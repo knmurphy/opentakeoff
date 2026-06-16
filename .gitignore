@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+web/dist/
+**/dist/
+
+# Python (optional AI sandbox)
+__pycache__/
+*.pyc
+.venv/
+venv/
+server/.venv/
+
+# Local env / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.log

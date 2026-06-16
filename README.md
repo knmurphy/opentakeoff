@@ -1,0 +1,104 @@
+<div align="center">
+
+# OpenTakeoff
+
+**A free, open-source PDF takeoff canvas — built for flooring contractors.**
+
+Open a plan, set the scale, trace your areas, and export your quantities.
+One-click room detection. Runs entirely in your browser. No account, no upload, no cost.
+
+[Quick start](#quick-start) · [Features](#features) · [The open flooring model](#the-open-flooring-model) · [AI sandbox](#optional-ai-sandbox) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+---
+
+Commercial takeoff tools start around **$1,200–$5,500/yr**, and the flooring
+options (Measure Square, RFMS, …) run **$600–$2,100/yr**. There has been **no
+open-source, web-based takeoff canvas** — let alone one for flooring. OpenTakeoff
+is that tool, given to the trade.
+
+It started as the takeoff module of a private flooring estimating app and was
+carved out, cleaned up, and released. The measuring engine is the real thing —
+including **One-Click Area**, the flood-fill room tracer the $300/mo tools charge
+for — not a demo.
+
+## Quick start
+
+```bash
+cd web
+npm install
+npm run dev        # http://localhost:5173
+```
+
+Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a
+condition, hit **One-Click Area**, and click inside a room. Open **Report** to see
+the breakdown and export CSV/JSON.
+
+Build a static site to host anywhere (GitHub Pages, Vercel, Netlify, S3):
+
+```bash
+npm run build      # -> web/dist/
+```
+
+## Features
+
+- **Open any plan PDF** — drag-drop, multi-page, multi-sheet (up to 4 side-by-side).
+- **Scale** — auto-detects the drawn scale note off the sheet, or calibrate from a
+  known dimension.
+- **Measure** — Area, Rectangle, Linear, Surface-Area (walls), Count, and Deduct.
+- **One-Click Area** — click inside a room; the linework bounds it, the polygon
+  traces itself, vertices snap to true corners.
+- **Conditions** — color + CAD hatch per finish (LVP, carpet, tile, …), a
+  per-condition **waste %**, and an ×N multiplier for repeated units.
+- **Report** — STACK-style breakdown by finish with measured **and** waste-adjusted
+  quantities; export to CSV / JSON; print.
+- **Markups** — revision clouds, callouts, text notes.
+- **Yours, locally** — everything persists in your browser (IndexedDB +
+  localStorage). Nothing is uploaded.
+
+## How your data is handled
+
+The default build is **client-only**. Your PDFs and takeoffs never leave your
+machine — there is no server in the loop. You can host the static build yourself
+and it stays that way.
+
+## The open flooring model
+
+OpenTakeoff has an **opt-in** "Contribute to the open flooring model" button. The
+idea: grow a shared, flooring-tuned dataset the whole trade benefits from.
+
+- It sends **only the derived takeoff** — condition labels, shape types,
+  quantities, and *normalized* room geometry.
+- It **never** sends the PDF, file names, project/client names, your markups, or
+  any absolute coordinates.
+- It requires an explicit attestation that you have the right to share, and the
+  code that builds the payload is right here in the open ([`web/src/lib/contribute.js`](web/src/lib/contribute.js)).
+
+Contribution is off unless an endpoint is configured (`VITE_CONTRIBUTE_ENDPOINT`),
+and you can self-host or disable it entirely.
+
+## Optional AI sandbox
+
+`server/` is an **optional** bring-your-own-model backend: a few takeoff-scoped AI
+endpoints (suggest-scale, detect-rooms, classify-finish) you can wire a **local
+model** (Ollama, a vision model, …) behind to experiment. It ships *empty of any
+trained model* — the default adapter is a transparent heuristic. See
+[`server/README.md`](server/README.md). You don't need it to use OpenTakeoff.
+
+## Tech
+
+React 18 + Vite, plain JSX for the canvas, **TypeScript** for the geometry libs,
+[pdf.js](https://github.com/mozilla/pdf.js) for rendering, and raw HTML5 Canvas +
+SVG for drawing — no paid dependencies. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `npm run typecheck && npm test &&
+npm run build` before a PR, keep the geometry libs pure and tested, and never
+commit real plans.
+
+## License
+
+[MIT](LICENSE) — use it, fork it, ship it, sell on top of it. Given to the flooring
+community.

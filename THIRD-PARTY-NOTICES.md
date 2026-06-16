@@ -1,0 +1,20 @@
+# Third-party notices
+
+OpenTakeoff is MIT-licensed. It builds on the following open-source projects,
+which retain their own licenses:
+
+| Project | License | Use |
+|---|---|---|
+| [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist`) | Apache-2.0 | PDF parsing & rendering (incl. the bundled `pdf.worker`) |
+| [React](https://github.com/facebook/react) / `react-dom` | MIT | UI runtime |
+| [React Router](https://github.com/remix-run/react-router) | MIT | Routing |
+| [Vite](https://github.com/vitejs/vite) | MIT | Build tool / dev server |
+| [TypeScript](https://github.com/microsoft/TypeScript) | Apache-2.0 | Type-checking the geometry libs |
+| [tsx](https://github.com/privatenumber/tsx) | MIT | Running TS tests under Node |
+
+The optional AI sandbox (`/server`) additionally uses
+[FastAPI](https://github.com/fastapi/fastapi) (MIT), [Starlette](https://github.com/encode/starlette) (BSD-3-Clause),
+[Uvicorn](https://github.com/encode/uvicorn) (BSD-3-Clause), and [Pydantic](https://github.com/pydantic/pydantic) (MIT).
+
+`pdf.js` is distributed under the Apache License 2.0; a copy of that license is
+available at <https://github.com/mozilla/pdf.js/blob/master/LICENSE>.

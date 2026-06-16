@@ -1,0 +1,119 @@
+/* OpenTakeoff design tokens — single source of truth. Change the look here. */
+
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* paper substrates */
+  --paper-cream: #ece5d2;        /* default warm paper */
+  --paper-bright: #f4efe0;       /* brighter, money-paper alt */
+  --paper-shadow: #d8d1bd;       /* deeper fold tone */
+
+  /* ink */
+  --ink:        #0e1a2e;         /* primary ink-navy */
+  --ink-soft:   #2a3346;
+  --ink-muted:  #6c6a5e;         /* mono labels */
+  --ink-faint:  #a39e8d;         /* hairlines */
+
+  /* primary accent */
+  --cobalt:     #1f3fc7;
+  --cobalt-deep:#152a8c;
+
+  /* terrazzo confetti — substrate variant only */
+  --fleck-rust:  #c4502a;
+  --fleck-ochre: #d99a2a;
+  --fleck-moss:  #1f6b4a;
+  --fleck-blue:  #1f3fc7;
+
+  /* semantic */
+  --c-positive: #1f6b4a;
+  --c-warning:  #c47a10;
+  --c-danger:   #b03a26;
+
+  /* type */
+  --f-display: "Bricolage Grotesque", "Inter", system-ui, sans-serif;
+  --f-body:    "Inter", system-ui, sans-serif;
+  --f-mono:    "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --f-mono-draft: "Space Mono", "JetBrains Mono", ui-monospace, monospace;
+
+  /* hairlines */
+  --rule: 1px solid var(--ink);
+  --rule-soft: 1px solid var(--ink-faint);
+  --rule-thick: 2px solid var(--ink);
+
+  /* motion — sparing, editorial; the 1 transition already in the app uses .15s */
+  --t-fast: .12s;
+  --t:      .2s;
+  --t-slow: .35s;
+  --ease:   cubic-bezier(.4, 0, .2, 1);
+
+  /* depth — kept subtle so it reads "paper", not "SaaS card" */
+  --shadow-1: 0 1px 2px rgba(14, 26, 46, .06), 0 2px 8px rgba(14, 26, 46, .06);
+  --shadow-2: 0 12px 36px rgba(14, 26, 46, .20);
+
+  /* focus ring — translucent cobalt, sits outside the border */
+  --ring: 0 0 0 3px rgba(31, 63, 199, .18);
+}
+
+/* paper textures — subtle grain via layered radial gradients (no images) */
+.paper-cream {
+  background-color: var(--paper-cream);
+  background-image:
+    radial-gradient(circle at 17% 23%, rgba(0,0,0,.025) 0, transparent 1.5px),
+    radial-gradient(circle at 73% 81%, rgba(0,0,0,.022) 0, transparent 1.2px),
+    radial-gradient(circle at 41% 67%, rgba(0,0,0,.018) 0, transparent 1px),
+    radial-gradient(circle at 89% 12%, rgba(0,0,0,.022) 0, transparent 1.3px),
+    radial-gradient(circle at 8% 88%, rgba(0,0,0,.02) 0, transparent 1px);
+  background-size: 7px 7px, 11px 11px, 5px 5px, 13px 13px, 9px 9px;
+}
+
+.paper-bright {
+  background-color: var(--paper-bright);
+  background-image:
+    radial-gradient(circle at 17% 23%, rgba(0,0,0,.022) 0, transparent 1.4px),
+    radial-gradient(circle at 73% 81%, rgba(0,0,0,.018) 0, transparent 1px),
+    radial-gradient(circle at 41% 67%, rgba(0,0,0,.014) 0, transparent .8px);
+  background-size: 7px 7px, 11px 11px, 5px 5px;
+}
+
+/* terrazzo flecked paper — money-paper / mid-century look */
+.paper-terrazzo {
+  background-color: var(--paper-bright);
+  background-image:
+    radial-gradient(circle at 12% 18%, var(--fleck-rust) 0 1.2px, transparent 1.4px),
+    radial-gradient(circle at 78% 33%, var(--fleck-ochre) 0 .9px, transparent 1.1px),
+    radial-gradient(circle at 23% 71%, var(--fleck-moss) 0 1.1px, transparent 1.3px),
+    radial-gradient(circle at 67% 84%, var(--fleck-blue) 0 .8px, transparent 1px),
+    radial-gradient(circle at 51% 41%, var(--fleck-rust) 0 .7px, transparent .9px),
+    radial-gradient(circle at 88% 62%, var(--fleck-moss) 0 .8px, transparent 1px),
+    radial-gradient(circle at 6% 52%, var(--fleck-ochre) 0 1px, transparent 1.2px),
+    radial-gradient(circle at 39% 9%, var(--fleck-blue) 0 .7px, transparent .9px),
+    radial-gradient(circle at 92% 91%, var(--fleck-ochre) 0 .9px, transparent 1.1px),
+    radial-gradient(circle at 33% 52%, var(--fleck-blue) 0 .6px, transparent .8px),
+    radial-gradient(circle at 60% 14%, var(--fleck-rust) 0 .8px, transparent 1px);
+  background-size: 23px 23px, 31px 31px, 27px 27px, 19px 19px, 17px 17px, 29px 29px, 21px 21px, 25px 25px, 33px 33px, 15px 15px, 22px 22px;
+}
+
+/* ink panel */
+.ink-panel {
+  background-color: var(--ink);
+  color: var(--paper-cream);
+  background-image:
+    radial-gradient(circle at 17% 23%, rgba(255,255,255,.025) 0, transparent 1.2px),
+    radial-gradient(circle at 73% 81%, rgba(255,255,255,.02) 0, transparent 1px);
+  background-size: 9px 9px, 13px 13px;
+}
+
+/* type helpers */
+.t-display { font-family: var(--f-display); font-weight: 700; letter-spacing: -0.02em; line-height: 0.95; }
+.t-display-italic { font-family: var(--f-display); font-style: italic; font-weight: 700; letter-spacing: -0.025em; line-height: 0.9; }
+.t-body { font-family: var(--f-body); font-weight: 400; line-height: 1.45; }
+.t-mono { font-family: var(--f-mono); font-weight: 500; letter-spacing: 0.02em; text-transform: uppercase; }
+.t-mono-data { font-family: var(--f-mono); font-weight: 500; }
+.t-label { font-family: var(--f-mono); font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; font-size: 10px; color: var(--ink-muted); }
+
+/* the blue square pip — replaces crosshair */
+.pip { display: inline-block; width: 7px; height: 7px; background: var(--cobalt); vertical-align: middle; }
+.pip-sm { display: inline-block; width: 5px; height: 5px; background: var(--cobalt); vertical-align: middle; }
+
+/* dot leader (between mono labels) */
+.dot-leader { flex: 1; border-bottom: 1px dotted var(--ink-faint); margin: 0 8px; align-self: end; height: .8em; }
