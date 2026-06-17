@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store } from "../lib/store.js";
+import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
@@ -442,17 +443,33 @@ export default function TakeoffCanvas() {
     setSheets(list);
     return list;
   }, []);
-  // open dropped/picked PDF files: stash the bytes in the local store, then show them
+  // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
+  // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
-    const files = Array.from(fileList || []).filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
-    if (!files.length) return;
-    for (const f of files) { try { await store.addPdf(f); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
+    const incoming = Array.from(fileList || []);
+    if (!incoming.length) return;
+    setCommitMsg("Reading files…");
+    let pdfs = [], skipped = [];
+    try { ({ pdfs, skipped } = await ingestFiles(incoming, { onProgress: setCommitMsg })); }
+    catch (e) { setCommitMsg(`Couldn't read those files: ${e.message || e}`); return; }
+    if (!pdfs.length) {
+      setCommitMsg(skipped.length
+        ? `Nothing to open — ${skipped.length} file${skipped.length === 1 ? "" : "s"} skipped. OpenTakeoff reads PDFs, images, and .zip plan sets.`
+        : "No supported files found. Drop a PDF, an image, or a .zip plan set.");
+      return;
+    }
+    for (const f of pdfs) { try { await store.addPdf(f); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
     await refreshSheets();
-    const names = files.map((f) => f.name);
-    setOpenTabs((t) => { const m = [...t]; for (const n of names) if (!m.includes(n)) m.push(n); return m; });
-    goToSheet(names[0]);
-    setView("canvas");
-    setCommitMsg(`Opened ${names.length} PDF${names.length === 1 ? "" : "s"}.`);
+    const names = pdfs.map((f) => f.name);
+    const tail = skipped.length ? ` · ${skipped.length} skipped` : "";
+    if (names.length === 1) {
+      setOpenTabs((t) => (t.includes(names[0]) ? t : [...t, names[0]]));
+      goToSheet(names[0]);
+      setView("canvas");
+    } else {
+      setView("gallery");   // a plan set → land in the gallery to pick sheets
+    }
+    setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
   }
   useEffect(() => {
     let off = false;
@@ -1397,12 +1414,11 @@ export default function TakeoffCanvas() {
       {/* toolbar — open/sheets | modes | tool menus | scale | actions | panels */}
       <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "8px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
-        <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }}
+        <input ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
           onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
-        <button type="button" onClick={() => fileInputRef.current?.click()} title="Open a plan PDF from your computer (or just drag one onto the canvas)"
+        <button type="button" onClick={() => fileInputRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set (or just drag them onto the canvas)"
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="plus" size={14} />Open PDF
-        </button>
+          <Icon name="plus" size={14} />Open</button>
         <button type="button" onClick={() => setView("gallery")}
           title="Plan set — the visual gallery; open one or several sheets (G)"
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${sheetGroup.length ? "var(--cobalt)" : "var(--ink-faint)"}`, background: sheetGroup.length ? "var(--cobalt)" : "transparent", color: sheetGroup.length ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>

@@ -130,11 +130,11 @@ export default function SheetGallery({
         <div style={{ flex: 1 }} />
         {onAddFiles && (
           <>
-            <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }}
+            <input ref={fileRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
               onChange={(e) => { onAddFiles(e.target.files); e.target.value = ""; }} />
-            <button onClick={() => fileRef.current?.click()} title="Open a plan PDF from your computer"
+            <button onClick={() => fileRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set"
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5 }}>
-              <Icon name="plus" size={13} />Open PDF
+              <Icon name="plus" size={13} />Open
             </button>
           </>
         )}
@@ -182,8 +182,8 @@ export default function SheetGallery({
             {!sheets.length ? (
               <button onClick={() => fileRef.current?.click()}
                 style={{ display: "block", width: "100%", maxWidth: 560, margin: "24px auto", padding: "48px 24px", border: "2px dashed var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", color: "var(--ink-muted)", fontFamily: "var(--f-body)", fontSize: 13.5, lineHeight: 1.7 }}>
-                <div style={{ fontFamily: "var(--f-display)", fontSize: 20, color: "var(--ink)", marginBottom: 8 }}>Open a plan PDF</div>
-                Drag a plan here, or click to choose. Nothing leaves your browser.
+                <div style={{ fontFamily: "var(--f-display)", fontSize: 20, color: "var(--ink)", marginBottom: 8 }}>Open your plans</div>
+                Drag a PDF, an image, or a whole .zip plan set here — or click to choose. Nothing leaves your browser.
               </button>
             ) : enumerated ? (
               <>

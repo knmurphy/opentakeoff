@@ -43,7 +43,9 @@ npm run build      # -> web/dist/
 
 ## Features
 
-- **Open any plan PDF** — drag-drop, multi-page, multi-sheet (up to 4 side-by-side).
+- **Open anything** — drag in a plan **PDF**, an **image** (scan/screenshot), or a whole
+  **`.zip` plan set** straight off a bid platform. Zips are unpacked and images wrapped to
+  PDF *in your browser*; multi-page and multi-sheet (up to 4 side-by-side).
 - **Scale** — auto-detects the drawn scale note off the sheet, or calibrate from a
   known dimension.
 - **Measure** — Area, Rectangle, Linear, Surface-Area (walls), Count, and Deduct.
