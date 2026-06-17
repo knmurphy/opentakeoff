@@ -4,7 +4,7 @@
 // "Contribute to the open flooring model" flow.
 import React, { useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, totalsToCsv, downloadText } from "../lib/totals.js";
+import { conditionTotals, grandTotals, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
@@ -12,12 +12,13 @@ const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFr
 export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onClose }) {
   const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
   const g = grandTotals(rows);
+  const matSummary = materialsSummary(rows);
   const [showContribute, setShowContribute] = useState(false);
 
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify({ project_name: projectName || null, generated_with: "OpenTakeoff", conditions: rows, totals: g }, null, 2),
+    JSON.stringify({ project_name: projectName || null, generated_with: "OpenTakeoff", conditions: rows, totals: g, materials: matSummary }, null, 2),
     "application/json");
 
   const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
@@ -103,6 +104,39 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             <strong>SF ordered</strong> = measured quantity × waste %. Waste is set per condition in the canvas. Wall SF comes from Surface-Area
             traces (run × height); Border SF from Linear runs with a thickness.
           </p>
+        )}
+        {matSummary.length > 0 && (
+          <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
+            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>Supporting materials — buy list</h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: "left" }}>Material</th>
+                  <th style={th}>Quantity</th>
+                  <th style={{ ...th, textAlign: "left", paddingLeft: 16 }}>Unit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matSummary.map((m, i) => (
+                  <tr key={i}>
+                    <td style={{ ...td, textAlign: "left" }}>{m.name}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{num(m.qty, 2)}</td>
+                    <td style={{ ...td, textAlign: "left", paddingLeft: 16, color: "var(--ink-muted)" }}>{m.unit || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p style={{ maxWidth: 980, margin: "10px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.7 }}>
+              <strong>By finish:</strong>{" "}
+              {rows.filter((r) => r.materials?.length).map((r) => (
+                <span key={r.id} style={{ marginRight: 14, whiteSpace: "nowrap" }}>
+                  <strong style={{ fontFamily: "var(--f-mono)" }}>{r.finish_tag}</strong>{" "}
+                  {r.materials.map((m) => `${m.name} ${num(m.qty, 2)}${m.unit ? " " + m.unit : ""}`).join(" · ")}
+                </span>
+              ))}
+              <br />Each quantity = measured {`{area / linear / count}`} ÷ your coverage rate, rounded up to whole units.
+            </p>
+          </div>
         )}
       </div>
 

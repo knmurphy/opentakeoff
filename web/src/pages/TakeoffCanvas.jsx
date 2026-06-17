@@ -205,20 +205,24 @@ function hitShape(shape, x, y, w, h, thr) {
 // hatch chosen to read like the real finish; waste % is a sensible default you
 // can change per condition (it's never auto-applied to the live readout, only
 // the Report). Delete any you don't need.
+// Each default also carries a couple of editable starter materials — quantities
+// derive deterministically from measured area/linear ÷ a coverage rate you set
+// (off the product data sheet). Delete/edit freely; they're just sensible seeds.
 const FLOORING_DEFAULTS = [
-  { tag: "CPT-1", color: "#2f7d54", hatch: "speckle", waste: 5 },   // Carpet tile
-  { tag: "BRD-1", color: "#be185d", hatch: "dots",    waste: 10 },  // Broadloom carpet (roll goods)
-  { tag: "LVT-1", color: "#b8860b", hatch: "plank",   waste: 8 },   // Luxury vinyl plank/tile
-  { tag: "VCT-1", color: "#2563eb", hatch: "checker", waste: 5 },   // Vinyl composition tile
-  { tag: "SV-1",  color: "#0d9488", hatch: "solid",   waste: 10 },  // Sheet vinyl
-  { tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste: 10 },  // Ceramic / porcelain tile
-  { tag: "RB-1",  color: "#475569", hatch: "horiz",   waste: 5 },   // Rubber / resilient wall base (linear)
-  { tag: "TR-1",  color: "#c96442", hatch: "vert",    waste: 0 },   // Transitions / reducers (linear)
+  { tag: "CPT-1", color: "#2f7d54", hatch: "speckle", waste: 5,  mats: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Carpet tile
+  { tag: "BRD-1", color: "#be185d", hatch: "dots",    waste: 10, mats: [{ name: "Adhesive", per: 120, basis: "area", unit: "gal" }] },                                    // Broadloom carpet (roll goods)
+  { tag: "LVT-1", color: "#b8860b", hatch: "plank",   waste: 8,  mats: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Luxury vinyl plank/tile
+  { tag: "VCT-1", color: "#2563eb", hatch: "checker", waste: 5,  mats: [{ name: "Adhesive", per: 350, basis: "area", unit: "gal" }] },                                    // Vinyl composition tile
+  { tag: "SV-1",  color: "#0d9488", hatch: "solid",   waste: 10, mats: [{ name: "Adhesive", per: 150, basis: "area", unit: "gal" }] },                                    // Sheet vinyl
+  { tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste: 10, mats: [{ name: "Thinset", per: 95, basis: "area", unit: "bag" }, { name: "Grout", per: 120, basis: "area", unit: "bag" }] }, // Ceramic / porcelain tile
+  { tag: "RB-1",  color: "#475569", hatch: "horiz",   waste: 5,  mats: [{ name: "Cove base adhesive", per: 40, basis: "linear", unit: "tube" }] },                        // Rubber / resilient wall base (linear)
+  { tag: "TR-1",  color: "#c96442", hatch: "vert",    waste: 0,  mats: [] },                                                                                              // Transitions / reducers (linear)
 ];
 function seedConditions() {
   return FLOORING_DEFAULTS.map((d) => ({
     id: uid("cnd"), finish_tag: d.tag, color: d.color, fill: d.color,
     hatch: d.hatch, multiplier: 1, waste_pct: d.waste,
+    materials: (d.mats || []).map((m) => ({ id: uid("mat"), round: true, ...m })),
   }));
 }
 
@@ -236,6 +240,7 @@ export default function TakeoffCanvas() {
   const [lastGroup, setLastGroup] = useState([]);     // most recent side-by-side composition — "Regroup" restores it
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
   const [hatchOpen, setHatchOpen] = useState(false);         // hatch picker popover (declutters the row)
+  const [matOpen, setMatOpen] = useState(false);             // supporting-materials editor panel
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
@@ -1318,10 +1323,29 @@ export default function TakeoffCanvas() {
       hatch: HATCHES[1 + (conditions.length % (HATCHES.length - 1))].id,
       multiplier: 1,        // ×N for identical repeated units (measure one, multiply)
       waste_pct: 0,         // flooring waste allowance (manual) — applied in the Report
+      materials: [],        // supporting materials (adhesive, grout, …) with coverage rates
     };
     setConditions((cs) => [...cs, c]); setActiveCond(c.id);
   }
   const updateCond = (patch) => setConditions((cs) => cs.map((c) => (c.id === activeCond ? { ...c, ...patch } : c)));
+
+  // delete a condition entirely (and its takeoffs); pick a new active one
+  function deleteCondition(id) {
+    const c = condById[id];
+    if (!c) return;
+    const owned = shapes.filter((s) => s.condition_id === id);
+    if (owned.length && !window.confirm(`Delete ${c.finish_tag} and its ${owned.length} takeoff${owned.length === 1 ? "" : "s"}? This can't be undone.`)) return;
+    const next = conditions.filter((x) => x.id !== id);
+    if (owned.length) setShapes((ss) => ss.filter((s) => s.condition_id !== id));
+    setConditions(next);
+    if (activeCond === id) setActiveCond(next[0]?.id || "");
+    setCommitMsg(`Deleted ${c.finish_tag}${owned.length ? ` and ${owned.length} takeoff${owned.length === 1 ? "" : "s"}` : ""}.`);
+  }
+
+  // supporting-materials editing (operates on the active condition)
+  const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
+  const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? { ...m, ...patch } : m)) });
+  const removeMaterial = (mid) => updateCond({ materials: (aCond?.materials || []).filter((m) => m.id !== mid) });
   // Height/Thickness are LIVE parameters (Kreo-style): changing them re-flows
   // every dependent shape on this condition — wall SF tracks the tile height.
   const setCondParam = (field, raw) => {
@@ -1584,7 +1608,9 @@ export default function TakeoffCanvas() {
       {/* appearance editor for the active condition */}
       {aCond && (
         <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "6px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11 }}>
-          <span style={{ fontWeight: 700, color: "var(--ink-muted)" }}>{aCond.finish_tag}</span>
+          <input value={aCond.finish_tag} onChange={(e) => updateCond({ finish_tag: e.target.value })}
+            title="Rename this condition / finish tag"
+            style={{ width: 88, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontFamily: "var(--f-mono)", fontWeight: 700, fontSize: 12, color: "var(--ink)" }} />
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ color: "var(--ink-muted)" }}>Line</span>
             {PALETTE.map((p) => <button key={p} title={p} onClick={() => updateCond({ color: p })} style={{ width: 16, height: 16, borderRadius: 4, background: p, border: aCond.color === p ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
@@ -1635,6 +1661,48 @@ export default function TakeoffCanvas() {
               onChange={(e) => setCondParam("thickness_in", e.target.value)}
               style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
           </span>
+          <div style={{ flex: 1, minWidth: 8 }} />
+          <button onClick={() => setMatOpen((v) => !v)} title="Supporting materials (adhesive, grout, thinset…) — order quantities derive from coverage rates you set"
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOpen ? "var(--ink)" : "transparent", color: matOpen ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
+            <Icon name="product" size={12} />Materials{aCond.materials?.length ? ` (${aCond.materials.length})` : ""}
+          </button>
+          <button onClick={() => deleteCondition(aCond.id)} title="Delete this condition (and its takeoffs)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
+            <Icon name="close" size={11} />Delete
+          </button>
+        </div>
+      )}
+      {aCond && matOpen && (
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-cream)", fontSize: 11.5 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <strong style={{ fontFamily: "var(--f-display)", fontSize: 12.5, color: "var(--ink)" }}>Supporting materials — {aCond.finish_tag}</strong>
+            <span style={{ color: "var(--ink-muted)" }}>order qty = measured ÷ coverage, rounded up. Coverage comes off the product data sheet.</span>
+          </div>
+          {(aCond.materials || []).map((m) => (
+            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+              <input value={m.name} onChange={(e) => updateMaterial(m.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)"
+                style={{ width: 160, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+              <span style={{ color: "var(--ink-muted)" }}>1</span>
+              <input value={m.unit} onChange={(e) => updateMaterial(m.id, { unit: e.target.value })} placeholder="unit"
+                style={{ width: 60, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+              <span style={{ color: "var(--ink-muted)" }}>per</span>
+              <input type="number" min="0" step="any" value={m.per || ""} onChange={(e) => updateMaterial(m.id, { per: Math.max(0, parseFloat(e.target.value) || 0) })} placeholder="0"
+                style={{ width: 66, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+              <select value={m.basis || "area"} onChange={(e) => updateMaterial(m.id, { basis: e.target.value })}
+                style={{ padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, background: "var(--paper-bright)" }}>
+                <option value="area">floor SF</option>
+                <option value="linear">linear LF</option>
+                <option value="count">each</option>
+              </select>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
+                <input type="checkbox" checked={m.round !== false} onChange={(e) => updateMaterial(m.id, { round: e.target.checked })} />round up
+              </label>
+              <button onClick={() => removeMaterial(m.id)} title="Remove this material"
+                style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
+            </div>
+          ))}
+          <button onClick={addMaterial}
+            style={{ marginTop: 2, padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add material</button>
         </div>
       )}
 
