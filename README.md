@@ -2,28 +2,36 @@
 
 # OpenTakeoff
 
-**A free, open-source PDF takeoff canvas — built for flooring contractors.**
+**The free, open-source takeoff canvas for flooring — open a plan, trace your areas, export your quantities.**
 
-Open a plan, set the scale, trace your areas, and export your quantities.
-One-click room detection. Runs entirely in your browser. No account, no upload, no cost.
+Open the plan. Set the scale. Trace the rooms. Read the report. Export the quantities.
+No account. No upload. No install. It runs in your browser.
 
-[Quick start](#quick-start) · [Features](#features) · [The open flooring model](#the-open-flooring-model) · [AI sandbox](#optional-ai-sandbox) · [Contributing](CONTRIBUTING.md)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Live demo](https://img.shields.io/badge/demo-opentakeoff.netlify.app-2ea44f.svg)](https://opentakeoff.netlify.app)
+[![Built with React + Vite](https://img.shields.io/badge/React%2018-Vite-444.svg)](#tech-stack)
+
+[**▶ Try the live demo**](https://opentakeoff.netlify.app) · [Quick start](#quick-start) · [Features](#features) · [Deploy it](#run-it--deploy-it) · [Build on top](#build-on-top-of-it) · [Contributing](CONTRIBUTING.md)
+
+<br/>
+
+<img src="docs/img/oneclick.png" alt="OpenTakeoff — a flooring takeoff in progress" width="820"/>
 
 </div>
 
 ---
 
-Commercial takeoff tools start around **$1,200–$5,500/yr**, and the flooring
-options run **$600–$2,100/yr**. There has been **no
-open-source, web-based takeoff canvas** — let alone one for flooring. OpenTakeoff
-is that tool, given to the trade.
+Commercial takeoff tools start around **$1,200–$5,500/yr**, and the flooring-specific options run **$600–$2,100/yr**. Until now there has been **no open-source, web-based takeoff canvas at all** — let alone one built for flooring. OpenTakeoff is that tool, given to the trade.
 
-It started as the takeoff module of a private flooring estimating app and was
-carved out, cleaned up, and released. The measuring engine is the real thing —
-including **One-Click Area**, the flood-fill room tracer the $300/mo tools charge
-for — not a demo.
+It started as the takeoff module of a private flooring estimating app, then got carved out, cleaned up, and released. **This is the real measuring engine, not a demo** — including **One-Click Area**, the flood-fill room tracer the $300/mo tools gate behind a subscription.
+
+And there's nothing to set up. Open the page, drag in a plan, start measuring. Your PDFs and your takeoffs never leave your machine — there is no server in the loop.
 
 ## Quick start
+
+You don't need to install anything to *use* it — just open the [**live demo**](https://opentakeoff.netlify.app), drag in a plan, and go.
+
+To run it yourself:
 
 ```bash
 cd web
@@ -31,94 +39,101 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a
-condition, hit **One-Click Area**, and click inside a room. Open **Report** to see
-the breakdown and export CSV/JSON.
-
-Build a static site to host anywhere (GitHub Pages, Vercel, Netlify, S3):
-
-```bash
-npm run build      # -> web/dist/
-```
+Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a condition, hit **One-Click Area**, and click inside a room. Open **Report** to see the breakdown and export CSV / JSON.
 
 ## Features
 
-- **Open anything** — drag in a plan **PDF**, an **image** (scan/screenshot), or a whole
-  **`.zip` plan set** straight off a bid platform. Zips are unpacked and images wrapped to
-  PDF *in your browser*; multi-page and multi-sheet (up to 4 side-by-side).
-- **Scale** — auto-detects the drawn scale note off the sheet, or calibrate from a
-  known dimension.
-- **Measure** — Area, Rectangle, Linear, Surface-Area (walls), Count, and Deduct.
-- **One-Click Area** — click inside a room; the linework bounds it, the polygon
-  traces itself, vertices snap to true corners.
-- **Conditions** — color + CAD hatch per finish (LVP, carpet, tile, …), a
-  per-condition **waste %**, and an ×N multiplier for repeated units.
-- **Report** — breakdown by finish with measured **and** waste-adjusted
-  quantities; export to CSV / JSON; print.
-- **Markups** — revision clouds, callouts, text notes.
-- **Yours, locally** — everything persists in your browser (IndexedDB +
-  localStorage). Nothing is uploaded.
+### 1. Open anything, instantly
+Drag in a plan **PDF**, an **image** (a scan or a screenshot), or a whole **`.zip` plan set** straight off a bid platform. Zips are unpacked and images wrapped to PDF *in your browser* — multi-page and multi-sheet, with up to **4 sheets side-by-side**. No upload step, no conversion service, no account.
 
-## How your data is handled
+### 2. A real measuring engine — not a counter with a ruler
+**One-Click Area** is the headline: click inside a room and the linework bounds it, the polygon traces itself, and the vertices snap to true corners. Plus the full manual kit — **Area, Rectangle, Linear, Surface-Area (walls), Count,** and **Deduct** (for columns, voids, and openings). This is the same engine pulled out of a commercial estimating app, not a toy reimplementation.
 
-The default build is **client-only**. Your PDFs and takeoffs never leave your
-machine — there is no server in the loop. You can host the static build yourself
-and it stays that way.
+### 3. Scale that matches real plan sets
+Auto-detects the drawn scale note off the sheet, or **calibrate** from any known dimension (click two points, type the real length). Scale is remembered **per sheet** — because plan sets are never one uniform scale, and tools that assume they are get the numbers wrong.
 
-## The open flooring model
+### 4. Conditions that read like the drawing
+A condition is one finish (LVP, carpet, tile, base, …). Each carries a **line/fill color** and a **CAD hatch pattern** (plank, herringbone, tile, terrazzo) so the canvas looks like the real drawing — plus a per-condition **waste %**, an **×N multiplier** for repeated identical units, a default **height** for wall traces, and a **thickness** that turns a linear run into border/feature-strip SF.
 
-OpenTakeoff has an **opt-in** "Contribute to the open flooring model" button. The
-idea: grow a shared, flooring-tuned dataset the whole trade benefits from.
+### 5. Assemblies — the supporting materials, done right
+Per condition, list the consumables that actually go on the order: adhesive, sealer, polyurethane, thinset, grout, cove-base adhesive. Each has a **coverage rate** and a **basis** (floor SF / linear LF / each), and the order quantity derives automatically — measured ÷ coverage, **rounded up** to whole units. Adhesive lines get a **trowel picker** that fills the spread rate from the notch size. This is the layer most takeoff tools punt on. It's shipped here.
 
-- It sends **only the derived takeoff** — condition labels, shape types,
-  quantities, and *normalized* room geometry.
-- It **never** sends the PDF, file names, project/client names, your markups, or
-  any absolute coordinates.
-- It requires an explicit attestation that you have the right to share, and the
-  code that builds the payload is right here in the open ([`web/src/lib/contribute.js`](web/src/lib/contribute.js)).
+### 6. Reports & export
+A per-condition breakdown — **Floor / Wall / Border SF, LF, EA, total SF, SY**, with and without waste — plus a combined **materials buy list**. Export to **CSV** or **JSON**, or print it. Waste is applied only in the report (the order quantity), never to the live measured number, so your takeoff and your buy list stay honest about which is which.
 
-Contribution is off unless an endpoint is configured (`VITE_CONTRIBUTE_ENDPOINT`),
-and you can self-host or disable it entirely.
+### 7. Plan-set tools
+A visual **gallery** (`G`) to pick and open sheets, **Regroup** to restore a side-by-side composition in one click, per-sheet **Hi-Res** rendering for tight zoom, **Snap** (beta) to plan lines and corners, and a separate **markup layer** (revision clouds, callouts, text notes) that's never counted in the totals.
 
-## Optional AI sandbox
+### 8. Yours, locally
+Every drawing, scale, condition, and markup autosaves to **your browser** (IndexedDB + localStorage). Nothing is uploaded, there's no account, and there's no server in the default build. Host the static build yourself and it stays exactly that way.
 
-`server/` is an **optional** bring-your-own-model backend: a few takeoff-scoped AI
-endpoints (suggest-scale, detect-rooms, classify-finish) you can wire a **local
-model** (Ollama, a vision model, …) behind to experiment. It ships *empty of any
-trained model* — the default adapter is a transparent heuristic. See
-[`server/README.md`](server/README.md). You don't need it to use OpenTakeoff.
+<div align="center">
+<img src="docs/img/report.png" alt="OpenTakeoff report — per-condition breakdown and materials buy list" width="780"/>
+</div>
 
-## Tech
+## What's in the box
 
-React 18 + Vite, plain JSX for the canvas, **TypeScript** for the geometry libs,
-[pdf.js](https://github.com/mozilla/pdf.js) for rendering, and raw HTML5 Canvas +
-SVG for drawing — no paid dependencies. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+| Area | What you get |
+|---|---|
+| **Ingest** | PDF, image, or `.zip` plan set — unpacked in-browser, multi-page, up to 4 sheets side-by-side |
+| **Scale** | Auto-detect the drawn scale note, or calibrate from a known dimension — per sheet |
+| **Measure** | One-Click Area (flood-fill), Area, Rectangle, Linear, Surface-Area (walls), Count, Deduct |
+| **Conditions** | Color + CAD hatch per finish, waste %, ×N multiplier, height, thickness → border SF |
+| **Assemblies** | Per-condition supporting materials with coverage rates → rounded order quantities, trowel picker |
+| **Report** | Per-condition Floor/Wall/Border SF, LF, EA, SY, with/without waste + materials buy list |
+| **Export** | CSV, JSON, print |
+| **Markups** | Revision clouds, callouts, text notes — separate layer, never counted |
+| **Storage** | IndexedDB + localStorage — client-only, nothing uploaded |
+| **Deploy** | One static build, hostable on Netlify, Vercel, GitHub Pages, S3, or any static host |
+
+## Run it / deploy it
+
+**To use it, all you need is a browser.** To self-host, it's one static build you can drop anywhere — there's no backend, no database, no environment to stand up.
+
+```bash
+cd web
+npm install
+npm run build      # → web/dist/  (static; host it anywhere)
+```
+
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/Kentucky-ai/opentakeoff)
+
+The repo ships a root `netlify.toml`, so the button above is genuinely one-click. The same `web/dist/` works on **Vercel, GitHub Pages, Cloudflare Pages, S3** — anywhere that serves static files.
+
+## Build on top of it
+
+OpenTakeoff is **Apache-2.0**: fork it, change it, ship it — for your own crew or as the base of your own product. The codebase is deliberately small and readable so you can add the features *you* want:
+
+- **Geometry & measurement** — [`web/src/lib/oneclick.ts`](web/src/lib/oneclick.ts), [`web/src/lib/sheets.ts`](web/src/lib/sheets.ts) (typed and tested)
+- **Totals & materials math** — [`web/src/lib/totals.js`](web/src/lib/totals.js)
+- **State & persistence** — [`web/src/lib/store.js`](web/src/lib/store.js)
+- **UI** — [`web/src/pages/TakeoffCanvas.jsx`](web/src/pages/TakeoffCanvas.jsx) and [`web/src/components/`](web/src/components/)
+
+Run `npm run typecheck && npm test && npm run build` before a PR; keep the geometry libs pure and tested; never commit real plans. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [user guide](docs/USER_GUIDE.md).
+
+## Tech stack
+
+- **Frontend:** React 18 + Vite, plain JSX
+- **Drawing:** raw HTML5 Canvas + SVG (no charting/canvas frameworks)
+- **Geometry:** TypeScript (`oneclick.ts`, `sheets.ts`)
+- **PDF rendering:** [pdf.js](https://github.com/mozilla/pdf.js)
+- **Plan-set ingest:** fflate (zip) + pdf-lib (image → PDF), lazy-loaded
+- **Storage:** IndexedDB + localStorage — no backend required
+- **Tests:** `node --test` + `tsx`
+- **No paid dependencies.** See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Status
+
+OpenTakeoff is a **working tool**, not a preview. The measuring engine — One-Click Area, conditions, assemblies, the report and exports — is the production engine carved out of a commercial flooring estimating app. **Snap** is marked beta. It's used on real commercial flooring bids; issues and pull requests are welcome.
 
 ## A note from the maker
 
-I run estimating for a commercial flooring company. Every takeoff tool I've used costs
-four figures a year and treats flooring as an afterthought — so I built the one I actually
-wanted, and I'm giving it to the trade.
+I run estimating for a commercial flooring company. Every takeoff tool I've used costs four figures a year and treats flooring as an afterthought — so I built the one I actually wanted, and I'm giving it to the trade.
 
-This is the real measuring engine, not a teaser. **One-Click Area** is the same flood-fill
-room tracer the expensive tools gate behind a subscription. Open a plan, trace your rooms,
-hand off a clean report — free, and nothing ever leaves your computer.
-
-The one thing I'll ask: if it saves you time, consider turning on **"contribute to the open
-flooring model."** It shares only the math — labels and quantities, never your plans — and
-the goal is genuinely big: the first AI model tuned on real flooring takeoffs, owned by the
-people who do the work instead of the software companies who sell to them. We build it
-together, or nobody does.
+This is the real measuring engine, not a teaser. **One-Click Area** is the same flood-fill room tracer the expensive tools gate behind a subscription. Open a plan, trace your rooms, hand off a clean report — free, and nothing ever leaves your computer.
 
 — Michael · Summit Flooring Group
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). In short: `npm run typecheck && npm test &&
-npm run build` before a PR, keep the geometry libs pure and tested, and never
-commit real plans.
-
 ## License
 
-[Apache License 2.0](LICENSE) — use it, fork it, ship it, sell on top of it. Given
-to the flooring community. See [NOTICE](NOTICE) for attribution.
+[Apache License 2.0](LICENSE) — use it, fork it, ship it, build on top of it. Given to the flooring community. See [NOTICE](NOTICE) for attribution.

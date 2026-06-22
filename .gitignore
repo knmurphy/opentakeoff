@@ -18,6 +18,10 @@ server/.venv/
 .env.*
 !.env.example
 
+# Netlify CLI local state (never commit; the root netlify.toml IS committed)
+.netlify/
+**/.netlify/
+
 # Editor / OS
 .DS_Store
 .vscode/

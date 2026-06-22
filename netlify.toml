@@ -1,0 +1,12 @@
+# OpenTakeoff — one-click static deploy.
+# The app lives in web/ and builds to web/dist/ with no backend.
+[build]
+  base    = "web"
+  command = "npm run build"
+  publish = "dist"
+
+# Single-page app: serve index.html for any path.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
