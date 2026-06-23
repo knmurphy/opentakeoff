@@ -17,11 +17,29 @@ export default function SheetGallery({
   const fileRef = useRef(null);
   const [pages, setPages] = useState({});   // file -> numPages (as discovered)
   const [sel, setSel] = useState([]);
+  const [sampleBusy, setSampleBusy] = useState(false);
   const [, bump] = useState(0);
   const seqRef = useRef(0);
   const queueRef = useRef([]);
   const pumpingRef = useRef(false);
   const obsRef = useRef(null);
+
+  // First-visit shortcut: fetch the bundled sample plan and feed it through the
+  // same ingest path as a dropped file, so a visitor can try a real takeoff in
+  // one click. The PDF lives in /public/demo and is fetched only on demand.
+  const loadSample = async () => {
+    if (sampleBusy || !onAddFiles) return;
+    setSampleBusy(true);
+    try {
+      const base = import.meta.env.BASE_URL || "/";
+      const res = await fetch(`${base}demo/sample-finish-plan.pdf`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      onAddFiles([new File([blob], "sample-finish-plan.pdf", { type: "application/pdf" })]);
+    } catch {
+      setSampleBusy(false);   // on success this empty state unmounts as sheets load
+    }
+  };
 
   // enumerate: learn every file's page count through the shared doc cache
   useEffect(() => {
@@ -180,11 +198,24 @@ export default function SheetGallery({
         {!allKeys.length && (
           <div style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)", fontSize: 13.5, lineHeight: 1.7 }}>
             {!sheets.length ? (
-              <button onClick={() => fileRef.current?.click()}
-                style={{ display: "block", width: "100%", maxWidth: 560, margin: "24px auto", padding: "48px 24px", border: "2px dashed var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", color: "var(--ink-muted)", fontFamily: "var(--f-body)", fontSize: 13.5, lineHeight: 1.7 }}>
-                <div style={{ fontFamily: "var(--f-display)", fontSize: 20, color: "var(--ink)", marginBottom: 8 }}>Open your plans</div>
-                Drag a PDF, an image, or a whole .zip plan set here — or click to choose. Nothing leaves your browser.
-              </button>
+              <div style={{ maxWidth: 560, margin: "0 auto" }}>
+                <button onClick={() => fileRef.current?.click()}
+                  style={{ display: "block", width: "100%", margin: "24px auto 0", padding: "44px 24px", border: "2px dashed var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", color: "var(--ink-muted)", fontFamily: "var(--f-body)", fontSize: 13.5, lineHeight: 1.7 }}>
+                  <div style={{ fontFamily: "var(--f-display)", fontSize: 20, color: "var(--ink)", marginBottom: 8 }}>Open your plans</div>
+                  Drag a PDF, an image, or a whole .zip plan set here — or click to choose. Nothing leaves your browser.
+                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "18px auto 16px", color: "var(--ink-faint)", fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: "0.14em", textTransform: "uppercase" }}>
+                  <span style={{ flex: 1, height: 1, background: "var(--ink-faint)" }} />new here?<span style={{ flex: 1, height: 1, background: "var(--ink-faint)" }} />
+                </div>
+                <button onClick={loadSample} disabled={sampleBusy} title="Open a real floor finish plan and try a takeoff"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 9, padding: "13px 22px", border: "1px solid var(--ink)", background: "var(--cobalt)", color: "var(--paper-bright)", cursor: sampleBusy ? "default" : "pointer", opacity: sampleBusy ? 0.65 : 1, fontWeight: 700, fontSize: 14, fontFamily: "var(--f-body)" }}>
+                  <Icon name="takeoff" size={16} />{sampleBusy ? "Loading sample…" : "Load sample plan"}
+                </button>
+                <div style={{ fontFamily: "var(--f-body)", fontSize: 12.5, color: "var(--ink-muted)", marginTop: 11, lineHeight: 1.6 }}>
+                  A real medical-center <strong style={{ color: "var(--ink)" }}>floor finish plan</strong> — the scale auto-detects;
+                  pick a finish and trace a flooring takeoff in seconds.
+                </div>
+              </div>
             ) : enumerated ? (
               <>
                 <div style={{ fontFamily: "var(--f-display)", fontSize: 16, color: "var(--ink)", marginBottom: 6 }}>Couldn't read those PDFs</div>
