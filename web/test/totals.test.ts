@@ -41,7 +41,7 @@ test("materials: linear basis uses measured LF, not area", () => {
 test("materials: note (trowel / coats) passes through to the row", () => {
   const conds = [{
     id: "wd", finish_tag: "WD-1",
-    materials: [{ id: "m", name: "Adhesive (Berger-Seidle)", per: 55, basis: "area", unit: "gal", round: true, note: "3/16″ V-notch" }],
+    materials: [{ id: "m", name: "Adhesive", per: 55, basis: "area", unit: "gal", round: true, note: "3/16″ V-notch" }],
   }];
   const [row] = conditionTotals(conds, [area("wd", 110)]);
   assert.equal(row.materials[0].note, "3/16″ V-notch");
