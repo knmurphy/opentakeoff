@@ -4,6 +4,11 @@ import * as pdfjsLib from "pdfjs-dist";
 
 export const RENDER_SCALE = 2.0;
 
+/** Side-by-side panel cap — shared by the canvas group logic and the gallery's
+ * open-side-by-side gate so the two can never disagree. Hi-res sheets render at
+ * the full auto budget, so a 4-up of large hi-res sheets is memory-heavy. */
+export const MAX_GROUP = 4;
+
 export interface Scale {
   label: string;
   /** real feet per image pixel at RENDER_SCALE */

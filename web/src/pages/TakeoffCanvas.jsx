@@ -18,8 +18,10 @@ import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import { Icon } from "../brand/icons.jsx";
-import { RENDER_SCALE, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
+import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
+import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, distToSeg, hitShape } from "../lib/geometry.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -46,7 +48,6 @@ const autoRenderScale = (wPt, hPt) => {
   const byArea = Math.sqrt(MAX_PANEL_AREA / (wPt * hPt));
   return Math.max(RENDER_SCALE, Math.min(QUALITY_CEILING, byDim, byArea));
 };
-const MAX_GROUP = 4;   // side-by-side panels; hi-res sheets render at the full auto budget, so a 4-up of large hi-res sheets is memory-heavy
 // Detail view: once zoomed past the base raster's 1:1 IN DEVICE PIXELS, we overlay a
 // crop of JUST the visible region, re-rendered from the PDF vectors at the current zoom —
 // Bluebeam/AutoCAD-style. Crispness becomes unbounded (up to the per-region canvas cap)
@@ -147,97 +148,10 @@ function HatchSwatch({ type, line, fill }) {
 let _idn = 0;
 const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
 const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
-// small, sharp star marker (vertices + snap indicator) — easier to see corners than a dot
-function starPath(cx, cy, R, points = 4, innerRatio = 0.38) {
-  const r = R * innerRatio; let d = "";
-  for (let i = 0; i < points * 2; i++) {
-    const a = (Math.PI * i) / points - Math.PI / 2, rad = i % 2 === 0 ? R : r;
-    d += `${i === 0 ? "M" : "L"}${cx + rad * Math.cos(a)},${cy + rad * Math.sin(a)} `;
-  }
-  return d + "Z";
-}
+// Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
+// hit-testing) live in lib/geometry.js — byte-identical with Spline's copy.
+const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
 
-// Revision-cloud path: a scalloped rectangle around [x0,y0]-[x1,y1] (image px).
-function cloudPath(x0, y0, x1, y1) {
-  const ax0 = Math.min(x0, x1), ay0 = Math.min(y0, y1), ax1 = Math.max(x0, x1), ay1 = Math.max(y0, y1);
-  const r = Math.max(6, Math.min(22, (ax1 - ax0 + ay1 - ay0) / 22));
-  const arc = (len) => Math.max(1, Math.round(len / (r * 1.6)));
-  let d = `M ${ax0} ${ay0}`;
-  const edge = (fromX, fromY, toX, toY) => {
-    const n = arc(Math.hypot(toX - fromX, toY - fromY));
-    for (let i = 1; i <= n; i++) {
-      const px = fromX + (toX - fromX) * (i / n), py = fromY + (toY - fromY) * (i / n);
-      d += ` A ${r} ${r} 0 0 1 ${px} ${py}`;
-    }
-  };
-  edge(ax0, ay0, ax1, ay0); edge(ax1, ay0, ax1, ay1); edge(ax1, ay1, ax0, ay1); edge(ax0, ay1, ax0, ay0);
-  return d + " Z";
-}
-
-// ── snap-to-vector spatial hash. The op-list walk that feeds it (endpoints +
-// line segments for One-Click Area) lives in lib/oneclick.js: extractVectorGeometry.
-function buildSnapGrid(points, cell = 24) {
-  const map = new Map();
-  for (const p of points) { const k = `${Math.floor(p[0] / cell)},${Math.floor(p[1] / cell)}`; let a = map.get(k); if (!a) { a = []; map.set(k, a); } if (a.length < 40) a.push(p); }
-  return { cell, map };
-}
-function nearestSnap(grid, x, y, maxDist) {
-  if (!grid) return null;
-  const { cell, map } = grid, cx = Math.floor(x / cell), cy = Math.floor(y / cell);
-  let best = null, bestD = maxDist * maxDist;
-  for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
-    const a = map.get(`${gx},${gy}`); if (!a) continue;
-    for (const p of a) { const dx = p[0] - x, dy = p[1] - y, d = dx * dx + dy * dy; if (d < bestD) { bestD = d; best = p; } }
-  }
-  return best;
-}
-
-// ── polar tracking: lock the next segment to the 45° family (sheet axes).
-// Within ANGLE_TOL° of a 45° multiple — or at any angle while Shift forces it —
-// the cursor projects onto the locked ray from the last vertex, so the committed
-// segment is exactly on-axis. The stage transform is translate+scale only, so
-// image-space angles ARE sheet angles.
-const ANGLE_TOL = 4;
-function angleSnap(last, cur, force) {
-  const dx = cur[0] - last[0], dy = cur[1] - last[1];
-  if (!dx && !dy) return null;
-  const theta = (Math.atan2(dy, dx) * 180) / Math.PI;
-  const snapped = Math.round(theta / 45) * 45;
-  if (!force && Math.abs(theta - snapped) > ANGLE_TOL) return null;
-  const rad = (snapped * Math.PI) / 180, ux = Math.cos(rad), uy = Math.sin(rad);
-  const d = dx * ux + dy * uy;   // projection keeps the cursor's distance along the ray
-  return { pt: [last[0] + d * ux, last[1] + d * uy], ux, uy, deg: ((snapped % 180) + 180) % 180 };
-}
-
-function closedMetrics(pts) {
-  const n = pts.length;
-  if (n < 3) {
-    let perim = 0;
-    for (let i = 1; i < n; i++) perim += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-    return { area: 0, perim };
-  }
-  let area = 0, perim = 0;
-  for (let i = 0; i < n; i++) {
-    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
-    area += x1 * y2 - x2 * y1;
-    perim += Math.hypot(x2 - x1, y2 - y1);
-  }
-  return { area: Math.abs(area) / 2, perim };
-}
-function openLen(pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return L; }
-function pointInPoly(x, y, pts) {
-  let inside = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const [xi, yi] = pts[i], [xj, yj] = pts[j];
-    if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)) inside = !inside;
-  }
-  return inside;
-}
-function distToSeg(px, py, ax, ay, bx, by) {
-  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
-  let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-}
 // toolbar menus — STACK-style: the menu face shows the armed tool
 const MEASURE_TOOLS = [
   { id: "oneclick", icon: "oneClick", label: "One-Click Area", shortcut: "O" },
@@ -257,16 +171,6 @@ const MARKUP_TOOLS = [
   { id: "text", icon: "textNote", label: "Text note" },
 ];
 const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
-
-// does (x,y) image-px hit this shape (within thr px)?
-function hitShape(shape, x, y, w, h, thr) {
-  const pts = shape.verts_norm.map(([nx, ny]) => [nx * w, ny * h]);
-  if (shape.measure_role === "count") return Math.hypot(pts[0][0] - x, pts[0][1] - y) < thr * 2;
-  if (shape.measure_role === "linear" || shape.measure_role === "surface_area") { for (let i = 1; i < pts.length; i++) if (distToSeg(x, y, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]) < thr) return true; return false; }
-  if (pointInPoly(x, y, pts)) return true;
-  for (let i = 0; i < pts.length; i++) { const j = (i + 1) % pts.length; if (distToSeg(x, y, pts[i][0], pts[i][1], pts[j][0], pts[j][1]) < thr) return true; }
-  return false;
-}
 
 // Flooring-first starter conditions seeded on a fresh workspace — line color +
 // hatch chosen to read like the real finish; waste % is a sensible default you
@@ -802,7 +706,7 @@ export default function TakeoffCanvas() {
         m.pageObj.getOperatorList().then((ol) => {
           if (stale()) return;
           const { points, segs, meta } = extractVectorGeometry(ol, m.viewport.transform, pdfjsLib.OPS);
-          snapGridsRef.current.set(m.key, buildSnapGrid(points));
+          snapGridsRef.current.set(m.key, buildSnapGrid(points, SNAP_CELL));
           vectorSegsRef.current.set(m.key, segs);
           segMetaRef.current.set(m.key, meta);
         }).catch(() => {});
@@ -1715,15 +1619,19 @@ export default function TakeoffCanvas() {
   const liveArea = liveUpp ? mm.area * liveUpp * liveUpp : null;
   const livePerim = liveUpp ? mm.perim * liveUpp : null;
   const condMult = aCond?.multiplier || 1;
-  const condShapes = visibleShapes.filter((s) => s.condition_id === activeCond);
-  const condTotal = condShapes.reduce((n, s) => n + (s.measure_role === "deduct" ? -1 : (s.measure_role === "floor_area" ? 1 : 0)) * (s.computed?.area_sf || 0), 0) * condMult;
-  const lfTotal = condShapes.reduce((n, s) => n + (s.measure_role === "linear" ? (s.computed?.perimeter_lf || 0) : 0), 0) * condMult;
-  const countTotal = condShapes.reduce((n, s) => n + (s.measure_role === "count" ? (s.computed?.count || 1) : 0), 0) * condMult;
-  const wallTotal = condShapes.reduce((n, s) => n + (s.measure_role === "surface_area" ? (s.computed?.area_sf || 0) : 0), 0) * condMult;
-  const borderTotal = condShapes.reduce((n, s) => n + (s.measure_role === "linear" ? (s.computed?.area_sf || 0) : 0), 0) * condMult;
-  const condH = Number(aCond?.height_ft) || 0;
+  // HUD + Takeoffs panel are sheet-scoped ("this sheet"): they total the
+  // VISIBLE shapes through the same conditionTotals rules the Report uses —
+  // one source of role math, two scopes.
+  const visRows = conditionTotals(conditions, visibleShapes);
+  const visRowById = new Map(visRows.map((r) => [r.id, r]));
+  const condRow = visRowById.get(activeCond);
+  const condTotal = condRow?.floor_sf || 0;
+  const lfTotal = condRow?.lf || 0;
+  const countTotal = condRow?.ea || 0;
+  const wallTotal = condRow?.wall_sf || 0;
+  const borderTotal = condRow?.border_sf || 0;
   // display-only Kreo-style derived metric: floor-area perimeters × the condition height
-  const vertTotal = condH > 0 ? condShapes.reduce((n, s) => n + (s.measure_role === "floor_area" ? (s.computed?.perimeter_lf || 0) : 0), 0) * condH * condMult : 0;
+  const vertTotal = verticalWallSf(visibleShapes, activeCond, aCond?.height_ft, condMult);
   const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
   const stdValue = unitsPerPx ? (STANDARD_SCALES.find((s) => Math.abs(s.upp - unitsPerPx) < 1e-9)?.label || "") : "";
 
@@ -2259,7 +2167,7 @@ export default function TakeoffCanvas() {
             </div>
           )}
           <div style={{ height: 1, background: "#eee6d8", margin: "8px 0" }} />
-          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, opacity: 0.5 }}>{aCond?.finish_tag || "—"} total ({condShapes.length}{condMult > 1 ? ` ×${condMult}` : ""})</div>
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, opacity: 0.5 }}>{aCond?.finish_tag || "—"} total ({condRow?.shape_count || 0}{condMult > 1 ? ` ×${condMult}` : ""})</div>
           {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(condTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF</span> <span style={{ fontSize: 12, fontWeight: 500, color: "#5b544a" }}>· {num(condTotal / 9)} SY</span></div>}
           {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(wallTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF wall</span></div>}
           {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(borderTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF border</span></div>}
@@ -2314,12 +2222,10 @@ export default function TakeoffCanvas() {
             </div>
             {conditions.length === 0 && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions yet — add one and start tracing.</div>}
             {conditions.map((c) => {
-              const cs = visibleShapes.filter((s) => s.condition_id === c.id);
+              const row = visRowById.get(c.id);
               const mult = c.multiplier || 1;
-              const sf = cs.reduce((n, s) => n + (s.measure_role === "deduct" ? -1 : s.measure_role === "floor_area" ? 1 : 0) * (s.computed?.area_sf || 0), 0) * mult;
-              const lf = cs.reduce((n, s) => n + (s.measure_role === "linear" ? (s.computed?.perimeter_lf || 0) : 0), 0) * mult;
-              const ea = cs.reduce((n, s) => n + (s.measure_role === "count" ? (s.computed?.count || 1) : 0), 0) * mult;
-              const wsf = cs.reduce((n, s) => n + (s.measure_role === "surface_area" ? (s.computed?.area_sf || 0) : 0), 0) * mult;
+              const sf = row?.floor_sf || 0, lf = row?.lf || 0, ea = row?.ea || 0, wsf = row?.wall_sf || 0;
+              const shapeCount = row?.shape_count || 0;
               const on = c.id === activeCond;
               const matOn = on && panelMatOpen;
               return (
@@ -2333,7 +2239,7 @@ export default function TakeoffCanvas() {
                         {sf ? `${num(sf)} SF` : ""}{wsf ? `${sf ? " · " : ""}${num(wsf)} SF wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${num(lf)} LF` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
                       </div>
                     </div>
-                    <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{cs.length}▦</span>
+                    <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
                     <button onClick={(e) => { e.stopPropagation(); setActiveCond(c.id); setPanelMatOpen((v) => (on ? !v : true)); }}
                       title="Assemblies — supporting materials for this condition"
                       style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOn ? "var(--ink)" : "transparent", color: matOn ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>

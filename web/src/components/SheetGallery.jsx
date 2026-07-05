@@ -5,9 +5,8 @@
 // at a time, and yield while the canvas is rastering a full sheet.
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { parseSheetKey, extractSheetNumber, detectScale, RENDER_SCALE } from "../lib/sheets";
+import { parseSheetKey, extractSheetNumber, detectScale, RENDER_SCALE, MAX_GROUP } from "../lib/sheets";
 
-const MAX_GROUP = 4;
 const THUMB_W = 380;
 
 export default function SheetGallery({
