@@ -163,6 +163,12 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
     const mt = meta[i];
     if (mt & SEG_CURVE) continue;
     if (mt & SEG_CLIP) { soft[i] = 1; continue; }
+    // Filled-not-stroked outlines bound SOLID ink (wall poché). Their short
+    // 0°/90° edges ride a tile grid's rhythm and would classify as hatch — but
+    // making them transparent lets the escalated fill cross a solid black band
+    // (the leak that turned hatched-room clicks into "dense linework" guards).
+    // Hatch itself is stroked linework, so exempting fills costs nothing.
+    if (mt & SEG_FILLONLY) continue;
     const x1 = segs[i * 4] * ws, y1 = segs[i * 4 + 1] * ws, x2 = segs[i * 4 + 2] * ws, y2 = segs[i * 4 + 3] * ws;
     const dx = x2 - x1, dy = y2 - y1;
     const len = Math.hypot(dx, dy);

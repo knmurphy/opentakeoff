@@ -151,6 +151,27 @@ test("hatch: room-scale rhythm (parallel walls above the pitch cap) is never hat
   assert.ok(approx(ringArea(traceRegion(f)), 60 * 400, 0.08), "one unit only");
 });
 
+test("hatch: fill-only (poché) walls riding the tile rhythm stay hard — the room traces", () => {
+  // The VA demo plan's failure mode: walls drawn as SOLID FILLED shapes whose
+  // short 0°/90° outline edges sit exactly on the tile grid's pitch. If they
+  // classify as hatch, the escalated fill crosses solid ink and leaks — the
+  // click came back as a "dense linework" guard instead of the room.
+  const grid: number[] = [];
+  for (let x = 20; x <= 980; x += 8) grid.push(x, 20, x, 780);   // sheet-wide rhythm
+  for (let y = 20; y <= 780; y += 8) grid.push(20, y, 980, y);   // room walls sit on multiples of 8
+  const all = [...border, ...room, ...grid];
+  const meta = zeroMeta(all);
+  const roomStart = border.length >> 2;
+  for (let k = 0; k < 4; k++) meta[roomStart + k] = SEG_FILLONLY; // the room is a filled poché band
+  const m = buildMask(all, IMG_W, IMG_H, MAXDIM, meta);
+  assert.ok(m.softCount > 100, `grid classifies soft, got ${m.softCount}`);
+  const f = floodRegion(m, 400, 300);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.hatchFiltered, true);
+  assert.ok(approx(ringArea(traceRegion(f)), 240000, 0.03), `escalated ring ≈ room area, got ${ringArea(traceRegion(f))}`);
+});
+
 test("hatch: a hatched room with a real door gap still refuses (no faked region)", () => {
   const gapped = [
     100, 100, 380, 100, 420, 100, 700, 100,
