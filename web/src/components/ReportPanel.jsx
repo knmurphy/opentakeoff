@@ -9,7 +9,7 @@ import { buildContribution, sendContribution, isContributeConfigured } from "../
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onClose }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose }) {
   const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
   const g = grandTotals(rows);
   const matSummary = materialsSummary(rows);
@@ -35,6 +35,12 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
         <button className="btn-ghost" onClick={exportJson} disabled={!rows.length}><Icon name="document" size={13} />JSON</button>
         <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length}>Print</button>
+        {onMarkedSet && (
+          <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length}
+            title={`Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`}>
+            <Icon name="document" size={13} />Marked set{markedSetDark ? " ☾" : ""}
+          </button>
+        )}
         <button className="btn-primary" onClick={() => setShowContribute(true)} disabled={!rows.length}
           title="Optionally contribute this takeoff's derived data to the open flooring model">
           <Icon name="oneClick" size={13} />Contribute

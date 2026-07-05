@@ -21,6 +21,7 @@ import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, distToSeg, hitShape } from "../lib/geometry.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -1508,6 +1509,29 @@ export default function TakeoffCanvas() {
     setMarkups((ms) => [...ms, { id: uid("mk"), sheet_id: key, rfi_id: "", ...m }]);
     setShowMarkupPanel(true);
   }
+  // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
+  // drawn, legend cover with net totals — built fully in the browser
+  // (lib/markedset.js). Exports in the CURRENT view: dark canvas → dark PDF.
+  async function exportMarkedSet() {
+    try {
+      setCommitMsg("Building the marked set…");
+      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...markups.map((m) => m.sheet_id)])];
+      const sheetMeta = keys.map((key) => {
+        const { file, page } = parseSheetKey(key);
+        return { key, file, page, label: tabLabel(key) };
+      }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
+      const { bytes, filename } = await buildMarkedSetPdf({
+        projectName, dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
+        getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
+        loadPdfData: (file) => store.loadPdfData(file),
+      });
+      downloadBytes(filename, bytes);
+      setCommitMsg(`Marked set downloaded — ${filename}`);
+    } catch (e) {
+      setCommitMsg(`Marked set failed: ${e.message || e}`);
+    }
+  }
+
   function placeMarkup(p) {
     const tp = panelAt(p[0]);
     const norm = (q, panel) => [(q[0] - panel.xOffset) / panel.img.w, q[1] / panel.img.h];
@@ -2283,6 +2307,7 @@ export default function TakeoffCanvas() {
           projectName={projectName} onProjectName={setProjectName}
           conditions={conditions} shapes={shapes}
           sheetLabel={(k) => tabLabel(k)}
+          onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
           onClose={() => setShowReport(false)}
         />
       )}
