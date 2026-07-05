@@ -24,7 +24,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 ### Tools
 | Key | Tool | What it does |
 |---|---|---|
-| `O` | **One‑Click Area** | Click inside a room; the enclosed space auto‑selects, traces, and snaps to corners. Review, then Create. |
+| `O` | **One‑Click Area** | Click inside a room; the enclosed space auto‑selects, traces, and snaps to corners — hatched/tiled rooms fill to the real walls (hatch linework is classified and seen through). Review, then Create. |
 | `A` | **Area** | Trace a polygon → floor SF. |
 | `R` | **Rectangle** | Two‑corner rectangle → floor SF. |
 | `L` | **Linear** | Trace a run → LF (＋ border SF if the condition has a thickness). |
@@ -97,12 +97,13 @@ Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, gr
 - **Regroup** — restore the last side‑by‑side composition in one click after scaling sheets individually.
 - **Hi‑Res** — crisper rendering when zoomed in (per sheet, per browser). Does **not** change quantities.
 - **Snap (beta)** — snap points to plan lines/corners.
+- **Dark view (☾)** — negative-print mode in the zoom cluster: sheets invert to light-on-dark, hatches stay legible, and the toggle is remembered per browser.
 
 ### Markup layer
-Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted).
+Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
 
 ### Report & export
-Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / JSON** export.
+Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
 
 ### Saving
 All drawings, scales, conditions, and markups autosave to this browser (IndexedDB + localStorage). Storage is **per origin** — i.e. per `localhost:PORT` / per domain. A different port = a fresh, empty workspace.
@@ -111,7 +112,7 @@ All drawings, scales, conditions, and markups autosave to this browser (IndexedD
 
 ## 4. Tips
 
-- Door openings usually stay closed in One‑Click (the door leaf + swing arc are linework). If a fill **spills**, click a more enclosed spot or trace with **Area**.
+- Door openings usually stay closed in One‑Click (the door leaf + swing arc are linework). If a fill **spills**, click a more enclosed spot or trace with **Area**. A hatched room with a genuinely open doorway still refuses rather than guessing — that's deliberate.
 - Raster (scanned) plans have no vector linework — One‑Click/Snap won't work; trace manually.
 - Set the scale **before** you measure; changing it re‑flows dependent shapes.
 - Waste is per condition — set it to match the install (e.g. ~8% straight‑lay, ~15% diagonal, ~20% herringbone).
