@@ -84,9 +84,30 @@ const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488
 const NO_FILL = "none";
 
 // SVG <pattern> for a condition (userSpaceOnUse → scales with the plan, CAD-style).
-function HatchPattern({ id, type, line, fill }) {
+// Invert a canvas's pixels in place: one difference-with-white pass (an
+// involution — applying it again flips back). This is how the negative/dark
+// view works: pixel inversion costs one pass at draw time, where a CSS
+// `filter: invert(1)` would make every sheet canvas a permanently-filtered
+// compositor layer re-processed on every frame — with several panels open on
+// a hi-Hz display that chain overloads the compositor (layer eviction =
+// flicker/void glitches).
+function invertCanvasPixels(cv) {
+  if (!cv || !cv.width || !cv.height) return;
+  const ctx = cv.getContext("2d");
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);   // raw device px — ignore any render transform
+  ctx.globalCompositeOperation = "difference";
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.restore();
+}
+
+function HatchPattern({ id, type, line, fill, dark }) {
   const sw = 1.1;
-  const bg = fill && fill !== NO_FILL ? <rect width={10} height={10} fill={fill} opacity={0.18} /> : null;
+  // dark mode legibility comes from brighter alphas baked into the pattern —
+  // never a CSS filter over the shape overlay (that re-rasterizes the whole
+  // layer on every sync)
+  const bg = fill && fill !== NO_FILL ? <rect width={10} height={10} fill={fill} opacity={dark ? 0.32 : 0.18} /> : null;
   const s = (d) => <path d={d} stroke={line} strokeWidth={sw} fill="none" />;
   const wrap = (kids) => <pattern id={id} patternUnits="userSpaceOnUse" width={10} height={10}>{bg}{kids}</pattern>;
   switch (type) {
@@ -361,6 +382,14 @@ export default function TakeoffCanvas() {
 
   const [scales, setScales] = useState({});
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
+  const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
+  // negative view is baked into the canvas PIXELS (invertCanvasPixels), never a
+  // CSS filter — track which canvases currently hold inverted pixels (only
+  // canvases that finished a render get an entry), + darkMode readable from
+  // async render chains
+  const canvasInvertedRef = useRef(new Map());
+  const darkModeRef = useRef(darkMode);
   const [hiResKeys, setHiResKeys] = useState(() => {        // per-sheet hi-res raster — per user (localStorage)
     try { return JSON.parse(localStorage.getItem("opentakeoff_hires") || "[]"); } catch { return []; }
   });
@@ -692,6 +721,22 @@ export default function TakeoffCanvas() {
     return t.then((task) => task.promise);
   }, []);
 
+  // dark toggle: flip the pixels of every rendered canvas in place — instant,
+  // no pdf.js re-render. Canvases without a map entry haven't rendered yet
+  // (their chain applies the current mode when it finishes) — skip those, or
+  // difference-fill would paint transparent backing stores white.
+  useEffect(() => {
+    darkModeRef.current = darkMode;
+    const flip = (cv) => {
+      if (cv && canvasInvertedRef.current.has(cv) && canvasInvertedRef.current.get(cv) !== darkMode) {
+        invertCanvasPixels(cv);
+        canvasInvertedRef.current.set(cv, darkMode);
+      }
+    };
+    for (const [, cv] of panelCanvasRefs.current) flip(cv);
+    flip(detailCanvasRef.current);
+  }, [darkMode]);
+
   // ── render the sheet group (a single sheet is a group of one) ──────────────
   // Two phases: (A) resolve every panel's dimensions — no raster — so the row
   // layout is final before any pixel paints, then (B) raster sequentially left
@@ -709,6 +754,7 @@ export default function TakeoffCanvas() {
     vectorSegsRef.current.clear();
     segMetaRef.current.clear();
     maskCacheRef.current.clear();
+    canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
     renderScalesRef.current.clear();
     try { detailTaskRef.current?.cancel(); } catch { /* done */ }
@@ -743,9 +789,15 @@ export default function TakeoffCanvas() {
         }
         if (!canvas) continue;
         canvas.width = m.w; canvas.height = m.h;
+        // dark: pdf.js paints light pixels progressively — keep the canvas hidden
+        // and reveal it already-inverted, or every render flashes white-on-dark
+        canvas.style.visibility = darkModeRef.current ? "hidden" : "";
         const rt = m.pageObj.render({ canvasContext: canvas.getContext("2d"), viewport: m.viewport });
         renderTasksRef.current.set(m.key, rt);
         await rt.promise; if (stale()) return;
+        if (darkModeRef.current) invertCanvasPixels(canvas);   // negative view baked into pixels
+        canvasInvertedRef.current.set(canvas, !!darkModeRef.current);
+        canvas.style.visibility = "";
         // snap-to-vector index per panel (best-effort; off until the user enables it)
         m.pageObj.getOperatorList().then((ol) => {
           if (stale()) return;
@@ -847,10 +899,16 @@ export default function TakeoffCanvas() {
     cv.style.left = `${fp.xOffset + x0}px`; cv.style.top = `${y0}px`;
     cv.style.width = `${regW}px`; cv.style.height = `${regH}px`;
     cv.width = bw; cv.height = bh; cv.style.display = "block";
+    cv.style.visibility = darkModeRef.current ? "hidden" : "";   // reveal already-inverted (see base render)
+    canvasInvertedRef.current.delete(cv);   // width assignment cleared the pixels
     try { detailTaskRef.current?.cancel(); } catch { /* done */ }
     const rt = pageObj.render({ canvasContext: cv.getContext("2d"), viewport: vp, transform: [1, 0, 0, 1, -x0 * factor, -y0 * factor] });
     detailTaskRef.current = rt;
-    rt.promise.catch(() => {});   // RenderingCancelledException on rapid re-zoom is expected
+    rt.promise.then(() => {
+      if (darkModeRef.current) invertCanvasPixels(cv);   // negative view baked into pixels
+      canvasInvertedRef.current.set(cv, !!darkModeRef.current);
+      cv.style.visibility = "";
+    }).catch(() => {});   // RenderingCancelledException on rapid re-zoom is expected
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tf, groupSig, status, focusKey]);
 
@@ -1637,17 +1695,19 @@ export default function TakeoffCanvas() {
   // Pattern id encodes the appearance so a hatch/color change yields a NEW paint
   // server — otherwise browsers keep painting the cached old pattern (the "it
   // reverted" bug). Shapes and <defs> use the same id.
-  const patId = (c) => `hx-${c.id}-${c.hatch || "solid"}-${String(c.color).slice(1)}-${String(c.fill || "n").slice(1)}`;
+  const patId = (c) => `hx-${c.id}-${c.hatch || "solid"}-${String(c.color).slice(1)}-${String(c.fill || "n").slice(1)}${darkMode ? "-d" : ""}`;
   // Fill for a committed shape. Hatch tiles are 10 stage-units — once the zoom
-  // puts a tile under ~4 screen px the pattern aliases into subpixel mush, so
-  // overview zoom swaps to a solid tint and every condition still reads as a
-  // clear color block.
+  // puts a tile under ~4 screen px the pattern aliases into subpixel mush
+  // (worst over the inverted dark sheet), so overview zoom swaps to a solid
+  // tint and every condition still reads as a clear color block. Dark mode gets
+  // its legibility from brighter alphas here, NOT from a CSS filter on the
+  // overlay — filtering that whole layer re-rasterizes it on every sync.
   const shapeFill = (cond) => {
     if (!cond) return "none";
     const solid = cond.fill && cond.fill !== NO_FILL ? cond.fill : null;
-    if (tf.scale < 0.35) return (solid || cond.color) + "40";
+    if (tf.scale < 0.35) return (solid || cond.color) + (darkMode ? "59" : "40");
     if (cond.hatch && cond.hatch !== "solid") return `url(#${patId(cond)})`;
-    return solid ? solid + "33" : "none";
+    return solid ? solid + (darkMode ? "4d" : "33") : "none";
   };
   const mm = closedMetrics(poly);
   // the live readout prices the IN-PROGRESS poly with its own panel's scale
@@ -1977,7 +2037,7 @@ export default function TakeoffCanvas() {
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
           onDoubleClick={() => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") finishShape(); }}
-          style={{ position: "absolute", inset: 0, background: "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
+          style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
               EFFECTIVE point (angle-locked / endpoint-snapped), the SPLINE STAR at
@@ -2006,7 +2066,7 @@ export default function TakeoffCanvas() {
             <canvas ref={detailCanvasRef} style={{ position: "absolute", left: 0, top: 0, display: "none", pointerEvents: "none" }} />
             <svg width={stage.w} height={stage.h} viewBox={`0 0 ${stage.w} ${stage.h}`} style={{ position: "absolute", top: 0, left: 0, overflow: "visible", pointerEvents: "none" }}>
               <defs>
-                {conditions.map((c) => <HatchPattern key={patId(c)} id={patId(c)} type={c.hatch || "solid"} line={c.color} fill={c.fill} />)}
+                {conditions.map((c) => <HatchPattern key={patId(c)} id={patId(c)} type={c.hatch || "solid"} line={c.color} fill={c.fill} dark={darkMode} />)}
               </defs>
               {/* committed shapes + markups, one group per panel in its local frame */}
               {panels.map((p) => {
@@ -2015,7 +2075,7 @@ export default function TakeoffCanvas() {
                 const label = labelFor(p);
                 return (
                   <g key={p.key} transform={`translate(${p.xOffset},0)`}>
-                    {panels.length > 1 && <text x={0} y={-26} fontSize={64} fontWeight={700} fill="#6b6256">{label}</text>}
+                    {panels.length > 1 && <text x={0} y={-26} fontSize={64} fontWeight={700} fill={darkMode ? "#9a917f" : "#6b6256"}>{label}</text>}
                     {pShapes.map((s) => {
                       const cond = condById[s.condition_id];
                       const col = cond?.color || "#888";
@@ -2146,6 +2206,9 @@ export default function TakeoffCanvas() {
                 style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 18, fontWeight: 700 }}>{lbl}</button>
             ))}
             <button onClick={() => stage.w && fitToView(stage.w, stage.h)} title="Fit" style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 12 }}>fit</button>
+            <button onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Light view" : "Dark view (negative print)"}
+              style={{ width: 34, height: 34, borderRadius: 0, border: `1px solid ${darkMode ? "var(--cobalt)" : "var(--ink-faint)"}`, background: darkMode ? "var(--cobalt)" : "var(--paper-bright)", color: darkMode ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 13 }}>
+              {darkMode ? "☀" : "☾"}</button>
           </div>
         </div>
 
