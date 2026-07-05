@@ -13,6 +13,8 @@ No account. No upload. No install. It runs in your browser.
 
 [**▶ Try the live demo**](https://opentakeoff.netlify.app) · [Quick start](#quick-start) · [Features](#features) · [Deploy it](#run-it--deploy-it) · [Build on top](#build-on-top-of-it) · [Contributing](CONTRIBUTING.md)
 
+**New — July 2026:** One-Click Area now traces **hatched rooms** · **Dark view** (negative print) · **Marked Set PDF export** — [full changelog](CHANGELOG.md)
+
 <br/>
 
 <img src="docs/img/social-card.png" alt="OpenTakeoff — a flooring takeoff in progress on a floor finish plan" width="820"/>
@@ -49,7 +51,7 @@ Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a 
 Drag in a plan **PDF**, an **image** (a scan or a screenshot), or a whole **`.zip` plan set** straight off a bid platform. Zips are unpacked and images wrapped to PDF *in your browser* — multi-page and multi-sheet, with up to **4 sheets side-by-side**. No upload step, no conversion service, no account.
 
 ### 2. A real measuring engine — not a counter with a ruler
-**One-Click Area** is the headline: click inside a room and the linework bounds it, the polygon traces itself, and the vertices snap to true corners. Plus the full manual kit — **Area, Rectangle, Linear, Surface-Area (walls), Count,** and **Deduct** (for columns, voids, and openings). This is the same engine pulled out of a commercial estimating app, not a toy reimplementation.
+**One-Click Area** is the headline: click inside a room and the linework bounds it, the polygon traces itself, and the vertices snap to true corners. It reads the drawing the way an estimator does — **hatching and poché don't fool it**: tile grids, plank lines, and section fills are classified as pattern, not wall, so a click inside a fully hatched room still traces the room (and a misread can never make the result worse than the strict fill — it escalates only when the strict pass comes back trapped). Plus the full manual kit — **Area, Rectangle, Linear, Surface-Area (walls), Count,** and **Deduct** (for columns, voids, and openings). This is the same engine pulled out of a commercial estimating app, not a toy reimplementation.
 
 Manual tracing gets a real drafting aid: **45°/90° angle lock**. Come within a few degrees of square or diagonal and the segment you're drawing locks onto the axis — the click commits the locked point, so walls come out dead square (hold **⇧** to force the lock at any angle). On the canvas the crosshair **is** the cursor: the OS pointer hides, a star marks the crossing, and in-progress work draws in the instrument's own cobalt (committed shapes wear their condition color). The lock reads quietly — the star swells, the preview thickens, and a chip by the cursor shows the locked angle plus the **live segment length**. No extra chrome on your sheet.
 
@@ -65,8 +67,10 @@ Per condition, list the consumables that actually go on the order: adhesive, sea
 ### 6. Reports & export
 A per-condition breakdown — **Floor / Wall / Border SF, LF, EA, total SF, SY**, with and without waste — plus a combined **materials buy list**. Export to **CSV** or **JSON**, or print it. Waste is applied only in the report (the order quantity), never to the live measured number, so your takeoff and your buy list stay honest about which is which.
 
+And when the numbers need to leave the app: **Marked Set PDF**. One click builds a distribution-ready PDF entirely in your browser — every sheet with the work burned in as drawn (condition colors, hatches, quantity chips, count markers, markups) behind a legend cover with the full totals and a by-sheet breakdown. Send it to a GC who will never install anything.
+
 ### 7. A vector-sharp canvas + plan-set tools
-Zoom in and the linework stays **razor-sharp**: past ~1.15× the visible region re-renders straight from the PDF vectors at your current zoom — Bluebeam/AutoCAD-style — instead of magnifying a fixed bitmap, so fine callouts and hatching never blur. It overlays just what's on screen, so there's no giant full-sheet bitmap to hold. Plus a visual **gallery** (`G`) to pick and open sheets, **Regroup** to restore a side-by-side composition in one click, per-sheet **Hi-Res** base rendering, **Snap** (beta) to plan lines and corners, and a separate **markup layer** (revision clouds, callouts, text notes) that's never counted in the totals.
+Zoom in and the linework stays **razor-sharp**: past ~1.15× the visible region re-renders straight from the PDF vectors at your current zoom — Bluebeam/AutoCAD-style — instead of magnifying a fixed bitmap, so fine callouts and hatching never blur. It overlays just what's on screen, so there's no giant full-sheet bitmap to hold. Plus a **dark view** (☾) that inverts the sheet itself — a true negative print, white linework on black, not a CSS filter — with hatches retuned so takeoffs read as well at night as they do at noon. And a visual **gallery** (`G`) to pick and open sheets, **Regroup** to restore a side-by-side composition in one click, per-sheet **Hi-Res** base rendering, **Snap** (beta) to plan lines and corners, and a separate **markup layer** (revision clouds, callouts, text notes) that's never counted in the totals.
 
 ### 8. Yours, locally
 Every drawing, scale, condition, and markup autosaves to **your browser** (IndexedDB + localStorage). Nothing is uploaded, there's no account, and there's no server in the default build. Host the static build yourself and it stays exactly that way.
@@ -86,8 +90,9 @@ Every drawing, scale, condition, and markup autosaves to **your browser** (Index
 | **Conditions** | Color + CAD hatch per finish, waste %, ×N multiplier, height, thickness → border SF |
 | **Assemblies** | Per-condition supporting materials with coverage rates → rounded order quantities, trowel picker |
 | **Report** | Per-condition Floor/Wall/Border SF, LF, EA, SY, with/without waste + materials buy list |
-| **Export** | CSV, JSON, print |
+| **Export** | CSV, JSON, print, **Marked Set PDF** (sheets + burned-in takeoff + legend cover, built in-browser) |
 | **Markups** | Revision clouds, callouts, text notes — separate layer, never counted |
+| **View** | Light or **dark (negative print)** — sheet pixels inverted at draw time, persists per browser |
 | **Storage** | IndexedDB + localStorage — client-only, nothing uploaded |
 | **Deploy** | One static build, hostable on Netlify, Vercel, GitHub Pages, S3, or any static host |
 
