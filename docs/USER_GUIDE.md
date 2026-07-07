@@ -13,7 +13,7 @@ no server.
 3. **Pick a condition** — the **Conditions** bar holds your finishes (WD‑1, LVT‑1, …). Click one to arm it (or press its number, `1`–`9`). Edit its color / hatch / waste / height in the bar.
 4. **Draw the takeoff** — pick a Measure tool and trace. Each shape is color‑coded to its condition.
 5. **Add supporting materials** *(optional)* — open **Assemblies** on the condition (adhesive, sealer, poly…) with coverage rates; order quantities derive automatically.
-6. **Report** — open **Report** for the per‑condition breakdown (SF/LF/EA, waste, SY) and the materials buy list; export **CSV** or **JSON**.
+6. **Report** — open **Report** for the per‑condition breakdown (SF/LF/EA, waste, SY) and the materials buy list; export **CSV**, **Excel (.xlsx)**, or **JSON**.
 
 Your work autosaves to this browser continuously. Reload and it's still there.
 
@@ -103,7 +103,9 @@ Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, gr
 Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
 
 ### Report & export
-Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
+Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
+
+**XLSX** downloads a four-tab Excel workbook, built entirely in your browser: **Conditions** (the report table — it follows your Columns picker, same as the CSV), **By sheet** (measured base quantities per sheet), **Materials** (per-condition lines plus the combined buy list), and **Shapes** (per-shape measured detail — no multiplier, no waste). The numbers are the same ones on screen: waste is applied only to order quantities, never to measured values.
 
 ### Saving
 All drawings, scales, conditions, and markups autosave to this browser (IndexedDB + localStorage). Storage is **per origin** — i.e. per `localhost:PORT` / per domain. A different port = a fresh, empty workspace.

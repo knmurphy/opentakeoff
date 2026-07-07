@@ -5,6 +5,14 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ## 2026-07-07
 
 ### Added
+- **Excel export.** An **XLSX** button in the Takeoff report downloads a
+  four-tab workbook — **Conditions** (follows the same Columns picker as the
+  CSV), **By sheet** (measured base quantities), **Materials** (per-condition
+  lines + combined buy list), and **Shapes** (per-shape measured detail). The
+  SpreadsheetML is hand-rolled in-browser and zipped with the already-bundled
+  fflate (lazy-loaded on first use) — no SheetJS, no exceljs, no new
+  dependency. Same numbers as the on-screen table: waste applies only to order
+  quantities, never to measured values. (#16)
 - **Continuous deployment.** Merges to `main` now auto-deploy to
   [takeoff.345flooring.com](https://takeoff.345flooring.com) via a GitHub
   Actions workflow that re-runs the full check (typecheck + tests + build) and
