@@ -231,6 +231,37 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   return title + lines.join("\n") + "\n";
 }
 
+// Report JSON envelope — schema opentakeoff.report.v1. Extracted pure so the
+// key set is testable (test/totals.test.ts pins it; schema drift fails there).
+//   - sheets[] carries scale provenance under `scale_source` — the SAME key the
+//     persisted payload uses ("unknown" when unrecorded).
+//   - sheets[] deliberately omits units_per_px: that figure is feet per
+//     internal baseline-raster pixel (RENDER_SCALE-coupled), uninterpretable
+//     outside the app. It stays in the persisted payload only.
+/**
+ * @param {{projectName?: string, rows?: any[], bySheet?: any[],
+ *   scaleInfo?: Array<{sheet_id: any, source?: string, [k: string]: any}>, markups?: any[],
+ *   sheetLabel?: ((sheetId: any) => string)|null}} args
+ */
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null }) {
+  const label = (id) => (sheetLabel ? sheetLabel(id) : id);
+  return {
+    schema: "opentakeoff.report.v1",
+    project_name: projectName || null,
+    generated_with: "OpenTakeoff",
+    sheets: scaleInfo.map((si) => ({ sheet_id: si.sheet_id, sheet: label(si.sheet_id), scale_source: si.source || "unknown" })),
+    conditions: rows,
+    by_sheet: bySheet.map((gp) => ({
+      sheet_id: gp.sheet_id,
+      sheet: label(gp.sheet_id),
+      rows: gp.rows.map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) })),
+    })),
+    totals: grandTotals(rows),
+    materials: materialsSummary(rows),
+    markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "" })),
+  };
+}
+
 export function downloadText(filename, text, type = "text/plain") {
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);

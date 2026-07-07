@@ -4,7 +4,7 @@
 // "Contribute to the open flooring model" flow.
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
+import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
@@ -74,19 +74,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify({
-      schema: "opentakeoff.report.v1",
-      project_name: projectName || null, generated_with: "OpenTakeoff",
-      sheets: scaleInfo.map((si) => ({ ...si, sheet: sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id })),
-      conditions: rows,
-      by_sheet: bySheet.map((gp) => ({
-        sheet_id: gp.sheet_id,
-        sheet: sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id,
-        rows: gp.rows.map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) })),
-      })),
-      totals: g, materials: matSummary,
-      markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: sheetLabel ? sheetLabel(m.sheet_id) : m.sheet_id, text: m.text || "" })),
-    }, null, 2),
+    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel }), null, 2),
     "application/json");
   const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName), "text/csv");
   const exportShapesJson = () => downloadText(`${baseName}_shapes.json`,
