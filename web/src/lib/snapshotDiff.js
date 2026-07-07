@@ -40,7 +40,7 @@ function deltasOf(fields, a, b) {
 // produce a "changed" row whose every cell showed "—". Status and cells now
 // derive from the same 0.05 threshold — sub-display drift is "unchanged"
 // (and, when it's the only difference, the takeoff reports identical).
-const allZero = (d) => Object.values(d).every((v) => Math.round(Math.abs(v) * 10) === 0);
+const allZero = (d) => Object.entries(d).every(([k, v]) => Math.round(Math.abs(v) * (k === "ea" ? 1 : 10)) === 0);
 
 // Pair A rows with B rows: id match first, then finish_tag fallback over the
 // leftovers (first-come, exact string, empty tags never pair). Returns entries

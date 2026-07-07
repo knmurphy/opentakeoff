@@ -234,3 +234,11 @@ test("missing payload arrays are tolerated — diff against {}", () => {
   assert.equal(allRemoved.conditions[0].deltas.floor_sf, -100);
   assert.equal(allRemoved.by_sheet[0].rows[0].deltas.floor_sf, -100);
 });
+
+test("allZero honors EA's 0dp display: fractional EA drift below 0.5 is unchanged", () => {
+  const a = { conditions: [{ id: "c1", finish_tag: "CT-1" }], shapes: [{ condition_id: "c1", sheet_id: "s1", measure_role: "count", computed: { count: 1 } }] };
+  // hand-edited payloads can carry fractional counts; the panel shows EA at 0dp
+  const b = { conditions: [{ id: "c1", finish_tag: "CT-1" }], shapes: [{ condition_id: "c1", sheet_id: "s1", measure_role: "count", computed: { count: 1.3 } }] };
+  const d = diffSnapshots(a, b);
+  assert.equal(d.conditions.find((r: any) => r.key === "c1")?.status, "unchanged");
+});

@@ -22,7 +22,7 @@
 // neither module touches the other's exports at module-eval time (only inside
 // function bodies) — ESM live bindings resolve by first call.
 import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
-import { parseSheetKey } from "./sheets";
+import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
 export const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
