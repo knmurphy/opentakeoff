@@ -65,6 +65,19 @@ test("shapesDetail: height_override only when the flag is literally true", () =>
   assert.equal(w2.height_override, true);
 });
 
+test("shapesDetail: height_ft — legacy shapes fall back to the condition height; an override wins outright, even 0", () => {
+  const conds9 = [{ id: "ct", finish_tag: "CT-1", height_ft: 9 }];
+  const shapes = [
+    { id: "legacy", sheet_id: "sh1", condition_id: "ct", measure_role: "surface_area", computed: { area_sf: 90 } },   // predates per-shape heights
+    { id: "own", sheet_id: "sh1", condition_id: "ct", measure_role: "surface_area", computed: { area_sf: 80 }, height_ft: 8 },
+    { id: "zero", sheet_id: "sh1", condition_id: "ct", measure_role: "surface_area", computed: { area_sf: 0 }, height_ft: 0, height_override: true },
+  ];
+  const [legacy, own, zero] = shapesDetail(conds9, shapes);
+  assert.equal(legacy.height_ft, 9);   // condition fallback — what its SF was computed with
+  assert.equal(own.height_ft, 8);
+  assert.equal(zero.height_ft, 0);     // overridden 0 stays 0, never the condition's 9
+});
+
 test("shapesDetail: surface_area carries wall SF and run LF (reference)", () => {
   const shapes = [{ id: "w", sheet_id: "sh1", condition_id: "ct", measure_role: "surface_area", computed: { area_sf: 270, perimeter_lf: 30 }, height_ft: 9 }];
   const [w] = shapesDetail(conds, shapes);
