@@ -2,6 +2,18 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-07
+
+### Added
+- **Continuous deployment.** Merges to `main` now auto-deploy to
+  [takeoff.345flooring.com](https://takeoff.345flooring.com) via a GitHub
+  Actions workflow that re-runs the full check (typecheck + tests + build) and
+  publishes `web/dist` to Netlify with `--no-build`.
+- **Local/CI parity.** Node is pinned by `web/.nvmrc` (22) and read by both nvm
+  and CI; `npm run check` runs the exact CI sequence locally. `main` is
+  protected: PRs only, green `web` check required, branch up to date, no
+  force-pushes.
+
 ## 2026-07-05 (evening)
 
 ### Fixed

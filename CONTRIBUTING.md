@@ -7,6 +7,7 @@ issues, and ideas are all welcome.
 
 ```bash
 cd web
+nvm use            # Node version comes from web/.nvmrc — CI uses the same file
 npm install
 npm run dev        # http://localhost:5173 — drag in demo/sample-plan.pdf
 ```
@@ -14,10 +15,21 @@ npm run dev        # http://localhost:5173 — drag in demo/sample-plan.pdf
 Before opening a PR:
 
 ```bash
-npm run typecheck  # tsc --noEmit (the geometry libs are typed)
-npm test           # node test runner over the One-Click geometry
-npm run build      # vite build -> dist/
+npm run check      # typecheck + test + build — the exact sequence CI runs
 ```
+
+If `npm run check` is green locally, CI will be green: CI reads the Node
+version from `web/.nvmrc` and runs this same script, nothing more.
+
+## How changes ship
+
+- `main` is protected: all changes land via PR, the `web` CI check must pass,
+  and the branch must be up to date with `main` before merging. No force-pushes.
+- Merging to `main` triggers the Deploy workflow, which re-runs `npm run check`
+  and publishes `web/dist` to Netlify (production:
+  [takeoff.345flooring.com](https://takeoff.345flooring.com)). Netlify never
+  builds on its own — the only build environments are your machine and Actions,
+  both pinned by `.nvmrc`.
 
 The optional AI sandbox lives in [`server/`](server/README.md) and is not needed
 for canvas work.

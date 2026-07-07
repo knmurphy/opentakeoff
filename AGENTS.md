@@ -6,11 +6,19 @@ OpenTakeoff is a **client-only React app**: a PDF construction-takeoff canvas fo
 
 ```bash
 cd web
+nvm use          # Node pinned by web/.nvmrc (CI reads the same file)
 npm install
 npm run dev      # http://localhost:5173 — hot reload
 npm test         # node:test over the pure geometry + totals math (test/*.test.ts)
 npm run build    # → web/dist/ (static output; this is what Netlify deploys)
+npm run check    # typecheck + test + build — exactly what CI runs; green here ⇒ green CI
 ```
+
+**Shipping:** `main` is protected — changes land only via PR with the `web` CI
+check green and the branch up to date. Merging to `main` runs
+`.github/workflows/deploy.yml`, which re-runs `npm run check` and publishes
+`web/dist` to Netlify at <https://takeoff.345flooring.com> (`--no-build`;
+Netlify never builds anything itself).
 
 The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.test.ts`); the canvas itself is verified by hand — **Vite does not flag undefined identifiers in JSX**, so grep for your new identifiers after editing and load the app once before you call it done. The bundled sample plan (`web/public/demo/`, wired to the "Load sample plan" button) is the fastest end-to-end check: load it, press `A`, trace a room, open Report.
 
