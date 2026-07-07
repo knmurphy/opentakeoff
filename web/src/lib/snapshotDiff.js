@@ -35,7 +35,12 @@ function deltasOf(fields, a, b) {
   return d;
 }
 
-const allZero = (d) => Object.values(d).every((v) => v === 0);
+// "changed" is judged at DISPLAY precision, not round2: the panel's delta
+// cells render 1 decimal and zero-gate there, so a 0.01–0.04 delta used to
+// produce a "changed" row whose every cell showed "—". Status and cells now
+// derive from the same 0.05 threshold — sub-display drift is "unchanged"
+// (and, when it's the only difference, the takeoff reports identical).
+const allZero = (d) => Object.values(d).every((v) => Math.round(Math.abs(v) * 10) === 0);
 
 // Pair A rows with B rows: id match first, then finish_tag fallback over the
 // leftovers (first-come, exact string, empty tags never pair). Returns entries

@@ -119,6 +119,29 @@ test("DUPLICATE finish_tags: two same-tag recreated conditions pair by order —
   assert.equal(d.identical, true);
 });
 
+// ── 3b. display-threshold status ─────────────────────────────────────────────
+
+test("a sub-display delta (|Δ| < 0.05) is 'unchanged' — status agrees with the dash cells", () => {
+  // 0.03 SF rounds to "—" in every 1-decimal delta cell; the row must not
+  // claim "changed" (it used to, off the raw round2 deltas)
+  const cond = { id: "c", finish_tag: "CT-1" };
+  const A = payload([cond], [floorShape("s1", "c", "plan", 100)]);
+  const B = payload([cond], [floorShape("s1", "c", "plan", 100.03)]);
+  const d = diffSnapshots(A, B);
+  assert.equal(d.conditions[0].status, "unchanged");
+  assert.equal(d.by_sheet.length, 0);                       // the sliver-only sheet is dropped
+  assert.equal(d.identical, true);
+});
+
+test("a delta at the display threshold (0.05) still reports 'changed'", () => {
+  const cond = { id: "c", finish_tag: "CT-1" };
+  const A = payload([cond], [floorShape("s1", "c", "plan", 100)]);
+  const B = payload([cond], [floorShape("s1", "c", "plan", 100.05)]);
+  const d = diffSnapshots(A, B);
+  assert.equal(d.conditions[0].status, "changed");
+  assert.equal(d.identical, false);
+});
+
 // ── 4. quantity change ───────────────────────────────────────────────────────
 
 test("a shape's area change diffs as 'changed' with the exact round2 delta", () => {
