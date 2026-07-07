@@ -8,6 +8,7 @@ import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloa
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
+import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 
@@ -26,12 +27,18 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [] }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
   const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
   const g = grandTotals(rows);
   const matSummary = materialsSummary(rows);
   const bySheet = sheetTotals(conditions, shapes);
   const [showContribute, setShowContribute] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  // bumped by the Project info modal on every company save, so the print
+  // masthead's loadCompany() below re-reads (a cheap localStorage parse)
+  const [identityRev, setIdentityRev] = useState(0); // eslint-disable-line no-unused-vars
+  const company = loadCompany();
+  const hasClient = Boolean(clientInfo.client_name || clientInfo.client_address || clientInfo.reference || clientInfo.date);
   const [colPrefs, setColPrefs] = useState(loadColPrefs);
   const [showCols, setShowCols] = useState(false);
   const colsRef = useRef(null);
@@ -142,6 +149,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <input value={projectName} onChange={(e) => onProjectName(e.target.value)} placeholder="Project name (optional)"
           className="field-input" style={{ width: 260, padding: "5px 9px", fontSize: 13 }} />
         <div style={{ flex: 1 }} />
+        <button className="btn-ghost" onClick={() => setShowInfo(true)}
+          title="Your company identity and the client/job details for the print header and marked-set cover">Project info</button>
         <div ref={colsRef} style={{ position: "relative" }}>
           <button className="btn-ghost" onClick={() => setShowCols((s) => !s)} title="Choose which columns the table and CSV show">Columns</button>
           {showCols && (
@@ -193,7 +202,22 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         </td></tr></thead><tbody><tr><td>
         {/* print-only masthead — hidden on screen via app.css */}
         <div className="report-print-header">
+          {(company.logo || company.name || company.address) && (
+            <div style={{ marginBottom: 10 }}>
+              {company.logo && <img src={company.logo} alt="" style={{ maxHeight: 48, maxWidth: 200, display: "block", marginBottom: 4 }} />}
+              {company.name && <div style={{ fontWeight: 700, fontSize: 12 }}>{company.name}</div>}
+              {company.address && <div style={{ fontSize: 10.5, whiteSpace: "pre-line" }}>{company.address}</div>}
+            </div>
+          )}
           <div style={{ fontFamily: "var(--f-display)", fontSize: 20, fontWeight: 700 }}>{projectName || "Untitled project"}</div>
+          {hasClient && (
+            <div style={{ fontSize: 10.5, marginTop: 2, lineHeight: 1.5 }}>
+              {clientInfo.client_name && <div>Prepared for: {clientInfo.client_name}</div>}
+              {clientInfo.client_address && <div style={{ whiteSpace: "pre-line" }}>{clientInfo.client_address}</div>}
+              {clientInfo.reference && <div>Ref: {clientInfo.reference}</div>}
+              {clientInfo.date && <div>Date: {clientInfo.date}</div>}
+            </div>
+          )}
           <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, margin: "2px 0 0" }}>Generated {new Date().toLocaleDateString()}</div>
           {scaleInfo.length > 0 && (
             <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, lineHeight: 1.6, marginTop: 6 }}>
@@ -367,6 +391,115 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
       {showContribute && (
         <ContributeModal conditions={conditions} shapes={shapes} onClose={() => setShowContribute(false)} />
       )}
+      {showInfo && (
+        <ProjectInfoModal clientInfo={clientInfo} onClientInfo={onClientInfo}
+          onSaved={() => setIdentityRev((r) => r + 1)} onClose={() => setShowInfo(false)} />
+      )}
+    </div>
+  );
+}
+
+// Project info — two homes: company identity is per-device (identity.js /
+// localStorage), client/job fields are per-project (onClientInfo → autosave).
+// Company edits save on every change, so an overlay-click close loses nothing;
+// onSaved bumps identityRev so the print masthead re-reads immediately.
+function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
+  const [company, setCompany] = useState(loadCompany);
+  const [logoErr, setLogoErr] = useState("");
+  const [saveFailed, setSaveFailed] = useState(false);
+
+  // functional form: the merge must land on whatever company is CURRENT — the
+  // logo path awaits a slow normalize, and name/address typed meanwhile must
+  // not be reverted by a stale snapshot
+  const setAndSave = (updater) => {
+    setCompany((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      const ok = saveCompany(next);
+      setSaveFailed(!ok);
+      if (ok && onSaved) onSaved();
+      return next;
+    });
+  };
+
+  const onLogoFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // re-picking the same file must still fire onChange
+    if (!file) return;
+    setLogoErr("");
+    try {
+      const logo = await normalizeLogoToPng(file);
+      setAndSave((prev) => ({ ...prev, logo }));
+    } catch (err) {
+      setLogoErr(err.message || String(err));
+    }
+  };
+  const removeLogo = () => setAndSave(({ logo, ...rest }) => rest);
+  const client = (field) => (e) => onClientInfo && onClientInfo({ ...clientInfo, [field]: e.target.value });
+
+  const section = { fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" };
+  const row = { display: "block", margin: "8px 0" };
+  const err = { margin: "6px 0 0", fontSize: 11.5, color: "var(--c-danger)" };
+
+  return (
+    <div onClick={onClose} className="report-modal" style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(14,26,46,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} className="panel" style={{ width: 520, maxWidth: "100%", maxHeight: "90%", overflow: "auto", background: "var(--paper-bright)", boxShadow: "var(--shadow-2)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--ink)" }}>
+          <Icon name="document" size={16} />
+          <strong style={{ fontFamily: "var(--f-display)", fontSize: 15 }}>Project info</strong>
+        </div>
+        <div style={{ padding: 16, fontSize: 13, lineHeight: 1.6, color: "var(--ink)" }}>
+          <div style={section}>Company — yours, saved on this device</div>
+          <label style={row}>
+            <span className="field-label">Name</span>
+            <input value={company.name || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, name: e.target.value }))}
+              placeholder="Your company" className="field-input" style={{ marginTop: 4 }} />
+          </label>
+          <label style={row}>
+            <span className="field-label">Address</span>
+            <textarea value={company.address || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, address: e.target.value }))}
+              rows={2} placeholder={"Street\nCity, ST"} className="field-input" style={{ marginTop: 4, resize: "vertical" }} />
+          </label>
+          <div style={row}>
+            <span className="field-label">Logo</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+              <input type="file" accept="image/*" onChange={onLogoFile} style={{ fontSize: 12, minWidth: 0 }} />
+              {company.logo && (
+                <>
+                  <img src={company.logo} alt="Company logo" style={{ width: 120, height: "auto", flex: "none", border: "1px solid var(--ink-faint)", background: "#fff" }} />
+                  <button onClick={removeLogo}
+                    style={{ border: "none", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontSize: 11.5, padding: 0, whiteSpace: "nowrap" }}>Remove logo</button>
+                </>
+              )}
+            </div>
+            {logoErr && <p style={err}>{logoErr}</p>}
+          </div>
+          {saveFailed && <p style={err}>Couldn't save on this device</p>}
+          <div style={{ ...section, borderTop: "1px solid var(--ink-faint)", marginTop: 14, paddingTop: 12 }}>Client / job — saved with this project</div>
+          <label style={row}>
+            <span className="field-label">Client name</span>
+            <input value={clientInfo.client_name || ""} onChange={client("client_name")} className="field-input" style={{ marginTop: 4 }} />
+          </label>
+          <label style={row}>
+            <span className="field-label">Client address</span>
+            <textarea value={clientInfo.client_address || ""} onChange={client("client_address")} rows={2}
+              className="field-input" style={{ marginTop: 4, resize: "vertical" }} />
+          </label>
+          <div style={{ display: "flex", gap: 12 }}>
+            <label style={{ ...row, flex: 1 }}>
+              <span className="field-label">PO / reference</span>
+              <input value={clientInfo.reference || ""} onChange={client("reference")} className="field-input" style={{ marginTop: 4 }} />
+            </label>
+            <label style={{ ...row, flex: 1 }}>
+              <span className="field-label">Date</span>
+              <input value={clientInfo.date || ""} onChange={client("date")} placeholder={'e.g. "Bid 7/12"'}
+                className="field-input" style={{ marginTop: 4 }} />
+            </label>
+          </div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "12px 16px", borderTop: "1px solid var(--ink-faint)" }}>
+          <button className="btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
     </div>
   );
 }
