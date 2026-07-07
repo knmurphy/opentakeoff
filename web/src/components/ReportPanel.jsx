@@ -414,8 +414,12 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
   const [logoErr, setLogoErr] = useState("");
   const [saveFailed, setSaveFailed] = useState(false);
   // pick sequence: normalizeLogoToPng is async, so a slow first pick must not
-  // clobber a faster second pick — or resurrect a logo removed meanwhile
+  // clobber a faster second pick — resurrect a logo removed meanwhile — or
+  // land after the modal closes (the modal unmounts on close, so a pick still
+  // normalizing would otherwise pass its own instance's seq check and persist
+  // via saveCompany from the dead fiber)
   const logoSeq = useRef(0);
+  useEffect(() => () => { logoSeq.current++; }, []);   // unmount invalidates in-flight picks
 
   // functional form: the merge must land on whatever company is CURRENT — the
   // logo path awaits a slow normalize, and name/address typed meanwhile must
@@ -438,7 +442,7 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
     const seq = ++logoSeq.current;
     try {
       const logo = await normalizeLogoToPng(file);
-      if (seq !== logoSeq.current) return;   // superseded by a later pick/remove
+      if (seq !== logoSeq.current) return;   // superseded by a later pick/remove/close
       setAndSave((prev) => ({ ...prev, logo }));
     } catch (err) {
       if (seq !== logoSeq.current) return;   // stale failure — don't flash its error
