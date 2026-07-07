@@ -129,6 +129,22 @@ export function sheetTotals(conditions, shapes) {
   }).filter((g) => g.rows.length);   // orphan shapes (dead condition_id) can't render a row
 }
 
+// Serialization-time rounding for a sheetTotals row: round2 the five quantity
+// fields, spread-preserving so the pinned v1 key order survives untouched.
+// sheetTotals OUTPUT stays unrounded (the condition-row reconciliation and
+// snapshotDiff both need raw rows) — call this only where a row leaves the
+// app (CSV, report JSON, Marked Set PDF legend). Rounding `ea` is observable
+// only for hand-edited fractional counts (drawn count shapes always carry
+// computed.count === 1); that aligns the JSON/PDF with the CSV, which already
+// rounded ea.
+export function roundSheetRow(r) {
+  return {
+    ...r,
+    floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf),
+    border_sf: round2(r.border_sf), lf: round2(r.lf), ea: round2(r.ea),
+  };
+}
+
 // Kreo-style derived metric: vertical wall SF = floor-area perimeters × the
 // condition's height. Display-only (never in condition rows or the CSV): a
 // floor perimeter includes door openings and shared walls, so this is a
@@ -223,11 +239,12 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
     let anyMult = false;
     for (const g of bySheet) {
       const label = sheetLabel ? sheetLabel(g.sheet_id) : g.sheet_id;
-      for (const r of g.rows) {
-        const mult = r.multiplier || 1;
+      for (const row of g.rows) {
+        const mult = row.multiplier || 1;
         if (mult > 1) anyMult = true;
-        const finish = mult > 1 ? `${r.finish_tag} ×${mult}` : r.finish_tag;
-        lines.push([label, g.sheet_id, finish, round2(r.floor_sf), round2(r.wall_sf), round2(r.border_sf), round2(r.lf), round2(r.ea)].map(esc).join(","));
+        const finish = mult > 1 ? `${row.finish_tag} ×${mult}` : row.finish_tag;
+        const r = roundSheetRow(row);
+        lines.push([label, g.sheet_id, finish, r.floor_sf, r.wall_sf, r.border_sf, r.lf, r.ea].map(esc).join(","));
       }
     }
     if (anyMult) lines.push("# By-sheet rows show measured (base) quantities; xN multipliers apply at condition level");
@@ -260,7 +277,7 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     by_sheet: bySheet.map((gp) => ({
       sheet_id: gp.sheet_id,
       sheet: label(gp.sheet_id),
-      rows: gp.rows.map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) })),
+      rows: gp.rows.map(roundSheetRow),
     })),
     totals: grandTotals(rows),
     materials: materialsSummary(rows),

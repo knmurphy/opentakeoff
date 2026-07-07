@@ -126,6 +126,24 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
      "floor_sf_net", "wall_sf_net", "border_sf_net", "lf_net", "total_sf_net", "sy_net", "materials"]);
 });
 
+test("reportJson: by_sheet rows serialize round2-ed — incl. ea — with key order intact", () => {
+  const conds = [{ id: "c", finish_tag: "FX-1" }];
+  // hand-edited payloads can carry fractional counts (drawn count shapes are
+  // always count: 1) — serialization rounds them like every other quantity
+  const shapes = [
+    { condition_id: "c", sheet_id: "s1", measure_role: "count", computed: { count: 1.333 } },
+    { condition_id: "c", sheet_id: "s1", measure_role: "floor_area", computed: { area_sf: 10.004 } },
+  ];
+  const bySheet = sheetTotals(conds, shapes);
+  assert.equal(bySheet[0].rows[0].ea, 1.333);          // sheetTotals output stays raw
+  assert.equal(bySheet[0].rows[0].floor_sf, 10.004);
+  const j = reportJson({ rows: conditionTotals(conds, shapes), bySheet });
+  assert.equal(j.by_sheet[0].rows[0].ea, 1.33);        // rounded at serialization
+  assert.equal(j.by_sheet[0].rows[0].floor_sf, 10);
+  assert.deepEqual(Object.keys(j.by_sheet[0].rows[0]),
+    ["id", "finish_tag", "color", "multiplier", "shape_count", "floor_sf", "wall_sf", "border_sf", "lf", "ea"]);
+});
+
 test("reportJson: unrecorded provenance exports as the literal 'unknown'", () => {
   const j = reportJson({ scaleInfo: [{ sheet_id: "s1" }] });
   assert.equal(j.sheets[0].scale_source, "unknown");

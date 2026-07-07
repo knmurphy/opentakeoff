@@ -18,7 +18,7 @@
 // pdf-lib is lazy-loaded (like ingest's image→PDF wrap), so the export costs
 // nothing until used and the app stays zero-install.
 
-import { conditionTotals, sheetTotals, round2 } from "./totals.js";
+import { conditionTotals, sheetTotals, roundSheetRow } from "./totals.js";
 import { pointInPoly, starPath } from "./geometry.js";
 import { dataUrlToBytes } from "./identity.js";
 import { RENDER_SCALE } from "./sheets";
@@ -276,7 +276,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         if (y < 92) break;   // stop above the fixed footnote slot at y=60 — rows never collide with it
         const c = condById[r.id] || {};
         pg.drawRectangle({ x: 66, y: y - 1, width: 9, height: 7, color: rgb(...hex(c.color)), opacity: 0.8 });
-        const floor = round2(r.floor_sf), wall = round2(r.wall_sf), border = round2(r.border_sf), lf = round2(r.lf), ea = r.ea;
+        const { floor_sf: floor, wall_sf: wall, border_sf: border, lf, ea } = roundSheetRow(r);
         const qty = [shows(floor) ? `${num(floor)} SF` : "", shows(wall) ? `${num(wall)} SF wall` : "", shows(border) ? `${num(border)} SF border` : "", shows(lf) ? `${num(lf)} LF` : "", shows(ea, 0) ? `${num(ea, 0)} EA` : ""].filter(Boolean).join(" · ");
         draw(`${r.finish_tag}${r.multiplier > 1 ? ` ×${r.multiplier}` : ""}  ${qty}`, { x: 82, y, size: 8.5, font, color: ink });
         y -= 11;
