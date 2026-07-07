@@ -223,8 +223,8 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   // reference figures never total).
   const foot = (key) => {
     if (key === "finish") return "TOTAL";
-    if (key === "waste_sf") return round2(g.total_sf_net - g.total_sf);
-    if (key === "waste_lf") return round2(g.lf_net - g.lf);
+    // derived waste feet: same getter as the body cells (g carries all four inputs)
+    if (key === "waste_sf" || key === "waste_lf") return GETTERS[key](g);
     return g[key] !== undefined ? g[key] : "";
   };
   lines.push(columns.map((c) => esc(foot(c.key))).join(","));

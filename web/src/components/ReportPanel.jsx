@@ -116,7 +116,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     }
   };
 
-  // picker row — finish is locked (filtered out of the lists below)
+  // picker row — locked columns (finish) are filtered out of the lists below
   const colCheckbox = (c) => (
     <React.Fragment key={c.key}>
       <label style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0", cursor: "pointer" }}>
@@ -151,9 +151,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                 <button onClick={() => setShowCols(false)} title="Close"
                   style={{ border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
               </div>
-              {TABLE_PROFILE.filter((c) => c.key !== "finish" && c.defaultVisible).map(colCheckbox)}
+              {TABLE_PROFILE.filter((c) => !c.locked && c.defaultVisible).map(colCheckbox)}
               <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Optional</div>
-              {TABLE_PROFILE.filter((c) => c.key !== "finish" && !c.defaultVisible).map(colCheckbox)}
+              {TABLE_PROFILE.filter((c) => !c.locked && !c.defaultVisible).map(colCheckbox)}
               <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export.</p>
             </div>
           )}
