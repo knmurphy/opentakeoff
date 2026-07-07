@@ -20,7 +20,6 @@
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 import { pointInPoly, starPath } from "./geometry.js";
-import { dataUrlToBytes } from "./identity.js";
 import { RENDER_SCALE } from "./sheets";
 
 const COBALT = "#1f3fc7";
@@ -170,13 +169,14 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
   const cobalt = dark ? rgb(0.45, 0.56, 1) : rgb(...hex(COBALT));   // brighter on near-black
 
   // company logo, if any — a corrupt stored dataURL must not kill the export,
-  // so decode + embed inside a try and skip silently on failure. Drawn as-is
-  // in dark mode too: normalized PNGs keep their transparency, no inversion.
+  // so embed inside a try and skip silently on failure. embedPng takes the
+  // data URI string directly (same as the dark-mode raster's toDataURL below).
+  // Drawn as-is in dark mode too: normalized PNGs keep their transparency,
+  // no inversion.
   let logoImg = null;
   if (company?.logo) {
     try {
-      const logoBytes = dataUrlToBytes(company.logo);
-      if (logoBytes) logoImg = await doc.embedPng(logoBytes);
+      logoImg = await doc.embedPng(company.logo);
     } catch { logoImg = null; }
   }
 
