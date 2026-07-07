@@ -1542,12 +1542,15 @@ export default function TakeoffCanvas() {
   // rescale kept the stale SF).
   const clipRef = useRef([]);
   const cloneOrigin = (o) => (o ? { origin: { ...o, ...(o.seed_norm ? { seed_norm: [...o.seed_norm] } : {}) } } : {});
+  // the clipboard payload for one shape: verts deep-copied, provenance kept,
+  // `from` remembers the source sheet so paste knows same-sheet vs cross-sheet
+  const clipEntry = (sel) => ({ condition_id: sel.condition_id, measure_role: sel.measure_role,
+                                verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
+                                ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) });
   function copySelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to copy."); return; }
-    clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                         verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
-                         ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) }];
+    clipRef.current = [clipEntry(sel)];
     setCommitMsg("Copied — ⌘V pastes onto the sheet under your cursor.");
   }
   function pasteClipboard(offset = 0.03) {
@@ -1573,9 +1576,7 @@ export default function TakeoffCanvas() {
   function duplicateSelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to duplicate."); return; }
-    clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                        verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
-                        ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) }];
+    clipRef.current = [clipEntry(sel)];
     pasteClipboard();
   }
   // ── markup (cloud / callout / text) — annotations, not measurements ─────────
