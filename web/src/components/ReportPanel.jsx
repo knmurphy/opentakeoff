@@ -158,15 +158,18 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </div>
           )}
         </div>
+        {/* JSON / Print / Marked set also work markups-only ("Revisions noted"
+            renders from markups alone); CSV and Contribute stay rows-only —
+            the CSV carries no markups and contribution is takeoff data */}
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
-        <button className="btn-ghost" onClick={exportJson} disabled={!rows.length}><Icon name="document" size={13} />JSON</button>
+        <button className="btn-ghost" onClick={exportJson} disabled={!rows.length && !markups.length}><Icon name="document" size={13} />JSON</button>
         <button className="btn-ghost" onClick={exportShapesCsv} disabled={!shapes.length}
           title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes CSV</button>
         <button className="btn-ghost" onClick={exportShapesJson} disabled={!shapes.length}
           title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes JSON</button>
-        <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length}>Print</button>
+        <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length && !markups.length}>Print</button>
         {onMarkedSet && (
-          <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length}
+          <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length && !markups.length}
             title={`Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`}>
             <Icon name="document" size={13} />Marked set{markedSetDark ? " ☾" : ""}
           </button>
@@ -221,10 +224,15 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             Quantities derived from drawings at stated scales; verify in field.
           </div>
         </div>
+        {/* the empty-state hides once markups exist — "Revisions noted" below
+            renders from markups alone, and "Nothing measured yet" reading as a
+            headline above a populated table was a lie */}
         {!rows.length ? (
-          <div style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)" }}>
-            Nothing measured yet — trace some areas, then come back for the breakdown.
-          </div>
+          markups.length ? null : (
+            <div style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)" }}>
+              Nothing measured yet — trace some areas, then come back for the breakdown.
+            </div>
+          )
         ) : (
           <table style={{ width: "100%", maxWidth: 980, margin: "0 auto", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
             <thead>
