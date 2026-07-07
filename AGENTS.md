@@ -14,11 +14,26 @@ npm run build    # → web/dist/ (static output; this is what Netlify deploys)
 npm run check    # typecheck + test + build — exactly what CI runs; green here ⇒ green CI
 ```
 
-**Shipping:** `main` is protected — changes land only via PR with the `web` CI
-check green and the branch up to date. Merging to `main` runs
-`.github/workflows/deploy.yml`, which re-runs `npm run check` and publishes
-`web/dist` to Netlify at <https://takeoff.345flooring.com> (`--no-build`;
-Netlify never builds anything itself).
+## Shipping — the required steps, every change
+
+`main` is protected on GitHub (PRs only, green `web` check, branch up to date,
+no force-pushes — admins included) and a local pre-commit hook rejects commits
+made on `main`. **Merging to `main` deploys to production**
+(<https://takeoff.345flooring.com>) via `.github/workflows/deploy.yml`, which
+re-runs `npm run check` and publishes `web/dist` to Netlify with `--no-build`
+— Netlify never builds anything itself. So:
+
+1. **Branch first** — never commit on `main`: `git checkout -b <topic>`.
+2. **`npm run check` before pushing** (in `web/`). It is exactly what CI runs,
+   on the same Node (`web/.nvmrc`) — green here means green CI.
+3. **Open a PR** and wait for the `web` check to pass. Don't merge red or
+   pending.
+4. **Squash-merge with branch delete**
+   (`gh pr merge <n> --squash --delete-branch`), then
+   `git checkout main && git pull --ff-only` and delete the local branch
+   (`git branch -D <topic>` — squash merges need `-D`).
+5. **Remember a merge is a deploy.** Don't merge work you haven't verified in
+   the running app.
 
 The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.test.ts`); the canvas itself is verified by hand — **Vite does not flag undefined identifiers in JSX**, so grep for your new identifiers after editing and load the app once before you call it done. The bundled sample plan (`web/public/demo/`, wired to the "Load sample plan" button) is the fastest end-to-end check: load it, press `A`, trace a room, open Report.
 
