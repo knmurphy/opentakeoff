@@ -22,6 +22,7 @@ import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNu
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
+import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, distToSeg, hitShape } from "../lib/geometry.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -315,6 +316,7 @@ export default function TakeoffCanvas() {
   const [commitMsg, setCommitMsg] = useState("");   // transient status line (misnamed for history; just the message bar)
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [projectName, setProjectName] = useState("");   // optional label for the report header
+  const [clientInfo, setClientInfo] = useState({});      // per-project client/job fields for branded output; additive payload field
   const fileInputRef = useRef(null);                    // hidden <input type=file> for "Open PDF"
 
   const containerRef = useRef(null);
@@ -556,6 +558,11 @@ export default function TakeoffCanvas() {
     store.loadAnnotations().then((a) => {
       if (off) return;
       setProjectName(a.project_name || "");
+      // string fields only — a corrupted record must not put an object where
+      // the report masthead renders a React child
+      setClientInfo(Object.fromEntries(Object.entries(
+        a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
+      ).filter(([, v]) => typeof v === "string")));
       const conds = a.conditions || [];
       if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
       else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
@@ -865,14 +872,14 @@ export default function TakeoffCanvas() {
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
-    const payload = { project_name: projectName, sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
+    const payload = { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
     const t = setTimeout(() => {
       store.saveAnnotations(payload).then(() => setSaveState("saved")).catch(() => setSaveState("idle"));
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName]);
+  }, [shapes, conditions, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1556,7 +1563,8 @@ export default function TakeoffCanvas() {
         return { key, file, page, label: tabLabel(key) };
       }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
       const { bytes, filename } = await buildMarkedSetPdf({
-        projectName, dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
+        projectName, clientInfo, company: loadCompany(),
+        dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -2340,6 +2348,7 @@ export default function TakeoffCanvas() {
       {showReport && (
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
+          clientInfo={clientInfo} onClientInfo={setClientInfo}
           conditions={conditions} shapes={shapes} markups={markups}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
