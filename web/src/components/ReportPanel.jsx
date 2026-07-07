@@ -413,6 +413,9 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
   const [company, setCompany] = useState(loadCompany);
   const [logoErr, setLogoErr] = useState("");
   const [saveFailed, setSaveFailed] = useState(false);
+  // pick sequence: normalizeLogoToPng is async, so a slow first pick must not
+  // clobber a faster second pick — or resurrect a logo removed meanwhile
+  const logoSeq = useRef(0);
 
   // functional form: the merge must land on whatever company is CURRENT — the
   // logo path awaits a slow normalize, and name/address typed meanwhile must
@@ -432,14 +435,18 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
     e.target.value = ""; // re-picking the same file must still fire onChange
     if (!file) return;
     setLogoErr("");
+    const seq = ++logoSeq.current;
     try {
       const logo = await normalizeLogoToPng(file);
+      if (seq !== logoSeq.current) return;   // superseded by a later pick/remove
       setAndSave((prev) => ({ ...prev, logo }));
     } catch (err) {
+      if (seq !== logoSeq.current) return;   // stale failure — don't flash its error
       setLogoErr(err.message || String(err));
     }
   };
-  const removeLogo = () => setAndSave(({ logo, ...rest }) => rest);
+  // bump the seq so an in-flight pick can't resurrect the removed logo
+  const removeLogo = () => { logoSeq.current++; setAndSave(({ logo, ...rest }) => rest); };
   const client = (field) => (e) => onClientInfo && onClientInfo({ ...clientInfo, [field]: e.target.value });
 
   const section = { fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" };
