@@ -1374,6 +1374,7 @@ export default function TakeoffCanvas() {
       measure_role: asDeduct ? "deduct" : "floor_area",
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { area_sf: +(met.area * upp * upp).toFixed(2), perimeter_lf: +(met.perim * upp).toFixed(2) },
+      origin: { method: "manual" },
     }]);
   }
   function commitLinear(points) {
@@ -1388,6 +1389,7 @@ export default function TakeoffCanvas() {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "linear",
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { perimeter_lf: +LF.toFixed(2), area_sf: tIn > 0 ? +((LF * tIn) / 12).toFixed(2) : 0 },
+      origin: { method: "manual" },
     }]);
   }
   // Surface Area — trace the wall run in plan; SF = traced LF × the condition's
@@ -1405,6 +1407,7 @@ export default function TakeoffCanvas() {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "surface_area", height_ft: h,
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { area_sf: +(LF * h).toFixed(2), perimeter_lf: +LF.toFixed(2) },
+      origin: { method: "manual" },
     }]);
   }
   function commitCount(p) {
@@ -1412,7 +1415,7 @@ export default function TakeoffCanvas() {
     const tp = panelAt(p[0]);
     setShapes((s) => [...s, {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "count",
-      verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 },
+      verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 }, origin: { method: "manual" },
     }]);
   }
 
@@ -1490,11 +1493,13 @@ export default function TakeoffCanvas() {
   // that sheet's scale (this also fixes the legacy bug where pasting after a
   // rescale kept the stale SF).
   const clipRef = useRef([]);
+  const cloneOrigin = (o) => (o ? { origin: { ...o, ...(o.seed_norm ? { seed_norm: [...o.seed_norm] } : {}) } } : {});
   function copySelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to copy."); return; }
     clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                         verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft }];
+                         verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
+                         ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) }];
     setCommitMsg("Copied — ⌘V pastes onto the sheet under your cursor.");
   }
   function pasteClipboard(offset = 0.03) {
@@ -1508,7 +1513,7 @@ export default function TakeoffCanvas() {
       cross = cross || !same;
       // same sheet: nudge so the copy is visible; other sheet: same relative spot
       const vn = c.verts_norm.map(([x, y]) => (same ? [Math.min(0.999, x + offset), Math.min(0.999, y + offset)] : [x, y]));
-      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft ? { height_ft: c.height_ft } : {}) };
+      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft ? { height_ft: c.height_ft } : {}), ...(c.height_override ? { height_override: true } : {}), ...cloneOrigin(c.origin) };
       return { ...s, computed: recomputeShape(s) };
     });
     setShapes((s) => [...s, ...made]);
@@ -1520,7 +1525,8 @@ export default function TakeoffCanvas() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to duplicate."); return; }
     clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                        verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft }];
+                        verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
+                        ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) }];
     pasteClipboard();
   }
   // ── markup (cloud / callout / text) — annotations, not measurements ─────────

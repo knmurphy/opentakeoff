@@ -5,6 +5,7 @@
 import React, { useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
+import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
@@ -20,6 +21,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const exportJson = () => downloadText(`${baseName}.json`,
     JSON.stringify({ project_name: projectName || null, generated_with: "OpenTakeoff", conditions: rows, totals: g, materials: matSummary }, null, 2),
     "application/json");
+  const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName), "text/csv");
+  const exportShapesJson = () => downloadText(`${baseName}_shapes.json`,
+    JSON.stringify(shapesToJson(shapesDetail(conditions, shapes, sheetLabel), projectName), null, 2),
+    "application/json");
 
   const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
@@ -34,6 +39,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <div style={{ flex: 1 }} />
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
         <button className="btn-ghost" onClick={exportJson} disabled={!rows.length}><Icon name="document" size={13} />JSON</button>
+        <button className="btn-ghost" onClick={exportShapesCsv} disabled={!shapes.length}
+          title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes CSV</button>
+        <button className="btn-ghost" onClick={exportShapesJson} disabled={!shapes.length}
+          title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes JSON</button>
         <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length}>Print</button>
         {onMarkedSet && (
           <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length}
