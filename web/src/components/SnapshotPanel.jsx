@@ -5,8 +5,8 @@
 // (store.js) and never leave the device.
 import React, { useEffect, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { store, isStaleTabError } from "../lib/store.js";
-import { diffSnapshots } from "../lib/snapshotDiff.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, friendlyStoreError } from "../lib/store.js";
+import { diffSnapshots, SHEET_FIELDS as DIFF_SHEET_FIELDS } from "../lib/snapshotDiff.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 
@@ -19,9 +19,7 @@ const delta = (v, d = 1) => {
   return <span style={{ color: "var(--c-positive)" }}>+{num(r, d)}</span>;
 };
 
-const errText = (e) => isStaleTabError(e)
-  ? "OpenTakeoff was updated in another tab — reload this tab to continue."
-  : (e?.message || String(e));
+const errText = (e) => isStaleTabError(e) ? STALE_TAB_MESSAGE : friendlyStoreError(e);
 
 // borrowed from ReportPanel so the compare table reads like the report
 const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
@@ -30,8 +28,13 @@ const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabul
 const STATUS_TINT = { added: "var(--c-positive)", removed: "var(--c-danger)" };
 // [deltas key, column header, display decimals]
 const DELTA_COLS = [["floor_sf", "Floor SF Δ", 1], ["wall_sf", "Wall SF Δ", 1], ["border_sf", "Border SF Δ", 1], ["lf", "LF Δ", 1], ["ea", "EA Δ", 0], ["total_sf_net", "SF ordered Δ", 1]];
-// by-sheet deltas are base quantities — no waste-adjusted column there
-const SHEET_FIELDS = [["floor_sf", "floor SF", 1], ["wall_sf", "wall SF", 1], ["border_sf", "border SF", 1], ["lf", "LF", 1], ["ea", "EA", 0]];
+// by-sheet deltas are base quantities — no waste-adjusted column there.
+// The field list comes from snapshotDiff (the single source of what's diffed);
+// only display meta lives here. Decimals must match allZero's precision rule
+// in snapshotDiff.js (ea → 0 decimals, others → 1) — drift resurrects the
+// all-"—" changed-rows bug documented there.
+const SHEET_META = { floor_sf: ["floor SF", 1], wall_sf: ["wall SF", 1], border_sf: ["border SF", 1], lf: ["LF", 1], ea: ["EA", 0] };
+const SHEET_FIELDS = DIFF_SHEET_FIELDS.map((k) => [k, ...SHEET_META[k]]);
 
 export default function SnapshotPanel({ open, onClose, buildPayload, currentLabel, onLoadSnapshot, sheetLabel }) {
   const [snaps, setSnaps] = useState([]);

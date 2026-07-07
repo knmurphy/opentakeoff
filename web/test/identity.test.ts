@@ -1,9 +1,9 @@
-// Company identity: localStorage load/save resilience + dataURL → bytes for
-// pdf-lib. normalizeLogoToPng is browser-only (createImageBitmap / <canvas> /
-// Image don't exist in node) — exercised in the app, deliberately NOT here.
+// Company identity: localStorage load/save resilience. normalizeLogoToPng is
+// browser-only (createImageBitmap / <canvas> / Image don't exist in node) —
+// exercised in the app, deliberately NOT here.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadCompany, saveCompany, dataUrlToBytes, LOGO_LIMIT } from "../src/lib/identity.js";
+import { loadCompany, saveCompany, LOGO_LIMIT } from "../src/lib/identity.js";
 
 test("loadCompany returns {} without localStorage; saveCompany reports failure", () => {
   assert.equal(typeof globalThis.localStorage, "undefined"); // node test env
@@ -30,6 +30,8 @@ test("loadCompany: malformed / non-object payloads collapse to {}", () => {
     assert.deepEqual(loadCompany(), {});                      // null parses, still {}
     store.set("opentakeoff_company", '{"name":"Acme Floors","logo":"data:image/png;base64,AA=="}');
     assert.deepEqual(loadCompany(), { name: "Acme Floors", logo: "data:image/png;base64,AA==" });
+    store.set("opentakeoff_company", '{"name":42,"address":{"street":"x"},"logo":"data:,ok"}');
+    assert.deepEqual(loadCompany(), { logo: "data:,ok" });    // non-string values dropped
   } finally {
     delete (globalThis as any).localStorage;
   }
@@ -51,18 +53,6 @@ test("saveCompany drops empty fields; nothing left removes the key", () => {
   } finally {
     delete (globalThis as any).localStorage;
   }
-});
-
-test("dataUrlToBytes round-trips a known payload, null on garbage", () => {
-  // "OpenTakeoff" → base64
-  const b64 = Buffer.from("OpenTakeoff").toString("base64");
-  const bytes = dataUrlToBytes(`data:image/png;base64,${b64}`);
-  assert.ok(bytes instanceof Uint8Array);
-  assert.equal(Buffer.from(bytes!).toString("utf8"), "OpenTakeoff");
-  assert.equal(dataUrlToBytes("not-a-url"), null);                     // no data: scheme
-  assert.equal(dataUrlToBytes("data:image/png;base64,!!!"), null);     // invalid base64
-  assert.equal(dataUrlToBytes(null as any), null);                     // non-string input
-  assert.equal(dataUrlToBytes("data:image/png,rawpixels"), null);      // not base64-flagged
 });
 
 test("LOGO_LIMIT is the documented cap", () => {

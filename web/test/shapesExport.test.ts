@@ -113,7 +113,9 @@ test("shapesToCsv: title, semantics line, exact header, quoting, negative deduct
   assert.equal(lines[1], "# Per-shape measured quantities — no multiplier or waste; deducts negative; LF on floor/deduct/surface rows is trace reference only (incl. openings) — linear rows alone sum to condition LF");
   assert.equal(lines[2], "Shape,Sheet,Sheet ID,Finish,Role,Area SF,LF,EA,Height ft,Height override,Origin");
   assert.ok(lines[3].includes('"CT-1, honed"'));
-  assert.ok(lines[4].includes("-12.5"));
+  // full-line equality: the -12.5 deduct is a NUMBER cell — a type-blind
+  // formula guard would emit '-12.5 and includes("-12.5") would still pass
+  assert.equal(lines[4], 'd,sh1,sh1,"CT-1, honed",deduct,-12.5,0,0,0,,untracked');
   assert.ok(csv.endsWith("\n"));
 });
 

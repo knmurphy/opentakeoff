@@ -10,11 +10,15 @@ export const LOGO_LIMIT = 200_000;
 
 // { name, address, logo } | {} — logo is a data:image/png;base64 URL.
 // try/catch (private mode / SSR), non-object JSON → {} — mirrors
-// reportColumns.loadColPrefs.
+// reportColumns.loadColPrefs. String VALUES only (keys stay arbitrary): a
+// hand-edited record must not put an object where the report masthead
+// renders a React child — the same filter TakeoffCanvas applies to
+// client_info on hydrate.
 export function loadCompany() {
   try {
     const parsed = JSON.parse(localStorage.getItem(KEY) || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    if (!(parsed && typeof parsed === "object" && !Array.isArray(parsed))) return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => typeof v === "string"));
   } catch {
     return {}; // private mode / SSR / corrupt JSON
   }
@@ -85,21 +89,5 @@ async function decodeImage(file) {
   } catch {
     URL.revokeObjectURL(url);
     throw new Error("Couldn't read that image — PNG, JPEG, WebP or SVG please");
-  }
-}
-
-// data:*;base64,… → Uint8Array (atob); null on malformed input — markedset
-// feeds this straight into embedPng.
-export function dataUrlToBytes(dataUrl) {
-  if (typeof dataUrl !== "string") return null;
-  const m = /^data:[^;,]*;base64,(.*)$/s.exec(dataUrl);
-  if (!m) return null;
-  try {
-    const bin = atob(m[1]);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  } catch {
-    return null; // not valid base64
   }
 }

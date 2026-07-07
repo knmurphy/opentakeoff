@@ -2,15 +2,18 @@
 // (finish): measured quantity, waste %, and waste-adjusted order quantity, with
 // a grand total. Exports to CSV / JSON, prints, and hosts the opt-in
 // "Contribute to the open flooring model" flow.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson } from "../lib/totals.js";
+import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
+
+// the report's one caveat line — page-strip on every printed page + masthead
+const DISCLAIMER = "Quantities derived from drawings at stated scales; verify in field.";
 
 // one-line hints for the opt-in columns in the picker (waste hint sits under
 // the second waste checkbox so it reads once for the pair)
@@ -28,10 +31,12 @@ const sheetNum = (v, d = 1) => {
 };
 
 export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
-  const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
-  const g = grandTotals(rows);
-  const matSummary = materialsSummary(rows);
-  const bySheet = sheetTotals(conditions, shapes);
+  // memoized on the source arrays: project-name/client-info keystrokes re-render
+  // the panel without touching conditions/shapes, so the totaling passes skip
+  const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
+  const bySheet = useMemo(() => sheetTotals(conditions, shapes), [conditions, shapes]);
+  const g = useMemo(() => grandTotals(rows), [rows]);
+  const matSummary = useMemo(() => materialsSummary(rows), [rows]);
   const [showContribute, setShowContribute] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   // bumped by the Project info modal on every company save, so the print
@@ -44,7 +49,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const colsRef = useRef(null);
   const tableCols = visibleCols(TABLE_PROFILE, colPrefs);
   const csvCols = visibleCols(CSV_PROFILE, colPrefs);
-  const perimByCond = floorPerimeterLf(shapes);
+  const perimByCond = useMemo(() => floorPerimeterLf(shapes), [shapes]);
   const ctx = { perimByCond };
 
   // while the report is up, the print stylesheet (app.css @media print) hides
@@ -116,7 +121,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     }
   };
 
-  // picker row — finish is locked (filtered out of the lists below)
+  // picker row — locked columns (finish) are filtered out of the lists below
   const colCheckbox = (c) => (
     <React.Fragment key={c.key}>
       <label style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0", cursor: "pointer" }}>
@@ -151,9 +156,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                 <button onClick={() => setShowCols(false)} title="Close"
                   style={{ border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
               </div>
-              {TABLE_PROFILE.filter((c) => c.key !== "finish" && c.defaultVisible).map(colCheckbox)}
+              {TABLE_PROFILE.filter((c) => !c.locked && c.defaultVisible).map(colCheckbox)}
               <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Optional</div>
-              {TABLE_PROFILE.filter((c) => c.key !== "finish" && !c.defaultVisible).map(colCheckbox)}
+              {TABLE_PROFILE.filter((c) => !c.locked && !c.defaultVisible).map(colCheckbox)}
               <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export.</p>
             </div>
           )}
@@ -189,7 +194,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             the top of every printed page (screen hides it) — a fixed footer would
             overlap the last row of intermediate pages */}
         <table className="report-flow"><thead><tr><td>
-          {projectName || "Untitled project"} — Quantities derived from drawings at stated scales; verify in field.
+          {projectName || "Untitled project"} — {DISCLAIMER}
         </td></tr></thead><tbody><tr><td>
         {/* print-only masthead — hidden on screen via app.css */}
         <div className="report-print-header">
@@ -204,7 +209,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           {hasClient && (
             <div style={{ fontSize: 10.5, marginTop: 2, lineHeight: 1.5 }}>
               {clientInfo.client_name && <div>Prepared for: {clientInfo.client_name}</div>}
-              {clientInfo.client_address && <div style={{ whiteSpace: "pre-line" }}>{clientInfo.client_address}</div>}
+              {/* print-overflow guard: a pasted 40-line address must not eat the
+                  page (the PDF cover caps its whole client block at 6 lines) */}
+              {clientInfo.client_address && <div style={{ whiteSpace: "pre-line" }}>{clientInfo.client_address.split("\n").slice(0, 6).join("\n")}</div>}
               {clientInfo.reference && <div>Ref: {clientInfo.reference}</div>}
               {clientInfo.date && <div>Date: {clientInfo.date}</div>}
             </div>
@@ -221,7 +228,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           )}
           <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, marginTop: 6 }}>OpenTakeoff — opentakeoff.netlify.app</div>
           <div style={{ fontSize: 10.5, marginTop: 2, borderBottom: "1px solid var(--ink-faint)", paddingBottom: 8, marginBottom: 12 }}>
-            Quantities derived from drawings at stated scales; verify in field.
+            {DISCLAIMER}
           </div>
         </div>
         {/* the empty-state hides once markups exist — "Revisions noted" below
@@ -314,8 +321,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             ))}
             <p style={{ margin: "10px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
               Base quantities as measured per sheet — waste not applied.
-              {bySheet.some((gp) => gp.rows.some((r) => r.multiplier > 1)) && (
-                <> By-sheet rows show measured (base) quantities; ×N multipliers apply at the condition level — sheet subtotals × multiplier reconcile to the condition table.</>
+              {hasMultipliers(bySheet) && (
+                // the shared note + a screen-only reconcile clause (CSV/PDF omit it)
+                <> {BY_SHEET_BASE_NOTE} — sheet subtotals × multiplier reconcile to the condition table.</>
               )}
             </p>
           </div>
@@ -405,6 +413,13 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
   const [company, setCompany] = useState(loadCompany);
   const [logoErr, setLogoErr] = useState("");
   const [saveFailed, setSaveFailed] = useState(false);
+  // pick sequence: normalizeLogoToPng is async, so a slow first pick must not
+  // clobber a faster second pick — resurrect a logo removed meanwhile — or
+  // land after the modal closes (the modal unmounts on close, so a pick still
+  // normalizing would otherwise pass its own instance's seq check and persist
+  // via saveCompany from the dead fiber)
+  const logoSeq = useRef(0);
+  useEffect(() => () => { logoSeq.current++; }, []);   // unmount invalidates in-flight picks
 
   // functional form: the merge must land on whatever company is CURRENT — the
   // logo path awaits a slow normalize, and name/address typed meanwhile must
@@ -424,14 +439,18 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
     e.target.value = ""; // re-picking the same file must still fire onChange
     if (!file) return;
     setLogoErr("");
+    const seq = ++logoSeq.current;
     try {
       const logo = await normalizeLogoToPng(file);
+      if (seq !== logoSeq.current) return;   // superseded by a later pick/remove/close
       setAndSave((prev) => ({ ...prev, logo }));
     } catch (err) {
+      if (seq !== logoSeq.current) return;   // stale failure — don't flash its error
       setLogoErr(err.message || String(err));
     }
   };
-  const removeLogo = () => setAndSave(({ logo, ...rest }) => rest);
+  // bump the seq so an in-flight pick can't resurrect the removed logo
+  const removeLogo = () => { logoSeq.current++; setAndSave(({ logo, ...rest }) => rest); };
   const client = (field) => (e) => onClientInfo && onClientInfo({ ...clientInfo, [field]: e.target.value });
 
   const section = { fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" };

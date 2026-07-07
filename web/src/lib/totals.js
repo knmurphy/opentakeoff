@@ -18,13 +18,31 @@
 // headers and the now-versioned JSON export keys (opentakeoff.report.v1) must
 // remain stable.
 
-// Import cycle note: reportColumns.js imports round2 from here. Safe because
-// neither module touches the other's exports at module-eval time (only inside
-// function bodies) — ESM live bindings resolve by first call.
+import { round2 } from "./num.js";
+import { csvEsc as esc } from "./csv.js";
 import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
 import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
-export const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+// Re-export so existing consumers (markedset, snapshotDiff, ReportPanel, tests)
+// keep importing round2 from here; num.js is the single definition.
+export { round2 } from "./num.js";
+
+// The role → quantity mapping from the header comment, shared by
+// conditionTotals and sheetTotals. Mutates acc ({ floor, wall, border, lf,
+// ea }) in place with the shape's raw computed numbers — no multiplier, no
+// waste, no rounding here. `cp.count || 1` is deliberate (||, not ??): a
+// count shape still tallies one unit even if computed.count is 0/missing.
+function accumulateRole(acc, s) {
+  const cp = s.computed || {};
+  switch (s.measure_role) {
+    case "deduct": acc.floor -= cp.area_sf || 0; break;
+    case "floor_area": acc.floor += cp.area_sf || 0; break;
+    case "surface_area": acc.wall += cp.area_sf || 0; break;
+    case "linear": acc.lf += cp.perimeter_lf || 0; acc.border += cp.area_sf || 0; break;
+    case "count": acc.ea += cp.count || 1; break;
+    default: break;
+  }
+}
 
 export function conditionTotals(conditions, shapes) {
   return conditions.map((c) => {
@@ -32,18 +50,9 @@ export function conditionTotals(conditions, shapes) {
     const waste = Math.max(0, Number(c.waste_pct) || 0);
     const w = 1 + waste / 100;
     const cs = shapes.filter((s) => s.condition_id === c.id);
-    let floor = 0, wall = 0, border = 0, lf = 0, ea = 0;
-    for (const s of cs) {
-      const cp = s.computed || {};
-      switch (s.measure_role) {
-        case "deduct": floor -= cp.area_sf || 0; break;
-        case "floor_area": floor += cp.area_sf || 0; break;
-        case "surface_area": wall += cp.area_sf || 0; break;
-        case "linear": lf += cp.perimeter_lf || 0; border += cp.area_sf || 0; break;
-        case "count": ea += cp.count || 1; break;
-        default: break;
-      }
-    }
+    const acc = { floor: 0, wall: 0, border: 0, lf: 0, ea: 0 };
+    for (const s of cs) accumulateRole(acc, s);
+    let { floor, wall, border, lf, ea } = acc;
     floor *= mult; wall *= mult; border *= mult; lf *= mult; ea *= mult;
     const total = floor + wall + border;
     // supporting materials: deterministic quantity = basis ÷ coverage, rounded up
@@ -87,6 +96,12 @@ export function conditionTotals(conditions, shapes) {
 //     included per row so consumers can footnote "×N applies at condition
 //     level") and UNROUNDED (accumulated raw; round2 at display/serialization
 //     only, so per-sheet rounding never compounds against the condition row).
+//   - HAZARD: these rows reuse condition-row keys (floor_sf, wall_sf,
+//     border_sf, lf, ea) but with the base-only semantics above, so passing
+//     them to grandTotals() type-matches silently and yields base
+//     (unmultiplied) figures — do NOT do it. (Renaming the keys base_* would
+//     make the misuse impossible, but the by_sheet row keys are frozen
+//     opentakeoff.report.v1 schema, so the rename is deferred.)
 //   - No waste, no materials: those are condition-level order quantities, not
 //     where-is-it-measured quantities.
 //   - floor_sf can be negative (a deduct pasted onto a different sheet than
@@ -99,15 +114,7 @@ export function sheetTotals(conditions, shapes) {
     let a = conds.get(s.condition_id);
     if (!a) { a = { n: 0, floor: 0, wall: 0, border: 0, lf: 0, ea: 0 }; conds.set(s.condition_id, a); }
     a.n += 1;
-    const cp = s.computed || {};
-    switch (s.measure_role) {
-      case "deduct": a.floor -= cp.area_sf || 0; break;
-      case "floor_area": a.floor += cp.area_sf || 0; break;
-      case "surface_area": a.wall += cp.area_sf || 0; break;
-      case "linear": a.lf += cp.perimeter_lf || 0; a.border += cp.area_sf || 0; break;
-      case "count": a.ea += cp.count || 1; break;
-      default: break;
-    }
+    accumulateRole(a, s);
   }
   // file name, then numeric page — mirror exportMarkedSet's sheetMeta sort
   const order = [...bySheet.keys()].sort((ka, kb) => {
@@ -126,6 +133,34 @@ export function sheetTotals(conditions, shapes) {
     });
     return { sheet_id, rows };
   }).filter((g) => g.rows.length);   // orphan shapes (dead condition_id) can't render a row
+}
+
+// The one base-quantities footnote, shared by CSV ("# " prefix, golden-
+// pinned), the Marked Set PDF legend, and the report panel (which appends
+// its own screen-only reconcile clause). Bare sentence, ASCII "xN" —
+// changing a character here changes the CSV golden.
+export const BY_SHEET_BASE_NOTE =
+  "By-sheet rows show measured (base) quantities; xN multipliers apply at condition level";
+
+// Gate for that footnote: does any by-sheet row carry a ×N > 1?
+export function hasMultipliers(bySheet) {
+  return (bySheet || []).some((g) => g.rows.some((r) => (r.multiplier || 1) > 1));
+}
+
+// Serialization-time rounding for a sheetTotals row: round2 the five quantity
+// fields, spread-preserving so the pinned v1 key order survives untouched.
+// sheetTotals OUTPUT stays unrounded (the condition-row reconciliation and
+// snapshotDiff both need raw rows) — call this only where a row leaves the
+// app (CSV, report JSON, Marked Set PDF legend). Rounding `ea` is observable
+// only for hand-edited fractional counts (drawn count shapes always carry
+// computed.count === 1); that aligns the JSON/PDF with the CSV, which already
+// rounded ea.
+export function roundSheetRow(r) {
+  return {
+    ...r,
+    floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf),
+    border_sf: round2(r.border_sf), lf: round2(r.lf), ea: round2(r.ea),
+  };
 }
 
 // Kreo-style derived metric: vertical wall SF = floor-area perimeters × the
@@ -183,10 +218,6 @@ export function grandTotals(rows) {
  * @returns {string}
  */
 export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null) {
-  const esc = (v) => {
-    const s = String(v ?? "");
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
   const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {
@@ -198,8 +229,8 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   // reference figures never total).
   const foot = (key) => {
     if (key === "finish") return "TOTAL";
-    if (key === "waste_sf") return round2(g.total_sf_net - g.total_sf);
-    if (key === "waste_lf") return round2(g.lf_net - g.lf);
+    // derived waste feet: same getter as the body cells (g carries all four inputs)
+    if (key === "waste_sf" || key === "waste_lf") return GETTERS[key](g);
     return g[key] !== undefined ? g[key] : "";
   };
   lines.push(columns.map((c) => esc(foot(c.key))).join(","));
@@ -223,17 +254,16 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   if (bySheet && bySheet.length) {
     lines.push("");
     lines.push(["Sheet", "Sheet ID", "Finish", "Floor SF", "Wall SF", "Border SF", "LF", "EA"].map(esc).join(","));
-    let anyMult = false;
     for (const g of bySheet) {
       const label = sheetLabel ? sheetLabel(g.sheet_id) : g.sheet_id;
-      for (const r of g.rows) {
-        const mult = r.multiplier || 1;
-        if (mult > 1) anyMult = true;
-        const finish = mult > 1 ? `${r.finish_tag} ×${mult}` : r.finish_tag;
-        lines.push([label, g.sheet_id, finish, round2(r.floor_sf), round2(r.wall_sf), round2(r.border_sf), round2(r.lf), round2(r.ea)].map(esc).join(","));
+      for (const row of g.rows) {
+        const mult = row.multiplier || 1;
+        const finish = mult > 1 ? `${row.finish_tag} ×${mult}` : row.finish_tag;
+        const r = roundSheetRow(row);
+        lines.push([label, g.sheet_id, finish, r.floor_sf, r.wall_sf, r.border_sf, r.lf, r.ea].map(esc).join(","));
       }
     }
-    if (anyMult) lines.push("# By-sheet rows show measured (base) quantities; xN multipliers apply at condition level");
+    if (hasMultipliers(bySheet)) lines.push("# " + BY_SHEET_BASE_NOTE);
   }
 
   const title = projectName ? `# ${projectName} — OpenTakeoff report\n` : "";
@@ -263,11 +293,14 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     by_sheet: bySheet.map((gp) => ({
       sheet_id: gp.sheet_id,
       sheet: label(gp.sheet_id),
-      rows: gp.rows.map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) })),
+      rows: gp.rows.map(roundSheetRow),
     })),
     totals: grandTotals(rows),
     materials: materialsSummary(rows),
-    markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "" })),
+    // id + rfi_id APPEND after the original four keys (the additive-only v1
+    // convention — see scale_source above): a cloud with empty text was fully
+    // anonymous in the export. Legacy markups: id → null, rfi_id → "".
+    markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
   };
 }
 
