@@ -4,7 +4,7 @@
 // "Contribute to the open flooring model" flow.
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson } from "../lib/totals.js";
+import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
@@ -314,8 +314,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             ))}
             <p style={{ margin: "10px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
               Base quantities as measured per sheet — waste not applied.
-              {bySheet.some((gp) => gp.rows.some((r) => r.multiplier > 1)) && (
-                <> By-sheet rows show measured (base) quantities; ×N multipliers apply at the condition level — sheet subtotals × multiplier reconcile to the condition table.</>
+              {hasMultipliers(bySheet) && (
+                // the shared note + a screen-only reconcile clause (CSV/PDF omit it)
+                <> {BY_SHEET_BASE_NOTE} — sheet subtotals × multiplier reconcile to the condition table.</>
               )}
             </p>
           </div>

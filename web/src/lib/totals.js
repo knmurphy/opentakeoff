@@ -129,6 +129,18 @@ export function sheetTotals(conditions, shapes) {
   }).filter((g) => g.rows.length);   // orphan shapes (dead condition_id) can't render a row
 }
 
+// The one base-quantities footnote, shared by CSV ("# " prefix, golden-
+// pinned), the Marked Set PDF legend, and the report panel (which appends
+// its own screen-only reconcile clause). Bare sentence, ASCII "xN" —
+// changing a character here changes the CSV golden.
+export const BY_SHEET_BASE_NOTE =
+  "By-sheet rows show measured (base) quantities; xN multipliers apply at condition level";
+
+// Gate for that footnote: does any by-sheet row carry a ×N > 1?
+export function hasMultipliers(bySheet) {
+  return (bySheet || []).some((g) => g.rows.some((r) => (r.multiplier || 1) > 1));
+}
+
 // Serialization-time rounding for a sheetTotals row: round2 the five quantity
 // fields, spread-preserving so the pinned v1 key order survives untouched.
 // sheetTotals OUTPUT stays unrounded (the condition-row reconciliation and
@@ -236,18 +248,16 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   if (bySheet && bySheet.length) {
     lines.push("");
     lines.push(["Sheet", "Sheet ID", "Finish", "Floor SF", "Wall SF", "Border SF", "LF", "EA"].map(esc).join(","));
-    let anyMult = false;
     for (const g of bySheet) {
       const label = sheetLabel ? sheetLabel(g.sheet_id) : g.sheet_id;
       for (const row of g.rows) {
         const mult = row.multiplier || 1;
-        if (mult > 1) anyMult = true;
         const finish = mult > 1 ? `${row.finish_tag} ×${mult}` : row.finish_tag;
         const r = roundSheetRow(row);
         lines.push([label, g.sheet_id, finish, r.floor_sf, r.wall_sf, r.border_sf, r.lf, r.ea].map(esc).join(","));
       }
     }
-    if (anyMult) lines.push("# By-sheet rows show measured (base) quantities; xN multipliers apply at condition level");
+    if (hasMultipliers(bySheet)) lines.push("# " + BY_SHEET_BASE_NOTE);
   }
 
   const title = projectName ? `# ${projectName} — OpenTakeoff report\n` : "";
