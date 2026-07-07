@@ -18,3 +18,14 @@ Thinset,6,bag
 Grout,4.56,bag
 Adhesive,1,gal
 Transition strip,7,ea
+
+Sheet,Sheet ID,Finish,Floor SF,Wall SF,Border SF,LF,EA
+A101,plan.pdf,"CT-1, honed",123.45,0,0,0,0
+A101,plan.pdf,LVT-2 ×2,210.55,0,0,0,0
+A101,plan.pdf,RB-1,0,0,29.42,88.25,0
+A101,plan.pdf,WT-1,0,305.62,0,0,0
+A101,plan.pdf,CNT,0,0,0,0,3
+A102,plan.pdf#2,"CT-1, honed",423.45,0,0,0,0
+A102,plan.pdf#2,RB-1,0,0,13.87,41.6,0
+A102,plan.pdf#2,CNT,0,0,0,0,4
+# By-sheet rows show measured (base) quantities; xN multipliers apply at condition level

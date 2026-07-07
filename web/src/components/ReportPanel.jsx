@@ -4,22 +4,39 @@
 // "Contribute to the open flooring model" flow.
 import React, { useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
+import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 
+const sheetNum = (v, d = 1) => {
+  const r = round2(v);
+  // zero-gate at the DISPLAY precision, so a ±0.02 sliver shows "—", not "(0)"
+  if (!Math.round(Math.abs(r) * 10 ** d)) return "—";
+  if (r < 0) return <span style={{ color: "var(--c-danger)" }}>({num(-r, d)})</span>;
+  return num(r, d);
+};
+
 export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose }) {
   const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
   const g = grandTotals(rows);
   const matSummary = materialsSummary(rows);
+  const bySheet = sheetTotals(conditions, shapes);
   const [showContribute, setShowContribute] = useState(false);
 
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
-  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName), "text/csv");
+  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify({ project_name: projectName || null, generated_with: "OpenTakeoff", conditions: rows, totals: g, materials: matSummary }, null, 2),
+    JSON.stringify({
+      project_name: projectName || null, generated_with: "OpenTakeoff", conditions: rows,
+      by_sheet: bySheet.map((gp) => ({
+        sheet_id: gp.sheet_id,
+        sheet: sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id,
+        rows: gp.rows.map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) })),
+      })),
+      totals: g, materials: matSummary,
+    }, null, 2),
     "application/json");
   const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName), "text/csv");
   const exportShapesJson = () => downloadText(`${baseName}_shapes.json`,
@@ -119,6 +136,52 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             <strong>SF ordered</strong> = measured quantity × waste %. Waste is set per condition in the canvas. Wall SF comes from Surface-Area
             traces (run × height); Border SF from Linear runs with a thickness.
           </p>
+        )}
+        {rows.length > 0 && bySheet.length > 0 && (
+          <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
+            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>By sheet</h3>
+            {bySheet.map((gp) => (
+              <div key={gp.sheet_id} style={{ margin: "0 0 14px" }}>
+                <h3 style={{ fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.06em", color: "var(--ink-muted)", margin: "0 0 6px" }}>{sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id}</h3>
+                <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...th, textAlign: "left" }}>Finish</th>
+                      <th style={th}>Floor SF</th>
+                      <th style={th}>Wall SF</th>
+                      <th style={th}>Border SF</th>
+                      <th style={th}>LF</th>
+                      <th style={th}>EA</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gp.rows.map((r) => (
+                      <tr key={r.id}>
+                        <td style={{ ...td, textAlign: "left" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ width: 12, height: 12, background: r.color, display: "inline-block", border: "1px solid var(--ink-faint)" }} />
+                            <strong style={{ fontFamily: "var(--f-mono)", fontWeight: 600 }}>{r.finish_tag}</strong>
+                            {r.multiplier > 1 && <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>×{r.multiplier}</span>}
+                          </span>
+                        </td>
+                        <td style={td}>{sheetNum(r.floor_sf)}</td>
+                        <td style={td}>{sheetNum(r.wall_sf)}</td>
+                        <td style={td}>{sheetNum(r.border_sf)}</td>
+                        <td style={td}>{sheetNum(r.lf)}</td>
+                        <td style={td}>{sheetNum(r.ea, 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+            <p style={{ margin: "10px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
+              Base quantities as measured per sheet — waste not applied.
+              {bySheet.some((gp) => gp.rows.some((r) => r.multiplier > 1)) && (
+                <> By-sheet rows show measured (base) quantities; ×N multipliers apply at the condition level — sheet subtotals × multiplier reconcile to the condition table.</>
+              )}
+            </p>
+          </div>
         )}
         {matSummary.length > 0 && (
           <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
