@@ -23,7 +23,9 @@ import { conditionTotals, sheetTotals, round2 } from "./totals.js";
 const COND_FIELDS = ["floor_sf", "wall_sf", "border_sf", "lf", "ea", "total_sf", "total_sf_net"];
 // Sheet rows carry BASE quantities only (sheetTotals semantics: the condition
 // multiplier is NOT applied, and there's no waste at sheet level).
-const SHEET_FIELDS = ["floor_sf", "wall_sf", "border_sf", "lf", "ea"];
+// Exported: SnapshotPanel derives its by-sheet delta columns from this list,
+// so the panel's columns can't drift from what the diff actually compares.
+export const SHEET_FIELDS = ["floor_sf", "wall_sf", "border_sf", "lf", "ea"];
 
 // round2(b − a) per field, treating a missing side as zero. So for an
 // "added" row the deltas ARE b's values, and for a "removed" row they are
@@ -40,6 +42,9 @@ function deltasOf(fields, a, b) {
 // produce a "changed" row whose every cell showed "—". Status and cells now
 // derive from the same 0.05 threshold — sub-display drift is "unchanged"
 // (and, when it's the only difference, the takeoff reports identical).
+// The per-field factor (ea ×1 → 0 decimals, others ×10 → 1 decimal) must stay
+// in lockstep with SnapshotPanel's SHEET_META display decimals — drift there
+// resurrects the all-"—" changed-rows bug described above.
 const allZero = (d) => Object.entries(d).every(([k, v]) => Math.round(Math.abs(v) * (k === "ea" ? 1 : 10)) === 0);
 
 // Pair A rows with B rows: id match first, then finish_tag fallback over the

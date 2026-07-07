@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { store, isStaleTabError } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
@@ -606,7 +606,7 @@ export default function TakeoffCanvas() {
       // blocked tab recovered here with hydrated=true, its still-empty defaults
       // would autosave straight over the other tab's real data. The reload
       // message is the whole story for this tab.
-      if (isStaleTabError(e)) { setCommitMsg("OpenTakeoff was updated in another tab — reload this tab to continue."); return; }
+      if (isStaleTabError(e)) { setCommitMsg(STALE_TAB_MESSAGE); return; }
       hydrated.current = true;
     });
     return () => { off = true; };
@@ -900,7 +900,7 @@ export default function TakeoffCanvas() {
     setSaveState("saving");
     const t = setTimeout(() => {
       store.saveAnnotations(payload).then(() => setSaveState("saved")).catch((e) => {
-        if (isStaleTabError(e)) setCommitMsg("OpenTakeoff was updated in another tab — reload this tab to continue.");
+        if (isStaleTabError(e)) setCommitMsg(STALE_TAB_MESSAGE);
         setSaveState("idle");
       });
     }, 700);
@@ -1542,12 +1542,15 @@ export default function TakeoffCanvas() {
   // rescale kept the stale SF).
   const clipRef = useRef([]);
   const cloneOrigin = (o) => (o ? { origin: { ...o, ...(o.seed_norm ? { seed_norm: [...o.seed_norm] } : {}) } } : {});
+  // the clipboard payload for one shape: verts deep-copied, provenance kept,
+  // `from` remembers the source sheet so paste knows same-sheet vs cross-sheet
+  const clipEntry = (sel) => ({ condition_id: sel.condition_id, measure_role: sel.measure_role,
+                                verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
+                                ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) });
   function copySelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to copy."); return; }
-    clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                         verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
-                         ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) }];
+    clipRef.current = [clipEntry(sel)];
     setCommitMsg("Copied — ⌘V pastes onto the sheet under your cursor.");
   }
   function pasteClipboard(offset = 0.03) {
@@ -1573,9 +1576,7 @@ export default function TakeoffCanvas() {
   function duplicateSelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to duplicate."); return; }
-    clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                        verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
-                        ...(sel.height_override ? { height_override: true } : {}), ...cloneOrigin(sel.origin) }];
+    clipRef.current = [clipEntry(sel)];
     pasteClipboard();
   }
   // ── markup (cloud / callout / text) — annotations, not measurements ─────────
@@ -1954,7 +1955,7 @@ export default function TakeoffCanvas() {
         })}
         <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
         <span style={{ fontSize: 10.5, color: "var(--ink-faint)", marginLeft: 4 }}>⌫ undo point · Esc cancel · scroll = zoom · pan mid-measure: just press-and-drag (click without dragging places the point)</span>
-        {commitMsg && <span style={{ marginLeft: "auto", fontSize: 12, color: commitMsg.startsWith("Commit failed") || commitMsg.includes("reload this tab") ? "#b03a26" : "var(--c-positive)" }}>{commitMsg}</span>}
+        {commitMsg && <span style={{ marginLeft: "auto", fontSize: 12, color: commitMsg === STALE_TAB_MESSAGE || commitMsg.startsWith("Commit failed") ? "#b03a26" : "var(--c-positive)" }}>{commitMsg}</span>}
       </div>
 
       {/* appearance editor for the active condition */}

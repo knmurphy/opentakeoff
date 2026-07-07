@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 // totals.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
-import { conditionTotals, round2, sheetTotals, totalsToCsv } from "../src/lib/totals.js";
+import { conditionTotals, round2, sheetTotals, totalsToCsv, hasMultipliers, BY_SHEET_BASE_NOTE } from "../src/lib/totals.js";
 import { conditions as goldenConditions, shapes as goldenShapes, projectName as goldenName } from "./fixtures/report.fixture.ts";
 
 const shape = (condition_id: string, sheet_id: string, measure_role: string, computed: any) =>
@@ -121,6 +121,22 @@ test("by-sheet CSV: label fallback to raw id, ×N finish mark, and the x-multipl
   assert.equal(lines.at(-3), "Sheet,Sheet ID,Finish,Floor SF,Wall SF,Border SF,LF,EA");
   assert.equal(lines.at(-2), "plan.pdf,plan.pdf,LVT-2 ×3,10.01,0,0,0,0");  // raw-id label, round2 at serialization
   assert.equal(lines.at(-1), "# By-sheet rows show measured (base) quantities; xN multipliers apply at condition level");
+});
+
+test("BY_SHEET_BASE_NOTE is the golden literal; hasMultipliers gates it", () => {
+  // the CSV golden embeds "# " + this exact sentence — constant and golden
+  // must never drift apart
+  assert.equal(BY_SHEET_BASE_NOTE,
+    "By-sheet rows show measured (base) quantities; xN multipliers apply at condition level");
+  const conds = [{ id: "c", finish_tag: "LVT-2", multiplier: 3 }, { id: "d", finish_tag: "CT-1" }];
+  const shapes = [
+    shape("c", "plan.pdf", "floor_area", { area_sf: 10 }),
+    shape("d", "plan.pdf", "floor_area", { area_sf: 5 }),
+  ];
+  assert.equal(hasMultipliers(sheetTotals(conds, shapes)), true);
+  assert.equal(hasMultipliers(sheetTotals([conds[1]], [shapes[1]])), false);
+  assert.equal(hasMultipliers([]), false);
+  assert.equal(hasMultipliers(null), false);
 });
 
 test("by-sheet CSV: no footnote when every emitted row is ×1", () => {

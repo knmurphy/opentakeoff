@@ -3,7 +3,7 @@
 //
 // conditionTotals rows are spread into an external contribution payload, so
 // derived columns live HERE (getters), never as new row fields.
-import { round2 } from "./totals.js";
+import { round2 } from "./num.js";
 
 // key → (row, ctx) => primitive. ctx (optional):
 //   { perimByCond: Map(condition_id → unrounded floor-perimeter LF) }
@@ -44,8 +44,10 @@ export const TABLE_PROFILE = [
   { key: "waste_pct",     header: "Waste",      defaultVisible: true },
   { key: "total_sf_net",  header: "SF ordered", defaultVisible: true,  accent: true, foot: (g) => g.total_sf_net },
   { key: "sy_net",        header: "SY",         defaultVisible: true,  accent: true, foot: (g) => g.sy_net },
-  { key: "waste_sf",      header: "Waste SF",   defaultVisible: false, foot: (g) => round2(g.total_sf_net - g.total_sf) },
-  { key: "waste_lf",      header: "Waste LF",   defaultVisible: false, foot: (g) => round2(g.lf_net - g.lf) },
+  // grandTotals output carries all four keys the waste getters read, so the
+  // TOTAL cells delegate to the same formulas as the body cells
+  { key: "waste_sf",      header: "Waste SF",   defaultVisible: false, foot: (g) => GETTERS.waste_sf(g) },
+  { key: "waste_lf",      header: "Waste LF",   defaultVisible: false, foot: (g) => GETTERS.waste_lf(g) },
   { key: "perimeter_ref", header: "Perim LF (ref)", defaultVisible: false, ref: true },
 ];
 

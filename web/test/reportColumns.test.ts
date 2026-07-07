@@ -76,6 +76,14 @@ test("locked finish column survives a hand-corrupted pref", () => {
   assert.equal(csvCols[0].key, "finish");
 });
 
+test("locked columns are exactly [finish] in both profiles (the picker filters on locked)", () => {
+  // ReportPanel's column picker hides `locked` columns — a new locked column
+  // must be a deliberate picker change, not a silent one
+  for (const profile of [TABLE_PROFILE, CSV_PROFILE]) {
+    assert.deepEqual(profile.filter((c: any) => c.locked).map((c: any) => c.key), ["finish"]);
+  }
+});
+
 test("CSV with a base column toggled off drops it end-to-end", () => {
   const cols = visibleCols(CSV_PROFILE, { sy_net: false });
   const csv = totalsToCsv(rows, projectName, null, null, cols);
