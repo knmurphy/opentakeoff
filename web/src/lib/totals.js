@@ -19,6 +19,7 @@
 // remain stable.
 
 import { round2 } from "./num.js";
+import { csvEsc as esc } from "./csv.js";
 import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
 import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
@@ -183,10 +184,6 @@ export function grandTotals(rows) {
  * @returns {string}
  */
 export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null) {
-  const esc = (v) => {
-    const s = String(v ?? "");
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
   const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {

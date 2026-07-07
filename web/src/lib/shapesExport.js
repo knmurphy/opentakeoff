@@ -6,6 +6,8 @@
 // include door openings and shared walls), never counted in the condition's
 // LF total; only linear rows sum to it.
 
+import { csvEsc as esc } from "./csv.js";
+
 export function shapesDetail(conditions, shapes, sheetLabel) {
   const byId = new Map(conditions.map((c) => [c.id, c]));
   return shapes.map((s) => {
@@ -41,10 +43,6 @@ export function shapesDetail(conditions, shapes, sheetLabel) {
 }
 
 export function shapesToCsv(rows, projectName = "") {
-  const esc = (v) => {
-    const s = String(v ?? "");
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
   const header = ["Shape", "Sheet", "Sheet ID", "Finish", "Role", "Area SF", "LF", "EA", "Height ft", "Height override", "Origin"];
   const lines = [
     "# Per-shape measured quantities — no multiplier or waste; deducts negative; LF on floor/deduct/surface rows is trace reference only (incl. openings) — linear rows alone sum to condition LF",
