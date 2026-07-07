@@ -18,13 +18,13 @@
 // headers and the now-versioned JSON export keys (opentakeoff.report.v1) must
 // remain stable.
 
-// Import cycle note: reportColumns.js imports round2 from here. Safe because
-// neither module touches the other's exports at module-eval time (only inside
-// function bodies) — ESM live bindings resolve by first call.
+import { round2 } from "./num.js";
 import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
 import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
-export const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+// Re-export so existing consumers (markedset, snapshotDiff, ReportPanel, tests)
+// keep importing round2 from here; num.js is the single definition.
+export { round2 } from "./num.js";
 
 export function conditionTotals(conditions, shapes) {
   return conditions.map((c) => {

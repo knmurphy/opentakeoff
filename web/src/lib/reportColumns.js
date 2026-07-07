@@ -3,7 +3,7 @@
 //
 // conditionTotals rows are spread into an external contribution payload, so
 // derived columns live HERE (getters), never as new row fields.
-import { round2 } from "./totals.js";
+import { round2 } from "./num.js";
 
 // key → (row, ctx) => primitive. ctx (optional):
 //   { perimByCond: Map(condition_id → unrounded floor-perimeter LF) }
