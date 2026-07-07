@@ -196,7 +196,8 @@ input, textarea { font-family: var(--f-body); }
      to auto, and the shell's other children leave layout entirely (they're
      visibility:hidden but would still reserve a viewport of space above the
      report — the flex:1 canvas region in particular). */
-  html, body, #root { height: auto !important; overflow: visible !important; }
+  html { height: auto !important; overflow: visible !important; }
+  body.report-open, body.report-open #root { height: auto !important; overflow: visible !important; }
   body.report-open .app-shell { height: auto !important; display: block !important; }
   body.report-open .app-shell > :not(.report-panel) { display: none !important; }
   body.report-open .report-panel {

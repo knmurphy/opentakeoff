@@ -120,6 +120,10 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   assert.deepEqual(Object.keys(j.by_sheet[0]), ["sheet_id", "sheet", "rows"]);
   assert.deepEqual(Object.keys(j.by_sheet[0].rows[0]),
     ["id", "finish_tag", "color", "multiplier", "shape_count", "floor_sf", "wall_sf", "border_sf", "lf", "ea"]);
+  assert.deepEqual(Object.keys(j.conditions[0]),
+    ["id", "finish_tag", "color", "fill", "hatch", "multiplier", "waste_pct", "shape_count",
+     "floor_sf", "wall_sf", "border_sf", "lf", "ea", "total_sf",
+     "floor_sf_net", "wall_sf_net", "border_sf_net", "lf_net", "total_sf_net", "sy_net", "materials"]);
 });
 
 test("reportJson: unrecorded provenance exports as the literal 'unknown'", () => {
