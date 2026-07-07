@@ -7,6 +7,7 @@ import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
+import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
 
@@ -81,6 +82,13 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const exportJson = () => downloadText(`${baseName}.json`,
     JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel }), null, 2),
     "application/json");
+  // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
+  // column picker like the CSV); buildXlsx lazy-loads fflate on first use
+  const exportXlsx = async () => {
+    const sheets = reportWorkbook({ rows, bySheet, shapeRows: shapesDetail(conditions, shapes, sheetLabel), cols: csvCols, ctx, sheetLabel });
+    const bytes = await buildXlsx(sheets);
+    downloadText(`${baseName}.xlsx`, bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  };
   const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName), "text/csv");
   const exportShapesJson = () => downloadText(`${baseName}_shapes.json`,
     JSON.stringify(shapesToJson(shapesDetail(conditions, shapes, sheetLabel), projectName), null, 2),
@@ -167,6 +175,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             renders from markups alone); CSV and Contribute stay rows-only —
             the CSV carries no markups and contribution is takeoff data */}
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
+        <button className="btn-ghost" onClick={exportXlsx} disabled={!rows.length}
+          title="Excel workbook — Conditions / By sheet / Materials / Shapes"><Icon name="document" size={13} />XLSX</button>
         <button className="btn-ghost" onClick={exportJson} disabled={!rows.length && !markups.length}><Icon name="document" size={13} />JSON</button>
         <button className="btn-ghost" onClick={exportShapesCsv} disabled={!shapes.length}
           title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes CSV</button>
