@@ -291,7 +291,10 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     })),
     totals: grandTotals(rows),
     materials: materialsSummary(rows),
-    markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "" })),
+    // id + rfi_id APPEND after the original four keys (the additive-only v1
+    // convention — see scale_source above): a cloud with empty text was fully
+    // anonymous in the export. Legacy markups: id → null, rfi_id → "".
+    markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
   };
 }
 

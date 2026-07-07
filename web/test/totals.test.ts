@@ -105,7 +105,10 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
     rows,
     bySheet: sheetTotals(conds, shapes),
     scaleInfo: [{ sheet_id: "sh1", units_per_px: 0.02, scale_source: "calibrated" }],
-    markups: [{ type: "cloud", sheet_id: "sh1", text: "verify", rect: [[0, 0], [1, 1]] }],
+    markups: [
+      { type: "cloud", sheet_id: "sh1", text: "verify", rect: [[0, 0], [1, 1]] },   // legacy: no id/rfi_id
+      { type: "cloud", sheet_id: "sh1", text: "", id: "mk-2", rfi_id: "RFI-014", rect: [[0, 0], [1, 1]] },
+    ],
     sheetLabel: (id: string) => `Sheet ${id}`,
   });
   assert.equal(j.schema, "opentakeoff.report.v1");
@@ -116,7 +119,13 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   assert.deepEqual(Object.keys(j.sheets[0]), ["sheet_id", "sheet", "scale_source"]);
   assert.equal(j.sheets[0].scale_source, "calibrated");
   assert.equal(j.sheets[0].sheet, "Sheet sh1");
-  assert.deepEqual(Object.keys(j.markups[0]), ["type", "sheet_id", "sheet", "text"]);
+  // id + rfi_id appended after the original four (additive-only v1 schema)
+  assert.deepEqual(Object.keys(j.markups[0]), ["type", "sheet_id", "sheet", "text", "id", "rfi_id"]);
+  assert.equal(j.markups[0].id, null);              // legacy markup: null id, empty rfi
+  assert.equal(j.markups[0].rfi_id, "");
+  assert.equal(j.markups[1].id, "mk-2");            // an id-bearing cloud with empty text
+  assert.equal(j.markups[1].rfi_id, "RFI-014");     // is no longer anonymous
+  assert.equal(j.markups[1].text, "");
   assert.deepEqual(Object.keys(j.by_sheet[0]), ["sheet_id", "sheet", "rows"]);
   assert.deepEqual(Object.keys(j.by_sheet[0].rows[0]),
     ["id", "finish_tag", "color", "multiplier", "shape_count", "floor_sf", "wall_sf", "border_sf", "lf", "ea"]);
