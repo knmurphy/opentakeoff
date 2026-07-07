@@ -2,13 +2,21 @@
 // (finish): measured quantity, waste %, and waste-adjusted order quantity, with
 // a grand total. Exports to CSV / JSON, prints, and hosts the opt-in
 // "Contribute to the open flooring model" flow.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
+import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
+
+// one-line hints for the opt-in columns in the picker (waste hint sits under
+// the second waste checkbox so it reads once for the pair)
+const COL_HINTS = {
+  waste_lf: "Waste SF/LF = order − measured",
+  perimeter_ref: "Perimeter is reference only — includes openings; not totaled",
+};
 
 const sheetNum = (v, d = 1) => {
   const r = round2(v);
@@ -24,6 +32,13 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const matSummary = materialsSummary(rows);
   const bySheet = sheetTotals(conditions, shapes);
   const [showContribute, setShowContribute] = useState(false);
+  const [colPrefs, setColPrefs] = useState(loadColPrefs);
+  const [showCols, setShowCols] = useState(false);
+  const colsRef = useRef(null);
+  const tableCols = visibleCols(TABLE_PROFILE, colPrefs);
+  const csvCols = visibleCols(CSV_PROFILE, colPrefs);
+  const perimByCond = floorPerimeterLf(shapes);
+  const ctx = { perimByCond };
 
   // while the report is up, the print stylesheet (app.css @media print) hides
   // the canvas chrome behind it and lets the report flow across pages
@@ -32,8 +47,25 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     return () => document.body.classList.remove("report-open");
   }, []);
 
+  // columns popover closes on any click outside it
+  useEffect(() => {
+    if (!showCols) return;
+    const onDown = (e) => { if (colsRef.current && !colsRef.current.contains(e.target)) setShowCols(false); };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showCols]);
+
+  // store only diffs from defaultVisible — a key toggled back to default is dropped
+  const toggleCol = (col) => {
+    const next = { ...colPrefs };
+    const want = !(colPrefs[col.key] ?? col.defaultVisible);
+    if (want === col.defaultVisible) delete next[col.key]; else next[col.key] = want;
+    setColPrefs(next);
+    saveColPrefs(next);
+  };
+
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
-  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel), "text/csv");
+  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
     JSON.stringify({
       schema: "opentakeoff.report.v1",
@@ -57,6 +89,51 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
 
+  // one condition-table cell, keyed off the column profile; values come
+  // through GETTERS so the table and the CSV read the same numbers
+  const renderCell = (col, r) => {
+    const v = GETTERS[col.key] ? GETTERS[col.key](r, ctx) : r[col.key];
+    switch (col.key) {
+      case "finish":
+        return (
+          <td key={col.key} style={{ ...td, textAlign: "left" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 12, height: 12, background: r.color, display: "inline-block", border: "1px solid var(--ink-faint)" }} />
+              <strong style={{ fontFamily: "var(--f-mono)", fontWeight: 600 }}>{r.finish_tag}</strong>
+              {r.multiplier > 1 && <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>×{r.multiplier}</span>}
+            </span>
+          </td>
+        );
+      case "shapes":
+        return <td key={col.key} style={td}>{v}</td>;
+      case "waste_pct":
+        return <td key={col.key} style={td}>{v ? `${num(v, 0)}%` : "—"}</td>;
+      case "ea":
+        return <td key={col.key} style={td}>{v ? num(v, 0) : "—"}</td>;
+      case "total_sf_net":
+        return <td key={col.key} style={{ ...td, fontWeight: 700, color: "var(--cobalt)" }}>{r.total_sf ? num(v) : "—"}</td>;
+      case "sy_net":
+        return <td key={col.key} style={{ ...td, color: "var(--cobalt)" }}>{r.total_sf ? num(v) : "—"}</td>;
+      case "perimeter_ref":
+        return <td key={col.key} style={{ ...td, color: "var(--ink-muted)" }}>{v ? num(v) : "—"}</td>;
+      default: // floor_sf, wall_sf, border_sf, lf, waste_sf, waste_lf, …
+        return <td key={col.key} style={td}>{v ? num(v) : "—"}</td>;
+    }
+  };
+
+  // picker row — finish is locked (filtered out of the lists below)
+  const colCheckbox = (c) => (
+    <React.Fragment key={c.key}>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0", cursor: "pointer" }}>
+        <input type="checkbox" checked={colPrefs[c.key] ?? c.defaultVisible} onChange={() => toggleCol(c)} />
+        <span>{c.header}</span>
+      </label>
+      {COL_HINTS[c.key] && (
+        <div style={{ margin: "0 0 4px 24px", fontSize: 10.5, color: "var(--ink-muted)", lineHeight: 1.5 }}>{COL_HINTS[c.key]}</div>
+      )}
+    </React.Fragment>
+  );
+
   return (
     <div className="report-panel" style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>
       <div className="report-toolbar" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid var(--ink)", background: "var(--paper-bright)" }}>
@@ -65,6 +142,25 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <input value={projectName} onChange={(e) => onProjectName(e.target.value)} placeholder="Project name (optional)"
           className="field-input" style={{ width: 260, padding: "5px 9px", fontSize: 13 }} />
         <div style={{ flex: 1 }} />
+        <div ref={colsRef} style={{ position: "relative" }}>
+          <button className="btn-ghost" onClick={() => setShowCols((s) => !s)} title="Choose which columns the table and CSV show">Columns</button>
+          {showCols && (
+            <div className="report-modal" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 70, width: 272, background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-2)", padding: "10px 12px", fontSize: 12.5, color: "var(--ink)" }}>
+              <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+                <strong style={{ fontFamily: "var(--f-display)", fontSize: 13 }}>Columns</strong>
+                <div style={{ flex: 1 }} />
+                <button onClick={() => { setColPrefs({}); saveColPrefs({}); }} title="Back to the default column set"
+                  style={{ border: "none", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontSize: 11.5, padding: "0 10px 0 0" }}>Reset</button>
+                <button onClick={() => setShowCols(false)} title="Close"
+                  style={{ border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+              </div>
+              {TABLE_PROFILE.filter((c) => c.key !== "finish" && c.defaultVisible).map(colCheckbox)}
+              <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Optional</div>
+              {TABLE_PROFILE.filter((c) => c.key !== "finish" && !c.defaultVisible).map(colCheckbox)}
+              <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export.</p>
+            </div>
+          )}
+        </div>
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
         <button className="btn-ghost" onClick={exportJson} disabled={!rows.length}><Icon name="document" size={13} />JSON</button>
         <button className="btn-ghost" onClick={exportShapesCsv} disabled={!shapes.length}
@@ -119,47 +215,30 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           <table style={{ width: "100%", maxWidth: 980, margin: "0 auto", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
             <thead>
               <tr>
-                <th style={{ ...th, textAlign: "left" }}>Finish</th>
-                <th style={th}>Shapes</th>
-                <th style={th}>Floor SF</th>
-                <th style={th}>Wall SF</th>
-                <th style={th}>Border SF</th>
-                <th style={th}>LF</th>
-                <th style={th}>EA</th>
-                <th style={th}>Waste</th>
-                <th style={{ ...th, color: "var(--cobalt)" }}>SF ordered</th>
-                <th style={{ ...th, color: "var(--cobalt)" }}>SY</th>
+                {tableCols.map((c) => (
+                  <th key={c.key} style={c.key === "finish" ? { ...th, textAlign: "left" } : c.accent ? { ...th, color: "var(--cobalt)" } : th}>{c.header}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td style={{ ...td, textAlign: "left" }}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 12, height: 12, background: r.color, display: "inline-block", border: "1px solid var(--ink-faint)" }} />
-                      <strong style={{ fontFamily: "var(--f-mono)", fontWeight: 600 }}>{r.finish_tag}</strong>
-                      {r.multiplier > 1 && <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>×{r.multiplier}</span>}
-                    </span>
-                  </td>
-                  <td style={td}>{r.shape_count}</td>
-                  <td style={td}>{r.floor_sf ? num(r.floor_sf) : "—"}</td>
-                  <td style={td}>{r.wall_sf ? num(r.wall_sf) : "—"}</td>
-                  <td style={td}>{r.border_sf ? num(r.border_sf) : "—"}</td>
-                  <td style={td}>{r.lf ? num(r.lf) : "—"}</td>
-                  <td style={td}>{r.ea ? num(r.ea, 0) : "—"}</td>
-                  <td style={td}>{r.waste_pct ? `${num(r.waste_pct, 0)}%` : "—"}</td>
-                  <td style={{ ...td, fontWeight: 700, color: "var(--cobalt)" }}>{r.total_sf ? num(r.total_sf_net) : "—"}</td>
-                  <td style={{ ...td, color: "var(--cobalt)" }}>{r.total_sf ? num(r.sy_net) : "—"}</td>
+                  {tableCols.map((c) => renderCell(c, r))}
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr>
                 <td style={{ ...td, textAlign: "left", borderTop: "2px solid var(--ink)", fontWeight: 700 }}>Total</td>
-                <td style={{ ...td, borderTop: "2px solid var(--ink)" }} colSpan={6}></td>
-                <td style={{ ...td, borderTop: "2px solid var(--ink)" }}></td>
-                <td style={{ ...td, borderTop: "2px solid var(--ink)", fontWeight: 700, color: "var(--cobalt)" }}>{num(g.total_sf_net)}</td>
-                <td style={{ ...td, borderTop: "2px solid var(--ink)", color: "var(--cobalt)" }}>{num(g.sy_net)}</td>
+                {/* finish is always first & locked; every other visible column gets its
+                    own td — footed columns render foot(g), ref columns never foot */}
+                {tableCols.slice(1).map((c) => (
+                  c.foot && !c.ref ? (
+                    <td key={c.key} style={{ ...td, borderTop: "2px solid var(--ink)", ...(c.accent ? { color: "var(--cobalt)", ...(c.key === "total_sf_net" ? { fontWeight: 700 } : {}) } : {}) }}>{num(c.foot(g))}</td>
+                  ) : (
+                    <td key={c.key} style={{ ...td, borderTop: "2px solid var(--ink)" }}></td>
+                  )
+                ))}
               </tr>
             </tfoot>
           </table>
@@ -168,6 +247,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           <p style={{ maxWidth: 980, margin: "14px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
             <strong>SF ordered</strong> = measured quantity × waste %. Waste is set per condition in the canvas. Wall SF comes from Surface-Area
             traces (run × height); Border SF from Linear runs with a thickness.
+            {tableCols.some((c) => c.key === "perimeter_ref") && (
+              <> Perim LF (ref) sums floor-trace perimeters — includes door openings and shared walls; reference only, never totaled or waste-adjusted.</>
+            )}
           </p>
         )}
         {rows.length > 0 && bySheet.length > 0 && (
