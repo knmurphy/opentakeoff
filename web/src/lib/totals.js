@@ -27,24 +27,32 @@ import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module impo
 // keep importing round2 from here; num.js is the single definition.
 export { round2 } from "./num.js";
 
+// The role → quantity mapping from the header comment, shared by
+// conditionTotals and sheetTotals. Mutates acc ({ floor, wall, border, lf,
+// ea }) in place with the shape's raw computed numbers — no multiplier, no
+// waste, no rounding here. `cp.count || 1` is deliberate (||, not ??): a
+// count shape still tallies one unit even if computed.count is 0/missing.
+function accumulateRole(acc, s) {
+  const cp = s.computed || {};
+  switch (s.measure_role) {
+    case "deduct": acc.floor -= cp.area_sf || 0; break;
+    case "floor_area": acc.floor += cp.area_sf || 0; break;
+    case "surface_area": acc.wall += cp.area_sf || 0; break;
+    case "linear": acc.lf += cp.perimeter_lf || 0; acc.border += cp.area_sf || 0; break;
+    case "count": acc.ea += cp.count || 1; break;
+    default: break;
+  }
+}
+
 export function conditionTotals(conditions, shapes) {
   return conditions.map((c) => {
     const mult = c.multiplier || 1;
     const waste = Math.max(0, Number(c.waste_pct) || 0);
     const w = 1 + waste / 100;
     const cs = shapes.filter((s) => s.condition_id === c.id);
-    let floor = 0, wall = 0, border = 0, lf = 0, ea = 0;
-    for (const s of cs) {
-      const cp = s.computed || {};
-      switch (s.measure_role) {
-        case "deduct": floor -= cp.area_sf || 0; break;
-        case "floor_area": floor += cp.area_sf || 0; break;
-        case "surface_area": wall += cp.area_sf || 0; break;
-        case "linear": lf += cp.perimeter_lf || 0; border += cp.area_sf || 0; break;
-        case "count": ea += cp.count || 1; break;
-        default: break;
-      }
-    }
+    const acc = { floor: 0, wall: 0, border: 0, lf: 0, ea: 0 };
+    for (const s of cs) accumulateRole(acc, s);
+    let { floor, wall, border, lf, ea } = acc;
     floor *= mult; wall *= mult; border *= mult; lf *= mult; ea *= mult;
     const total = floor + wall + border;
     // supporting materials: deterministic quantity = basis ÷ coverage, rounded up
@@ -100,15 +108,7 @@ export function sheetTotals(conditions, shapes) {
     let a = conds.get(s.condition_id);
     if (!a) { a = { n: 0, floor: 0, wall: 0, border: 0, lf: 0, ea: 0 }; conds.set(s.condition_id, a); }
     a.n += 1;
-    const cp = s.computed || {};
-    switch (s.measure_role) {
-      case "deduct": a.floor -= cp.area_sf || 0; break;
-      case "floor_area": a.floor += cp.area_sf || 0; break;
-      case "surface_area": a.wall += cp.area_sf || 0; break;
-      case "linear": a.lf += cp.perimeter_lf || 0; a.border += cp.area_sf || 0; break;
-      case "count": a.ea += cp.count || 1; break;
-      default: break;
-    }
+    accumulateRole(a, s);
   }
   // file name, then numeric page — mirror exportMarkedSet's sheetMeta sort
   const order = [...bySheet.keys()].sort((ka, kb) => {
