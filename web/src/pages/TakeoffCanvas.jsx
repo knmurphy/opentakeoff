@@ -286,6 +286,7 @@ export default function TakeoffCanvas() {
   const [tf, setTf] = useState({ x: 0, y: 0, scale: 1 }); // render mirror of tfRef
 
   const [scales, setScales] = useState({});
+  const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — "calibrated" | "standard" | "detected"; sheets that predate the flag export "unknown"
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
@@ -571,8 +572,14 @@ export default function TakeoffCanvas() {
       else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
       else setView("gallery");
       const sc = {};
-      for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) sc[s.sheet_id] = s.units_per_px;
+      const src = {};
+      for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
+        sc[s.sheet_id] = s.units_per_px;
+        // provenance is additive — old projects lack it, junk values are dropped (report shows "unknown")
+        if (["calibrated", "standard", "detected"].includes(s.scale_source)) src[s.sheet_id] = s.scale_source;
+      }
       setScales(sc);
+      setScaleSources(src);
       hydrated.current = true;
     }).catch(() => { hydrated.current = true; });
     return () => { off = true; };
@@ -858,14 +865,14 @@ export default function TakeoffCanvas() {
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
-    const payload = { project_name: projectName, sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
+    const payload = { project_name: projectName, sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
     const t = setTimeout(() => {
       store.saveAnnotations(payload).then(() => setSaveState("saved")).catch(() => setSaveState("idle"));
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, markups, sheetGroup, lastGroup, openTabs, projectName]);
+  }, [shapes, conditions, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1357,6 +1364,7 @@ export default function TakeoffCanvas() {
     // store at BASELINE resolution — the auto hi-res raster has factorFor× denser pixels
     const toBase = factorFor(pa.key);
     setScales((s) => ({ ...s, [pa.key]: (feet / px) * toBase })); // per page — remembered for this sheet
+    setScaleSources((s) => ({ ...s, [pa.key]: "calibrated" }));
     setCalib([]); setPendingLen("");
   }
 
@@ -1814,7 +1822,7 @@ export default function TakeoffCanvas() {
         </button>
         {vRule}
         {/* scale group: standard dropdown + plan-note chip + calibrate */}
-        <select value={stdValue} onChange={(e) => { const f = STANDARD_SCALES.find((s) => s.label === e.target.value); if (f) setScales((s) => ({ ...s, [focusPanel.key]: f.upp })); }}
+        <select value={stdValue} onChange={(e) => { const f = STANDARD_SCALES.find((s) => s.label === e.target.value); if (f) { setScales((s) => ({ ...s, [focusPanel.key]: f.upp })); setScaleSources((s) => ({ ...s, [focusPanel.key]: "standard" })); } }}
           title={`Set the scale for ${labelFor(focusPanel)} — remembered per sheet${groupKeys.length > 1 ? " (targets the sheet you last clicked)" : ""}`}
           style={{ padding: 6, border: unitsPerPx ? "1px solid var(--c-positive)" : "1px solid var(--ink-faint)", background: "transparent", color: unitsPerPx ? "var(--c-positive)" : "var(--c-danger)", fontSize: 12 }}>
           <option value="">{unitsPerPx ? `scale set${stdValue ? "" : " · custom"} ✓` : `Set scale for ${labelFor(focusPanel)}…`}</option>
@@ -1824,7 +1832,7 @@ export default function TakeoffCanvas() {
           const det = detectedScales[focusPanel.key];
           if (!det) return null;
           if (!unitsPerPx) return (
-            <button type="button" onClick={() => setScales((s) => ({ ...s, [focusPanel.key]: det.upp }))}
+            <button type="button" onClick={() => { setScales((s) => ({ ...s, [focusPanel.key]: det.upp })); setScaleSources((s) => ({ ...s, [focusPanel.key]: "detected" })); }}
               title={`The plan notes ${det.label} on ${labelFor(focusPanel)}${det.multi ? " — this sheet shows several scales (details are often larger); confirm against a known dimension" : ""}. Click to use it.`}
               style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", border: "1px dashed var(--c-positive)", background: "transparent", color: "var(--c-positive)", cursor: "pointer", fontSize: 11.5, fontWeight: 600, lineHeight: 1 }}>
               <Icon name="target" size={13} />plan says {det.label}{det.multi ? " ±" : ""} — use
@@ -2332,7 +2340,8 @@ export default function TakeoffCanvas() {
       {showReport && (
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
-          conditions={conditions} shapes={shapes}
+          conditions={conditions} shapes={shapes} markups={markups}
+          scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
           onClose={() => setShowReport(false)}

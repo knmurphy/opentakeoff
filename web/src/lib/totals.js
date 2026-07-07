@@ -11,6 +11,12 @@
 //
 // `shape.computed` already holds the per-shape numbers (computed at draw time
 // against that sheet's scale), so totaling is pure arithmetic — no scale here.
+//
+// Naming debt, kept deliberately: the `_net` suffix (total_sf_net, sy_net, …)
+// means the WASTE-ADJUSTED order quantity — estimating parlance would call the
+// un-adjusted measured figure "net". The names stay as-is because the CSV
+// headers and the now-versioned JSON export keys (opentakeoff.report.v1) must
+// remain stable.
 
 export const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 

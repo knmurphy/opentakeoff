@@ -2,7 +2,7 @@
 // (finish): measured quantity, waste %, and waste-adjusted order quantity, with
 // a grand total. Exports to CSV / JSON, prints, and hosts the opt-in
 // "Contribute to the open flooring model" flow.
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary } from "../lib/totals.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
@@ -18,24 +18,35 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [] }) {
   const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
   const g = grandTotals(rows);
   const matSummary = materialsSummary(rows);
   const bySheet = sheetTotals(conditions, shapes);
   const [showContribute, setShowContribute] = useState(false);
 
+  // while the report is up, the print stylesheet (app.css @media print) hides
+  // the canvas chrome behind it and lets the report flow across pages
+  useEffect(() => {
+    document.body.classList.add("report-open");
+    return () => document.body.classList.remove("report-open");
+  }, []);
+
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
     JSON.stringify({
-      project_name: projectName || null, generated_with: "OpenTakeoff", conditions: rows,
+      schema: "opentakeoff.report.v1",
+      project_name: projectName || null, generated_with: "OpenTakeoff",
+      sheets: scaleInfo.map((si) => ({ ...si, sheet: sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id })),
+      conditions: rows,
       by_sheet: bySheet.map((gp) => ({
         sheet_id: gp.sheet_id,
         sheet: sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id,
         rows: gp.rows.map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) })),
       })),
       totals: g, materials: matSummary,
+      markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: sheetLabel ? sheetLabel(m.sheet_id) : m.sheet_id, text: m.text || "" })),
     }, null, 2),
     "application/json");
   const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName), "text/csv");
@@ -47,8 +58,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
 
   return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid var(--ink)", background: "var(--paper-bright)" }}>
+    <div className="report-panel" style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>
+      <div className="report-toolbar" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid var(--ink)", background: "var(--paper-bright)" }}>
         <Icon name="takeoffs" size={18} />
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 16, color: "var(--ink)" }}>Takeoff report</strong>
         <input value={projectName} onChange={(e) => onProjectName(e.target.value)} placeholder="Project name (optional)"
@@ -77,7 +88,29 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         </button>
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
+      <div className="report-scroll" style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
+        {/* print pagination: the flow-table's thead repeats this one-line strip at
+            the top of every printed page (screen hides it) — a fixed footer would
+            overlap the last row of intermediate pages */}
+        <table className="report-flow"><thead><tr><td>
+          {projectName || "Untitled project"} — Quantities derived from drawings at stated scales; verify in field.
+        </td></tr></thead><tbody><tr><td>
+        {/* print-only masthead — hidden on screen via app.css */}
+        <div className="report-print-header">
+          <div style={{ fontFamily: "var(--f-display)", fontSize: 20, fontWeight: 700 }}>{projectName || "Untitled project"}</div>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, margin: "2px 0 0" }}>Generated {new Date().toLocaleDateString()}</div>
+          {scaleInfo.length > 0 && (
+            <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, lineHeight: 1.6, marginTop: 6 }}>
+              {scaleInfo.map((si) => (
+                <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {si.source}</div>
+              ))}
+            </div>
+          )}
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, marginTop: 6 }}>OpenTakeoff — opentakeoff.netlify.app</div>
+          <div style={{ fontSize: 10.5, marginTop: 2, borderBottom: "1px solid var(--ink-faint)", paddingBottom: 8, marginBottom: 12 }}>
+            Quantities derived from drawings at stated scales; verify in field.
+          </div>
+        </div>
         {!rows.length ? (
           <div style={{ padding: 48, textAlign: "center", color: "var(--ink-muted)" }}>
             Nothing measured yet — trace some areas, then come back for the breakdown.
@@ -183,6 +216,36 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </p>
           </div>
         )}
+        {markups.length > 0 && (
+          <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
+            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>Revisions noted</h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: "left" }}>Type</th>
+                  <th style={{ ...th, textAlign: "left" }}>Sheet</th>
+                  <th style={{ ...th, textAlign: "left" }}>Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {markups.map((m) => (
+                  <tr key={m.id}>
+                    <td style={{ ...td, textAlign: "left" }}>
+                      <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.08em", border: "1px solid var(--ink-faint)", padding: "1px 6px", color: "var(--ink-soft)" }}>
+                        {m.type === "cloud" ? "CLOUD" : m.type === "callout" ? "CALLOUT" : "NOTE"}
+                      </span>
+                    </td>
+                    <td style={{ ...td, textAlign: "left", fontFamily: "var(--f-mono)", fontSize: 11.5 }}>{sheetLabel ? sheetLabel(m.sheet_id) : m.sheet_id}</td>
+                    <td style={{ ...td, textAlign: "left", whiteSpace: "normal", width: "60%" }}>{m.text || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p style={{ margin: "10px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
+              Markups are annotations, not measurements — quantities above are unaffected.
+            </p>
+          </div>
+        )}
         {matSummary.length > 0 && (
           <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
             <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>Supporting materials — buy list</h3>
@@ -216,6 +279,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </p>
           </div>
         )}
+        </td></tr></tbody></table>
       </div>
 
       {showContribute && (
@@ -244,7 +308,7 @@ function ContributeModal({ conditions, shapes, onClose }) {
   };
 
   return (
-    <div onClick={onClose} style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(14,26,46,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div onClick={onClose} className="report-modal" style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(14,26,46,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()} className="panel" style={{ width: 520, maxWidth: "100%", maxHeight: "90%", overflow: "auto", background: "var(--paper-bright)", boxShadow: "var(--shadow-2)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", borderBottom: "1px solid var(--ink)" }}>
           <Icon name="oneClick" size={16} />
