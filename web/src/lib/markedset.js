@@ -44,7 +44,7 @@ const hex = (h) => {
   const v = s.length === 3 ? s.split("").map((c) => c + c).join("") : s.padEnd(6, "0");
   return [parseInt(v.slice(0, 2), 16) / 255, parseInt(v.slice(2, 4), 16) / 255, parseInt(v.slice(4, 6), 16) / 255];
 };
-const num = (v, d = 1) => (Math.round(v * 10 ** d) / 10 ** d).toLocaleString(undefined, { maximumFractionDigits: d });
+const num = (v, d = 1) => (Math.round(v * 10 ** d) / 10 ** d || 0).toLocaleString(undefined, { maximumFractionDigits: d }); // || 0 normalizes -0 so a −0.05 delta never prints "-0"
 
 // pdf-lib's standard Helvetica encodes WinAnsi only — one CJK/emoji code point
 // in ANY drawn string (project name, company/client fields, condition tags,
@@ -62,7 +62,7 @@ const num = (v, d = 1) => (Math.round(v * 10 ** d) / 10 ** d).toLocaleString(und
 // "0 SF" (and "-0 SF" for negatives).
 const shows = (v, d = 1) => Math.round(Math.abs(v) * 10 ** d) !== 0;
 
-const WINANSI_EXTRAS = new Set(["…", "–", "—", "‘", "’", "“", "”", "•"]);
+const WINANSI_EXTRAS = new Set([..."…–—‘’“”•", ..."€™Šš‹›ŒœŽžŸƒ†‡‰ˆ˜"]); // full printable cp1252 0x80–0x9F
 export function winAnsiSafe(s) {
   let out = "";
   for (const ch of String(s ?? "")) {
