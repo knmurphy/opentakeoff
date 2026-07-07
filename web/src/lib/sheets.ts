@@ -1,6 +1,8 @@
 // Shared sheet/plan-text helpers for the Takeoff Canvas and the Sheet Gallery:
 // sheet-key codec, standard scales, title-block sheet numbers, drawn-scale notes.
 import * as pdfjsLib from "pdfjs-dist";
+export { parseSheetKey } from "./sheetKey"; // moved to a pdfjs-free module; re-exported for existing importers
+export type { ParsedSheetKey } from "./sheetKey";
 
 export const RENDER_SCALE = 2.0;
 
@@ -31,10 +33,6 @@ interface TextContentLike {
   items: TextItemLike[];
 }
 
-export interface ParsedSheetKey {
-  file: string;
-  page: number;
-}
 
 export interface DetectedScale {
   upp: number;
@@ -68,14 +66,6 @@ export const STANDARD_SCALES: Scale[] = [
   { label: '1" = 50\'', upp: eng(50) },
   { label: '1" = 60\'', upp: eng(60) },
 ];
-
-// Inverse of sheetKey (page 1 = bare file name; pages 2+ = "name#page"): split on
-// the LAST '#' and only when the tail is numeric — file names may contain '#'.
-export function parseSheetKey(key: string): ParsedSheetKey {
-  const i = key.lastIndexOf("#");
-  if (i > 0 && /^\d+$/.test(key.slice(i + 1))) return { file: key.slice(0, i), page: parseInt(key.slice(i + 1), 10) };
-  return { file: key, page: 1 };
-}
 
 // Pull the drawing's sheet number (e.g. A003, A-101, S1.1) from the title block —
 // the largest sheet-number-shaped token in the lower-right region of the page.

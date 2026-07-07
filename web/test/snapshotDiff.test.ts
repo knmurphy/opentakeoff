@@ -84,12 +84,62 @@ test("deleted-and-recreated condition matches by finish_tag and diffs unchanged"
   const d = diffSnapshots(A, B);
   assert.equal(d.conditions.length, 1);                     // NOT remove+add
   const e = d.conditions[0];
-  assert.equal(e.key, "tag:CT-1");
+  assert.equal(e.key, "tag:CT-1#0");                        // ordinal disambiguates duplicate tags
   assert.equal(e.status, "unchanged");
   for (const f of COND_FIELDS) assert.equal(e.deltas[f], 0);
   // the tag key carries through to by_sheet, so the sheet reconciles too
   assert.equal(d.by_sheet.length, 0);
   assert.equal(d.identical, true);
+});
+
+test("DUPLICATE finish_tags: two same-tag recreated conditions pair by order — no phantom changes", () => {
+  // the adversarial-review probe: two conditions sharing finish_tag "CT-1",
+  // both deleted and recreated with fresh uids, quantities byte-identical.
+  // A bare "tag:CT-1" key collided in the by-sheet Maps — one baseline row
+  // was dropped, the survivor diffed against both B rows, and an identical
+  // takeoff reported changes.
+  const A = payload(
+    [{ id: "a1", finish_tag: "CT-1" }, { id: "a2", finish_tag: "CT-1" }],
+    [floorShape("s1", "a1", "plan", 100), floorShape("s2", "a2", "plan", 250)],
+  );
+  const B = payload(
+    [{ id: "b1", finish_tag: "CT-1" }, { id: "b2", finish_tag: "CT-1" }],
+    [floorShape("s8", "b1", "plan", 100), floorShape("s9", "b2", "plan", 250)],
+  );
+  const d = diffSnapshots(A, B);
+  assert.equal(d.conditions.length, 2);                     // both pairs, neither remove+add
+  assert.deepEqual(d.conditions.map((e: any) => e.key), ["tag:CT-1#0", "tag:CT-1#1"]);
+  for (const e of d.conditions) {
+    assert.equal(e.status, "unchanged");
+    for (const f of COND_FIELDS) assert.equal(e.deltas[f], 0, `${e.key}.${f}`);
+  }
+  // row keys unique (React key={r.key} warned on duplicates before)
+  assert.equal(new Set(d.conditions.map((e: any) => e.key)).size, 2);
+  assert.equal(d.by_sheet.length, 0);                       // no phantom sheet diffs
+  assert.equal(d.identical, true);
+});
+
+// ── 3b. display-threshold status ─────────────────────────────────────────────
+
+test("a sub-display delta (|Δ| < 0.05) is 'unchanged' — status agrees with the dash cells", () => {
+  // 0.03 SF rounds to "—" in every 1-decimal delta cell; the row must not
+  // claim "changed" (it used to, off the raw round2 deltas)
+  const cond = { id: "c", finish_tag: "CT-1" };
+  const A = payload([cond], [floorShape("s1", "c", "plan", 100)]);
+  const B = payload([cond], [floorShape("s1", "c", "plan", 100.03)]);
+  const d = diffSnapshots(A, B);
+  assert.equal(d.conditions[0].status, "unchanged");
+  assert.equal(d.by_sheet.length, 0);                       // the sliver-only sheet is dropped
+  assert.equal(d.identical, true);
+});
+
+test("a delta at the display threshold (0.05) still reports 'changed'", () => {
+  const cond = { id: "c", finish_tag: "CT-1" };
+  const A = payload([cond], [floorShape("s1", "c", "plan", 100)]);
+  const B = payload([cond], [floorShape("s1", "c", "plan", 100.05)]);
+  const d = diffSnapshots(A, B);
+  assert.equal(d.conditions[0].status, "changed");
+  assert.equal(d.identical, false);
 });
 
 // ── 4. quantity change ───────────────────────────────────────────────────────
@@ -183,4 +233,12 @@ test("missing payload arrays are tolerated — diff against {}", () => {
   assert.equal(allRemoved.conditions[0].status, "removed");
   assert.equal(allRemoved.conditions[0].deltas.floor_sf, -100);
   assert.equal(allRemoved.by_sheet[0].rows[0].deltas.floor_sf, -100);
+});
+
+test("allZero honors EA's 0dp display: fractional EA drift below 0.5 is unchanged", () => {
+  const a = { conditions: [{ id: "c1", finish_tag: "CT-1" }], shapes: [{ condition_id: "c1", sheet_id: "s1", measure_role: "count", computed: { count: 1 } }] };
+  // hand-edited payloads can carry fractional counts; the panel shows EA at 0dp
+  const b = { conditions: [{ id: "c1", finish_tag: "CT-1" }], shapes: [{ condition_id: "c1", sheet_id: "s1", measure_role: "count", computed: { count: 1.3 } }] };
+  const d = diffSnapshots(a, b);
+  assert.equal(d.conditions.find((r: any) => r.key === "c1")?.status, "unchanged");
 });
