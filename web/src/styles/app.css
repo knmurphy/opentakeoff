@@ -189,13 +189,18 @@ input, textarea { font-family: var(--f-body); }
   body.report-open .report-panel,
   body.report-open .report-panel * { visibility: visible; }
 
-  /* Un-clip the panel: on screen it's inset:0 with an inner scroller, which
-     window.print() would clip to one viewport. Let content flow across pages. */
+  /* Un-clip the panel: on screen it's inset:0 with an inner scroller inside a
+     100vh shell, which window.print() would clip to one viewport — and Gecko
+     clips position:absolute subtrees to the FIRST page outright. So the panel
+     goes back into normal flow (static), every fixed-height ancestor collapses
+     to auto, and the shell's other children leave layout entirely (they're
+     visibility:hidden but would still reserve a viewport of space above the
+     report — the flex:1 canvas region in particular). */
+  html, body, #root { height: auto !important; overflow: visible !important; }
+  body.report-open .app-shell { height: auto !important; display: block !important; }
+  body.report-open .app-shell > :not(.report-panel) { display: none !important; }
   body.report-open .report-panel {
-    position: absolute !important;
-    inset: auto !important;
-    left: 0 !important;
-    top: 0 !important;
+    position: static !important;
     width: 100% !important;
     height: auto !important;
     overflow: visible !important;

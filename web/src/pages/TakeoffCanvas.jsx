@@ -1775,7 +1775,9 @@ export default function TakeoffCanvas() {
   const vRule = <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)", margin: "0 3px" }} />;
 
   return (
+    // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
     <div
+      className="app-shell"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer?.files); }}
       style={{ position: "relative", display: "flex", flexDirection: "column", height: "100vh" }}>
