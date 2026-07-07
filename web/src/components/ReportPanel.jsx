@@ -2,7 +2,7 @@
 // (finish): measured quantity, waste %, and waste-adjusted order quantity, with
 // a grand total. Exports to CSV / JSON, prints, and hosts the opt-in
 // "Contribute to the open flooring model" flow.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
@@ -11,6 +11,9 @@ import { buildContribution, sendContribution, isContributeConfigured } from "../
 import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
+
+// the report's one caveat line — page-strip on every printed page + masthead
+const DISCLAIMER = "Quantities derived from drawings at stated scales; verify in field.";
 
 // one-line hints for the opt-in columns in the picker (waste hint sits under
 // the second waste checkbox so it reads once for the pair)
@@ -28,10 +31,12 @@ const sheetNum = (v, d = 1) => {
 };
 
 export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
-  const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
-  const g = grandTotals(rows);
-  const matSummary = materialsSummary(rows);
-  const bySheet = sheetTotals(conditions, shapes);
+  // memoized on the source arrays: project-name/client-info keystrokes re-render
+  // the panel without touching conditions/shapes, so the totaling passes skip
+  const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
+  const bySheet = useMemo(() => sheetTotals(conditions, shapes), [conditions, shapes]);
+  const g = useMemo(() => grandTotals(rows), [rows]);
+  const matSummary = useMemo(() => materialsSummary(rows), [rows]);
   const [showContribute, setShowContribute] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   // bumped by the Project info modal on every company save, so the print
@@ -44,7 +49,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const colsRef = useRef(null);
   const tableCols = visibleCols(TABLE_PROFILE, colPrefs);
   const csvCols = visibleCols(CSV_PROFILE, colPrefs);
-  const perimByCond = floorPerimeterLf(shapes);
+  const perimByCond = useMemo(() => floorPerimeterLf(shapes), [shapes]);
   const ctx = { perimByCond };
 
   // while the report is up, the print stylesheet (app.css @media print) hides
@@ -189,7 +194,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             the top of every printed page (screen hides it) — a fixed footer would
             overlap the last row of intermediate pages */}
         <table className="report-flow"><thead><tr><td>
-          {projectName || "Untitled project"} — Quantities derived from drawings at stated scales; verify in field.
+          {projectName || "Untitled project"} — {DISCLAIMER}
         </td></tr></thead><tbody><tr><td>
         {/* print-only masthead — hidden on screen via app.css */}
         <div className="report-print-header">
@@ -204,7 +209,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           {hasClient && (
             <div style={{ fontSize: 10.5, marginTop: 2, lineHeight: 1.5 }}>
               {clientInfo.client_name && <div>Prepared for: {clientInfo.client_name}</div>}
-              {clientInfo.client_address && <div style={{ whiteSpace: "pre-line" }}>{clientInfo.client_address}</div>}
+              {/* print-overflow guard: a pasted 40-line address must not eat the
+                  page (the PDF cover caps its whole client block at 6 lines) */}
+              {clientInfo.client_address && <div style={{ whiteSpace: "pre-line" }}>{clientInfo.client_address.split("\n").slice(0, 6).join("\n")}</div>}
               {clientInfo.reference && <div>Ref: {clientInfo.reference}</div>}
               {clientInfo.date && <div>Date: {clientInfo.date}</div>}
             </div>
@@ -221,7 +228,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           )}
           <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, marginTop: 6 }}>OpenTakeoff — opentakeoff.netlify.app</div>
           <div style={{ fontSize: 10.5, marginTop: 2, borderBottom: "1px solid var(--ink-faint)", paddingBottom: 8, marginBottom: 12 }}>
-            Quantities derived from drawings at stated scales; verify in field.
+            {DISCLAIMER}
           </div>
         </div>
         {/* the empty-state hides once markups exist — "Revisions noted" below
