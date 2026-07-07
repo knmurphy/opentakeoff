@@ -22,6 +22,7 @@
 // neither module touches the other's exports at module-eval time (only inside
 // function bodies) — ESM live bindings resolve by first call.
 import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
+import { parseSheetKey } from "./sheets";
 
 export const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -75,9 +76,13 @@ export function conditionTotals(conditions, shapes) {
 // sheet_id. Returns [{ sheet_id, rows: [{ id, finish_tag, color, multiplier,
 // shape_count, floor_sf, wall_sf, border_sf, lf, ea }] }].
 //
-//   - Sheet groups follow first appearance of the sheet_id in `shapes`; rows
-//     within a group follow `conditions` order; a condition appears only on
-//     sheets where it has ≥1 shape, and shapeless sheets don't appear at all.
+//   - Sheet groups sort by file name (localeCompare) then page number — the
+//     `file#page` sheet_id convention via parseSheetKey, the SAME order
+//     exportMarkedSet gives the PDF — so report/CSV/JSON and the Marked Set
+//     agree, and delete-and-redraw can't reorder a re-export (first-appearance
+//     draw order used to leak through). Rows within a group follow
+//     `conditions` order; a condition appears only on sheets where it has
+//     ≥1 shape, and shapeless sheets don't appear at all.
 //   - Quantities are BASE (the condition multiplier is NOT applied — it's
 //     included per row so consumers can footnote "×N applies at condition
 //     level") and UNROUNDED (accumulated raw; round2 at display/serialization
@@ -87,11 +92,10 @@ export function conditionTotals(conditions, shapes) {
 //   - floor_sf can be negative (a deduct pasted onto a different sheet than
 //     its positive area) — returned as-is, never clamped.
 export function sheetTotals(conditions, shapes) {
-  const order = [];                 // sheet_ids by first appearance
   const bySheet = new Map();        // sheet_id → Map(condition_id → accumulator)
   for (const s of shapes) {
     let conds = bySheet.get(s.sheet_id);
-    if (!conds) { conds = new Map(); bySheet.set(s.sheet_id, conds); order.push(s.sheet_id); }
+    if (!conds) { conds = new Map(); bySheet.set(s.sheet_id, conds); }
     let a = conds.get(s.condition_id);
     if (!a) { a = { n: 0, floor: 0, wall: 0, border: 0, lf: 0, ea: 0 }; conds.set(s.condition_id, a); }
     a.n += 1;
@@ -105,6 +109,11 @@ export function sheetTotals(conditions, shapes) {
       default: break;
     }
   }
+  // file name, then numeric page — mirror exportMarkedSet's sheetMeta sort
+  const order = [...bySheet.keys()].sort((ka, kb) => {
+    const a = parseSheetKey(String(ka)), b = parseSheetKey(String(kb));
+    return a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file);
+  });
   return order.map((sheet_id) => {
     const conds = bySheet.get(sheet_id);
     const rows = conditions.filter((c) => conds.has(c.id)).map((c) => {

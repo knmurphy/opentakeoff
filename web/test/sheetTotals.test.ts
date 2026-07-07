@@ -3,7 +3,8 @@
 //   - sheet rows carry BASE (unmultiplied) UNROUNDED quantities, so
 //     round2(Σ sheets × multiplier) reconciles exactly with the conditionTotals
 //     row — no compounded per-sheet rounding;
-//   - ordering is first-appearance for sheets, `conditions` order within;
+//   - sheets order by file name then page (exportMarkedSet's sort — never
+//     draw order), `conditions` order within;
 //   - shapeless sheets/conditions never appear; deducts can go negative;
 //   - totalsToCsv without bySheet is byte-identical to the pre-change output.
 import { test } from "node:test";
@@ -50,7 +51,7 @@ test("a deduct alone on a sheet yields a negative floor_sf — never clamped", (
   assert.equal(round2(100 - 25.5), conditionTotals(conds, shapes)[0].floor_sf);
 });
 
-test("sheets order by first appearance; shapeless sheets and conditions don't appear", () => {
+test("sheets order by file then page — not draw order; shapeless sheets and conditions don't appear", () => {
   const conds = [
     { id: "a", finish_tag: "A" },
     { id: "b", finish_tag: "B" },
@@ -62,11 +63,28 @@ test("sheets order by first appearance; shapeless sheets and conditions don't ap
     shape("a", "sheet2", "floor_area", { area_sf: 3 }),
   ];
   const groups = sheetTotals(conds, shapes);
-  assert.deepEqual(groups.map((g) => g.sheet_id), ["sheet2", "sheet1"]);
+  // sheet2 was DRAWN first, but sheet1 sorts first: file/page order — the
+  // same sort exportMarkedSet applies — so report/CSV/JSON always agree with
+  // the Marked Set PDF
+  assert.deepEqual(groups.map((g) => g.sheet_id), ["sheet1", "sheet2"]);
   // rows follow `conditions` order (a before b) even though b was drawn first
-  assert.deepEqual(groups[0].rows.map((r: any) => r.id), ["a", "b"]);
-  assert.deepEqual(groups[1].rows.map((r: any) => r.id), ["a"]);   // no b, no empty
+  assert.deepEqual(groups[0].rows.map((r: any) => r.id), ["a"]);        // no b, no empty
+  assert.deepEqual(groups[1].rows.map((r: any) => r.id), ["a", "b"]);
   for (const g of groups) assert.ok(!g.rows.some((r: any) => r.id === "empty"));
+});
+
+test("a later-drawn earlier-file sheet sorts first; pages compare numerically", () => {
+  const conds = [{ id: "c", finish_tag: "CT-1" }];
+  const shapes = [
+    shape("c", "b-plans.pdf#2", "floor_area", { area_sf: 1 }),   // drawn first
+    shape("c", "a-plans.pdf", "floor_area", { area_sf: 2 }),     // earlier file, drawn later
+    shape("c", "b-plans.pdf#10", "floor_area", { area_sf: 3 }),  // page 10 AFTER 2 (numeric, not lexicographic)
+  ];
+  const groups = sheetTotals(conds, shapes);
+  assert.deepEqual(groups.map((g) => g.sheet_id), ["a-plans.pdf", "b-plans.pdf#2", "b-plans.pdf#10"]);
+  // delete-and-redraw (a fresh draw order) yields the identical ordering
+  const redrawn = sheetTotals(conds, [...shapes].reverse());
+  assert.deepEqual(redrawn.map((g) => g.sheet_id), groups.map((g) => g.sheet_id));
 });
 
 test("linear shapes contribute LF and border SF to the sheet row", () => {
