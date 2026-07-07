@@ -33,13 +33,31 @@ function openDB() {
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE);
       if (!db.objectStoreNames.contains(SNAP_STORE)) db.createObjectStore(SNAP_STORE, { keyPath: "id" });
     };
-    // Another tab still holds an older-version connection (nothing closes
-    // connections today), so the upgrade can't proceed until it's gone.
-    req.onblocked = () => reject(Object.assign(
-      new Error("OpenTakeoff is open in another tab with older data — close it or reload."),
-      { name: "BlockedError" },
-    ));
-    req.onsuccess = () => resolve(req.result);
+    // Another tab still holds an older-version connection, so the upgrade
+    // can't proceed until it's gone. We reject rather than wait — but the
+    // open request stays pending and may still succeed once the blocker
+    // closes, so onsuccess must clean up after a settled reject (below).
+    let settled = false;
+    req.onblocked = () => {
+      settled = true;
+      reject(Object.assign(
+        new Error("OpenTakeoff is open in another tab with older data — close it or reload."),
+        { name: "BlockedError" },
+      ));
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      if (settled) {
+        // late success after onblocked already rejected — close the orphaned
+        // connection or it would block every future upgrade in turn (safe:
+        // success fires only after the upgrade transaction commits)
+        db.close();
+        return;
+      }
+      // if another tab bumps the version later, get out of its way
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => {
       if (req.error?.name === "VersionError") {
         // This build is OLDER than the database — a stale tab after a future bump.
@@ -61,6 +79,18 @@ export function isStaleTabError(e) {
   return e?.name === "VersionError" || e?.name === "BlockedError";
 }
 
+// Open, run, ALWAYS close — even when fn throws (a DataCloneError inside a
+// put, say). A leaked open connection blocks every future version upgrade
+// in every tab.
+async function withDb(fn) {
+  const db = await openDB();
+  try {
+    return await fn(db);
+  } finally {
+    db.close();
+  }
+}
+
 function tx(db, store, mode, fn) {
   return new Promise((resolve, reject) => {
     const t = db.transaction(store, mode);
@@ -76,9 +106,7 @@ function tx(db, store, mode, fn) {
 
 export const localStore = {
   async listSheets() {
-    const db = await openDB();
-    const names = await tx(db, PDF_STORE, "readonly", (os) => os.getAllKeys());
-    db.close();
+    const names = await withDb((db) => tx(db, PDF_STORE, "readonly", (os) => os.getAllKeys()));
     // preserve insertion order (IndexedDB getAllKeys sorts by key; we keep the
     // saved order from annotations.sheet_tabs at the canvas layer, so name-sort
     // here is fine for the gallery)
@@ -86,72 +114,68 @@ export const localStore = {
   },
 
   async loadPdfData(name) {
-    const db = await openDB();
-    const rec = await tx(db, PDF_STORE, "readonly", (os) => os.get(name));
-    db.close();
+    const rec = await withDb((db) => tx(db, PDF_STORE, "readonly", (os) => os.get(name)));
     if (!rec) throw new Error(`PDF not found in local store: ${name}`);
     // hand pdf.js a fresh view each call — getDocument({data}) may detach it
     return new Uint8Array(rec.bytes);
   },
 
   async addPdf(file) {
+    // read the bytes BEFORE opening — don't hold a connection across an
+    // unrelated (possibly slow, file-sized) await
     const bytes = await file.arrayBuffer();
-    const db = await openDB();
     // de-dupe by name: a re-dropped file replaces the old bytes
-    await tx(db, PDF_STORE, "readwrite", (os) => os.put({ name: file.name, bytes }));
-    db.close();
+    await withDb((db) => tx(db, PDF_STORE, "readwrite", (os) => os.put({ name: file.name, bytes })));
     return { name: file.name };
   },
 
   async removePdf(name) {
-    const db = await openDB();
-    await tx(db, PDF_STORE, "readwrite", (os) => os.delete(name));
-    db.close();
+    await withDb((db) => tx(db, PDF_STORE, "readwrite", (os) => os.delete(name)));
   },
 
   async loadAnnotations() {
-    const db = await openDB();
-    const a = await tx(db, META_STORE, "readonly", (os) => os.get(ANN_KEY));
-    db.close();
+    const a = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(ANN_KEY)));
     return a || { schema: ANN_SCHEMA, conditions: [], shapes: [], markups: [], sheets: [], sheet_group: [], last_group: [], sheet_tabs: [] };
   },
 
   async saveAnnotations(payload) {
-    const db = await openDB();
-    await tx(db, META_STORE, "readwrite", (os) => os.put({ ...payload, schema: ANN_SCHEMA }, ANN_KEY));
-    db.close();
+    await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put({ ...payload, schema: ANN_SCHEMA }, ANN_KEY)));
   },
 
   async saveSnapshot(label, payload) {
     const id = "snap_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const ts = Date.now();
-    const db = await openDB();
-    await tx(db, SNAP_STORE, "readwrite", (os) => os.put({ id, ts, label: String(label || "").trim() || null, payload }));
-    db.close();
+    await withDb((db) => tx(db, SNAP_STORE, "readwrite", (os) => os.put({ id, ts, label: String(label || "").trim() || null, payload })));
     return { id, ts };
   },
 
   async listSnapshots() {
-    const db = await openDB();
-    const recs = await tx(db, SNAP_STORE, "readonly", (os) => os.getAll());
-    db.close();
-    // strip payloads (they can be MBs of shapes) — the list UI only needs metadata
-    return (recs || [])
-      .map(({ id, ts, label }) => ({ id, ts, label }))
-      .sort((a, b) => b.ts - a.ts);
+    // cursor walk, collecting metadata only — the list UI never needs the
+    // payloads (they can be MBs of shapes), and getAll() would materialize
+    // every one of them at once; this bounds peak memory to a single record
+    const metas = await withDb((db) => tx(db, SNAP_STORE, "readonly", (os) => {
+      const out = [];
+      const req = os.openCursor();
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur) return;
+        const { id, ts, label } = cur.value;
+        out.push({ id, ts, label });
+        cur.continue();
+      };
+      return out;
+    }));
+    // cursor order is key order, not time order — keep newest-first
+    return metas.sort((a, b) => b.ts - a.ts);
   },
 
   async getSnapshot(id) {
-    const db = await openDB();
-    const rec = await tx(db, SNAP_STORE, "readonly", (os) => os.get(id));
-    db.close();
+    const rec = await withDb((db) => tx(db, SNAP_STORE, "readonly", (os) => os.get(id)));
     return rec || null;
   },
 
   async deleteSnapshot(id) {
-    const db = await openDB();
-    await tx(db, SNAP_STORE, "readwrite", (os) => os.delete(id));
-    db.close();
+    await withDb((db) => tx(db, SNAP_STORE, "readwrite", (os) => os.delete(id)));
   },
 };
 

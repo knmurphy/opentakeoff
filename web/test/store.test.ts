@@ -26,6 +26,19 @@ function rawOpen(version: number, upgrade?: (db: IDBDatabase) => void): Promise<
   });
 }
 
+// Version-bump probe: succeeds only if no connection is still open at a lower
+// version. On regression it goes red promptly via the onblocked reject — a
+// bare `await open(...)` would hang forever instead (fake-indexeddb's
+// waitForOthersClosed loops indefinitely; node:test has no default timeout).
+function probeUpgrade(version: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("opentakeoff", version);
+    req.onblocked = () => reject(new Error("upgrade blocked — a store connection leaked"));
+    req.onsuccess = () => { req.result.close(); resolve(); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 function rawPut(db: IDBDatabase, storeName: string, value: unknown, key?: IDBValidKey): Promise<void> {
   return new Promise((resolve, reject) => {
     const t = db.transaction(storeName, "readwrite");
@@ -116,6 +129,25 @@ test("database newer than this build surfaces as a stale-tab VersionError", asyn
   // sanity: garden-variety errors are NOT stale-tab errors
   assert.equal(isStaleTabError(new Error("boom")), false);
   assert.equal(isStaleTabError(null), false);
+});
+
+test("a failed put closes the connection anyway (withDb error path)", async () => {
+  // functions aren't structured-cloneable — the put throws DataCloneError
+  await assert.rejects(store.saveSnapshot("x", { evil: () => {} }), /clon/i);
+  // if saveSnapshot leaked its connection, this version bump would block
+  await probeUpgrade(3);
+});
+
+test("blocked open rejects BlockedError, then closes its late success (no zombie connection)", async () => {
+  const v1 = await rawOpen(1);
+  // v1 stays open — the store's v2 open blocks behind it and must reject
+  await assert.rejects(store.listSheets(), (e: any) => e.name === "BlockedError");
+  // Once the blocker closes, the store's orphaned open finally succeeds; the
+  // settled flag must close that connection, or THIS probe blocks in turn.
+  // (Deterministic: fake-indexeddb chains opens on one connection queue and
+  // fires onsuccess before advancing it — no sleeps needed.)
+  v1.close();
+  await probeUpgrade(3);
 });
 
 test("annotations round-trip still works against the v2 database (regression)", async () => {
