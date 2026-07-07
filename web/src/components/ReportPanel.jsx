@@ -212,7 +212,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               {/* pre-provenance projects have a scale but no record of HOW it was
                   set — say so in words; the machine JSON keeps the raw "unknown" */}
               {scaleInfo.map((si) => (
-                <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {!si.source || si.source === "unknown" ? "scale set — provenance unrecorded" : si.source}</div>
+                <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {!si.scale_source || si.scale_source === "unknown" ? "scale set — provenance unrecorded" : si.scale_source}</div>
               ))}
             </div>
           )}

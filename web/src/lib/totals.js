@@ -249,7 +249,7 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     schema: "opentakeoff.report.v1",
     project_name: projectName || null,
     generated_with: "OpenTakeoff",
-    sheets: scaleInfo.map((si) => ({ sheet_id: si.sheet_id, sheet: label(si.sheet_id), scale_source: si.source || "unknown" })),
+    sheets: scaleInfo.map((si) => ({ sheet_id: si.sheet_id, sheet: label(si.sheet_id), scale_source: si.scale_source ?? si.source ?? "unknown" })),
     conditions: rows,
     by_sheet: bySheet.map((gp) => ({
       sheet_id: gp.sheet_id,

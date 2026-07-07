@@ -104,7 +104,7 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
     projectName: "Job 42",
     rows,
     bySheet: sheetTotals(conds, shapes),
-    scaleInfo: [{ sheet_id: "sh1", units_per_px: 0.02, source: "calibrated" }],
+    scaleInfo: [{ sheet_id: "sh1", units_per_px: 0.02, scale_source: "calibrated" }],
     markups: [{ type: "cloud", sheet_id: "sh1", text: "verify", rect: [[0, 0], [1, 1]] }],
     sheetLabel: (id: string) => `Sheet ${id}`,
   });
@@ -130,6 +130,11 @@ test("reportJson: unrecorded provenance exports as the literal 'unknown'", () =>
   const j = reportJson({ scaleInfo: [{ sheet_id: "s1" }] });
   assert.equal(j.sheets[0].scale_source, "unknown");
   assert.equal(j.project_name, null);
+});
+
+test("reportJson: legacy 'source' key still read as a fallback", () => {
+  const j = reportJson({ scaleInfo: [{ sheet_id: "s1", source: "detected" }] });
+  assert.equal(j.sheets[0].scale_source, "detected");
 });
 
 test("verticalWallSf: floor perimeters × height × multiplier; 0 without a height", () => {
