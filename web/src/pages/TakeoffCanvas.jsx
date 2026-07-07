@@ -602,7 +602,11 @@ export default function TakeoffCanvas() {
       hydrate(a);
       hydrated.current = true;
     }).catch((e) => {
-      if (isStaleTabError(e)) setCommitMsg("OpenTakeoff was updated in another tab — reload this tab to continue.");
+      // stale-tab failure: leave autosave DISARMED (hydrated stays false). If a
+      // blocked tab recovered here with hydrated=true, its still-empty defaults
+      // would autosave straight over the other tab's real data. The reload
+      // message is the whole story for this tab.
+      if (isStaleTabError(e)) { setCommitMsg("OpenTakeoff was updated in another tab — reload this tab to continue."); return; }
       hydrated.current = true;
     });
     return () => { off = true; };
