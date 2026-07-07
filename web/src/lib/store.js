@@ -79,6 +79,20 @@ export function isStaleTabError(e) {
   return e?.name === "VersionError" || e?.name === "BlockedError";
 }
 
+// The one UI copy for stale-tab failures. TakeoffCanvas routes its message
+// tint on exact equality with this string, so every surface must use the
+// constant — a local paraphrase would silently render in the success color.
+export const STALE_TAB_MESSAGE = "OpenTakeoff was updated in another tab — reload this tab to continue.";
+
+// Map raw store errors to copy the user can act on; falls back to the
+// error's own message for everything unrecognized.
+export function friendlyStoreError(e) {
+  if (e?.name === "QuotaExceededError") {
+    return "Not enough storage space for this snapshot — delete old snapshots or unused PDFs and try again.";
+  }
+  return e?.message || String(e);
+}
+
 // Open, run, ALWAYS close — even when fn throws (a DataCloneError inside a
 // put, say). A leaked open connection blocks every future version upgrade
 // in every tab.

@@ -8,7 +8,7 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { store, isStaleTabError, ANN_SCHEMA } from "../src/lib/store.js";
+import { store, isStaleTabError, ANN_SCHEMA, STALE_TAB_MESSAGE, friendlyStoreError } from "../src/lib/store.js";
 
 beforeEach(() => {
   (globalThis as any).indexedDB = new IDBFactory();
@@ -148,6 +148,17 @@ test("blocked open rejects BlockedError, then closes its late success (no zombie
   // fires onsuccess before advancing it — no sleeps needed.)
   v1.close();
   await probeUpgrade(3);
+});
+
+test("friendlyStoreError maps quota to actionable copy; other errors pass through", () => {
+  assert.equal(
+    friendlyStoreError(Object.assign(new Error("raw engine text"), { name: "QuotaExceededError" })),
+    "Not enough storage space for this snapshot — delete old snapshots or unused PDFs and try again.",
+  );
+  assert.equal(friendlyStoreError(new Error("boom")), "boom");
+  // TakeoffCanvas routes its message tint on EXACT equality with this string —
+  // pin the copy so an edit there can't silently turn the warning green
+  assert.equal(STALE_TAB_MESSAGE, "OpenTakeoff was updated in another tab — reload this tab to continue.");
 });
 
 test("annotations round-trip still works against the v2 database (regression)", async () => {

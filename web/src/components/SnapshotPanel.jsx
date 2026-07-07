@@ -5,7 +5,7 @@
 // (store.js) and never leave the device.
 import React, { useEffect, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { store, isStaleTabError } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, friendlyStoreError } from "../lib/store.js";
 import { diffSnapshots } from "../lib/snapshotDiff.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
@@ -19,9 +19,7 @@ const delta = (v, d = 1) => {
   return <span style={{ color: "var(--c-positive)" }}>+{num(r, d)}</span>;
 };
 
-const errText = (e) => isStaleTabError(e)
-  ? "OpenTakeoff was updated in another tab — reload this tab to continue."
-  : (e?.message || String(e));
+const errText = (e) => isStaleTabError(e) ? STALE_TAB_MESSAGE : friendlyStoreError(e);
 
 // borrowed from ReportPanel so the compare table reads like the report
 const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
