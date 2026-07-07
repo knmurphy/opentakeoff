@@ -96,6 +96,12 @@ export function conditionTotals(conditions, shapes) {
 //     included per row so consumers can footnote "×N applies at condition
 //     level") and UNROUNDED (accumulated raw; round2 at display/serialization
 //     only, so per-sheet rounding never compounds against the condition row).
+//   - HAZARD: these rows reuse condition-row keys (floor_sf, wall_sf,
+//     border_sf, lf, ea) but with the base-only semantics above, so passing
+//     them to grandTotals() type-matches silently and yields base
+//     (unmultiplied) figures — do NOT do it. (Renaming the keys base_* would
+//     make the misuse impossible, but the by_sheet row keys are frozen
+//     opentakeoff.report.v1 schema, so the rename is deferred.)
 //   - No waste, no materials: those are condition-level order quantities, not
 //     where-is-it-measured quantities.
 //   - floor_sf can be negative (a deduct pasted onto a different sheet than
