@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // totals.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
-import { conditionTotals, materialsSummary, verticalWallSf } from "../src/lib/totals.js";
+import { conditionTotals, materialsSummary, verticalWallSf, sheetTotals, reportJson } from "../src/lib/totals.js";
 
 const area = (id: string, sf: number) => ({ condition_id: id, measure_role: "floor_area", computed: { area_sf: sf } });
 const lin = (id: string, lf: number) => ({ condition_id: id, measure_role: "linear", computed: { perimeter_lf: lf } });
@@ -92,6 +92,49 @@ test("materials: linear and count bases use LF/EA, never area", () => {
   const byName = Object.fromEntries(row.materials.map((m: any) => [m.name, m.qty]));
   assert.equal(byName["Cove adhesive"], 3);  // ceil(120/40)
   assert.equal(byName.Corner, 7);
+});
+
+// ── report JSON schema v1 — the key set is a published contract (2026-07-07) ──
+
+test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet rows", () => {
+  const conds = [{ id: "ct", finish_tag: "CT-1", color: "#123456", waste_pct: 10 }];
+  const shapes = [{ condition_id: "ct", sheet_id: "sh1", measure_role: "floor_area", computed: { area_sf: 100, perimeter_lf: 40 } }];
+  const rows = conditionTotals(conds, shapes);
+  const j = reportJson({
+    projectName: "Job 42",
+    rows,
+    bySheet: sheetTotals(conds, shapes),
+    scaleInfo: [{ sheet_id: "sh1", units_per_px: 0.02, scale_source: "calibrated" }],
+    markups: [{ type: "cloud", sheet_id: "sh1", text: "verify", rect: [[0, 0], [1, 1]] }],
+    sheetLabel: (id: string) => `Sheet ${id}`,
+  });
+  assert.equal(j.schema, "opentakeoff.report.v1");
+  assert.deepEqual(Object.keys(j),
+    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups"]);
+  // sheets: provenance under scale_source (the persisted-payload key); NO
+  // units_per_px — that figure is internal (RENDER_SCALE-coupled)
+  assert.deepEqual(Object.keys(j.sheets[0]), ["sheet_id", "sheet", "scale_source"]);
+  assert.equal(j.sheets[0].scale_source, "calibrated");
+  assert.equal(j.sheets[0].sheet, "Sheet sh1");
+  assert.deepEqual(Object.keys(j.markups[0]), ["type", "sheet_id", "sheet", "text"]);
+  assert.deepEqual(Object.keys(j.by_sheet[0]), ["sheet_id", "sheet", "rows"]);
+  assert.deepEqual(Object.keys(j.by_sheet[0].rows[0]),
+    ["id", "finish_tag", "color", "multiplier", "shape_count", "floor_sf", "wall_sf", "border_sf", "lf", "ea"]);
+  assert.deepEqual(Object.keys(j.conditions[0]),
+    ["id", "finish_tag", "color", "fill", "hatch", "multiplier", "waste_pct", "shape_count",
+     "floor_sf", "wall_sf", "border_sf", "lf", "ea", "total_sf",
+     "floor_sf_net", "wall_sf_net", "border_sf_net", "lf_net", "total_sf_net", "sy_net", "materials"]);
+});
+
+test("reportJson: unrecorded provenance exports as the literal 'unknown'", () => {
+  const j = reportJson({ scaleInfo: [{ sheet_id: "s1" }] });
+  assert.equal(j.sheets[0].scale_source, "unknown");
+  assert.equal(j.project_name, null);
+});
+
+test("reportJson: legacy 'source' key still read as a fallback", () => {
+  const j = reportJson({ scaleInfo: [{ sheet_id: "s1", source: "detected" }] });
+  assert.equal(j.sheets[0].scale_source, "detected");
 });
 
 test("verticalWallSf: floor perimeters × height × multiplier; 0 without a height", () => {

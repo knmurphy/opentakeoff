@@ -28,7 +28,12 @@ export function shapesDetail(conditions, shapes, sheetLabel) {
       finish: cond?.finish_tag ?? "",
       role,
       area_sf, lf, ea,
-      height_ft: Number(s.height_ft) || 0,
+      // recomputeShape's height semantics, mirrored: an explicit override wins
+      // outright (even 0); a legacy shape without its own height reports the
+      // condition height its wall SF was actually computed against.
+      height_ft: s.height_override === true
+        ? Number(s.height_ft) || 0
+        : Number(s.height_ft) || Number(cond?.height_ft) || 0,
       height_override: s.height_override === true,
       origin: s.origin?.method || "untracked",
     };

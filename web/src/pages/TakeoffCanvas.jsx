@@ -288,7 +288,7 @@ export default function TakeoffCanvas() {
   const [tf, setTf] = useState({ x: 0, y: 0, scale: 1 }); // render mirror of tfRef
 
   const [scales, setScales] = useState({});
-  const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — "calibrated" | "standard" | "detected"; sheets that predate the flag export "unknown"
+  const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
@@ -586,8 +586,11 @@ export default function TakeoffCanvas() {
     const src = {};
     for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
       sc[s.sheet_id] = s.units_per_px;
-      // provenance is additive — old projects lack it, junk values are dropped (report shows "unknown")
-      if (["calibrated", "standard", "detected"].includes(s.scale_source)) src[s.sheet_id] = s.scale_source;
+      // provenance is additive — old projects lack it (report shows "unknown").
+      // Any non-empty string passes through, not just today's known values: a
+      // whitelist would silently strip a future value on load and the next
+      // autosave would persist the loss. Display already falls back safely.
+      if (typeof s.scale_source === "string" && s.scale_source) src[s.sheet_id] = s.scale_source;
     }
     setScales(sc);
     setScaleSources(src);
@@ -599,7 +602,11 @@ export default function TakeoffCanvas() {
       hydrate(a);
       hydrated.current = true;
     }).catch((e) => {
-      if (isStaleTabError(e)) setCommitMsg("OpenTakeoff was updated in another tab — reload this tab to continue.");
+      // stale-tab failure: leave autosave DISARMED (hydrated stays false). If a
+      // blocked tab recovered here with hydrated=true, its still-empty defaults
+      // would autosave straight over the other tab's real data. The reload
+      // message is the whole story for this tab.
+      if (isStaleTabError(e)) { setCommitMsg("OpenTakeoff was updated in another tab — reload this tab to continue."); return; }
       hydrated.current = true;
     });
     return () => { off = true; };
@@ -1153,8 +1160,12 @@ export default function TakeoffCanvas() {
     if (s.measure_role === "count") return { count: 1 };
     if (s.measure_role === "surface_area") {
       // the wall keeps the height it was DRAWN at; the condition H is only the
-      // default for new traces (and the fallback for legacy shapes without one)
-      const h = Number(s.height_ft) || Number(condById[s.condition_id]?.height_ft) || 0;
+      // default for new traces (and the fallback for legacy shapes without one).
+      // An explicit override wins outright — even 0 (a zero-height wall is a
+      // deliberate statement, not an invitation to fall back to the condition).
+      const h = s.height_override === true
+        ? Number(s.height_ft) || 0
+        : Number(s.height_ft) || Number(condById[s.condition_id]?.height_ft) || 0;
       const LF = openLen(pts) * u;
       return { area_sf: +(LF * h).toFixed(2), perimeter_lf: +LF.toFixed(2) };
     }
@@ -1289,8 +1300,11 @@ export default function TakeoffCanvas() {
     if (s.measure_role === "count") return `${tag} · ${num(s.computed?.count || 1, 0)} EA`;
     if (s.measure_role === "deduct") return `${tag} · −${num(a)} SF deduct`;
     if (s.measure_role === "surface_area") {
-      const h = s.height_ft || condById[s.condition_id]?.height_ft;
-      return `${tag} · ${num(a)} SF wall (${num(lf)} LF × ${num(Number(h) || 0, 2)}′)`;
+      // same height semantics as recomputeShape: an override wins outright (even 0)
+      const h = s.height_override === true
+        ? Number(s.height_ft) || 0
+        : Number(s.height_ft) || Number(condById[s.condition_id]?.height_ft) || 0;
+      return `${tag} · ${num(a)} SF wall (${num(lf)} LF × ${num(h, 2)}′)`;
     }
     if (s.measure_role === "linear") return `${tag} · ${num(lf)} LF${a > 0 ? ` · ${num(a)} SF border` : ""}`;
     return `${tag} · ${num(a)} SF · ${num(a / 9)} SY`;
@@ -1547,7 +1561,8 @@ export default function TakeoffCanvas() {
       cross = cross || !same;
       // same sheet: nudge so the copy is visible; other sheet: same relative spot
       const vn = c.verts_norm.map(([x, y]) => (same ? [Math.min(0.999, x + offset), Math.min(0.999, y + offset)] : [x, y]));
-      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft ? { height_ft: c.height_ft } : {}), ...(c.height_override ? { height_override: true } : {}), ...cloneOrigin(c.origin) };
+      // != null, not truthy: an overridden height of 0 must survive the paste
+      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft != null ? { height_ft: c.height_ft } : {}), ...(c.height_override ? { height_override: true } : {}), ...cloneOrigin(c.origin) };
       return { ...s, computed: recomputeShape(s) };
     });
     setShapes((s) => [...s, ...made]);
@@ -1760,7 +1775,9 @@ export default function TakeoffCanvas() {
   const vRule = <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)", margin: "0 3px" }} />;
 
   return (
+    // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
     <div
+      className="app-shell"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer?.files); }}
       style={{ position: "relative", display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -2373,7 +2390,7 @@ export default function TakeoffCanvas() {
           projectName={projectName} onProjectName={setProjectName}
           clientInfo={clientInfo} onClientInfo={setClientInfo}
           conditions={conditions} shapes={shapes} markups={markups}
-          scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, source: scaleSources[sheet_id] || "unknown" }))}
+          scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
           onClose={() => setShowReport(false)}
