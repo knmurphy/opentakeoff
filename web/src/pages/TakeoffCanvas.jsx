@@ -2140,6 +2140,12 @@ export default function TakeoffCanvas() {
     if (!window.confirm(`Remove ${lm?.name || "this material"} from the library?${n ? (n === 1 ? " 1 linked line keeps its values — only the link is removed." : ` ${n} linked lines keep their values — only the links are removed.`) : ""}`)) return;
     persistMatLib(matLib.filter((x) => x.id !== libId));
     if (n) setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    // condition templates carry lib_id too (so applying re-links to a live
+    // entry) — detach them here as well, or a deleted entry would leave
+    // dangling links inside saved templates
+    if (templates.some((t) => (t.materials || []).some((m) => m.lib_id === libId))) {
+      persistTemplates(templates.map((t) => ({ ...t, materials: (t.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    }
   };
   const addLibMaterial = () => persistMatLib([...matLib, { id: uid("lib"), name: "", unit: "", per: 0, basis: "area", round: true, note: "" }]);
 
