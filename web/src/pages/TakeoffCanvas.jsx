@@ -282,6 +282,7 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
             <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: ov("round") ? "#c47a10" : "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
               <input type="checkbox" checked={m.round !== false} onChange={(e) => onUpdate(m.id, { round: e.target.checked })} />round up
             </label>
+            {ov("round") && rv(m, "round")}
             {isAdhesive(m.name) && (m.basis || "area") === "area" && (
               <select value={TROWEL_PRESETS.some((t) => t.label === m.note) ? m.note : ""}
                 onChange={(e) => { const t = TROWEL_PRESETS.find((x) => x.label === e.target.value); if (t) onUpdate(m.id, { note: t.label, per: t.per }); }}
@@ -2097,6 +2098,7 @@ export default function TakeoffCanvas() {
     const L = libFields(lm);
     if (f === "per") return (Number(m.per) || 0) !== L.per;
     if (f === "round") return (m.round !== false) !== L.round;
+    if (f === "basis") return (m.basis || "area") !== L.basis;   // absent basis means "area" everywhere else — don't flag it
     return String(m[f] || "") !== String(L[f] || "");
   };
   const attachLibMaterial = (libId) => {
@@ -2116,7 +2118,13 @@ export default function TakeoffCanvas() {
     if (lm) updateMaterial(m.id, { [f]: libFields(lm)[f] });
   };
   const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  const linkedCount = (libId) => conditions.reduce((n, c) => n + (c.materials || []).filter((m) => m.lib_id === libId).length, 0);
+  // one pass per render, not per library row — the Materials tab calls this per row
+  const linkedCountById = (() => {
+    const by = {};
+    for (const c of conditions) for (const m of c.materials || []) if (m.lib_id) by[m.lib_id] = (by[m.lib_id] || 0) + 1;
+    return by;
+  })();
+  const linkedCount = (libId) => linkedCountById[libId] || 0;
   const pushLibUpdate = (libId) => {
     const lm = matLibById[libId];
     if (!lm) return;
