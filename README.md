@@ -43,7 +43,7 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a condition, hit **One-Click Area**, and click inside a room. Open **Report** to see the breakdown and export CSV / JSON.
+Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a condition, hit **One-Click Area**, and click inside a room. Open **Report** to see the breakdown and export CSV / Excel / JSON.
 
 ## Features
 
@@ -69,7 +69,7 @@ A condition is one finish (LVP, carpet, tile, base, …). Each carries a **line/
 Per condition, list the consumables that actually go on the order: adhesive, sealer, polyurethane, thinset, grout, cove-base adhesive. Each has a **coverage rate** and a **basis** (floor SF / linear LF / each), and the order quantity derives automatically — measured ÷ coverage, **rounded up** to whole units. Adhesive lines get a **trowel picker** that fills the spread rate from the notch size. This is the layer most takeoff tools punt on. It's shipped here.
 
 ### 6. Reports & export
-A per-condition breakdown — **Floor / Wall / Border SF, LF, EA, total SF, SY**, with and without waste — plus a combined **materials buy list**. Export to **CSV** or **JSON**, or print it. Waste is applied only in the report (the order quantity), never to the live measured number, so your takeoff and your buy list stay honest about which is which.
+A per-condition breakdown — **Floor / Wall / Border SF, LF, EA, total SF, SY**, with and without waste — plus a combined **materials buy list**. Export to **CSV**, **Excel (.xlsx)** — a four-tab workbook (Conditions / By sheet / Materials / Shapes) written entirely in-browser — or **JSON**, or print it. Waste is applied only in the report (the order quantity), never to the live measured number, so your takeoff and your buy list stay honest about which is which.
 
 And when the numbers need to leave the app: **Marked Set PDF**. One click builds a distribution-ready PDF entirely in your browser — every sheet with the work burned in as drawn (condition colors, hatches, quantity chips, count markers, markups) behind a legend cover with the full totals and a by-sheet breakdown. Send it to a GC who will never install anything.
 
@@ -94,7 +94,7 @@ Every drawing, scale, condition, and markup autosaves to **your browser** (Index
 | **Conditions** | Color + CAD hatch per finish, waste %, ×N multiplier, height, thickness → border SF |
 | **Assemblies** | Per-condition supporting materials with coverage rates → rounded order quantities, trowel picker |
 | **Report** | Per-condition Floor/Wall/Border SF, LF, EA, SY, with/without waste + materials buy list |
-| **Export** | CSV, JSON, print, **Marked Set PDF** (sheets + burned-in takeoff + legend cover, built in-browser) |
+| **Export** | CSV, **Excel (.xlsx)** (Conditions / By sheet / Materials / Shapes tabs), JSON, print, **Marked Set PDF** (sheets + burned-in takeoff + legend cover, built in-browser) |
 | **Markups** | Revision clouds, callouts, text notes — separate layer, never counted |
 | **View** | Light or **dark (negative print)** — sheet pixels inverted at draw time, persists per browser |
 | **Storage** | IndexedDB + localStorage — client-only, nothing uploaded |

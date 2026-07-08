@@ -15,7 +15,7 @@ npm run dev        # http://localhost:5173 — drag in demo/sample-plan.pdf
 Before opening a PR:
 
 ```bash
-npm run check      # typecheck + test + build — the exact sequence CI runs
+npm run check      # typecheck + lint + test + build — the exact sequence CI runs
 ```
 
 If `npm run check` is green locally, CI will be green: CI reads the Node
@@ -49,7 +49,8 @@ for canvas work.
   canvas only ever talks to `store`, so a backend can be added by implementing
   the same four methods.
 - **`web/src/lib/totals.js`** + **`components/ReportPanel.jsx`** — role-aware
-  totaling, the Report, and CSV/JSON export.
+  totaling, the Report, and CSV/XLSX/JSON export (the hand-rolled .xlsx writer
+  lives in `web/src/lib/xlsx.js`).
 - **`web/src/lib/contribute.js`** — the opt-in "contribute to the open flooring
   model" payload builder (derived data only).
 
