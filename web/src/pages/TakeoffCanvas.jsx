@@ -87,6 +87,14 @@ const HATCHES = [
 const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
 const NO_FILL = "none";
 
+// Docked Takeoffs panel geometry — per-user UI prefs (localStorage, diff-only
+// overrides like the report column prefs), NEVER in the takeoff payload: panel
+// width inside buildPayload would show up as noise in every snapshot diff.
+const PANEL_PREFS_KEY = "opentakeoff_panel";
+const PANEL_DEFAULTS = { w: 320, collapsed: false };
+const PANEL_MIN_W = 240;
+const PANEL_MAX_W = 560;
+
 // SVG <pattern> for a condition (userSpaceOnUse → scales with the plan, CAD-style).
 // Invert a canvas's pixels in place: one difference-with-white pass (an
 // involution — applying it again flips back). This is how the negative/dark
@@ -276,7 +284,14 @@ export default function TakeoffCanvas() {
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
-  const [showTakeoffs, setShowTakeoffs] = useState(false);    // side panel: takeoffs list (conditions + totals)
+  // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
+  // persist per user in localStorage as diffs against PANEL_DEFAULTS.
+  const [panelPrefs, setPanelPrefs] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || "{}");
+      return { ...PANEL_DEFAULTS, ...(p && typeof p === "object" && !Array.isArray(p) ? p : {}) };
+    } catch { return { ...PANEL_DEFAULTS }; }
+  });
   const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
@@ -292,6 +307,41 @@ export default function TakeoffCanvas() {
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
+  // diff-only prefs (cf. reportColumns): only keys that differ from the
+  // defaults persist, so a future default change reaches existing users
+  useEffect(() => {
+    try {
+      const diff = {};
+      for (const k of Object.keys(PANEL_DEFAULTS)) if (panelPrefs[k] !== PANEL_DEFAULTS[k]) diff[k] = panelPrefs[k];
+      localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(diff));
+    } catch { /* private mode */ }
+  }, [panelPrefs]);
+  const panelW = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, Number(panelPrefs.w) || PANEL_DEFAULTS.w));
+  const takeoffsOpen = !panelPrefs.collapsed;
+  const toggleTakeoffs = () => setPanelPrefs((p) => ({ ...p, collapsed: !p.collapsed }));
+  // Resize by dragging the panel's left edge. Each width change reflows the
+  // canvas container — coordinate math is safe (pointer→image reads the rect
+  // at event time; the stage transform is anchored top-left, so content stays
+  // put and we deliberately do NOT re-fit) — but the hi-res detail crop only
+  // re-renders on transform change, so the detail effect also keys on panelW/
+  // takeoffsOpen below. Mid-drag we hold the gesture window (like wheel zoom)
+  // so the crop re-renders once on settle, not per pointermove.
+  const panelDragRef = useRef(null);
+  const onPanelResizeDown = (e) => {
+    e.preventDefault();
+    panelDragRef.current = { sx: e.clientX, sw: panelW };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPanelResizeMove = (e) => {
+    const d = panelDragRef.current; if (!d) return;
+    gestureUntilRef.current = performance.now() + GESTURE_MS;
+    const w = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, d.sw + (d.sx - e.clientX)));
+    setPanelPrefs((p) => (p.w === w ? p : { ...p, w }));
+  };
+  const onPanelResizeUp = (e) => {
+    panelDragRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
+  };
   // negative view is baked into the canvas PIXELS (invertCanvasPixels), never a
   // CSS filter — track which canvases currently hold inverted pixels (only
   // canvases that finished a render get an entry), + darkMode readable from
@@ -868,8 +918,10 @@ export default function TakeoffCanvas() {
       if (detailKeyRef.current === renderKey) detailKeyRef.current = "";   // let the next tick retry this crop
       if (e?.name !== "RenderingCancelledException") console.error("[detail] render failed:", e);
     });
+    // panelW/takeoffsOpen: docking or resizing the Takeoffs panel changes the
+    // container rect without a transform change — re-run so the crop resyncs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tf, groupSig, status, focusKey]);
+  }, [tf, groupSig, status, focusKey, panelW, takeoffsOpen]);
 
   // the doc cache holds whole PDFs in the worker — tear it down when the
   // project view unmounts or the project changes
@@ -2289,7 +2341,7 @@ export default function TakeoffCanvas() {
             takeoffs panel (which docks at right:56) so a lit toggle also closes it. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
           {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
-          {panelBtn(() => setShowTakeoffs((v) => !v), "takeoffs", "Takeoffs — conditions + running totals", showTakeoffs, visibleShapes.length)}
+          {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
 
         {/* markup panel — manage clouds/callouts/text + link or create RFIs (top-left, clear of HUD/FABs) */}
@@ -2318,57 +2370,73 @@ export default function TakeoffCanvas() {
           </div>
         )}
 
-        {/* Takeoffs side panel — every condition on this sheet with its running totals.
-            "Takeoffs on the side": click a row to make it active, ⧉ to copy its shape. */}
-        {showTakeoffs && (
-          <div style={{ position: "absolute", right: 56, top: 118, width: panelMatOpen ? 420 : 300, maxHeight: "calc(100% - 132px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink)", borderRadius: 0, boxShadow: "var(--shadow-2)", zIndex: 7, fontSize: 12.5 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", background: "var(--ink)", color: "var(--paper-cream)", borderRadius: 0 }}>
-              <strong>Takeoffs · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <button onClick={() => setShowTakeoffs(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-            </div>
-            {conditions.length === 0 && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions yet — add one and start tracing.</div>}
-            {conditions.map((c) => {
-              const row = visRowById.get(c.id);
-              const mult = c.multiplier || 1;
-              const sf = row?.floor_sf || 0, lf = row?.lf || 0, ea = row?.ea || 0, wsf = row?.wall_sf || 0;
-              const shapeCount = row?.shape_count || 0;
-              const on = c.id === activeCond;
-              const matOn = on && panelMatOpen;
-              return (
-                <div key={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : "3px solid transparent" }}>
-                  <div onClick={() => setActiveCond(c.id)} title="Make this the active condition"
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer" }}>
-                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
-                      <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
-                        {sf ? `${num(sf)} SF` : ""}{wsf ? `${sf ? " · " : ""}${num(wsf)} SF wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${num(lf)} LF` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
+       </div>
+
+        {/* Takeoffs panel — DOCKED in the layout row (reflows the canvas, not an
+            overlay): every condition with its running totals. Click a row to make
+            it active (in Select with a shape picked, it reassigns — same as the
+            conditions bar). Resize by dragging the left edge; width + collapsed
+            persist per user. Collapse/expand keeps the current transform — the
+            stage is anchored top-left, so a re-fit would be a jarring jump. */}
+        {takeoffsOpen && (
+          <div style={{ width: panelW, flexShrink: 0, display: "flex", background: "var(--paper-bright)", borderLeft: "1px solid var(--ink-faint)", fontSize: 12.5 }}>
+            <div onPointerDown={onPanelResizeDown} onPointerMove={onPanelResizeMove} onPointerUp={onPanelResizeUp}
+              title="Drag to resize"
+              style={{ width: 5, flexShrink: 0, cursor: "col-resize", touchAction: "none", background: "transparent", borderRight: "1px solid var(--ink-faint)" }} />
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", background: "var(--ink)", color: "var(--paper-cream)", flexShrink: 0 }}>
+                <strong>Takeoffs · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
+                <button onClick={toggleTakeoffs} title="Collapse the panel (the ▦ button on the canvas edge brings it back)"
+                  style={{ background: "none", border: "none", color: "#fff", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>»</button>
+              </div>
+              <div style={{ flex: 1, overflow: "auto" }}>
+                {conditions.length === 0 && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions yet — add one and start tracing.</div>}
+                {conditions.map((c, i) => {
+                  const row = visRowById.get(c.id);
+                  const mult = c.multiplier || 1;
+                  const sf = row?.floor_sf || 0, lf = row?.lf || 0, ea = row?.ea || 0, wsf = row?.wall_sf || 0;
+                  const shapeCount = row?.shape_count || 0;
+                  const on = c.id === activeCond;
+                  const matOn = on && panelMatOpen;
+                  const reassigning = tool === "select" && selectedId;
+                  return (
+                    <div key={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : "3px solid transparent" }}>
+                      <div onClick={() => { if (reassigning) reassignSelected(c.id); setActiveCond(c.id); }}
+                        title={reassigning ? "Reassign selected shape to this condition" : "Make this the active condition"}
+                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", outline: reassigning ? "1px dashed #1f3fc7" : "none", outlineOffset: -3 }}>
+                        {i < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", borderRadius: 3, padding: "0 3px", flexShrink: 0 }}>{i + 1}</span>}
+                        <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
+                          <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
+                            {sf ? `${num(sf)} SF` : ""}{wsf ? `${sf ? " · " : ""}${num(wsf)} SF wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${num(lf)} LF` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
+                          </div>
+                        </div>
+                        <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
+                        <button onClick={(e) => { e.stopPropagation(); setActiveCond(c.id); setPanelMatOpen((v) => (on ? !v : true)); }}
+                          title="Assemblies — supporting materials for this condition"
+                          style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOn ? "var(--ink)" : "transparent", color: matOn ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>
+                          <Icon name="product" size={11} />{c.materials?.length ? c.materials.length : ""}
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); deleteCondition(c.id); }} title="Delete this condition (and its takeoffs)"
+                          style={{ flexShrink: 0, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
                       </div>
+                      {matOn && (
+                        <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
+                          <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Assemblies — order qty = measured ÷ coverage, rounded up.</div>
+                          <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
+                        </div>
+                      )}
                     </div>
-                    <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
-                    <button onClick={(e) => { e.stopPropagation(); setActiveCond(c.id); setPanelMatOpen((v) => (on ? !v : true)); }}
-                      title="Assemblies — supporting materials for this condition"
-                      style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOn ? "var(--ink)" : "transparent", color: matOn ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>
-                      <Icon name="product" size={11} />{c.materials?.length ? c.materials.length : ""}
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); deleteCondition(c.id); }} title="Delete this condition (and its takeoffs)"
-                      style={{ flexShrink: 0, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
-                  </div>
-                  {matOn && (
-                    <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
-                      <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Assemblies — order qty = measured ÷ coverage, rounded up.</div>
-                      <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
-                    </div>
-                  )}
+                  );
+                })}
+                <div style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)", color: "var(--ink-muted)", fontSize: 10.5 }}>
+                  Select a shape on the plan, then ⧉ Copy / ⎘ Paste (⌘C / ⌘V) — it lands on the sheet under your cursor.
                 </div>
-              );
-            })}
-            <div style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)", color: "var(--ink-muted)", fontSize: 10.5 }}>
-              Select a shape on the plan, then ⧉ Copy / ⎘ Paste (⌘C / ⌘V) — it lands on the sheet under your cursor.
+              </div>
             </div>
           </div>
         )}
-       </div>
       </div>
 
       {/* gallery-first plan-set view — overlays the mounted canvas */}
