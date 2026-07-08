@@ -21,7 +21,8 @@
 import { round2 } from "./num.js";
 import { csvEsc as esc } from "./csv.js";
 import { GETTERS, CSV_PROFILE, floorPerimeterLf } from "./reportColumns.js";
-import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
+import { attrValue } from "./conditionColumns.js";
+import { compareSheetKeys } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
 // Re-export so existing consumers (markedset, snapshotDiff, ReportPanel, tests)
 // keep importing round2 from here; num.js is the single definition.
@@ -116,11 +117,8 @@ export function sheetTotals(conditions, shapes) {
     a.n += 1;
     accumulateRole(a, s);
   }
-  // file name, then numeric page — mirror exportMarkedSet's sheetMeta sort
-  const order = [...bySheet.keys()].sort((ka, kb) => {
-    const a = parseSheetKey(String(ka)), b = parseSheetKey(String(kb));
-    return a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file);
-  });
+  // canonical sheet order — shared comparator, same as exportMarkedSet
+  const order = [...bySheet.keys()].sort((ka, kb) => compareSheetKeys(String(ka), String(kb)));
   return order.map((sheet_id) => {
     const conds = bySheet.get(sheet_id);
     const rows = conditions.filter((c) => conds.has(c.id)).map((c) => {
@@ -158,11 +156,8 @@ export function sheetGroupedRows(conditions, shapes) {
     if (!arr) { arr = []; bySheet.set(s.sheet_id, arr); }
     arr.push(s);
   }
-  // file name, then numeric page — the same sort as sheetTotals
-  const order = [...bySheet.keys()].sort((ka, kb) => {
-    const a = parseSheetKey(String(ka)), b = parseSheetKey(String(kb));
-    return a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file);
-  });
+  // canonical sheet order — shared comparator, same as sheetTotals
+  const order = [...bySheet.keys()].sort((ka, kb) => compareSheetKeys(String(ka), String(kb)));
   return order.map((sheet_id) => {
     const sheetShapes = bySheet.get(sheet_id);
     return {
@@ -347,8 +342,8 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     conditions: rows.map((r) => ({
       ...r,
       columns: colDefs.flatMap((cc) => {
-        const v = attrs.get(r.id)?.[cc.id];
-        return typeof v === "string" && v ? [{ id: cc.id, name: cc.name, value: v }] : [];
+        const v = attrValue(attrs.get(r.id), cc.id);   // the shared assigned-value rule
+        return v ? [{ id: cc.id, name: cc.name, value: v }] : [];
       }),
     })),
     by_sheet: bySheet.map((gp) => ({

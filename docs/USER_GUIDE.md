@@ -80,6 +80,9 @@ A condition is one finish (e.g. `WD-1` red oak). It carries:
 ### Supporting materials (assemblies)
 Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, grout, cove‑base adhesive…). Each has a **coverage rate** and a **basis** (floor SF / linear LF / each). Order qty = measured ÷ coverage, **rounded up** to whole units. Adhesive lines get a **trowel picker** that fills the SF/gal from the notch size. A `note` field carries trowel notch / # of coats. The Report sums these into a **buy list**.
 
+### Custom columns
+Classify conditions along your own dimension — **CSI Division**, bid package, trade. Open **Custom columns** on the condition bar (or a row's **Condition details** in the takeoffs panel): define a column with a list of values (project-wide), then pick one value per condition. Renaming a value updates every assigned condition; deleting one keeps the assignment, shown as *"(removed)"*. The Report can **group** by any custom column and carries the values in CSV/XLSX/JSON.
+
 ### Measure roles → totals (the math)
 | Role | Adds to |
 |---|---|
@@ -103,7 +106,7 @@ Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, gr
 Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
 
 ### Report & export
-Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
+Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, a **Group** select — restructure the table by **sheet** (each sheet's slice with waste and ×N applied, subtotaled) or by any **custom column**, with the grouping named on the printed page — and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
 
 **XLSX** downloads a four-tab Excel workbook, built entirely in your browser: **Conditions** (the report table — it follows your Columns picker, same as the CSV), **By sheet** (measured base quantities per sheet), **Materials** (per-condition lines plus the combined buy list), and **Shapes** (per-shape measured detail — no multiplier, no waste). The numbers are the same ones on screen: waste is applied only to order quantities, never to measured values.
 

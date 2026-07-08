@@ -19,10 +19,10 @@ import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
 import { Icon } from "../brand/icons.jsx";
-import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
+import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale } from "../lib/sheets";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
-import { sanitizeConditionColumns, renameColumnValue } from "../lib/conditionColumns.js";
+import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape } from "../lib/geometry.js";
@@ -268,11 +268,10 @@ function ColumnSelects({ columns, cond, onAssign }) {
   return (
     <>
       {columns.map((cc) => {
-        const raw = cond?.attrs?.[cc.id];
-        const v = typeof raw === "string" ? raw : "";   // corrupted non-string attrs value → unassigned display
+        const v = attrValue(cond?.attrs, cc.id);   // the shared assigned-value rule (hydrate sanitizes, this keeps the display consistent)
         return (
           <label key={cc.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginRight: 12, marginBottom: 6 }}>
-            <span style={{ color: "var(--ink-muted)" }}>{cc.name || "Untitled"}</span>
+            <span style={{ color: "var(--ink-muted)" }}>{columnLabel(cc)}</span>
             <select value={v} onChange={(e) => onAssign(cc.id, e.target.value)} style={ip}>
               <option value="">Unassigned</option>
               {cc.values.map((val) => <option key={val} value={val}>{val}</option>)}
@@ -292,7 +291,7 @@ function AddValueInput({ onAdd }) {
   const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-      <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && commit()} placeholder="add value" style={{ ...ip, width: 90 }} />
+      <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && commit()} placeholder="add value" style={{ ...ip, width: 90 }} />
       <button onClick={commit} title="Add this value to the list"
         style={{ padding: "2px 7px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+</button>
     </span>
@@ -608,7 +607,7 @@ export default function TakeoffCanvas() {
       a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
     ).filter(([, v]) => typeof v === "string")));
     setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
-    const conds = a.conditions || [];
+    const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
     setShapes(a.shapes || []);
@@ -1637,7 +1636,7 @@ export default function TakeoffCanvas() {
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
-      }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
+      }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
         dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
@@ -1738,7 +1737,7 @@ export default function TakeoffCanvas() {
   };
   const deleteColumn = (colId) => {
     const cc = conditionColumns.find((c) => c.id === colId);
-    if (!window.confirm(`Delete column "${cc?.name || "Untitled"}" for the whole project? Conditions keep their values but they're no longer shown or exported.`)) return;
+    if (!window.confirm(`Delete column "${columnLabel(cc)}" for the whole project? Conditions keep their values but they're no longer shown or exported.`)) return;
     setConditionColumns((cols) => cols.filter((c) => c.id !== colId));   // orphaned attrs[colId] stay behind — harmless, nothing iterates raw attrs
   };
 
@@ -1767,7 +1766,7 @@ export default function TakeoffCanvas() {
 
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   const aCond = condById[activeCond];
-  const attrCount = aCond ? conditionColumns.filter((cc) => typeof aCond.attrs?.[cc.id] === "string" && aCond.attrs[cc.id]).length : 0;   // active condition's assigned custom-column values (button badge)
+  const attrCount = aCond ? conditionColumns.filter((cc) => attrValue(aCond.attrs, cc.id)).length : 0;   // active condition's assigned custom-column values (button badge)
   const activeColor = aCond?.color || "#c96442";
   // Pattern id encodes the appearance so a hatch/color change yields a NEW paint
   // server — otherwise browsers keep painting the cached old pattern (the "it

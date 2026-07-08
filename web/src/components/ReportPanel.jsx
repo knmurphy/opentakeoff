@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, customColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
+import { columnLabel } from "../lib/conditionColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
@@ -196,7 +197,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             <option value="">None</option>
             <option value="sheet">Sheet</option>
             {conditionColumns.map((cc) => (
-              <option key={cc.id} value={cc.id}>{cc.name || "Untitled"}</option>
+              <option key={cc.id} value={cc.id}>{columnLabel(cc)}</option>
             ))}
           </select>
         </label>
@@ -311,7 +312,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               the partition degenerates to one group. */}
           {grouped && (
             <p style={{ maxWidth: 980, margin: "0 auto 8px", fontSize: 11.5, color: "var(--ink-muted)" }}>
-              Grouped by <strong>{groupCol ? (groupCol.name || "Untitled") : "sheet"}</strong>
+              Grouped by <strong>{groupCol ? columnLabel(groupCol) : "sheet"}</strong>
             </p>
           )}
           <table style={{ width: "100%", maxWidth: 980, margin: "0 auto", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
@@ -323,59 +324,54 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                 ))}
               </tr>
             </thead>
-            {grouped ? (
-              // one tbody PER GROUP (in sheet mode the same condition repeats
-              // across groups — r.id is only unique within a group's tbody).
-              // thead + grand-total tfoot stay exactly as ungrouped, so print
-              // pagination is untouched.
-              groups.map((gp) => {
-                const sub = grandTotals(gp.rows);
-                // sheet groups carry a per-sheet perimByCond — the panel-wide
-                // map would show whole-project perimeter next to per-slice
-                // quantities
-                const gctx = gp.perimByCond ? { perimByCond: gp.perimByCond, attrsByCond } : ctx;
-                return (
-                  <tbody key={gp.value ?? "∅"}>
-                    {/* breakAfter is a print nicety only — unreliable on table
-                        rows in Chromium, unimplemented in Gecko; occasional
-                        header stranding at a page bottom is accepted in v1 */}
+            {/* ONE render path: the ungrouped view is a degenerate single group
+                (no header/subtotal chrome). One tbody PER GROUP — in sheet mode
+                the same condition repeats across groups, so r.id is only unique
+                within a group's tbody. thead + grand-total tfoot stay exactly
+                as ungrouped, so print pagination is untouched. */}
+            {(grouped ? groups : [{ rows }]).map((gp) => {
+              // key in a disjoint keyspace: a vocabulary value literally named
+              // "∅" must not collide with the Unassigned group's sentinel
+              const key = !grouped ? "rows" : gp.value === null ? "∅" : "v:" + gp.value;
+              const sub = grouped && gp.rows.length > 1 ? grandTotals(gp.rows) : null;
+              // sheet groups carry a per-sheet perimByCond — the panel-wide
+              // map would show whole-project perimeter next to per-slice
+              // quantities
+              const gctx = gp.perimByCond ? { perimByCond: gp.perimByCond, attrsByCond } : ctx;
+              return (
+                <tbody key={key}>
+                  {/* breakAfter is a print nicety only — unreliable on table
+                      rows in Chromium, unimplemented in Gecko; occasional
+                      header stranding at a page bottom is accepted in v1 */}
+                  {grouped && (
                     <tr style={{ breakAfter: "avoid" }}>
                       <td colSpan={tableCols.length} style={{ ...td, textAlign: "left", fontFamily: "var(--f-display)", fontSize: 13, fontWeight: 700, paddingTop: 14, ...(gp.value === null ? { fontStyle: "italic" } : {}) }}>
                         {gp.label}
                       </td>
                     </tr>
-                    {gp.rows.map((r) => (
-                      <tr key={r.id}>
-                        {tableCols.map((c) => renderCell(c, r, gctx))}
-                      </tr>
-                    ))}
-                    {/* single-row group: skip the subtotal — it would repeat
-                        the row verbatim */}
-                    {gp.rows.length > 1 && (
-                      <tr>
-                        <td style={{ ...td, textAlign: "left", borderTop: "1px solid var(--ink-soft)", color: "var(--ink-muted)", fontWeight: 600 }}>Subtotal</td>
-                        {/* lighter than the grand-total tfoot: thin border,
-                            muted color; same foot mechanism on the group's
-                            own grandTotals */}
-                        {tableCols.slice(1).map((c) => (
-                          <td key={c.key} style={{ ...td, borderTop: "1px solid var(--ink-soft)", color: "var(--ink-muted)" }}>
-                            {c.foot && !c.ref ? num(c.foot(sub)) : ""}
-                          </td>
-                        ))}
-                      </tr>
-                    )}
-                  </tbody>
-                );
-              })
-            ) : (
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id}>
-                    {tableCols.map((c) => renderCell(c, r))}
-                  </tr>
-                ))}
-              </tbody>
-            )}
+                  )}
+                  {gp.rows.map((r) => (
+                    <tr key={r.id}>
+                      {tableCols.map((c) => renderCell(c, r, gctx))}
+                    </tr>
+                  ))}
+                  {/* single-row group: no subtotal — it would repeat the row verbatim */}
+                  {sub && (
+                    <tr>
+                      <td style={{ ...td, textAlign: "left", borderTop: "1px solid var(--ink-soft)", color: "var(--ink-muted)", fontWeight: 600 }}>Subtotal</td>
+                      {/* lighter than the grand-total tfoot: thin border,
+                          muted color; same foot mechanism on the group's
+                          own grandTotals */}
+                      {tableCols.slice(1).map((c) => (
+                        <td key={c.key} style={{ ...td, borderTop: "1px solid var(--ink-soft)", color: "var(--ink-muted)" }}>
+                          {c.foot && !c.ref ? num(c.foot(sub)) : ""}
+                        </td>
+                      ))}
+                    </tr>
+                  )}
+                </tbody>
+              );
+            })}
             <tfoot>
               <tr>
                 <td style={{ ...td, textAlign: "left", borderTop: "2px solid var(--ink)", fontWeight: 700 }}>Total</td>

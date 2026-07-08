@@ -19,11 +19,46 @@ export function sanitizeConditionColumns(raw) {
   return raw
     .filter((c) => {
       if (!(c && typeof c === "object" && !Array.isArray(c) && typeof c.id === "string" && c.id && typeof c.name === "string")) return false;
+      if (c.id === "sheet") return false;   // reserved by the report's Group select — a column with this id would be shadowed by the built-in Sheet mode
       if (seenIds.has(c.id)) return false;
       seenIds.add(c.id);
       return true;
     })
     .map((c) => ({ ...c, values: [...new Set((Array.isArray(c.values) ? c.values : []).filter((v) => typeof v === "string" && v.trim()))] }));
+}
+
+// The assigned-value rule, shared by EVERY attrs reader (table/CSV getter,
+// grouping, JSON export, selects, badge): a string with visible content is
+// assigned; anything else — absent, non-string, empty, whitespace-only — is
+// unassigned. sanitizeConditionAttrs strips violating values at hydrate, but
+// readers still route through here so the rule has exactly one definition.
+export function attrValue(attrs, colId) {
+  const v = attrs?.[colId];
+  return typeof v === "string" && v.trim() ? v : "";
+}
+
+// Defensive hydrate for per-condition attrs (the client_info precedent —
+// conditions otherwise pass wholesale): a non-object attrs is dropped, and
+// values that fail attrValue's rule are stripped, so downstream readers can
+// trust what they get. Conditions without attrs pass through untouched.
+export function sanitizeConditionAttrs(conditions) {
+  if (!Array.isArray(conditions)) return [];
+  return conditions.map((c) => {
+    const cur = c?.attrs;
+    if (cur === undefined) return c;
+    const attrs = {};
+    if (cur && typeof cur === "object" && !Array.isArray(cur)) {
+      for (const [k, v] of Object.entries(cur)) if (typeof v === "string" && v.trim()) attrs[k] = v;
+    }
+    return { ...c, attrs };
+  });
+}
+
+// Display label for a column — a whitespace-only name is as unusable as an
+// empty one (blank table/CSV headers, a blank Group option, "Grouped by ⟨⟩"
+// in print), so both fall back. The stored name is never mutated.
+export function columnLabel(cc) {
+  return typeof cc?.name === "string" && cc.name.trim() ? cc.name : "Untitled";
 }
 
 // Rewrite assignments when a vocabulary value is renamed — typo-fixing is the

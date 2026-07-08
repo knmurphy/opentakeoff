@@ -12,7 +12,7 @@
 //     columns, other values, and unassigned conditions keep object identity.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeConditionColumns, renameColumnValue } from "../src/lib/conditionColumns.js";
+import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, attrValue, columnLabel } from "../src/lib/conditionColumns.js";
 
 const cols = () => [
   { id: "col-a", name: "CSI Division", values: ["09 65 00", "09 68 00"] },
@@ -70,6 +70,43 @@ test("later duplicate column ids are dropped, first wins — ids key options/chi
     { id: "col-a", name: "Impostor", values: ["v2"] },
   ]);
   assert.deepEqual(out.map((c) => [c.id, c.name]), [["col-a", "First"], ["col-b", "Other"]]);
+});
+
+test("the id 'sheet' is reserved — a column carrying it would be shadowed by the built-in Sheet group mode", () => {
+  const out = sanitizeConditionColumns([{ id: "sheet", name: "Phase", values: ["1"] }, ...cols()]);
+  assert.deepEqual(out, cols());
+});
+
+// ── attrValue / sanitizeConditionAttrs / columnLabel ─────────────────────────
+
+test("attrValue: the one assigned-value rule — visible string or unassigned", () => {
+  const attrs = { a: "09 68 00", b: "", c: "  ", d: 42, e: null, f: " x " };
+  assert.equal(attrValue(attrs, "a"), "09 68 00");
+  assert.equal(attrValue(attrs, "b"), "");     // empty
+  assert.equal(attrValue(attrs, "c"), "");     // whitespace-only
+  assert.equal(attrValue(attrs, "d"), "");     // non-string
+  assert.equal(attrValue(attrs, "e"), "");
+  assert.equal(attrValue(attrs, "f"), " x ");  // visible content — returned untrimmed
+  assert.equal(attrValue(attrs, "zz"), "");    // absent key
+  assert.equal(attrValue(undefined, "a"), ""); // no attrs at all
+});
+
+test("sanitizeConditionAttrs: strips corrupt values at hydrate; untouched conditions keep identity", () => {
+  const clean = { id: "c1", finish_tag: "A" };                              // no attrs — passes through by identity
+  const dirty = { id: "c2", finish_tag: "B", attrs: { ok: "v", bad: 7, empty: "", ws: "  " } };
+  const broken = { id: "c3", finish_tag: "C", attrs: "not-an-object" };
+  const [a, b, c] = sanitizeConditionAttrs([clean, dirty, broken]);
+  assert.equal(a, clean);
+  assert.deepEqual(b.attrs, { ok: "v" });
+  assert.deepEqual(c.attrs, {});
+  assert.deepEqual(sanitizeConditionAttrs("nope" as any), []);
+});
+
+test("columnLabel: whitespace-only names are as unusable as empty ones", () => {
+  assert.equal(columnLabel({ name: "CSI Division" }), "CSI Division");
+  assert.equal(columnLabel({ name: "" }), "Untitled");
+  assert.equal(columnLabel({ name: "   " }), "Untitled");
+  assert.equal(columnLabel({}), "Untitled");
 });
 
 test("unknown item fields pass through the round-trip", () => {

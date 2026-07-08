@@ -4,6 +4,7 @@
 // conditionTotals rows are spread into an external contribution payload, so
 // derived columns live HERE (getters), never as new row fields.
 import { round2 } from "./num.js";
+import { attrValue, columnLabel } from "./conditionColumns.js";
 
 // key → (row, ctx) => primitive. ctx (optional):
 //   { perimByCond: Map(condition_id → unrounded floor-perimeter LF) }
@@ -82,16 +83,13 @@ export function customColProfile(conditionColumns) {
   // require an array — a truthy non-array from a corrupted payload must not throw
   return (Array.isArray(conditionColumns) ? conditionColumns : []).map((cc) => ({
     key: "custom:" + cc.id,
-    header: cc.name || "Untitled",
+    header: columnLabel(cc),
     defaultVisible: false,
     custom: true,
-    get: (r, ctx) => {
-      const v = ctx?.attrsByCond?.get(r.id)?.[cc.id];
-      // the one chokepoint sanitizing attrs values: conditions hydrate
-      // wholesale with no validation, so a corrupted non-string value must
-      // not reach a React child (or an export) — coerce to ""
-      return typeof v === "string" ? v : "";
-    },
+    // attrValue is the one definition of "assigned" — hydrate strips corrupt
+    // values (sanitizeConditionAttrs), and this keeps table/CSV/XLSX on the
+    // same rule as grouping, JSON, and the canvas UI
+    get: (r, ctx) => attrValue(ctx?.attrsByCond?.get(r.id), cc.id),
   }));
 }
 
@@ -101,14 +99,14 @@ export function customColProfile(conditionColumns) {
 // the vocabulary — the "(removed)" case) sorted, then the null/Unassigned
 // group LAST. Empty groups dropped. Groups key on value: string|null so a
 // vocabulary value literally named "Unassigned" can't merge with the null
-// group. Same coercion chokepoint as customColProfile: non-strings AND ""
-// fold into the null group — never an empty-labeled ad-hoc group.
+// group. attrValue's shared rule folds non-strings, "" and whitespace-only
+// into the null group — never an empty-labeled ad-hoc group.
 export function partitionRowsBy(rows, columnDef, attrsByCond) {
   const byValue = new Map(); // assigned value → rows, in first-seen order
   const nullRows = [];
   for (const r of rows) {
-    const v = attrsByCond?.get(r.id)?.[columnDef.id];
-    if (typeof v === "string" && v) {
+    const v = attrValue(attrsByCond?.get(r.id), columnDef.id);
+    if (v) {
       if (!byValue.has(v)) byValue.set(v, []);
       byValue.get(v).push(r);
     } else {

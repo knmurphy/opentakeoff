@@ -2,6 +2,22 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-08
+
+### Added
+- **Custom condition columns + report grouping.** Define project-level custom
+  columns (e.g. **CSI Division**) with selectable values and assign one per
+  condition — from the condition bar's **Custom columns** strip or the takeoffs
+  panel's **Condition details**. Renaming a value updates every assigned
+  condition; deleting one keeps the data, shown as "(removed)". The report
+  gains a unified **Group** select: by **sheet** (ordered quantities — waste
+  and ×N applied per sheet slice, subtotaled per group) or by any custom
+  column, with the grouping named on the printed page. Custom columns join the
+  report's column picker (hidden by default), append to CSV/XLSX after the
+  frozen columns, ride the JSON export additively, and the grouped-by column
+  always exports. Projects that never use the feature produce byte-identical
+  payloads and CSVs. (#31, #33–#36)
+
 ## 2026-07-07
 
 ### Added
