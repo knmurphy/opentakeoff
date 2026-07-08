@@ -5,6 +5,20 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ## 2026-07-08
 
 ### Added
+- **Stamp system — reusable annotation stamps.** Define an annotation once, save
+  it to a **browser-wide library** (the first cross-project asset), and drop it
+  onto any sheet with a click — the Bluebeam tool-chest pattern for shop-drawing
+  markup. Open the **Stamps** palette on the right rail: **Place** arms a stamp,
+  then each canvas click instantiates it as **normal, editable markups** (a
+  number bubble prompts for its value on placement). A fresh library seeds a
+  **Flooring shop drawings** set — north arrow, plank/tile & seam-direction
+  arrows, detail bubble, keyed note, pattern-origin marker, and **FOR
+  CONSTRUCTION / AS-BUILT / APPROVED** approval stamps. Save any selected markup
+  as a new stamp; rename/delete from the palette; **export/import** the library
+  as JSON (import merges) so a crew shares one standard set. Two new markup
+  primitives ship with it — **arrows** (leader + arrowhead) and **bubbles**
+  (circle + centered text) — both selectable, movable, recolorable, and burned
+  into the Marked Set PDF like every other markup.
 - **Per-markup color.** Any revision cloud, callout, text note, or highlight can
   be recolored from a palette swatch on its markup-panel row (or reset to
   **auto** — cobalt when linked to an RFI, amber otherwise). The color drives the

@@ -33,7 +33,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 | `D` | **Deduct** | Trace a void/column → subtracts SF. |
 | `⇧D` | **Deduct rectangle** | Rectangle deduct. |
 | `P` | **Pan** | Move around the sheet. |
-| `V` | **Select** | Select / move / edit / reassign / delete a shape — or click a markup (cloud/callout/note) to select it. |
+| `V` | **Select** | Select / move / edit / reassign / delete a shape — or click a markup (cloud/callout/note/arrow/bubble) to select it. |
 | `G` | **Gallery** | Open the plan‑set gallery / sheet picker. |
 
 ### Conditions
@@ -109,7 +109,7 @@ Classify conditions along your own dimension — **CSI Division**, bid package, 
 - **Dark view (☾)** — negative-print mode in the zoom cluster: sheets invert to light-on-dark, hatches stay legible, and the toggle is remembered per browser.
 
 ### Markup layer
-Revision clouds, callouts, text notes, and **highlight boxes** — annotations only, kept separate from measurements (never counted). The markup (◇), RFI (⬢), and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+Revision clouds, callouts, text notes, and **highlight boxes** — annotations only, kept separate from measurements (never counted). The markup (◇), stamp, RFI (⬢), and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
 
 **Highlight box** — pick the **Highlight** markup tool, then click two opposite corners to drop a translucent filled box over an area. It draws **behind** the other markups so it never dims them; a cloud, callout, or note sitting under a highlight stays clickable.
 
@@ -130,6 +130,15 @@ Turn a markup into a tracked **Request For Information**. Open the markup panel,
 - **Filter** by status; **Close** / **Void** / **Delete** an RFI (delete clears the link on every markup it was attached to — the annotations stay).
 - **Fly to** any linked markup — jumps to its sheet (opening it first if needed) and centers it, even across sheets.
 - **Export** — from the Report: an **RFI log** (CSV / JSON), the RFIs embedded in the report **JSON**, and an **RFI schedule page** in the **Marked set** PDF (with the RFI number printed on each linked markup).
+
+### Stamps (reusable annotations)
+A **stamp** is an annotation you define once and drop onto any sheet with a click — the tool-chest pattern from Bluebeam, for fast, consistent shop-drawing markup. Open the **Stamps** palette (the stamp icon on the right rail). Unlike conditions and markups (per project), the **stamp library is browser-wide** — it persists across every project, the first shared asset in OpenTakeoff.
+
+- **Place** — click **Place** on a stamp to arm it, then click the plan. It drops as **normal, editable markups** (move, recolor, restyle, delete, link to an RFI — anything a hand-drawn markup can do). The stamp stays armed, so click again to place more; press `Esc` (or pick another tool) to disarm. A stamp with a number bubble opens the inline editor so you can type the number as you place it.
+- **Starter set** — a fresh library seeds a **Flooring shop drawings** set: north arrow, plank/tile direction arrow, seam-direction arrow, detail bubble, keyed note, pattern-origin marker, and **FOR CONSTRUCTION / AS-BUILT / APPROVED** approval stamps.
+- **Define your own** — select any placed markup with the Select tool, open the palette, and **Save selected markup as stamp**. Rename (✎) or delete (🗑) stamps from the palette.
+- **Share** — **Export** the library to JSON and **Import** it on another machine (import merges, replacing same-id stamps) so a whole crew works off one standard set.
+- **On the plan & in the PDF** — placed stamps are markups, so they show the same color / line-style / weight controls and **burn into the Marked Set PDF** like every other markup. Two new markup primitives ship with stamps: **arrows** (a leader with an arrowhead) and **bubbles** (a circle carrying centered text).
 
 ### Report & export
 Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, an **RFI log** (CSV / JSON), and a **Group** select — restructure the table by **sheet** (each sheet's slice with waste and ×N applied, subtotaled) or by any **custom column**, with the grouping named on the printed page — plus **CSV / XLSX / JSON** export and **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn, a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown), and an **RFI schedule page** when RFIs exist. Revision clouds export with real scalloped edges and their △ revision deltas. Untick the **Markups** checkbox beside the Marked-set button to ship a takeoff-only set (RFI-only exports still work). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.

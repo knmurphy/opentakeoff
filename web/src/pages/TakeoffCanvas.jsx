@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
+import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
@@ -31,6 +32,7 @@ import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, 
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
+import StampPanel from "../components/StampPanel.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -190,6 +192,14 @@ export default function TakeoffCanvas() {
   const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
   const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
   const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
+  // Stamp library (browser-global, meta store) — reusable annotation stamps
+  // dropped click-to-place (#40). armedStamp holds the stamp picked from the
+  // palette; while tool==="stamp" each canvas click instantiates it as normal,
+  // editable markups. Persist mirrors the template/material library pattern.
+  const [stampLib, setStampLib] = useState({ stamps: [], sets: [] });
+  const stampLibRef = useRef({ stamps: [], sets: [] });       // readable outside a render (persist merges)
+  const [showStampPanel, setShowStampPanel] = useState(false);
+  const [armedStamp, setArmedStamp] = useState(null);         // stamp armed for click-to-place (tool==="stamp")
   // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
   // persist per user in localStorage as diffs against PANEL_DEFAULTS.
   const [panelPrefs, setPanelPrefs] = useState(() => {
@@ -626,6 +636,35 @@ export default function TakeoffCanvas() {
     return () => { off = true; };
   }, []);
 
+  // Stamp library — independent of hydrate (it seeds no project state), so it
+  // loads on its own. A truly empty library gets the flooring defaults, then
+  // persists them once so the seeded set is exportable and survives reloads
+  // (the seedConditions precedent, but written back because the library is the
+  // asset itself, not a per-project derivation). Re-read on tab focus like the
+  // other browser-global records.
+  useEffect(() => {
+    let off = false;
+    store.loadStampLibrary().catch(() => ({ stamps: [], sets: [] })).then((raw) => {
+      if (off) return;
+      const seeded = seedStampLibrary(raw);
+      const wasEmpty = !(raw?.stamps || []).length;
+      stampLibRef.current = seeded; setStampLib(seeded);
+      if (wasEmpty && seeded.stamps.length) store.saveStampLibrary(seeded).catch(() => { /* seed persists on next edit */ });
+    });
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      store.loadStampLibrary().then((lib) => {
+        if (JSON.stringify(lib) === JSON.stringify(stampLibRef.current)) return;
+        // another tab edited the library — swap in only if it still has stamps
+        // (never clobber our seeded defaults with a bare {stamps:[],sets:[]})
+        if (!lib.stamps.length) return;
+        stampLibRef.current = lib; setStampLib(lib);
+      }).catch(() => { /* keep what we have */ });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { off = true; document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+
   // library freshness: BOTH browser-global records — the condition template
   // library AND the material library (each sanitized at load, same as the
   // mount effect above) — may have been edited by another tab since our mount
@@ -651,6 +690,10 @@ export default function TakeoffCanvas() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
+
+  // leaving the stamp tool disarms the pending stamp — a stray click under a
+  // measure/select tool must never drop a stamp
+  useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -1115,7 +1158,7 @@ export default function TakeoffCanvas() {
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
         else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
         else setCalib((c) => c.slice(0, -1));
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); }
+      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1161,6 +1204,7 @@ export default function TakeoffCanvas() {
       else { const a = poly[0]; commitPoly([[a[0], a[1]], [p[0], a[1]], [p[0], p[1]], [a[0], p[1]]], tool === "deduct-rect"); setPoly([]); }
     }
     else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
+    else if (tool === "stamp") placeStamp(p);
   }
   // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
   // hitShape can't test them — this is a purpose-built bbox/point test in the
@@ -1206,6 +1250,16 @@ export default function TakeoffCanvas() {
       const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
       const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
       return X >= x0 - thr && X <= x1 + thr && Y >= y0 - thr && Y <= y1 + thr;
+    }
+    if (m.type === "arrow" && m.from && m.to) {
+      // a stamp-placed leader — hit its shaft (endpoint tolerance folds into the band)
+      const fx = m.from[0] * W + ox, fy = m.from[1] * H, tx = m.to[0] * W + ox, ty = m.to[1] * H;
+      return distToSeg(X, Y, fx, fy, tx, ty) < thr * 1.5;
+    }
+    if (m.type === "bubble" && m.at) {
+      // a filled circle — hit its disc; r is normalized to sheet WIDTH
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H, rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * W;
+      return Math.hypot(X - cx, Y - cy) < rad + thr;
     }
     return false;
   }
@@ -1275,7 +1329,8 @@ export default function TakeoffCanvas() {
         // first click of a double-click re-edit) never nudges the markup.
         const orig = (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
           : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
-            : { at: mHit.at };
+            : mHit.type === "arrow" ? { from: mHit.from, to: mHit.to }
+              : { at: mHit.at };   // text + bubble
         // raw start (markups don't snap/angle-lock; matches the raw tracking point in
         // onPointerMove so the delta can't be contaminated by a stale snap/angle ref)
         dragRef.current = { kind: "markupMove", markupId: mHit.id, sheetId: mHit.sheet_id, start: toImage(e.clientX, e.clientY), orig, moved: false };
@@ -1534,7 +1589,8 @@ export default function TakeoffCanvas() {
           if (m.id !== d.markupId) return m;
           if (o.rect) return { ...m, rect: [[o.rect[0][0] + dx, o.rect[0][1] + dy], [o.rect[1][0] + dx, o.rect[1][1] + dy]] };
           if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
-          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };
+          if (o.from) return { ...m, from: [o.from[0] + dx, o.from[1] + dy], to: [o.to[0] + dx, o.to[1] + dy] };
+          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };   // text + bubble
         }));
       }
       return;
@@ -1804,7 +1860,8 @@ export default function TakeoffCanvas() {
     if (!sp || !sp.img.w) return null;
     let nx, ny;
     if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
-    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }
+    else if (m.type === "arrow" && m.from && m.to) { nx = (m.from[0] + m.to[0]) / 2; ny = (m.from[1] + m.to[1]) / 2; }
+    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }   // text + bubble + callout
     else return null;
     return [nx * sp.img.w + sp.xOffset, ny * sp.img.h];
   }
@@ -1892,6 +1949,90 @@ export default function TakeoffCanvas() {
   function updateMarkup(mid, patch) { setMarkups((ms) => ms.map((m) => (m.id === mid ? { ...m, ...patch } : m))); }
   function deleteMarkup(mid) { setMarkups((ms) => ms.filter((m) => m.id !== mid)); }
 
+  // ── stamps — reusable annotations dropped click-to-place (#40). The library
+  // is browser-global (persists across projects); placed instances are NORMAL
+  // markups. Persist mirrors persistTemplates: ref + state + fire-and-forget
+  // save, sanitized at the store boundary.
+  const persistStampLib = (next) => {
+    stampLibRef.current = next; setStampLib(next);
+    store.saveStampLibrary(next).catch((e) => setCommitMsg(`Couldn't save the stamp library: ${e.message || e}`));
+  };
+  // Arm a stamp for placement: switch to the stamp tool and hold it in
+  // armedStamp. Repeated clicks place multiple copies until you pick another
+  // tool or press Escape.
+  const armStamp = (stamp) => { setArmedStamp(stamp); setTool("stamp"); setMarkupDraft(null); };
+  // Instantiate the armed stamp at the click point — every element becomes a
+  // normal markup on the clicked panel's sheet. A `_prompt` element (a bubble
+  // whose number you fill in) opens the text editor on the placed instance.
+  function placeStamp(p) {
+    if (!armedStamp) return;
+    const tp = panelAt(p[0]);
+    const cx = (p[0] - tp.xOffset) / tp.img.w, cy = p[1] / tp.img.h;
+    const instances = instantiateStamp(armedStamp, [cx, cy]);
+    if (!instances.length) { setCommitMsg("This stamp has no placeable elements."); return; }
+    let promptId = null;
+    for (const inst of instances) {
+      const { _prompt, ...m } = inst;
+      const id = uid("mk");
+      addMarkup({ ...m, id }, tp.key);
+      if (_prompt && !promptId) promptId = id;
+    }
+    setCommitMsg(`Placed “${armedStamp.name}”.`);
+    if (promptId) openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(promptId, { text: (t || "").trim() }) });
+  }
+  // Save the selected markup as a single-element stamp (the palette's define
+  // flow). markupToStampElement re-expresses its coords as anchor-relative
+  // offsets so the stamp is position independent.
+  function saveMarkupAsStamp(m) {
+    const el = markupToStampElement(m);
+    if (!el) { setCommitMsg("This markup can't be saved as a stamp."); return; }
+    const name = (window.prompt("Name this stamp:", (m.text || el.type).trim() || "Stamp") || "").trim();
+    if (!name) return;
+    const stamp = { id: uid("stmp"), name, elements: [el] };
+    persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, stamp] });
+    setCommitMsg(`Saved stamp “${name}”.`);
+    setShowStampPanel(true);
+  }
+  const deleteStamp = (id) => {
+    const lib = stampLibRef.current;
+    persistStampLib({
+      stamps: lib.stamps.filter((s) => s.id !== id),
+      sets: lib.sets.map((set) => ({ ...set, stampIds: set.stampIds.filter((sid) => sid !== id) })),
+    });
+    if (armedStamp?.id === id) setArmedStamp(null);
+  };
+  const renameStamp = (id, name) => {
+    const nm = (name || "").trim();
+    if (!nm) return;
+    persistStampLib({ ...stampLibRef.current, stamps: stampLibRef.current.stamps.map((s) => (s.id === id ? { ...s, name: nm } : s)) });
+  };
+  // Export the whole library as JSON (a crew shares one standard set); import
+  // MERGES a file's stamps/sets in, replacing same-id entries so a re-import is
+  // idempotent. The store sanitizes on save, so a malformed file can't wedge us.
+  function exportStamps() {
+    const data = JSON.stringify({ schema: "opentakeoff.stamp_library.v1", ...stampLibRef.current }, null, 2);
+    downloadBytes("opentakeoff-stamps.json", new TextEncoder().encode(data), "application/json");
+  }
+  async function importStamps(file) {
+    try {
+      const parsed = JSON.parse(await file.text());
+      const cur = stampLibRef.current;
+      const inStamps = Array.isArray(parsed?.stamps) ? parsed.stamps : [];
+      const inSets = Array.isArray(parsed?.sets) ? parsed.sets : [];
+      const inIds = new Set(inStamps.map((s) => s?.id));
+      const inSetIds = new Set(inSets.map((s) => s?.id));
+      const merged = {
+        stamps: [...cur.stamps.filter((s) => !inIds.has(s.id)), ...inStamps],
+        sets: [...cur.sets.filter((s) => !inSetIds.has(s.id)), ...inSets],
+      };
+      persistStampLib(merged);   // persistStampLib → store sanitizes, dropping any malformed items
+      setCommitMsg(`Imported ${inStamps.length} stamp${inStamps.length === 1 ? "" : "s"}.`);
+      setShowStampPanel(true);
+    } catch (e) {
+      setCommitMsg(`Couldn't import stamps: ${e.message || e}`);
+    }
+  }
+
   // ── RFI register — the dormant markup.rfi_id hook made real. One RFI ↔ many
   // markups (markup.rfi_id === rfi.id); linked markups are DERIVED, never stored
   // twice. rfi.js stays PURE — every date is stamped HERE, at the event, so no
@@ -1942,7 +2083,8 @@ export default function TakeoffCanvas() {
     let anchor;
     if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
     else if (m.type === "callout") anchor = m.at || m.target;
-    else anchor = m.at;
+    else if (m.type === "arrow" && m.from && m.to) anchor = [(m.from[0] + m.to[0]) / 2, (m.from[1] + m.to[1]) / 2];
+    else anchor = m.at;   // text + bubble
     if (!anchor) return false;
     const el = containerRef.current;
     if (!el) return false;
@@ -2740,6 +2882,36 @@ export default function TakeoffCanvas() {
                           </g>
                         );
                       }
+                      if (m.type === "arrow") {
+                        const [fx, fy] = [m.from[0] * p.img.w, m.from[1] * p.img.h];
+                        const [tx, ty] = [m.to[0] * p.img.w, m.to[1] * p.img.h];
+                        const midx = (fx + tx) / 2, midy = (fy + ty) / 2;
+                        const hx0 = Math.min(fx, tx), hy0 = Math.min(fy, ty), hx1 = Math.max(fx, tx), hy1 = Math.max(fy, ty);
+                        const pad = (6 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <line x1={fx} y1={fy} x2={tx} y2={ty} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} strokeLinecap="round" />
+                            {/* filled arrowhead at the `to` end */}
+                            <path d={arrowheadPath(fx, fy, tx, ty, 11 / z)} fill={mk} />
+                            {m.text && <text x={midx} y={midy - 6 / z} fill={mk} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(hx0, hy0 - pad - 9 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "bubble") {
+                        const cx = m.at[0] * p.img.w, cy = m.at[1] * p.img.h;
+                        const rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * p.img.w;
+                        const pad = (5 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(cx - rad - pad, cy - rad - pad, cx + rad + pad, cy + rad + pad)}
+                            <circle cx={cx} cy={cy} r={rad} fill={darkMode ? "rgba(12,15,20,.85)" : "rgba(255,255,255,.85)"} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={cx} y={cy} fill={mk} fontSize={Math.min(13, rad * z * 0.9) / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(cx + rad, cy - rad - 4 / z)}
+                          </g>
+                        );
+                      }
                       const [x, y] = m.at;
                       const lw = ((m.text?.length || 1) * 7 + 10) / z;
                       return (
@@ -2886,6 +3058,7 @@ export default function TakeoffCanvas() {
             rides the canvas edge, so it stays visible either way. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
           {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
+          {panelBtn(() => setShowStampPanel((v) => !v), "stamp", "Stamps — reusable annotations dropped click-to-place", showStampPanel, stampLib.stamps.length)}
           {panelBtn(() => setShowRfiPanel((v) => !v), "rfi", "RFI register — raise, track, and export Requests For Information", showRfiPanel, rfis.length)}
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
@@ -2989,6 +3162,18 @@ export default function TakeoffCanvas() {
               </div>
             ))}
           </div>
+        )}
+
+        {/* Stamp palette — project-global tool-chest (#40): arm a reusable stamp
+            and click-to-place it as normal markups; save the selected markup as
+            a stamp; export/import the library as JSON. */}
+        {showStampPanel && (
+          <StampPanel
+            library={stampLib} armedStamp={armedStamp}
+            selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
+            onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
+            onExport={exportStamps} onImport={importStamps} onClose={() => setShowStampPanel(false)}
+          />
         )}
 
         {/* RFI register — project-global (not sheet-scoped like the markup panel):
