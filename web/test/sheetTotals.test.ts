@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 // totals.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
-import { conditionTotals, round2, sheetTotals, totalsToCsv, hasMultipliers, BY_SHEET_BASE_NOTE } from "../src/lib/totals.js";
+import { conditionTotals, round2, sheetTotals, sheetGroupedRows, totalsToCsv, hasMultipliers, BY_SHEET_BASE_NOTE } from "../src/lib/totals.js";
 import { conditions as goldenConditions, shapes as goldenShapes, projectName as goldenName } from "./fixtures/report.fixture.ts";
 
 const shape = (condition_id: string, sheet_id: string, measure_role: string, computed: any) =>
@@ -95,6 +95,89 @@ test("linear shapes contribute LF and border SF to the sheet row", () => {
   assert.equal(row.border_sf, 29.42);
   assert.equal(row.floor_sf, 0);
   assert.equal(row.shape_count, 1);
+});
+
+// ── sheetGroupedRows: ORDERED quantities per sheet (report group-by-sheet) ──
+// The counterpart invariants to sheetTotals: full conditionTotals math per
+// sheet's shapes (waste + ×N applied per slice), same canonical sheet order,
+// per-group perimByCond, orphan/shapeless sheets dropped.
+
+test("sheetGroupedRows: sheets order by file then numeric page — not draw order", () => {
+  const conds = [{ id: "c", finish_tag: "CT-1" }];
+  const shapes = [
+    shape("c", "b-plans.pdf#2", "floor_area", { area_sf: 1 }),   // drawn first
+    shape("c", "a-plans.pdf", "floor_area", { area_sf: 2 }),     // earlier file, drawn later
+    shape("c", "b-plans.pdf#10", "floor_area", { area_sf: 3 }),  // page 10 AFTER 2 (numeric)
+  ];
+  const groups = sheetGroupedRows(conds, shapes);
+  assert.deepEqual(groups.map((g) => g.sheet_id), ["a-plans.pdf", "b-plans.pdf#2", "b-plans.pdf#10"]);
+});
+
+test("sheetGroupedRows: slices carry ORDERED quantities — waste % and ×N applied per sheet", () => {
+  const conds = [{ id: "c", finish_tag: "LVT-2", multiplier: 2, waste_pct: 10 }];
+  const shapes = [
+    shape("c", "s1", "floor_area", { area_sf: 10 }),
+    shape("c", "s2", "floor_area", { area_sf: 20 }),
+  ];
+  const [g1, g2] = sheetGroupedRows(conds, shapes);
+  assert.equal(g1.rows[0].floor_sf, 20);           // 10 × 2 — multiplier applied, unlike sheetTotals
+  assert.equal(g1.rows[0].total_sf_net, 22);       // × 1.1 waste on top
+  assert.equal(g2.rows[0].floor_sf, 40);
+  assert.equal(g2.rows[0].total_sf_net, 44);
+});
+
+test("sheetGroupedRows: slices sum to the conditionTotals row within display-rounding drift", () => {
+  // 10.004 → per-slice round2 can drift the visible sum by cents from the
+  // condition row (each slice rounds independently) — the accepted by-sheet
+  // behavior; the underlying math is linear, so pre-rounding they're equal
+  const conds = [{ id: "c", finish_tag: "LVT-2", multiplier: 3, waste_pct: 7 }];
+  const shapes = [
+    shape("c", "s1", "floor_area", { area_sf: 10.004 }),
+    shape("c", "s2", "floor_area", { area_sf: 5.503 }),
+    shape("c", "s3", "linear", { perimeter_lf: 12.007, area_sf: 4.002 }),
+  ];
+  const groups = sheetGroupedRows(conds, shapes);
+  const [condRow] = conditionTotals(conds, shapes);
+  for (const key of ["total_sf", "total_sf_net", "lf", "lf_net", "sy_net"] as const) {
+    const sliceSum = groups.reduce((n, g) => n + g.rows[0][key], 0);
+    assert.ok(Math.abs(sliceSum - condRow[key]) < 0.02, `${key}: ${sliceSum} vs ${condRow[key]}`);
+  }
+});
+
+test("sheetGroupedRows: a condition traced on two sheets appears in both groups", () => {
+  const conds = [{ id: "c", finish_tag: "CT-1" }, { id: "d", finish_tag: "RB-1" }];
+  const shapes = [
+    shape("c", "s1", "floor_area", { area_sf: 1 }),
+    shape("c", "s2", "floor_area", { area_sf: 2 }),
+    shape("d", "s2", "floor_area", { area_sf: 3 }),
+  ];
+  const groups = sheetGroupedRows(conds, shapes);
+  assert.deepEqual(groups.map((g) => g.rows.map((r: any) => r.id)), [["c"], ["c", "d"]]);
+});
+
+test("sheetGroupedRows: orphan-only sheets dropped; shapeless sheets never appear", () => {
+  const conds = [{ id: "c", finish_tag: "CT-1" }];
+  const shapes = [
+    shape("c", "plan", "floor_area", { area_sf: 10 }),
+    shape("ghost", "detail", "floor_area", { area_sf: 5 }),   // dead condition_id → all-orphan sheet
+  ];
+  const groups = sheetGroupedRows(conds, shapes);
+  assert.deepEqual(groups.map((g) => g.sheet_id), ["plan"]);
+  assert.deepEqual(sheetGroupedRows(conds, []), []);
+});
+
+test("sheetGroupedRows: perimByCond is per-sheet — a floor trace on one sheet never leaks into another's map", () => {
+  const conds = [{ id: "c", finish_tag: "CT-1" }, { id: "d", finish_tag: "LVT-2" }];
+  const shapes = [
+    shape("c", "s1", "floor_area", { area_sf: 100, perimeter_lf: 40 }),
+    shape("c", "s2", "floor_area", { area_sf: 25, perimeter_lf: 10 }),
+    shape("d", "s2", "floor_area", { area_sf: 9, perimeter_lf: 12 }),
+  ];
+  const [g1, g2] = sheetGroupedRows(conds, shapes);
+  assert.equal(g1.perimByCond.get("c"), 40);
+  assert.equal(g1.perimByCond.has("d"), false);   // d has no shapes on s1
+  assert.equal(g2.perimByCond.get("c"), 10);      // s2's slice only, not 50
+  assert.equal(g2.perimByCond.get("d"), 12);
 });
 
 // ── totalsToCsv: additive extension ─────────────────────────────────────────

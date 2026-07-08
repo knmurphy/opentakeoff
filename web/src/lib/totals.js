@@ -20,8 +20,9 @@
 
 import { round2 } from "./num.js";
 import { csvEsc as esc } from "./csv.js";
-import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
-import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
+import { GETTERS, CSV_PROFILE, colGetter, floorPerimeterLf } from "./reportColumns.js";
+import { attrValue } from "./conditionColumns.js";
+import { compareSheetKeys } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
 // Re-export so existing consumers (markedset, snapshotDiff, ReportPanel, tests)
 // keep importing round2 from here; num.js is the single definition.
@@ -116,11 +117,8 @@ export function sheetTotals(conditions, shapes) {
     a.n += 1;
     accumulateRole(a, s);
   }
-  // file name, then numeric page — mirror exportMarkedSet's sheetMeta sort
-  const order = [...bySheet.keys()].sort((ka, kb) => {
-    const a = parseSheetKey(String(ka)), b = parseSheetKey(String(kb));
-    return a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file);
-  });
+  // canonical sheet order — shared comparator, same as exportMarkedSet
+  const order = [...bySheet.keys()].sort((ka, kb) => compareSheetKeys(String(ka), String(kb)));
   return order.map((sheet_id) => {
     const conds = bySheet.get(sheet_id);
     const rows = conditions.filter((c) => conds.has(c.id)).map((c) => {
@@ -133,6 +131,41 @@ export function sheetTotals(conditions, shapes) {
     });
     return { sheet_id, rows };
   }).filter((g) => g.rows.length);   // orphan shapes (dead condition_id) can't render a row
+}
+
+// Sheet-grouped ORDERED quantities for the report's group-by-sheet view —
+// deliberately different from sheetTotals above (base quantities): each
+// group's rows are conditionTotals restricted to that sheet's shapes, so
+// waste % and ×N apply per slice and every column keeps its ungrouped
+// meaning. Returns [{ sheet_id, rows, perimByCond }] in the same canonical
+// file→page order as sheetTotals; a condition traced on N sheets appears in
+// N groups. perimByCond is per-sheet (floorPerimeterLf over that sheet's
+// shapes) — the global map would show whole-project perimeter next to
+// per-slice quantities.
+//   - Rows carry per-slice materials with per-slice ceil — tbody display
+//     only, never aggregate (summing per-slice ceils overstates the buy).
+//   - Negative slices (a deduct on a different sheet than its positive area)
+//     are returned as-is — rendered with a bare minus in v1, unlike the
+//     by-sheet section's red-paren style.
+//   - Empty groups dropped: orphan shapes (dead condition_id) can make a
+//     sheet all-orphan, mirroring the sheetTotals guard.
+export function sheetGroupedRows(conditions, shapes) {
+  const bySheet = new Map();        // sheet_id → that sheet's shapes
+  for (const s of shapes) {
+    let arr = bySheet.get(s.sheet_id);
+    if (!arr) { arr = []; bySheet.set(s.sheet_id, arr); }
+    arr.push(s);
+  }
+  // canonical sheet order — shared comparator, same as sheetTotals
+  const order = [...bySheet.keys()].sort((ka, kb) => compareSheetKeys(String(ka), String(kb)));
+  return order.map((sheet_id) => {
+    const sheetShapes = bySheet.get(sheet_id);
+    return {
+      sheet_id,
+      rows: conditionTotals(conditions, sheetShapes).filter((r) => r.shape_count > 0),
+      perimByCond: floorPerimeterLf(sheetShapes),
+    };
+  }).filter((g) => g.rows.length);
 }
 
 // The one base-quantities footnote, shared by CSV ("# " prefix, golden-
@@ -212,16 +245,17 @@ export function grandTotals(rows) {
  * @param {((sheetId: any) => string)|null} [sheetLabel] sheet_id → display label
  * @param {Array<{key: string, header: string}>|null} [cols] CSV_PROFILE-shaped
  *   column list to emit; null → the default-visible CSV_PROFILE columns
- *   (byte-identical to the frozen v1 export). Opt-ins append after the base 13.
- * @param {{perimByCond?: Map<any, number>}|null} [ctx] handed to GETTERS
- *   (perimeter_ref needs it)
+ *   (byte-identical to the frozen v1 export). Opt-ins append after the base 13;
+ *   custom columns (customColProfile) carry their own `get` and append after.
+ * @param {{perimByCond?: Map<any, number>, attrsByCond?: Map<any, object>}|null}
+ *   [ctx] handed to the getters (perimeter_ref / custom columns need it)
  * @returns {string}
  */
 export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null) {
   const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {
-    lines.push(columns.map((c) => esc(GETTERS[c.key]?.(r, ctx))).join(","));
+    lines.push(columns.map((c) => esc(colGetter(c)?.(r, ctx))).join(","));
   }
   const g = grandTotals(rows);
   // TOTAL row, column-driven: "TOTAL" under the finish column, grand-total
@@ -272,6 +306,10 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
 
 // Report JSON envelope — schema opentakeoff.report.v1. Extracted pure so the
 // key set is testable (test/totals.test.ts pins it; schema drift fails there).
+// v1 is additive-only: new keys APPEND after the existing ones (see markups'
+// id/rfi_id, row `columns`, top-level `condition_columns`) and are always
+// emitted — empty arrays, never conditionally absent — so the shape stays
+// deterministic for downstream parsers.
 //   - sheets[] carries scale provenance under `scale_source` — the SAME key the
 //     persisted payload uses ("unknown" when unrecorded).
 //   - sheets[] deliberately omits units_per_px: that figure is feet per
@@ -280,16 +318,33 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
 /**
  * @param {{projectName?: string, rows?: any[], bySheet?: any[],
  *   scaleInfo?: Array<{sheet_id: any, source?: string, [k: string]: any}>, markups?: any[],
- *   sheetLabel?: ((sheetId: any) => string)|null}} args
+ *   sheetLabel?: ((sheetId: any) => string)|null,
+ *   conditionColumns?: Array<{id: string, name: string, values: string[]}>,
+ *   attrsByCond?: Map<any, object>|null}} args
  */
-export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null }) {
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null, conditionColumns = [], attrsByCond = null }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
+  // destructuring defaults don't apply to an explicit null, and both values can
+  // trace back to a corrupted payload — coerce (and drop malformed items) so
+  // the export can't throw
+  const colDefs = (Array.isArray(conditionColumns) ? conditionColumns : []).filter((cc) => cc && typeof cc === "object" && typeof cc.id === "string");
+  const attrs = attrsByCond instanceof Map ? attrsByCond : new Map();
   return {
     schema: "opentakeoff.report.v1",
     project_name: projectName || null,
     generated_with: "OpenTakeoff",
     sheets: scaleInfo.map((si) => ({ sheet_id: si.sheet_id, sheet: label(si.sheet_id), scale_source: si.scale_source ?? si.source ?? "unknown" })),
-    conditions: rows,
+    // custom-column values APPEND after materials (row key order otherwise
+    // untouched). Iterating the DEFINED columns — never raw attrs — naturally
+    // drops orphaned colIds; attrValue (the shared assigned-value rule) keeps
+    // corrupted and empty values out of the export.
+    conditions: rows.map((r) => ({
+      ...r,
+      columns: colDefs.flatMap((cc) => {
+        const v = attrValue(attrs.get(r.id), cc.id);   // the shared assigned-value rule
+        return v ? [{ id: cc.id, name: cc.name, value: v }] : [];
+      }),
+    })),
     by_sheet: bySheet.map((gp) => ({
       sheet_id: gp.sheet_id,
       sheet: label(gp.sheet_id),
@@ -301,6 +356,9 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     // convention — see scale_source above): a cloud with empty text was fully
     // anonymous in the export. Legacy markups: id → null, rfi_id → "".
     markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
+    // the custom-column definitions themselves, so row `columns` values can be
+    // read against the project vocabulary
+    condition_columns: colDefs.map(({ id, name, values }) => ({ id, name, values: Array.isArray(values) ? values : [] })),
   };
 }
 

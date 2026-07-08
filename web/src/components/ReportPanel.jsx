@@ -4,8 +4,9 @@
 // "Contribute to the open flooring model" flow.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
-import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
+import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
+import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
+import { columnLabel } from "../lib/conditionColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
@@ -31,7 +32,7 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo, conditionColumns = [] }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
   const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
@@ -48,10 +49,45 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const [colPrefs, setColPrefs] = useState(loadColPrefs);
   const [showCols, setShowCols] = useState(false);
   const colsRef = useRef(null);
-  const tableCols = visibleCols(TABLE_PROFILE, colPrefs);
-  const csvCols = visibleCols(CSV_PROFILE, colPrefs);
+  // custom columns append after each profile (frozen 13 → built-in opt-ins →
+  // custom), so toggling one can never disturb the frozen CSV prefix
+  const customCols = customColProfile(conditionColumns);
+  const tableCols = visibleCols([...TABLE_PROFILE, ...customCols], colPrefs);
+  // group-by choice: "" (none) | "sheet" | a custom column id; normalized
+  // ONCE per render and used everywhere (select value AND partitioning) — a
+  // stale colId must fall back to None, never reach the select or the
+  // partitioner.
+  const [groupByRaw, setGroupByRaw] = useState(loadGroupBy);
+  const groupBy = groupByRaw === "sheet" || conditionColumns.some((cc) => cc.id === groupByRaw) ? groupByRaw : "";
+  // grouping force-includes its column in the CSV/XLSX even when hidden in
+  // the picker (D7) — a grouped report's export always carries its grouping
+  const csvCols = forceIncludeGroupCol(visibleCols([...CSV_PROFILE, ...customCols], colPrefs), customCols, groupBy);
   const perimByCond = useMemo(() => floorPerimeterLf(shapes), [shapes]);
-  const ctx = { perimByCond };
+  // custom-column values reach the getters through ctx, never as row fields
+  // (conditionTotals rows are spread into the contribution payload)
+  const attrsByCond = useMemo(() => new Map(conditions.map((c) => [c.id, c.attrs])), [conditions]);
+  const ctx = { perimByCond, attrsByCond };
+  // grouped view. Custom-column mode partitions the already-computed rows
+  // (no recompute); sheet mode re-runs conditionTotals per sheet's shapes —
+  // ORDERED quantities per slice (waste + ×N applied), each group carrying
+  // its own per-sheet perimByCond for that group's cells. sheetLabel is an
+  // inline arrow recreated per parent render — apply it at render time,
+  // never in the memo deps.
+  //
+  // Degenerate single-group partitions: a lone Unassigned group (nothing
+  // assigned) and a lone sheet (single-sheet project) render exactly as
+  // ungrouped — the chrome would say nothing. But a lone NAMED group (every
+  // condition shares one real value) keeps the caption + header: the user
+  // grouped precisely to put that value on the printed page, and the CSV
+  // force-includes the column, so the two outputs must agree. Its subtotal is
+  // still suppressed — it would duplicate the grand TOTAL directly below it.
+  const groupCol = groupBy && groupBy !== "sheet" ? conditionColumns.find((cc) => cc.id === groupBy) : null;
+  const colGroups = useMemo(() => (groupCol ? partitionRowsBy(rows, groupCol, attrsByCond) : null), [rows, groupCol, attrsByCond]);
+  const sheetGroups = useMemo(() => (groupBy === "sheet" ? sheetGroupedRows(conditions, shapes) : null), [groupBy, conditions, shapes]);
+  const groups = sheetGroups
+    ? sheetGroups.map((gp) => ({ value: gp.sheet_id, label: sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id, rows: gp.rows, perimByCond: gp.perimByCond }))
+    : colGroups;
+  const grouped = Boolean(groups && (groups.length > 1 || (groupCol && groups.length === 1 && groups[0].value !== null)));
 
   // while the report is up, the print stylesheet (app.css @media print) hides
   // the canvas chrome behind it and lets the report flow across pages
@@ -80,7 +116,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel }), null, 2),
+    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel, conditionColumns, attrsByCond }), null, 2),
     "application/json");
   // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
   // column picker like the CSV); buildXlsx lazy-loads fflate on first use
@@ -98,9 +134,14 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
 
   // one condition-table cell, keyed off the column profile; values come
-  // through GETTERS so the table and the CSV read the same numbers
-  const renderCell = (col, r) => {
-    const v = GETTERS[col.key] ? GETTERS[col.key](r, ctx) : r[col.key];
+  // through the shared colGetter so the table and the CSV read the same
+  // numbers. Sheet groups pass their own ctx (per-sheet perimByCond).
+  const renderCell = (col, r, cellCtx) => {
+    const get = colGetter(col);
+    const v = get ? get(r, cellCtx) : r[col.key];
+    // custom columns: plain left-aligned text (already coerced to string by
+    // the customColProfile getter); TOTAL cells stay blank (no foot)
+    if (col.custom) return <td key={col.key} style={{ ...td, textAlign: "left" }}>{v || "—"}</td>;
     switch (col.key) {
       case "finish":
         return (
@@ -152,6 +193,20 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <div style={{ flex: 1 }} />
         <button className="btn-ghost" onClick={() => setShowInfo(true)}
           title="Your company identity and the client/job details for the print header and marked-set cover">Project info</button>
+        {/* always rendered, even with zero custom columns — Sheet grouping
+            is useful on its own */}
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink)", whiteSpace: "nowrap" }}
+          title="Break the condition table into sections with subtotals">
+          Group:
+          <select value={groupBy} onChange={(e) => { setGroupByRaw(e.target.value); saveGroupBy(e.target.value); }}
+            style={{ padding: "5px 6px", border: "1px solid var(--ink-faint)", background: "transparent", fontSize: 12, maxWidth: 160 }}>
+            <option value="">None</option>
+            <option value="sheet">Sheet</option>
+            {conditionColumns.map((cc) => (
+              <option key={cc.id} value={cc.id}>{columnLabel(cc)}</option>
+            ))}
+          </select>
+        </label>
         <div ref={colsRef} style={{ position: "relative" }}>
           <button className="btn-ghost" onClick={() => setShowCols((s) => !s)} title="Choose which columns the table and CSV show">Columns</button>
           {showCols && (
@@ -167,7 +222,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               {TABLE_PROFILE.filter((c) => !c.locked && c.defaultVisible).map(colCheckbox)}
               <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Optional</div>
               {TABLE_PROFILE.filter((c) => !c.locked && !c.defaultVisible).map(colCheckbox)}
-              <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export.</p>
+              <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Custom columns</div>
+              {customCols.length ? customCols.map(colCheckbox) : (
+                <div style={{ fontSize: 10.5, color: "var(--ink-muted)", lineHeight: 1.5 }}>No custom columns yet — define them from the condition bar in the canvas.</div>
+              )}
+              <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export. Grouping by a custom column always exports that column.</p>
             </div>
           )}
         </div>
@@ -251,21 +310,74 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </div>
           )
         ) : (
+          <>
+          {/* print-visible grouping caption — the Group select lives in
+              .report-toolbar (display:none in print), so the printed page
+              must say what the sections are. Kept on screen too (cheap,
+              consistent). Suppressed with the rest of the group chrome when
+              the partition degenerates to one group. */}
+          {grouped && (
+            <p style={{ maxWidth: 980, margin: "0 auto 8px", fontSize: 11.5, color: "var(--ink-muted)" }}>
+              Grouped by <strong>{groupCol ? columnLabel(groupCol) : "sheet"}</strong>
+            </p>
+          )}
           <table style={{ width: "100%", maxWidth: 980, margin: "0 auto", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
             <thead>
               <tr>
                 {tableCols.map((c) => (
-                  <th key={c.key} style={c.key === "finish" ? { ...th, textAlign: "left" } : c.accent ? { ...th, color: "var(--cobalt)" } : th}>{c.header}</th>
+                  // custom columns are text — header left-aligns with the cells
+                  <th key={c.key} style={c.key === "finish" || c.custom ? { ...th, textAlign: "left" } : c.accent ? { ...th, color: "var(--cobalt)" } : th}>{c.header}</th>
                 ))}
               </tr>
             </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  {tableCols.map((c) => renderCell(c, r))}
-                </tr>
-              ))}
-            </tbody>
+            {/* ONE render path: the ungrouped view is a degenerate single group
+                (no header/subtotal chrome). One tbody PER GROUP — in sheet mode
+                the same condition repeats across groups, so r.id is only unique
+                within a group's tbody. thead + grand-total tfoot stay exactly
+                as ungrouped, so print pagination is untouched. */}
+            {(grouped ? groups : [{ rows }]).map((gp) => {
+              // key in a disjoint keyspace: a vocabulary value literally named
+              // "∅" must not collide with the Unassigned group's sentinel
+              const key = !grouped ? "rows" : gp.value === null ? "∅" : "v:" + gp.value;
+              const sub = grouped && groups.length > 1 && gp.rows.length > 1 ? grandTotals(gp.rows) : null;
+              // sheet groups carry a per-sheet perimByCond — the panel-wide
+              // map would show whole-project perimeter next to per-slice
+              // quantities
+              const gctx = gp.perimByCond ? { perimByCond: gp.perimByCond, attrsByCond } : ctx;
+              return (
+                <tbody key={key}>
+                  {/* breakAfter is a print nicety only — unreliable on table
+                      rows in Chromium, unimplemented in Gecko; occasional
+                      header stranding at a page bottom is accepted in v1 */}
+                  {grouped && (
+                    <tr style={{ breakAfter: "avoid" }}>
+                      <td colSpan={tableCols.length} style={{ ...td, textAlign: "left", fontFamily: "var(--f-display)", fontSize: 13, fontWeight: 700, paddingTop: 14, ...(gp.value === null ? { fontStyle: "italic" } : {}) }}>
+                        {gp.label}
+                      </td>
+                    </tr>
+                  )}
+                  {gp.rows.map((r) => (
+                    <tr key={r.id}>
+                      {tableCols.map((c) => renderCell(c, r, gctx))}
+                    </tr>
+                  ))}
+                  {/* single-row group: no subtotal — it would repeat the row verbatim */}
+                  {sub && (
+                    <tr>
+                      <td style={{ ...td, textAlign: "left", borderTop: "1px solid var(--ink-soft)", color: "var(--ink-muted)", fontWeight: 600 }}>Subtotal</td>
+                      {/* lighter than the grand-total tfoot: thin border,
+                          muted color; same foot mechanism on the group's
+                          own grandTotals */}
+                      {tableCols.slice(1).map((c) => (
+                        <td key={c.key} style={{ ...td, borderTop: "1px solid var(--ink-soft)", color: "var(--ink-muted)" }}>
+                          {c.foot && !c.ref ? num(c.foot(sub)) : ""}
+                        </td>
+                      ))}
+                    </tr>
+                  )}
+                </tbody>
+              );
+            })}
             <tfoot>
               <tr>
                 <td style={{ ...td, textAlign: "left", borderTop: "2px solid var(--ink)", fontWeight: 700 }}>Total</td>
@@ -281,6 +393,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               </tr>
             </tfoot>
           </table>
+          </>
         )}
         {rows.length > 0 && (
           <p style={{ maxWidth: 980, margin: "14px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
@@ -288,6 +401,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             traces (run × height); Border SF from Linear runs with a thickness.
             {tableCols.some((c) => c.key === "perimeter_ref") && (
               <> Perim LF (ref) sums floor-trace perimeters — includes door openings and shared walls; reference only, never totaled or waste-adjusted.</>
+            )}
+            {/* bridge to the base-quantity By-sheet section below — the two
+                slice the same shapes with different semantics */}
+            {groupBy === "sheet" && grouped && (
+              <> Groups show ordered quantities (waste and ×N applied per sheet); the By-sheet section below shows base measured quantities.</>
             )}
           </p>
         )}

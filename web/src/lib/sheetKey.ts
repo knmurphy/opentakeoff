@@ -10,3 +10,11 @@ export function parseSheetKey(key: string): ParsedSheetKey {
   if (i > 0 && /^\d+$/.test(key.slice(i + 1))) return { file: key.slice(0, i), page: parseInt(key.slice(i + 1), 10) };
   return { file: key, page: 1 };
 }
+
+// THE canonical sheet order — file name, then numeric page. Every sheet-ordered
+// output (by-sheet totals, the report's grouped-by-sheet view, the Marked Set
+// PDF) sorts with this one comparator so they can never drift apart.
+export function compareSheetKeys(ka: string, kb: string): number {
+  const a = parseSheetKey(ka), b = parseSheetKey(kb);
+  return a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file);
+}

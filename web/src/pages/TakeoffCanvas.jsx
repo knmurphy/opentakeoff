@@ -19,9 +19,10 @@ import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
 import { Icon } from "../brand/icons.jsx";
-import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
+import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale } from "../lib/sheets";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape } from "../lib/geometry.js";
@@ -258,6 +259,45 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove }) {
   );
 }
 
+// Per-condition custom-column assignment — one select per defined column.
+// Shared by the edit-bar strip and the Takeoffs side panel so the two never
+// drift. Unassigned = attrs key absent; a value deleted from the vocabulary
+// keeps the condition's string, shown as "<value> (removed)".
+function ColumnSelects({ columns, cond, onAssign }) {
+  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, background: "var(--paper-bright)" };
+  return (
+    <>
+      {columns.map((cc) => {
+        const v = attrValue(cond?.attrs, cc.id);   // the shared assigned-value rule (hydrate sanitizes, this keeps the display consistent)
+        return (
+          <label key={cc.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginRight: 12, marginBottom: 6 }}>
+            <span style={{ color: "var(--ink-muted)" }}>{columnLabel(cc)}</span>
+            <select value={v} onChange={(e) => onAssign(cc.id, e.target.value)} style={ip}>
+              <option value="">Unassigned</option>
+              {cc.values.map((val) => <option key={val} value={val}>{val}</option>)}
+              {v && !cc.values.includes(v) && <option value={v}>{v} (removed)</option>}
+            </select>
+          </label>
+        );
+      })}
+    </>
+  );
+}
+
+// add-value input for the column manager — local draft state, commit on Enter/+
+function AddValueInput({ onAdd }) {
+  const [v, setV] = useState("");
+  const commit = () => { const t = v.trim(); if (t) onAdd(t); setV(""); };
+  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && commit()} placeholder="add value" style={{ ...ip, width: 90 }} />
+      <button onClick={commit} title="Add this value to the list"
+        style={{ padding: "2px 7px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+</button>
+    </span>
+  );
+}
+
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
   const [sheets, setSheets] = useState([]);
@@ -273,6 +313,7 @@ export default function TakeoffCanvas() {
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
   const [hatchOpen, setHatchOpen] = useState(false);         // hatch picker popover (declutters the row)
   const [matOpen, setMatOpen] = useState(false);             // supporting-materials editor panel
+  const [catOpen, setCatOpen] = useState(false);             // custom-columns strip — mutually exclusive with matOpen (they'd stack)
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
@@ -305,6 +346,7 @@ export default function TakeoffCanvas() {
   const [pendingLen, setPendingLen] = useState("");
 
   const [conditions, setConditions] = useState([]);
+  const [conditionColumns, setConditionColumns] = useState([]);  // project-level custom-column vocabulary [{ id, name, values }] — assignments live on c.attrs
   const [activeCond, setActiveCond] = useState("");
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
@@ -564,7 +606,8 @@ export default function TakeoffCanvas() {
     setClientInfo(Object.fromEntries(Object.entries(
       a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
     ).filter(([, v]) => typeof v === "string")));
-    const conds = a.conditions || [];
+    setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
+    const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
     setShapes(a.shapes || []);
@@ -889,7 +932,7 @@ export default function TakeoffCanvas() {
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
-  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
+  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
@@ -904,7 +947,7 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1593,7 +1636,7 @@ export default function TakeoffCanvas() {
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
-      }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
+      }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
         dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
@@ -1669,6 +1712,34 @@ export default function TakeoffCanvas() {
     setCommitMsg(`Deleted ${c.finish_tag}${owned.length ? ` and ${owned.length} takeoff${owned.length === 1 ? "" : "s"}` : ""}.`);
   }
 
+  // custom columns: project-scoped vocabulary editing + per-condition assignment.
+  // Snapshot-compare asymmetry, accepted: the diff (COND_FIELDS quantities) is
+  // blind to attrs/definition changes, yet Load restores them — an assignments-
+  // only change diffs as "unchanged". Known, not a bug.
+  const assignAttr = (colId, v) => {
+    // hydrate sanitizes attrs (sanitizeConditionAttrs), so spreading is safe;
+    // an absent attrs spreads to {}
+    const attrs = { ...aCond?.attrs };
+    if (v) attrs[colId] = v; else delete attrs[colId];   // Unassigned = key absent, never ""
+    updateCond({ attrs });
+  };
+  const addColumn = () => setConditionColumns((cols) => [...cols, { id: uid("col"), name: "", values: [] }]);
+  const renameColumn = (colId, name) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, name } : cc)));   // id stays — assignments follow automatically
+  const addColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId && !cc.values.includes(v) ? { ...cc, values: [...cc.values, v] } : cc)));
+  const removeColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.filter((x) => x !== v) } : cc)));   // assigned conditions keep the string — selects show "(removed)"
+  const renameColumnVal = (colId, oldV) => {
+    const newV = (window.prompt("Rename value:", oldV) || "").trim();
+    if (!newV || newV === oldV) return;
+    // rename into an existing value = merge (values are unique — they key the chips and the select options)
+    setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.includes(newV) ? cc.values.filter((x) => x !== oldV) : cc.values.map((x) => (x === oldV ? newV : x)) } : cc)));
+    setConditions((cs) => renameColumnValue(cs, colId, oldV, newV));   // assignments follow the vocabulary
+  };
+  const deleteColumn = (colId) => {
+    const cc = conditionColumns.find((c) => c.id === colId);
+    if (!window.confirm(`Delete column "${columnLabel(cc)}" for the whole project? Conditions keep their values but they're no longer shown or exported.`)) return;
+    setConditionColumns((cols) => cols.filter((c) => c.id !== colId));   // orphaned attrs[colId] stay behind — harmless, nothing iterates raw attrs
+  };
+
   // supporting-materials editing (operates on the active condition)
   const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
   const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? { ...m, ...patch } : m)) });
@@ -1694,6 +1765,7 @@ export default function TakeoffCanvas() {
 
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   const aCond = condById[activeCond];
+  const attrCount = aCond ? conditionColumns.filter((cc) => attrValue(aCond.attrs, cc.id)).length : 0;   // active condition's assigned custom-column values (button badge)
   const activeColor = aCond?.color || "#c96442";
   // Pattern id encodes the appearance so a hatch/color change yields a NEW paint
   // server — otherwise browsers keep painting the cached old pattern (the "it
@@ -2012,9 +2084,13 @@ export default function TakeoffCanvas() {
               style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
           </span>
           <div style={{ flex: 1, minWidth: 8 }} />
-          <button onClick={() => setMatOpen((v) => !v)} title="Supporting materials (adhesive, grout, thinset…) — order quantities derive from coverage rates you set"
+          <button onClick={() => { setMatOpen((v) => !v); setCatOpen(false); }} title="Supporting materials (adhesive, grout, thinset…) — order quantities derive from coverage rates you set"
             style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOpen ? "var(--ink)" : "transparent", color: matOpen ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
             <Icon name="product" size={12} />Materials{aCond.materials?.length ? ` (${aCond.materials.length})` : ""}
+          </button>
+          <button onClick={() => { setCatOpen((v) => !v); setMatOpen(false); }} title="Custom columns (e.g. CSI Division) — classify conditions for report grouping and exports"
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: catOpen ? "var(--ink)" : "transparent", color: catOpen ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
+            <Icon name="sideBySide" size={12} />Custom columns{attrCount ? ` (${attrCount})` : ""}
           </button>
           <button onClick={() => deleteCondition(aCond.id)} title="Delete this condition (and its takeoffs)"
             style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
@@ -2029,6 +2105,44 @@ export default function TakeoffCanvas() {
             <span style={{ color: "var(--ink-muted)" }}>order qty = measured ÷ coverage, rounded up. Coverage comes off the product data sheet.</span>
           </div>
           <MaterialsEditor materials={aCond.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
+        </div>
+      )}
+      {aCond && catOpen && (
+        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-cream)", fontSize: 11.5 }}>
+          {conditionColumns.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <strong style={{ fontFamily: "var(--f-display)", fontSize: 12.5, color: "var(--ink)" }}>Custom columns — {aCond.finish_tag}</strong>
+                <span style={{ color: "var(--ink-muted)" }}>classify this condition; the Report can group and export by these.</span>
+              </div>
+              <ColumnSelects columns={conditionColumns} cond={aCond} onAssign={assignAttr} />
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <strong style={{ fontFamily: "var(--f-display)", fontSize: 12.5, color: "var(--ink)" }}>Manage columns</strong>
+            <span style={{ color: "var(--ink-muted)" }}>Columns and values apply to the whole project.</span>
+          </div>
+          {conditionColumns.length === 0 && <div style={{ color: "var(--ink-muted)", marginBottom: 6 }}>Add a column, e.g. CSI Division.</div>}
+          {conditionColumns.map((cc) => (
+            <div key={cc.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+              <input value={cc.name} onChange={(e) => renameColumn(cc.id, e.target.value)} placeholder="Column name (e.g. CSI Division)"
+                style={{ padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, width: 160 }} />
+              {cc.values.map((v) => (
+                <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 3px 2px 8px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11.5, color: "var(--ink)" }}>
+                  {v}
+                  <button onClick={() => renameColumnVal(cc.id, v)} title="Rename this value — assigned conditions follow"
+                    style={{ padding: "0 3px", border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>✎</button>
+                  <button onClick={() => removeColumnValue(cc.id, v)} title="Remove from the list — conditions keep the value, shown as (removed)"
+                    style={{ padding: "0 3px", border: "none", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11 }}>✕</button>
+                </span>
+              ))}
+              <AddValueInput onAdd={(v) => addColumnValue(cc.id, v)} />
+              <button onClick={() => deleteColumn(cc.id)} title="Delete this column (whole project)"
+                style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕ column</button>
+            </div>
+          ))}
+          <button onClick={addColumn}
+            style={{ marginTop: 2, padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add column</button>
         </div>
       )}
 
@@ -2347,7 +2461,7 @@ export default function TakeoffCanvas() {
                     </div>
                     <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
                     <button onClick={(e) => { e.stopPropagation(); setActiveCond(c.id); setPanelMatOpen((v) => (on ? !v : true)); }}
-                      title="Assemblies — supporting materials for this condition"
+                      title="Condition details — custom columns and supporting materials"
                       style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOn ? "var(--ink)" : "transparent", color: matOn ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>
                       <Icon name="product" size={11} />{c.materials?.length ? c.materials.length : ""}
                     </button>
@@ -2356,6 +2470,10 @@ export default function TakeoffCanvas() {
                   </div>
                   {matOn && (
                     <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
+                      <div style={{ marginBottom: 6, fontWeight: 700, color: "var(--ink)" }}>Condition details</div>
+                      {conditionColumns.length > 0 && (
+                        <div style={{ marginBottom: 4 }}><ColumnSelects columns={conditionColumns} cond={c} onAssign={assignAttr} /></div>
+                      )}
                       <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Assemblies — order qty = measured ÷ coverage, rounded up.</div>
                       <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
                     </div>
@@ -2389,6 +2507,7 @@ export default function TakeoffCanvas() {
           projectName={projectName} onProjectName={setProjectName}
           clientInfo={clientInfo} onClientInfo={setClientInfo}
           conditions={conditions} shapes={shapes} markups={markups}
+          conditionColumns={conditionColumns}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
