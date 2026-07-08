@@ -92,6 +92,7 @@ Every drawing, scale, condition, and markup autosaves to **your browser** (Index
 | **Measure** | One-Click Area (flood-fill), Area, Rectangle, Linear, Surface-Area (walls), Count, Deduct |
 | **Drawing aids** | 45°/90° angle lock with ⇧ hard-lock, live angle + segment-length readout at the cursor, endpoint Snap (beta) |
 | **Conditions** | Color + CAD hatch per finish, waste %, ×N multiplier, height, thickness → border SF, custom columns (e.g. CSI Division) |
+| **Takeoffs panel** | Docked, resizable condition list — filter, natural sort, tag grouping, multi-select bulk edit, zoom-to-condition, browser-wide **template library**, optional compact strip |
 | **Material library** | Browser-wide reusable materials — copy-on-attach with a live link, amber overrides with revert, explicit update-linked |
 | **Assemblies** | Per-condition supporting materials with coverage rates → rounded order quantities, trowel picker |
 | **Report** | Per-condition Floor/Wall/Border SF, LF, EA, SY, with/without waste + materials buy list; group by sheet or custom column with subtotals |

@@ -15,6 +15,9 @@
 // And local-only snapshot helpers (like addPdf/removePdf, not part of the seam):
 // saveSnapshot(label, payload), listSnapshots(), getSnapshot(id), deleteSnapshot(id).
 
+import { sanitizeTemplates } from "./templates.js";
+import { sanitizeMaterialLibrary } from "./materials.js";
+
 const DB_NAME = "opentakeoff";
 const DB_VERSION = 2;
 const PDF_STORE = "pdfs";          // key: file name -> { name, bytes: ArrayBuffer }
@@ -164,8 +167,11 @@ export const localStore = {
   },
 
   async loadTemplates() {
+    // sanitize on load, not just save: the record is browser-global, so a
+    // corrupt item (any writer, any past version) would otherwise throw inside
+    // EVERY project's hydrate — wiping or wedging all of them at once
     const t = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(TPL_KEY)));
-    return Array.isArray(t) ? t : [];
+    return sanitizeTemplates(t);
   },
 
   async saveTemplates(list) {
@@ -173,8 +179,10 @@ export const localStore = {
   },
 
   async loadMaterialLibrary() {
+    // sanitize on load for the same reason as loadTemplates: browser-global
+    // record, and one corrupt item would crash the canvas for every project
     const m = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(MATLIB_KEY)));
-    return Array.isArray(m) ? m : [];
+    return sanitizeMaterialLibrary(m);
   },
 
   async saveMaterialLibrary(list) {
