@@ -223,7 +223,20 @@ const FLOORING_DEFAULTS = [
   { tag: "RB-1",  color: "#475569", hatch: "horiz",   waste: 5,  mats: [{ name: "Cove base adhesive", per: 40, basis: "linear", unit: "tube" }] },                        // Rubber / resilient wall base (linear)
   { tag: "TR-1",  color: "#c96442", hatch: "vert",    waste: 0,  mats: [] },                                                                                              // Transitions / reducers (linear)
 ];
-function seedConditions() {
+// A template is a condition minus ids (finish_tag, colors, hatch, waste,
+// H/T params, materials) — instantiation mints fresh condition/material ids.
+const instantiateTemplate = (t) => ({
+  id: uid("cnd"), finish_tag: t.finish_tag || "?",
+  color: t.color || PALETTE[0], fill: t.fill ?? t.color ?? PALETTE[0],
+  hatch: t.hatch || "solid", multiplier: 1, waste_pct: Number(t.waste_pct) || 0,
+  ...(t.height_ft != null ? { height_ft: t.height_ft } : {}),
+  ...(t.thickness_in != null ? { thickness_in: t.thickness_in } : {}),
+  materials: (t.materials || []).map((m) => ({ round: true, ...m, id: uid("mat") })),
+});
+// Fresh-workspace seeding reads the user's template library first; the
+// built-in flooring defaults are only the empty-library fallback.
+function seedConditions(library) {
+  if (Array.isArray(library) && library.length) return library.map(instantiateTemplate);
   return FLOORING_DEFAULTS.map((d) => ({
     id: uid("cnd"), finish_tag: d.tag, color: d.color, fill: d.color,
     hatch: d.hatch, multiplier: 1, waste_pct: d.waste,
@@ -306,6 +319,9 @@ export default function TakeoffCanvas() {
   const [checkedConds, setCheckedConds] = useState(() => new Set());
   const [bulkWaste, setBulkWaste] = useState("");
   const checkAnchorRef = useRef(null);
+  const [panelTab, setPanelTab] = useState("takeoffs");       // "takeoffs" | "library" — the docked panel's tabs
+  const [templates, setTemplates] = useState([]);             // condition template library (browser-global, meta store)
+  const templatesRef = useRef([]);                            // readable inside hydrate (seeding a fresh workspace)
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
   const [status, setStatus] = useState("loading");
@@ -629,7 +645,7 @@ export default function TakeoffCanvas() {
     ).filter(([, v]) => typeof v === "string")));
     const conds = a.conditions || [];
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
-    else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
+    else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
     setShapes(a.shapes || []);
     setMarkups(Array.isArray(a.markups) ? a.markups : []);
     const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
@@ -659,7 +675,12 @@ export default function TakeoffCanvas() {
   };
   useEffect(() => {
     let off = false;
-    store.loadAnnotations().then((a) => {
+    // templates load BEFORE annotations: hydrate's fresh-workspace seeding
+    // reads templatesRef, so the library must be in hand first
+    store.loadTemplates().catch(() => []).then((tpl) => {
+      if (!off) { templatesRef.current = tpl; setTemplates(tpl); }
+      return store.loadAnnotations();
+    }).then((a) => {
       if (off) return;
       hydrate(a);
       hydrated.current = true;
@@ -1916,6 +1937,45 @@ export default function TakeoffCanvas() {
     setCommitMsg(`Deleted ${ids.size} condition${ids.size === 1 ? "" : "s"}${owned ? ` and ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}.`);
   };
 
+  // ── condition template library ops (browser-global; store meta key) ───────
+  const persistTemplates = (next) => {
+    templatesRef.current = next; setTemplates(next);
+    store.saveTemplates(next).catch((e) => setCommitMsg(`Couldn't save the library: ${e.message || e}`));
+  };
+  const condToTemplate = (c) => ({
+    finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
+    waste_pct: c.waste_pct || 0,
+    ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
+    ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
+    materials: (c.materials || []).map(({ id: _id, ...m }) => m),   // ids are minted on instantiation
+  });
+  const saveActiveAsTemplate = () => {
+    if (!aCond) return;
+    const tpl = condToTemplate(aCond);
+    const at = templates.findIndex((t) => t.finish_tag === tpl.finish_tag);
+    if (at >= 0 && !window.confirm(`A “${tpl.finish_tag}” template is already in the library — replace it?`)) return;
+    persistTemplates(at >= 0 ? templates.map((t, i) => (i === at ? tpl : t)) : [...templates, tpl]);
+    setCommitMsg(`Saved ${tpl.finish_tag} to the library.`);
+  };
+  const applyTemplate = (t) => {
+    const c = instantiateTemplate(t);
+    setConditions((cs) => [...cs, c]);
+    setActiveCond(c.id);
+    setPanelTab("takeoffs");
+    setCommitMsg(`Added ${c.finish_tag} from the library.`);
+  };
+  const renameTemplate = (idx) => {
+    const t = templates[idx];
+    const tag = (window.prompt("Template tag:", t.finish_tag) || "").trim();
+    if (!tag || tag === t.finish_tag) return;
+    persistTemplates(templates.map((x, i) => (i === idx ? { ...x, finish_tag: tag } : x)));
+  };
+  const deleteTemplate = (idx) => {
+    const t = templates[idx];
+    if (!window.confirm(`Remove the ${t.finish_tag} template from the library? Existing conditions are unaffected.`)) return;
+    persistTemplates(templates.filter((_, i) => i !== idx));
+  };
+
   const renderCondRow = (c, i) => {
     const row = visRowById.get(c.id);
     const mult = c.multiplier || 1;
@@ -2522,8 +2582,13 @@ export default function TakeoffCanvas() {
               title="Drag to resize"
               style={{ width: 5, flexShrink: 0, cursor: "col-resize", touchAction: "none", background: "transparent", borderRight: "1px solid var(--ink-faint)" }} />
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "9px 12px", background: "var(--ink)", color: "var(--paper-cream)", flexShrink: 0 }}>
-                <strong>Takeoffs · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 12px", background: "var(--ink)", color: "var(--paper-cream)", flexShrink: 0 }}>
+                <span style={{ display: "inline-flex", gap: 2 }}>
+                  {[["takeoffs", `Takeoffs · ${groupKeys.length > 1 ? "these sheets" : "this sheet"}`], ["library", `Library${templates.length ? ` (${templates.length})` : ""}`]].map(([id, label]) => (
+                    <button key={id} onClick={() => setPanelTab(id)}
+                      style={{ padding: "3px 8px", border: "none", borderBottom: panelTab === id ? "2px solid var(--paper-cream)" : "2px solid transparent", background: "none", color: "var(--paper-cream)", opacity: panelTab === id ? 1 : 0.65, cursor: "pointer", fontWeight: 700, fontSize: 12.5 }}>{label}</button>
+                  ))}
+                </span>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                   <button onClick={() => setPanelPrefs((p) => ({ ...p, strip: !p.strip }))}
                     title="Compact strip — also show the conditions as a horizontal strip above the canvas (handy on small projects with the panel collapsed)"
@@ -2532,6 +2597,7 @@ export default function TakeoffCanvas() {
                     style={{ background: "none", border: "none", color: "#fff", fontSize: 15, cursor: "pointer", lineHeight: 1 }}>»</button>
                 </span>
               </div>
+              {panelTab === "takeoffs" && <>
               {/* view controls — search / natural sort / tag-family grouping.
                   All VIEW-ONLY: the array order (hotkeys, payload) never changes. */}
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", borderBottom: "1px solid var(--ink-faint)", flexShrink: 0 }}>
@@ -2590,6 +2656,40 @@ export default function TakeoffCanvas() {
                   <br />⌫ undo point · Esc cancel · scroll = zoom · pan mid-measure: press-and-drag (a click without dragging places the point).
                 </div>
               </div>
+              </>}
+              {/* Library tab — reusable condition templates, browser-wide */}
+              {panelTab === "library" && (
+                <div style={{ flex: 1, overflow: "auto" }}>
+                  <div style={{ padding: "8px 12px 4px", color: "var(--ink-muted)", fontSize: 11 }}>
+                    Reusable condition templates, shared across every plan in this browser. A fresh workspace seeds from this library (built-in flooring defaults when it's empty).
+                  </div>
+                  <div style={{ padding: "6px 12px 10px" }}>
+                    <button onClick={saveActiveAsTemplate} disabled={!aCond}
+                      title="Snapshot the active condition (appearance, waste, H/T, materials) into the library"
+                      style={{ width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: aCond ? "pointer" : "default", fontSize: 12, color: aCond ? "var(--ink)" : "var(--ink-faint)" }}>
+                      + save {aCond?.finish_tag || "the active condition"} to the library
+                    </button>
+                  </div>
+                  {templates.length === 0 && <div style={{ padding: "2px 12px 12px", color: "var(--ink-muted)" }}>No templates yet — make a condition the way you like it, then save it here.</div>}
+                  {templates.map((t, idx) => (
+                    <div key={`${t.finish_tag}-${idx}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                      <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={t.hatch || "solid"} line={t.color} fill={t.fill} /></span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.finish_tag}</div>
+                        <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)" }}>
+                          {t.waste_pct || 0}% waste{t.height_ft != null ? ` · H ${t.height_ft}′` : ""}{t.thickness_in != null ? ` · T ${t.thickness_in}″` : ""}{t.materials?.length ? ` · ${t.materials.length} material${t.materials.length === 1 ? "" : "s"}` : ""}
+                        </div>
+                      </div>
+                      <button onClick={() => applyTemplate(t)} title="Add a condition from this template to the takeoff"
+                        style={{ flexShrink: 0, padding: "3px 8px", borderRadius: 0, border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Apply</button>
+                      <button onClick={() => renameTemplate(idx)} title="Rename this template"
+                        style={{ flexShrink: 0, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>✎</button>
+                      <button onClick={() => deleteTemplate(idx)} title="Remove this template from the library"
+                        style={{ flexShrink: 0, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
