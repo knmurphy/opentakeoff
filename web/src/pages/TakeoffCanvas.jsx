@@ -192,6 +192,7 @@ export default function TakeoffCanvas() {
   const panelSelectionRef = useRef(null);            // the panel registers "dismiss the bulk selection" here; activateCondition calls it
   const [templates, setTemplates] = useState([]);             // condition template library (browser-global, meta store)
   const templatesRef = useRef([]);                            // readable inside hydrate (seeding a fresh workspace)
+  const [matLib, setMatLib] = useState([]);                   // material library (browser-global; conditions COPY on attach + carry lib_id)
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
   const [status, setStatus] = useState("loading");
@@ -557,6 +558,9 @@ export default function TakeoffCanvas() {
     // reads templatesRef, so the library must be in hand first
     store.loadTemplates().catch(() => []).then((tpl) => {
       if (!off) { templatesRef.current = tpl; setTemplates(tpl); }
+      return store.loadMaterialLibrary().catch(() => []);
+    }).then((ml) => {
+      if (!off) setMatLib(ml);
       return store.loadAnnotations();
     }).then((a) => {
       if (off) return;
@@ -1881,6 +1885,75 @@ export default function TakeoffCanvas() {
     persistTemplates(templates.filter((_, i) => i !== idx));
   };
 
+  // ── material library ops (#47: copy-on-attach with a live link) ───────────
+  // Conditions always own fully materialized material lines; lib_id is an
+  // ADDITIVE link. Nothing here can affect totals, exports, or old snapshots
+  // unless the user explicitly pushes an update.
+  // memoized: both derivations feed the memoized TakeoffsPanel as props, so
+  // they must hold identity across canvas-only renders (tf mirror, crosshair)
+  const matLibById = useMemo(() => Object.fromEntries(matLib.map((m) => [m.id, m])), [matLib]);
+  const persistMatLib = (next) => {
+    setMatLib(next);
+    store.saveMaterialLibrary(next).catch((e) => setCommitMsg(`Couldn't save the material library: ${e.message || e}`));
+  };
+  const libFields = (lm) => ({ name: lm.name || "", unit: lm.unit || "", per: lm.per || 0, basis: lm.basis || "area", round: lm.round !== false, note: lm.note || "" });
+  // overridden = this line's field differs from its linked library entry
+  const matFieldOverridden = (m, lm, f) => {
+    if (!lm) return false;
+    const L = libFields(lm);
+    if (f === "per") return (Number(m.per) || 0) !== L.per;
+    if (f === "round") return (m.round !== false) !== L.round;
+    if (f === "basis") return (m.basis || "area") !== L.basis;   // absent basis means "area" everywhere else — don't flag it
+    return String(m[f] || "") !== String(L[f] || "");
+  };
+  const attachLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm || !aCond) return;
+    updateCond({ materials: [...(aCond.materials || []), { id: uid("mat"), ...libFields(lm), lib_id: lm.id }] });
+  };
+  const promoteMaterial = (m) => {
+    if (!m.name) { setCommitMsg("Name the material before saving it to the library."); return; }
+    const entry = { id: uid("lib"), ...libFields(m) };
+    persistMatLib([...matLib, entry]);
+    updateMaterial(m.id, { lib_id: entry.id });
+    setCommitMsg(`Saved ${m.name} to the material library.`);
+  };
+  const revertMatField = (m, f) => {
+    const lm = matLibById[m.lib_id];
+    if (lm) updateMaterial(m.id, { [f]: libFields(lm)[f] });
+  };
+  const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  // one pass per conditions change, not per library row — the Materials tab reads this per row
+  const linkedCountById = useMemo(() => {
+    const by = {};
+    for (const c of conditions) for (const m of c.materials || []) if (m.lib_id) by[m.lib_id] = (by[m.lib_id] || 0) + 1;
+    return by;
+  }, [conditions]);
+  const linkedCount = (libId) => linkedCountById[libId] || 0;
+  const pushLibUpdate = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm) return;
+    const n = linkedCount(libId);
+    if (!n) { setCommitMsg("No condition lines link this material yet."); return; }
+    if (!window.confirm(`Update ${n} linked line${n === 1 ? "" : "s"} across conditions to the library values? Overrides on those lines are replaced.`)) return;
+    setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => (m.lib_id === libId ? { ...m, ...libFields(lm) } : m)) })));
+    setCommitMsg(`Updated ${n} linked line${n === 1 ? "" : "s"} from the library.`);
+  };
+  const deleteLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    const n = linkedCount(libId);
+    if (!window.confirm(`Remove ${lm?.name || "this material"} from the library?${n ? (n === 1 ? " 1 linked line keeps its values — only the link is removed." : ` ${n} linked lines keep their values — only the links are removed.`) : ""}`)) return;
+    persistMatLib(matLib.filter((x) => x.id !== libId));
+    if (n) setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    // condition templates carry lib_id too (so applying re-links to a live
+    // entry) — detach them here as well, or a deleted entry would leave
+    // dangling links inside saved templates
+    if (templates.some((t) => (t.materials || []).some((m) => m.lib_id === libId))) {
+      persistTemplates(templates.map((t) => ({ ...t, materials: (t.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    }
+  };
+  const addLibMaterial = () => persistMatLib([...matLib, { id: uid("lib"), name: "", unit: "", per: 0, basis: "area", round: true, note: "" }]);
+
   // ── TakeoffsPanel wiring ───────────────────────────────────────────────────
   // The docked panel is memoized (React.memo) so canvas-only renders — the
   // ~11Hz tf mirror during pan/zoom, crosshair/status churn — skip its whole
@@ -1899,6 +1972,10 @@ export default function TakeoffCanvas() {
     onRenameTemplate: renameTemplate, onDeleteTemplate: deleteTemplate,
     onAddColumn: addColumn, onRenameColumn: renameColumn, onDeleteColumn: deleteColumn,
     onAddColumnValue: addColumnValue, onRemoveColumnValue: removeColumnValue, onRenameColumnValue: renameColumnVal,
+    onAttachLibMaterial: attachLibMaterial, onPromoteMaterial: promoteMaterial, onRevertMatField: revertMatField,
+    onUpdateLibMaterial: updateLibMaterial, onPushLibUpdate: pushLibUpdate,
+    onDeleteLibMaterial: deleteLibMaterial, onAddLibMaterial: addLibMaterial,
+    matFieldOverridden,   // pure helper, not an event handler — the forwarder returns its result
     onToggleCollapse: toggleTakeoffs,
   };
   const [panelHandlers] = useState(() => {
@@ -2391,8 +2468,8 @@ export default function TakeoffCanvas() {
        </div>
 
         {/* Takeoffs panel — DOCKED in the layout row (reflows the canvas, not an
-            overlay): every condition with its running totals, plus the Library
-            and Columns tabs. Extracted to components/TakeoffsPanel.jsx and
+            overlay): every condition with its running totals, plus the Library,
+            Materials, and Columns tabs. Extracted to components/TakeoffsPanel.jsx and
             ALWAYS mounted (it renders null while collapsed) so its view state —
             tab, filter, multi-select — survives a collapse/expand round-trip
             exactly as it did as canvas state. Collapse/expand keeps the current
@@ -2407,6 +2484,9 @@ export default function TakeoffCanvas() {
           visRowById={visRowById}
           conditionColumns={conditionColumns}
           templates={templates}
+          matLib={matLib}
+          matLibById={matLibById}
+          linkedCountById={linkedCountById}
           panelPrefs={panelPrefs}
           onPanelPrefs={setPanelPrefs}
           onSetActive={setActiveCond}

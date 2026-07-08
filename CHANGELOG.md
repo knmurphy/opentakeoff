@@ -5,6 +5,14 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ## 2026-07-08
 
 ### Added
+- **Material library (Materials tab).** Reusable materials, browser-wide, in a
+  new panel tab. Copy-on-attach semantics: attaching copies the values onto the
+  condition and keeps a link, so totals, exports, and old snapshots never
+  depend on the library. Linked lines mark overridden fields in amber with
+  per-field revert; library edits reach linked lines only via an explicit
+  "update linked (N)" push; deleting a library material detaches links and
+  lines keep their values; "→ lib" promotes any condition material into the
+  library. New meta-store key, no DB version bump. (#47, #48)
 - **Docked Takeoffs panel — the new home for conditions (#38).** The conditions
   bar and its stacked editor rows are gone; a docked, resizable, collapsible
   panel on the right now holds the condition list (running totals, shape

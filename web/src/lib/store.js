@@ -16,6 +16,7 @@
 // saveSnapshot(label, payload), listSnapshots(), getSnapshot(id), deleteSnapshot(id).
 
 import { sanitizeTemplates } from "./templates.js";
+import { sanitizeMaterialLibrary } from "./materials.js";
 
 const DB_NAME = "opentakeoff";
 const DB_VERSION = 2;
@@ -26,6 +27,10 @@ const ANN_KEY = "annotations";
 // condition template library — browser-global (not part of a project payload),
 // lives under its own key in the keyPath-less meta store: no DB version bump
 const TPL_KEY = "condition_templates";
+// material library — same browser-global pattern as templates. Conditions
+// COPY a library material on attach (plus an additive lib_id link), so the
+// library is never load-bearing for totals, exports, or old snapshots.
+const MATLIB_KEY = "material_library";
 const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1";
 
 function openDB() {
@@ -171,6 +176,17 @@ export const localStore = {
 
   async saveTemplates(list) {
     await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put(Array.isArray(list) ? list : [], TPL_KEY)));
+  },
+
+  async loadMaterialLibrary() {
+    // sanitize on load for the same reason as loadTemplates: browser-global
+    // record, and one corrupt item would crash the canvas for every project
+    const m = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(MATLIB_KEY)));
+    return sanitizeMaterialLibrary(m);
+  },
+
+  async saveMaterialLibrary(list) {
+    await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put(Array.isArray(list) ? list : [], MATLIB_KEY)));
   },
 
   async saveSnapshot(label, payload) {

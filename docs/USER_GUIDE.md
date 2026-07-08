@@ -83,6 +83,9 @@ A condition is one finish (e.g. `WD-1` red oak). It carries:
 ### Supporting materials (assemblies)
 Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, grout, cove‑base adhesive…). Each has a **coverage rate** and a **basis** (floor SF / linear LF / each). Order qty = measured ÷ coverage, **rounded up** to whole units. Adhesive lines get a **trowel picker** that fills the SF/gal from the notch size. A `note` field carries trowel notch / # of coats. The Report sums these into a **buy list**.
 
+### Material library
+The Takeoffs panel's **Materials** tab holds reusable materials, browser‑wide. Attaching one to a condition (**+ from library…** in the assemblies editor) **copies** its values onto the condition and keeps a link (⛓) — so totals, exports, and snapshots never depend on the library. Edit a linked line freely: fields that differ from the library tint **amber** with a per‑field **↺** revert. Library edits never propagate silently — **update linked (N)** pushes them explicitly. Deleting a library material only removes the link; lines keep their values. **→ lib** on any material line saves it to the library.
+
 ### Custom columns
 Classify conditions along your own dimension — **CSI Division**, bid package, trade. The Takeoffs panel's **Columns** tab defines project-wide columns with a list of values; once columns exist, the active condition's properties (Takeoffs tab) pick one value per condition. Renaming a value updates every assigned condition; deleting one keeps the assignment, shown as *"(removed)"*. The Report can **group** by any custom column. Columns are hidden in the table/CSV by default — toggle them in the **Columns** picker (grouping by a column always includes it in CSV/XLSX); the JSON export always carries definitions and values.
 
