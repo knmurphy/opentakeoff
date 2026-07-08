@@ -33,7 +33,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 | `D` | **Deduct** | Trace a void/column → subtracts SF. |
 | `⇧D` | **Deduct rectangle** | Rectangle deduct. |
 | `P` | **Pan** | Move around the sheet. |
-| `V` | **Select** | Select / move / edit / reassign / delete a shape. |
+| `V` | **Select** | Select / move / edit / reassign / delete a shape — or click a markup (cloud/callout/note) to select it. |
 | `G` | **Gallery** | Open the plan‑set gallery / sheet picker. |
 
 ### Conditions
@@ -48,7 +48,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 | **Press‑and‑drag** | Pan mid‑measure (without placing a point). |
 | **Scroll** | Zoom. |
 | `Enter` or **double‑click** | Finish the shape (Area/Deduct need ≥3 points; Linear/Surface ≥2). In One‑Click, `Enter` creates the selected space(s). |
-| `Backspace` / `Delete` | Remove the last placed point; if nothing's in progress, delete the **selected** shape; in One‑Click, drop the last region. |
+| `Backspace` / `Delete` | Remove the last placed point; if nothing's in progress, delete the **selected** shape **or markup**; in One‑Click, drop the last region. |
 | `⌘Z` / `Ctrl+Z` | Undo the last placed point. |
 | `Esc` | Cancel the in‑progress shape / selection / proposal. |
 | **Hold `⇧` (Shift)** | Force the next segment onto the nearest 45°/90° axis, at any cursor angle (see Angle lock below). |
@@ -100,10 +100,20 @@ Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, gr
 - **Dark view (☾)** — negative-print mode in the zoom cluster: sheets invert to light-on-dark, hatches stay legible, and the toggle is remembered per browser.
 
 ### Markup layer
-Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇), RFI (⬢), and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+
+**Select & delete a markup** — with the **Select** tool (`V`), click a placed markup to select it (a white‑ringed cobalt halo appears — visible even on a cobalt RFI markup). `Backspace` / `Delete` removes it. Shape and markup selection are mutually exclusive: selecting one clears the other.
+
+### RFI register
+Turn a markup into a tracked **Request For Information**. Open the markup panel, and on any markup row press **Raise RFI** (or **Link existing** to attach it to an RFI you already opened; **Unlink** detaches). A linked markup turns cobalt on the plan and carries its RFI number. Open the **RFI register** (⬢ on the right rail) to work the log:
+
+- **Fields** — number (auto, `RFI-001…`), subject, question, status (Open → Answered → Closed, or Void), ball‑in‑court, priority, cost/schedule impact flags, opened date, response + response date. Setting a status to **Answered** auto‑stamps the response date.
+- **Filter** by status; **Close** / **Void** / **Delete** an RFI (delete clears the link on every markup it was attached to — the annotations stay).
+- **Fly to** any linked markup — jumps to its sheet (opening it first if needed) and centers it, even across sheets.
+- **Export** — from the Report: an **RFI log** (CSV / JSON), the RFIs embedded in the report **JSON**, and an **RFI schedule page** in the **Marked set** PDF (with the RFI number printed on each linked markup).
 
 ### Report & export
-Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
+Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, an **RFI log** (CSV / JSON), and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn, a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown), and an **RFI schedule page** when RFIs exist. It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
 
 **XLSX** downloads a four-tab Excel workbook, built entirely in your browser: **Conditions** (the report table — it follows your Columns picker, same as the CSV), **By sheet** (measured base quantities per sheet), **Materials** (per-condition lines plus the combined buy list), and **Shapes** (per-shape measured detail — no multiplier, no waste). The numbers are the same ones on screen: waste is applied only to order quantities, never to measured values.
 

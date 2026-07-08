@@ -74,7 +74,7 @@ A per-condition breakdown — **Floor / Wall / Border SF, LF, EA, total SF, SY**
 And when the numbers need to leave the app: **Marked Set PDF**. One click builds a distribution-ready PDF entirely in your browser — every sheet with the work burned in as drawn (condition colors, hatches, quantity chips, count markers, markups) behind a legend cover with the full totals and a by-sheet breakdown. Send it to a GC who will never install anything.
 
 ### 7. A vector-sharp canvas + plan-set tools
-Zoom in and the linework stays **razor-sharp**: past ~1.15× the visible region re-renders straight from the PDF vectors at your current zoom — Bluebeam/AutoCAD-style — instead of magnifying a fixed bitmap, so fine callouts and hatching never blur. It overlays just what's on screen, so there's no giant full-sheet bitmap to hold. Plus a **dark view** (☾) that inverts the sheet itself — a true negative print, white linework on black, not a CSS filter — with hatches retuned so takeoffs read as well at night as they do at noon. And a visual **gallery** (`G`) to pick and open sheets, **Regroup** to restore a side-by-side composition in one click, per-sheet **Hi-Res** base rendering, **Snap** (beta) to plan lines and corners, and a separate **markup layer** (revision clouds, callouts, text notes) that's never counted in the totals.
+Zoom in and the linework stays **razor-sharp**: past ~1.15× the visible region re-renders straight from the PDF vectors at your current zoom — Bluebeam/AutoCAD-style — instead of magnifying a fixed bitmap, so fine callouts and hatching never blur. It overlays just what's on screen, so there's no giant full-sheet bitmap to hold. Plus a **dark view** (☾) that inverts the sheet itself — a true negative print, white linework on black, not a CSS filter — with hatches retuned so takeoffs read as well at night as they do at noon. And a visual **gallery** (`G`) to pick and open sheets, **Regroup** to restore a side-by-side composition in one click, per-sheet **Hi-Res** base rendering, **Snap** (beta) to plan lines and corners, and a separate **markup layer** (revision clouds, callouts, text notes) that's never counted in the totals — selectable and deletable on the canvas, and promotable to a tracked **RFI** with a full register (status, ball-in-court, priority, cost/schedule impact), fly-to, and CSV/JSON/PDF export.
 
 ### 8. Yours, locally
 Every drawing, scale, condition, and markup autosaves to **your browser** (IndexedDB + localStorage). Nothing is uploaded, there's no account, and there's no server in the default build. Host the static build yourself and it stays exactly that way.
@@ -94,8 +94,9 @@ Every drawing, scale, condition, and markup autosaves to **your browser** (Index
 | **Conditions** | Color + CAD hatch per finish, waste %, ×N multiplier, height, thickness → border SF |
 | **Assemblies** | Per-condition supporting materials with coverage rates → rounded order quantities, trowel picker |
 | **Report** | Per-condition Floor/Wall/Border SF, LF, EA, SY, with/without waste + materials buy list |
-| **Export** | CSV, **Excel (.xlsx)** (Conditions / By sheet / Materials / Shapes tabs), JSON, print, **Marked Set PDF** (sheets + burned-in takeoff + legend cover, built in-browser) |
-| **Markups** | Revision clouds, callouts, text notes — separate layer, never counted |
+| **Export** | CSV, **Excel (.xlsx)** (Conditions / By sheet / Materials / Shapes tabs), JSON, **RFI log** (CSV / JSON), print, **Marked Set PDF** (sheets + burned-in takeoff + legend cover + RFI schedule, built in-browser) |
+| **Markups** | Revision clouds, callouts, text notes — separate layer, never counted; select & delete on canvas |
+| **RFIs** | Raise a Request For Information from any markup — full register (status, ball-in-court, priority, cost/schedule impact), fly-to, and export |
 | **View** | Light or **dark (negative print)** — sheet pixels inverted at draw time, persists per browser |
 | **Storage** | IndexedDB + localStorage — client-only, nothing uploaded |
 | **Deploy** | One static build, hostable on Netlify, Vercel, GitHub Pages, S3, or any static host |

@@ -2,6 +2,33 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-08
+
+### Added
+- **RFI register.** Any markup (revision cloud, callout, or text note) can be
+  promoted to a tracked **Request For Information**: **Raise RFI** on a markup
+  row mints `RFI-001…`, tints the markup cobalt, and opens the register (⬢ on
+  the right rail). Each RFI carries subject, question, status (Open → Answered →
+  Closed / Void), ball-in-court, priority, cost/schedule impact flags, dates,
+  and a response — with the response date auto-stamped on the Open→Answered
+  transition. One RFI links to many markups (**Link existing** / **Unlink**);
+  deleting an RFI clears the link on every markup it touched (the annotation
+  stays). **Fly to** any linked markup jumps to its sheet — opening it first if
+  needed — and centers it, even across sheets.
+- **RFI export.** An **RFI log** (CSV / JSON) in the Report, the RFIs embedded
+  in the report **JSON**, and a dedicated **RFI schedule page** in the
+  **Marked Set PDF** — with each linked markup carrying its RFI number burned
+  onto the sheet (drawn even when the markup has no note). A live RFI that has
+  outlived its markups still exports (cover + schedule, no per-sheet pages).
+- **Select & delete markups on canvas.** With the **Select** tool (`V`), click a
+  placed markup to select it (a white-ringed cobalt halo, visible even on
+  cobalt RFI markups) and `Backspace` / `Delete` to remove it. Shape and markup
+  selection are mutually exclusive.
+
+### Changed
+- Callout leaders now end in a filled **arrowhead** (on canvas and in the
+  Marked Set PDF), replacing the old target star.
+
 ## 2026-07-07
 
 ### Added
