@@ -247,41 +247,72 @@ function seedConditions(library) {
 
 // Editable supporting-materials rows — the assembly behind a condition. Shared
 // by the top-bar editor and the Takeoffs side panel so the two never drift.
-function MaterialsEditor({ materials, onAdd, onUpdate, onRemove }) {
+function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libById, overridden, onRevert, onAttach, onPromote }) {
   const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
+  // library link affordances (#47, all optional so the editor works standalone):
+  // linked lines show ⛓; a field differing from its library entry tints amber
+  // and grows a per-field ↺ revert; unlinked lines can be promoted to the library
+  const OV = "1px solid #c47a10";
+  const rv = (m, f) => (
+    <button onClick={() => onRevert(m, f)} title="Revert this field to the library value"
+      style={{ padding: "0 3px", border: "none", background: "transparent", color: "#c47a10", cursor: "pointer", fontSize: 11, lineHeight: 1 }}>↺</button>
+  );
   return (
     <>
-      {(materials || []).map((m) => (
-        <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-          <input value={m.name} onChange={(e) => onUpdate(m.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)" style={{ ...ip, width: 160 }} />
-          <span style={{ color: "var(--ink-muted)" }}>1</span>
-          <input value={m.unit} onChange={(e) => onUpdate(m.id, { unit: e.target.value })} placeholder="unit" style={{ ...ip, width: 60 }} />
-          <span style={{ color: "var(--ink-muted)" }}>per</span>
-          <input type="number" min="0" step="any" value={m.per || ""} onChange={(e) => onUpdate(m.id, { per: Math.max(0, parseFloat(e.target.value) || 0) })} placeholder="0" style={{ ...ip, width: 66 }} />
-          <select value={m.basis || "area"} onChange={(e) => onUpdate(m.id, { basis: e.target.value })} style={{ ...ip, background: "var(--paper-bright)" }}>
-            <option value="area">floor SF</option>
-            <option value="linear">linear LF</option>
-            <option value="count">each</option>
-          </select>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
-            <input type="checkbox" checked={m.round !== false} onChange={(e) => onUpdate(m.id, { round: e.target.checked })} />round up
-          </label>
-          {isAdhesive(m.name) && (m.basis || "area") === "area" && (
-            <select value={TROWEL_PRESETS.some((t) => t.label === m.note) ? m.note : ""}
-              onChange={(e) => { const t = TROWEL_PRESETS.find((x) => x.label === e.target.value); if (t) onUpdate(m.id, { note: t.label, per: t.per }); }}
-              title="Trowel notch — sets the adhesive coverage (SF/gal). Verify against the data sheet."
-              style={{ ...ip, background: "var(--paper-bright)" }}>
-              <option value="">trowel…</option>
-              {TROWEL_PRESETS.map((t) => <option key={t.label} value={t.label}>{t.label} · {t.per} SF/gal</option>)}
+      {(materials || []).map((m) => {
+        const lm = libById ? libById[m.lib_id] : null;
+        const ov = (f) => (lm && overridden ? overridden(m, lm, f) : false);
+        return (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+            {lm && <span title={`Linked to “${lm.name}” in the material library — amber fields differ from the library values`} style={{ color: "var(--ink-muted)", fontSize: 11, cursor: "default" }}>⛓</span>}
+            <input value={m.name} onChange={(e) => onUpdate(m.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)" style={{ ...ip, width: 160, ...(ov("name") ? { border: OV } : {}) }} />
+            {ov("name") && rv(m, "name")}
+            <span style={{ color: "var(--ink-muted)" }}>1</span>
+            <input value={m.unit} onChange={(e) => onUpdate(m.id, { unit: e.target.value })} placeholder="unit" style={{ ...ip, width: 60, ...(ov("unit") ? { border: OV } : {}) }} />
+            {ov("unit") && rv(m, "unit")}
+            <span style={{ color: "var(--ink-muted)" }}>per</span>
+            <input type="number" min="0" step="any" value={m.per || ""} onChange={(e) => onUpdate(m.id, { per: Math.max(0, parseFloat(e.target.value) || 0) })} placeholder="0" style={{ ...ip, width: 66, ...(ov("per") ? { border: OV } : {}) }} />
+            {ov("per") && rv(m, "per")}
+            <select value={m.basis || "area"} onChange={(e) => onUpdate(m.id, { basis: e.target.value })} style={{ ...ip, background: "var(--paper-bright)", ...(ov("basis") ? { border: OV } : {}) }}>
+              <option value="area">floor SF</option>
+              <option value="linear">linear LF</option>
+              <option value="count">each</option>
             </select>
-          )}
-          <input value={m.note || ""} onChange={(e) => onUpdate(m.id, { note: e.target.value })} placeholder="note (coats, trowel…)" style={{ ...ip, width: 150 }} />
-          <button onClick={() => onRemove(m.id)} title="Remove this material"
-            style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
-        </div>
-      ))}
+            {ov("basis") && rv(m, "basis")}
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: ov("round") ? "#c47a10" : "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
+              <input type="checkbox" checked={m.round !== false} onChange={(e) => onUpdate(m.id, { round: e.target.checked })} />round up
+            </label>
+            {ov("round") && rv(m, "round")}
+            {isAdhesive(m.name) && (m.basis || "area") === "area" && (
+              <select value={TROWEL_PRESETS.some((t) => t.label === m.note) ? m.note : ""}
+                onChange={(e) => { const t = TROWEL_PRESETS.find((x) => x.label === e.target.value); if (t) onUpdate(m.id, { note: t.label, per: t.per }); }}
+                title="Trowel notch — sets the adhesive coverage (SF/gal). Verify against the data sheet."
+                style={{ ...ip, background: "var(--paper-bright)" }}>
+                <option value="">trowel…</option>
+                {TROWEL_PRESETS.map((t) => <option key={t.label} value={t.label}>{t.label} · {t.per} SF/gal</option>)}
+              </select>
+            )}
+            <input value={m.note || ""} onChange={(e) => onUpdate(m.id, { note: e.target.value })} placeholder="note (coats, trowel…)" style={{ ...ip, width: 150, ...(ov("note") ? { border: OV } : {}) }} />
+            {ov("note") && rv(m, "note")}
+            {!lm && onPromote && (
+              <button onClick={() => onPromote(m)} title="Save this material to the library (this line becomes linked)"
+                style={{ padding: "2px 7px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>→ lib</button>
+            )}
+            <button onClick={() => onRemove(m.id)} title="Remove this material"
+              style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
+          </div>
+        );
+      })}
       <button onClick={onAdd}
         style={{ marginTop: 2, padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add material</button>
+      {onAttach && (library || []).length > 0 && (
+        <select value="" onChange={(e) => { if (e.target.value) onAttach(e.target.value); }}
+          title="Attach a material from the library — the line copies the library values and stays linked"
+          style={{ ...ip, marginLeft: 6, background: "var(--paper-bright)", color: "var(--ink-muted)" }}>
+          <option value="">+ from library…</option>
+          {library.map((lm) => <option key={lm.id} value={lm.id}>{lm.name || "(unnamed)"}{lm.per ? ` · ${lm.per}/${lm.unit || "?"}` : ""}</option>)}
+        </select>
+      )}
     </>
   );
 }
@@ -359,9 +390,11 @@ export default function TakeoffCanvas() {
   const [checkedConds, setCheckedConds] = useState(() => new Set());
   const [bulkWaste, setBulkWaste] = useState("");
   const checkAnchorRef = useRef(null);
-  const [panelTab, setPanelTab] = useState("takeoffs");       // "takeoffs" | "library" — the docked panel's tabs
+  const [panelTab, setPanelTab] = useState("takeoffs");       // "takeoffs" | "library" | "materials" | "columns" — the docked panel's tabs
   const [templates, setTemplates] = useState([]);             // condition template library (browser-global, meta store)
   const templatesRef = useRef([]);                            // readable inside hydrate (seeding a fresh workspace)
+  const [matLib, setMatLib] = useState([]);                   // material library (browser-global; conditions COPY on attach + carry lib_id)
+  const [matLibQuery, setMatLibQuery] = useState("");         // Materials tab search (transient)
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
   const [status, setStatus] = useState("loading");
@@ -721,6 +754,9 @@ export default function TakeoffCanvas() {
     // reads templatesRef, so the library must be in hand first
     store.loadTemplates().catch(() => []).then((tpl) => {
       if (!off) { templatesRef.current = tpl; setTemplates(tpl); }
+      return store.loadMaterialLibrary().catch(() => []);
+    }).then((ml) => {
+      if (!off) setMatLib(ml);
       return store.loadAnnotations();
     }).then((a) => {
       if (off) return;
@@ -2046,6 +2082,73 @@ export default function TakeoffCanvas() {
     persistTemplates(templates.filter((_, i) => i !== idx));
   };
 
+  // ── material library ops (#47: copy-on-attach with a live link) ───────────
+  // Conditions always own fully materialized material lines; lib_id is an
+  // ADDITIVE link. Nothing here can affect totals, exports, or old snapshots
+  // unless the user explicitly pushes an update.
+  const matLibById = Object.fromEntries(matLib.map((m) => [m.id, m]));
+  const persistMatLib = (next) => {
+    setMatLib(next);
+    store.saveMaterialLibrary(next).catch((e) => setCommitMsg(`Couldn't save the material library: ${e.message || e}`));
+  };
+  const libFields = (lm) => ({ name: lm.name || "", unit: lm.unit || "", per: lm.per || 0, basis: lm.basis || "area", round: lm.round !== false, note: lm.note || "" });
+  // overridden = this line's field differs from its linked library entry
+  const matFieldOverridden = (m, lm, f) => {
+    if (!lm) return false;
+    const L = libFields(lm);
+    if (f === "per") return (Number(m.per) || 0) !== L.per;
+    if (f === "round") return (m.round !== false) !== L.round;
+    if (f === "basis") return (m.basis || "area") !== L.basis;   // absent basis means "area" everywhere else — don't flag it
+    return String(m[f] || "") !== String(L[f] || "");
+  };
+  const attachLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm || !aCond) return;
+    updateCond({ materials: [...(aCond.materials || []), { id: uid("mat"), ...libFields(lm), lib_id: lm.id }] });
+  };
+  const promoteMaterial = (m) => {
+    if (!m.name) { setCommitMsg("Name the material before saving it to the library."); return; }
+    const entry = { id: uid("lib"), ...libFields(m) };
+    persistMatLib([...matLib, entry]);
+    updateMaterial(m.id, { lib_id: entry.id });
+    setCommitMsg(`Saved ${m.name} to the material library.`);
+  };
+  const revertMatField = (m, f) => {
+    const lm = matLibById[m.lib_id];
+    if (lm) updateMaterial(m.id, { [f]: libFields(lm)[f] });
+  };
+  const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  // one pass per render, not per library row — the Materials tab calls this per row
+  const linkedCountById = (() => {
+    const by = {};
+    for (const c of conditions) for (const m of c.materials || []) if (m.lib_id) by[m.lib_id] = (by[m.lib_id] || 0) + 1;
+    return by;
+  })();
+  const linkedCount = (libId) => linkedCountById[libId] || 0;
+  const pushLibUpdate = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm) return;
+    const n = linkedCount(libId);
+    if (!n) { setCommitMsg("No condition lines link this material yet."); return; }
+    if (!window.confirm(`Update ${n} linked line${n === 1 ? "" : "s"} across conditions to the library values? Overrides on those lines are replaced.`)) return;
+    setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => (m.lib_id === libId ? { ...m, ...libFields(lm) } : m)) })));
+    setCommitMsg(`Updated ${n} linked line${n === 1 ? "" : "s"} from the library.`);
+  };
+  const deleteLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    const n = linkedCount(libId);
+    if (!window.confirm(`Remove ${lm?.name || "this material"} from the library?${n ? (n === 1 ? " 1 linked line keeps its values — only the link is removed." : ` ${n} linked lines keep their values — only the links are removed.`) : ""}`)) return;
+    persistMatLib(matLib.filter((x) => x.id !== libId));
+    if (n) setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    // condition templates carry lib_id too (so applying re-links to a live
+    // entry) — detach them here as well, or a deleted entry would leave
+    // dangling links inside saved templates
+    if (templates.some((t) => (t.materials || []).some((m) => m.lib_id === libId))) {
+      persistTemplates(templates.map((t) => ({ ...t, materials: (t.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    }
+  };
+  const addLibMaterial = () => persistMatLib([...matLib, { id: uid("lib"), name: "", unit: "", per: 0, basis: "area", round: true, note: "" }]);
+
   const renderCondRow = (c, i) => {
     const row = visRowById.get(c.id);
     const mult = c.multiplier || 1;
@@ -2156,7 +2259,9 @@ export default function TakeoffCanvas() {
         {matOn && (
           <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
             <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Assemblies — order qty = measured ÷ coverage, rounded up.</div>
-            <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
+            <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial}
+              library={matLib} libById={matLibById} overridden={matFieldOverridden} onRevert={revertMatField}
+              onAttach={attachLibMaterial} onPromote={promoteMaterial} />
           </div>
         )}
       </div>
@@ -2659,7 +2764,7 @@ export default function TakeoffCanvas() {
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 12px", background: "var(--ink)", color: "var(--paper-cream)", flexShrink: 0 }}>
                 <span style={{ display: "inline-flex", gap: 2 }}>
-                  {[["takeoffs", `Takeoffs · ${groupKeys.length > 1 ? "these sheets" : "this sheet"}`], ["library", `Library${templates.length ? ` (${templates.length})` : ""}`], ["columns", `Columns${conditionColumns.length ? ` (${conditionColumns.length})` : ""}`]].map(([id, label]) => (
+                  {[["takeoffs", `Takeoffs · ${groupKeys.length > 1 ? "these sheets" : "this sheet"}`], ["library", `Library${templates.length ? ` (${templates.length})` : ""}`], ["materials", `Materials${matLib.length ? ` (${matLib.length})` : ""}`], ["columns", `Columns${conditionColumns.length ? ` (${conditionColumns.length})` : ""}`]].map(([id, label]) => (
                     <button key={id} onClick={() => setPanelTab(id)}
                       style={{ padding: "3px 8px", border: "none", borderBottom: panelTab === id ? "2px solid var(--paper-cream)" : "2px solid transparent", background: "none", color: "var(--paper-cream)", opacity: panelTab === id ? 1 : 0.65, cursor: "pointer", fontWeight: 700, fontSize: 12.5 }}>{label}</button>
                   ))}
@@ -2763,6 +2868,61 @@ export default function TakeoffCanvas() {
                         style={{ flexShrink: 0, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11 }}>✕</button>
                     </div>
                   ))}
+                </div>
+              )}
+              {/* Materials tab — the material library (#47/#48): canonical
+                  consumables shared across every plan in this browser. Conditions
+                  COPY on attach (lib_id link); edits here never propagate unless
+                  explicitly pushed to linked lines. */}
+              {panelTab === "materials" && (
+                <div style={{ flex: 1, overflow: "auto", fontSize: 11.5 }}>
+                  <div style={{ padding: "8px 12px 4px", color: "var(--ink-muted)", fontSize: 11 }}>
+                    Reusable materials, browser-wide. Attaching one to a condition copies its values and keeps a link — edits here only reach linked lines when you push them.
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px 8px" }}>
+                    <input value={matLibQuery} onChange={(e) => setMatLibQuery(e.target.value)} placeholder="filter materials…"
+                      style={{ flex: 1, minWidth: 0, padding: "4px 8px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+                    {matLibQuery && <button onClick={() => setMatLibQuery("")} title="Clear the filter" style={{ border: "none", background: "none", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0 }}>×</button>}
+                  </div>
+                  {matLib.length === 0 && <div style={{ padding: "2px 12px 12px", color: "var(--ink-muted)" }}>No library materials yet — add one below, or use “→ lib” on a condition's material line.</div>}
+                  {matLib.filter((lm) => !matLibQuery.trim() || (lm.name || "").toLowerCase().includes(matLibQuery.trim().toLowerCase())).map((lm) => {
+                    const n = linkedCount(lm.id);
+                    const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
+                    return (
+                      <div key={lm.id} style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <input value={lm.name} onChange={(e) => updateLibMaterial(lm.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)" style={{ ...ip, width: 150 }} />
+                          <span style={{ color: "var(--ink-muted)" }}>1</span>
+                          <input value={lm.unit} onChange={(e) => updateLibMaterial(lm.id, { unit: e.target.value })} placeholder="unit" style={{ ...ip, width: 54 }} />
+                          <span style={{ color: "var(--ink-muted)" }}>per</span>
+                          <input type="number" min="0" step="any" value={lm.per || ""} onChange={(e) => updateLibMaterial(lm.id, { per: Math.max(0, parseFloat(e.target.value) || 0) })} placeholder="0" style={{ ...ip, width: 62 }} />
+                          <select value={lm.basis || "area"} onChange={(e) => updateLibMaterial(lm.id, { basis: e.target.value })} style={{ ...ip, background: "var(--paper-bright)" }}>
+                            <option value="area">floor SF</option>
+                            <option value="linear">linear LF</option>
+                            <option value="count">each</option>
+                          </select>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units">
+                            <input type="checkbox" checked={lm.round !== false} onChange={(e) => updateLibMaterial(lm.id, { round: e.target.checked })} />round up
+                          </label>
+                          <input value={lm.note || ""} onChange={(e) => updateLibMaterial(lm.id, { note: e.target.value })} placeholder="note" style={{ ...ip, width: 120 }} />
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
+                          <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)" }}>{n ? `⛓ ${n} linked line${n === 1 ? "" : "s"}` : "not linked yet"}</span>
+                          <div style={{ flex: 1 }} />
+                          {n > 0 && (
+                            <button onClick={() => pushLibUpdate(lm.id)} title="Replace the values on every linked condition line with these library values (overrides included)"
+                              style={{ padding: "2px 8px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontSize: 11 }}>update linked ({n})</button>
+                          )}
+                          <button onClick={() => deleteLibMaterial(lm.id)} title="Remove from the library — linked lines keep their values, only the link is removed"
+                            style={{ padding: "2px 8px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11 }}>✕</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ padding: "6px 12px", borderTop: matLib.length ? "1px solid var(--ink-faint)" : "none" }}>
+                    <button onClick={addLibMaterial}
+                      style={{ width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add library material</button>
+                  </div>
                 </div>
               )}
               {/* Columns tab — the custom-columns manager (#31/#33): project-level
