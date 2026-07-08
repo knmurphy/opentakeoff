@@ -71,7 +71,7 @@ With the **45°** toggle on (it's on by default, next to Snap), the segment you'
 
 ### Conditions (finishes)
 A condition is one finish (e.g. `WD-1` red oak). It carries:
-- **Line / fill color** and a **hatch pattern** (plank, herringbone, tile, terrazzo, …) so each finish reads like the real drawing.
+- **Line / fill color**, a **hatch pattern** (plank, herringbone, tile, terrazzo, …), and a **line style** (solid / dashed / dotted / dash-dot) so each finish reads like the real drawing. The line style applies to positive **floor-area** and **linear** outlines; **surface** walls keep their dash-dot look and **deducts** keep their red dashing.
 - **Multiplier (×N)** — measure one identical unit, multiply by N.
 - **Waste %** — a flooring allowance applied **only in the Report** (order quantity), never to the live measured number.
 - **Height (H)** — default height for new Surface‑Area (wall) traces; also drives vertical‑SF display. Existing walls keep the height they were drawn at.
@@ -100,9 +100,15 @@ Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, gr
 - **Dark view (☾)** — negative-print mode in the zoom cluster: sheets invert to light-on-dark, hatches stay legible, and the toggle is remembered per browser.
 
 ### Markup layer
-Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇), RFI (⬢), and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+Revision clouds, callouts, text notes, and **highlight boxes** — annotations only, kept separate from measurements (never counted). The markup (◇), RFI (⬢), and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+
+**Highlight box** — pick the **Highlight** markup tool, then click two opposite corners to drop a translucent filled box over an area. It draws **behind** the other markups so it never dims them; a cloud, callout, or note sitting under a highlight stays clickable.
+
+**Color & line style** — each markup row carries a color swatch (or **auto**: cobalt when linked to an RFI, amber otherwise) and a line-style picker (solid / dashed / dotted / dash-dot). The color is lightened automatically on the dark view so it stays visible. RFI linkage always shows as a small **⬢/number badge** regardless of color or note text.
 
 **Select & delete a markup** — with the **Select** tool (`V`), click a placed markup to select it (a white‑ringed cobalt halo appears — visible even on a cobalt RFI markup). `Backspace` / `Delete` removes it. Shape and markup selection are mutually exclusive: selecting one clears the other.
+
+**Show / hide the layer** — **Hide layer** in the markup panel header hides every markup on the canvas and suspends their hit-testing, so you can't select, delete, or fly to a hidden markup — the way out when a full-area highlight covers the takeoff beneath it. It's independent of the Marked Set export, which still includes markups.
 
 ### RFI register
 Turn a markup into a tracked **Request For Information**. Open the markup panel, and on any markup row press **Raise RFI** (or **Link existing** to attach it to an RFI you already opened; **Unlink** detaches). A linked markup turns cobalt on the plan and carries its RFI number. Open the **RFI register** (⬢ on the right rail) to work the log:

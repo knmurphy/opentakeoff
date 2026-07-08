@@ -22,6 +22,7 @@ import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_B
 import { pointInPoly, starPath, arrowheadPath } from "./geometry.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
+import { pdfDashFor, boostForDark } from "./lineStyles.js";
 
 const COBALT = "#1f3fc7";
 const DEDUCT_RED = "#b03a26";
@@ -422,15 +423,20 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       if (!pts.length) continue;
       const isDeduct = s.measure_role === "deduct";
       const col = rgb(...hex(isDeduct ? DEDUCT_RED : cond?.color));
+      // line_style governs positive floor_area + linear outlines only: deduct keeps
+      // its red (no dash override) and surface_area keeps its solid wall run.
+      const borderDash = isDeduct ? undefined : pdfDashFor(cond?.line_style || "solid");
       if (s.measure_role === "floor_area" || isDeduct) {
         const fill = cond?.fill && cond.fill !== "none" && !isDeduct ? rgb(...hex(cond.fill)) : col;
-        pg.drawSvgPath(svgPath(pts), { x: 0, y: 0, color: fill, opacity: (isDeduct ? 0.14 : 0.16) + alphaBoost / 2, borderColor: col, borderWidth: 1.1, borderOpacity: 0.95 });
+        pg.drawSvgPath(svgPath(pts), { x: 0, y: 0, color: fill, opacity: (isDeduct ? 0.14 : 0.16) + alphaBoost / 2, borderColor: col, borderWidth: 1.1, borderOpacity: 0.95, ...(borderDash ? { borderDashArray: borderDash } : {}) });
         if (!isDeduct && cond?.hatch && cond.hatch !== "solid") {
           for (const [ax, ay, bx, by] of hatchLines(pts, cond.hatch)) line(ax, ay, bx, by, col, 0.5, 0.55 + alphaBoost);
         }
         chip(shapeChip(s, cond), ...centroid(pts), col);
       } else if (s.measure_role === "linear" || s.measure_role === "surface_area") {
-        for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], col, 1.4, 0.95);
+        // shared branch — dash only the linear role; surface_area stays solid
+        const segDash = s.measure_role === "linear" ? pdfDashFor(cond?.line_style || "solid") : undefined;
+        for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], col, 1.4, 0.95, segDash);
         const mid = pts[Math.floor((pts.length - 1) / 2)];
         chip(shapeChip(s, cond), mid[0], mid[1] - 14, col);
       } else if (s.measure_role === "count") {
@@ -438,32 +444,49 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         pg.drawEllipse({ x: px, y: py, xScale: 4.5, yScale: 4.5, borderColor: col, borderWidth: 1.2, color: col, opacity: 0.35 });
       }
     }
-    for (const m of marksBy.get(sh.key) || []) {
+    // highlights draw FIRST (behind) so their translucent fill never dims the
+    // linework of clouds/callouts/text above — same z-order as the canvas.
+    const marksHere = [...(marksBy.get(sh.key) || [])].sort((a, b) => (a.type === "highlight" ? 0 : 1) - (b.type === "highlight" ? 0 : 1));
+    for (const m of marksHere) {
       // linked RFI number marker (ASCII) — drawn UNCONDITIONALLY, even when the
       // markup has no note (a linked cloud can be textless), so the link always
       // prints. Helvetica can't draw ⬢, so it's the number, not the glyph.
       const rlabel = m.rfi_id && rfiNum.has(m.rfi_id) ? rfiNum.get(m.rfi_id) : "";
       const lbl = (t) => [rlabel, t].filter((s) => s != null && s !== "").join(" ");
-      if (m.type === "cloud" && m.rect) {
+      // per-markup color drives the STROKE/FILL and the note text, dark-boosted for
+      // the dark sheet — mirroring the canvas fallback exactly (custom color, else
+      // cobalt when linked, else amber). Legacy/uncolored markups match the canvas.
+      // Linkage still prints via the RFI number prefix (lbl), independent of color.
+      const mbase = m.color || (m.rfi_id ? COBALT : "#c47a10");
+      const mcol = rgb(...hex(dark ? boostForDark(mbase) : mbase));
+      const mdash = pdfDashFor(m.line_style || "solid");
+      if (m.type === "highlight" && m.rect) {
+        const [[nx0, ny0], [nx1, ny1]] = m.rect;
+        const r = [[nx0 * W, ny0 * H], [nx1 * W, ny0 * H], [nx1 * W, ny1 * H], [nx0 * W, ny1 * H]];
+        pg.drawSvgPath(svgPath(r), { x: 0, y: 0, color: mcol, opacity: 0.18 + alphaBoost / 2, borderColor: mcol, borderWidth: 1, borderOpacity: 0.9, ...(mdash ? { borderDashArray: mdash } : {}) });
+        const t = lbl(m.text);
+        if (t) text(t, Math.min(nx0, nx1) * W, Math.min(ny0, ny1) * H - 10 / ptScale, 8, mcol, bold);
+      } else if (m.type === "cloud" && m.rect) {
         const [[nx0, ny0], [nx1, ny1]] = m.rect;
         // scalloped read approximated by a dashed border — arcs don't survive
-        // arbitrary page transforms; the note text carries the meaning
+        // arbitrary page transforms; the note text carries the meaning. An explicit
+        // line_style overrides the default [4,3] scallop dash.
         const r = [[nx0 * W, ny0 * H], [nx1 * W, ny0 * H], [nx1 * W, ny1 * H], [nx0 * W, ny1 * H]];
-        pg.drawSvgPath(svgPath(r), { x: 0, y: 0, borderColor: cobalt, borderWidth: 1.3, borderOpacity: 0.95, borderDashArray: [4, 3] });
+        pg.drawSvgPath(svgPath(r), { x: 0, y: 0, borderColor: mcol, borderWidth: 1.3, borderOpacity: 0.95, borderDashArray: mdash || [4, 3] });
         const t = lbl(m.text);
-        if (t) text(t, Math.min(nx0, nx1) * W, Math.min(ny0, ny1) * H - 10 / ptScale, 8, cobalt, bold);
+        if (t) text(t, Math.min(nx0, nx1) * W, Math.min(ny0, ny1) * H - 10 / ptScale, 8, mcol, bold);
       } else if (m.type === "callout" && m.at) {
         if (m.target) {
-          line(m.target[0] * W, m.target[1] * H, m.at[0] * W, m.at[1] * H, cobalt, 0.9, 0.9);
+          line(m.target[0] * W, m.target[1] * H, m.at[0] * W, m.at[1] * H, mcol, 0.9, 0.9, mdash);
           // arrowhead at the target end, pointing from the label — page coords
           // negate y to match svgPath's convention
           const [pax, pay] = toPage(m.at[0] * W, m.at[1] * H);
           const [ptx, pty] = toPage(m.target[0] * W, m.target[1] * H);
-          pg.drawSvgPath(arrowheadPath(pax, -pay, ptx, -pty, 5), { x: 0, y: 0, color: cobalt, opacity: 0.9 });
+          pg.drawSvgPath(arrowheadPath(pax, -pay, ptx, -pty, 5), { x: 0, y: 0, color: mcol, opacity: 0.9 });
         }
-        text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, cobalt, bold);
+        text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
       } else if (m.type === "text" && m.at) {
-        text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, cobalt, bold);
+        text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
       }
     }
     // sheet stamp, top-left in visual space

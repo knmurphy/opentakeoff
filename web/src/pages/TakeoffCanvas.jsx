@@ -25,6 +25,7 @@ import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
+import { dashArrayFor, boostForDark, LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 
@@ -174,6 +175,7 @@ const MARKUP_TOOLS = [
   { id: "cloud", icon: "cloud", label: "Revision cloud" },
   { id: "callout", icon: "callout", label: "Callout" },
   { id: "text", icon: "textNote", label: "Text note" },
+  { id: "highlight", icon: "highlight", label: "Highlight box" },
 ];
 const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
 
@@ -276,8 +278,9 @@ export default function TakeoffCanvas() {
   const [hatchOpen, setHatchOpen] = useState(false);         // hatch picker popover (declutters the row)
   const [matOpen, setMatOpen] = useState(false);             // supporting-materials editor panel
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
-  const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
+  const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
+  const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
   const [showTakeoffs, setShowTakeoffs] = useState(false);    // side panel: takeoffs list (conditions + totals)
   const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
@@ -350,6 +353,7 @@ export default function TakeoffCanvas() {
   const rubberRef = useRef(null);
   const rectRef = useRef(null);
   const cloudRef = useRef(null);       // live cloud preview (first corner → cursor)
+  const highlightRef = useRef(null);   // live highlight-box preview (first corner → cursor; own translucent fill, NOT rectRef's condition fill)
   const snapRef = useRef(null);        // current snapped image point (or null)
   const snapGridsRef = useRef(new Map()); // sheetKey → {cell, map} spatial hash of vector endpoints
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
@@ -1077,7 +1081,7 @@ export default function TakeoffCanvas() {
         if (poly.length) { setPoly((q) => q.slice(0, -1)); setCalib((c) => c.slice(0, -1)); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
-        else if (selectedMarkupId) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
+        else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
         else setCalib((c) => c.slice(0, -1));
       } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
@@ -1087,7 +1091,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, selectedMarkupId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, selectedMarkupId, showMarkups, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
@@ -1121,7 +1125,7 @@ export default function TakeoffCanvas() {
       if (poly.length === 0) setPoly([p]);
       else { const a = poly[0]; commitPoly([[a[0], a[1]], [p[0], a[1]], [p[0], p[1]], [a[0], p[1]]], tool === "deduct-rect"); setPoly([]); }
     }
-    else if (tool === "cloud" || tool === "callout" || tool === "text") placeMarkup(p);
+    else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
   }
   // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
   // hitShape can't test them — this is a purpose-built bbox/point test in the
@@ -1158,6 +1162,15 @@ export default function TakeoffCanvas() {
       const ax = m.at[0] * W + ox, ay = m.at[1] * H;
       const lw = ((m.text?.length || 1) * 7 + 14) / sc;
       return X >= ax - thr && X <= ax + lw && Y >= ay - 16 / sc - thr && Y <= ay + thr;
+    }
+    if (m.type === "highlight" && m.rect) {
+      // a highlight is FILLED and meant to be grabbed — hit its interior (with a
+      // small margin) so it selects; precedence in selectAt keeps other markups
+      // under it clickable.
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      return X >= x0 - thr && X <= x1 + thr && Y >= y0 - thr && Y <= y1 + thr;
     }
     return false;
   }
@@ -1210,8 +1223,17 @@ export default function TakeoffCanvas() {
     }
     // 2. markups render ON TOP of shapes (:2137 > :2093), so a markup hit wins over a
     //    plain shape click — but NOT over the selected shape's handles above.
-    const mHit = [...visibleMarkups].reverse().find((m) => hitMarkup(m, p, thr));
-    if (mHit) { selectMarkup(mHit.id); return; }
+    //    When the markup layer is hidden (showMarkups false), skip the search
+    //    entirely — you can't select/delete/fly-to an invisible markup.
+    if (showMarkups) {
+      const rev = [...visibleMarkups].reverse();
+      // a NON-highlight markup hit beats a highlight at the same point (test
+      // highlights last), so a linked cloud/callout under a highlight stays
+      // clickable; a highlight still wins over a plain shape (it shields it).
+      const mHit = rev.find((m) => m.type !== "highlight" && hitMarkup(m, p, thr))
+                || rev.find((m) => m.type === "highlight" && hitMarkup(m, p, thr));
+      if (mHit) { selectMarkup(mHit.id); return; }
+    }
     // 3. move the selected shape if its body (not a handle) was hit
     if (sel && selSp && hitShape(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
       dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
@@ -1359,9 +1381,20 @@ export default function TakeoffCanvas() {
         cloudRef.current.style.display = "block";
       } else cloudRef.current.style.display = "none";
     }
+    // live highlight preview: a translucent box, first corner → cursor (its own
+    // ref, NOT rectRef which carries the active condition fill)
+    if (highlightRef.current) {
+      if (!panRef.current && tool === "highlight" && markupDraft) {
+        highlightRef.current.setAttribute("x", Math.min(markupDraft[0], cur[0]));
+        highlightRef.current.setAttribute("y", Math.min(markupDraft[1], cur[1]));
+        highlightRef.current.setAttribute("width", Math.abs(cur[0] - markupDraft[0]));
+        highlightRef.current.setAttribute("height", Math.abs(cur[1] - markupDraft[1]));
+        highlightRef.current.style.display = "block";
+      } else highlightRef.current.style.display = "none";
+    }
   }
   function hideCrosshair() {
-    for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
+    for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, highlightRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
     if (hoverRef.current) hoverRef.current.style.display = "none";
     hoverIdRef.current = "";
     angleRef.current = null;
@@ -1696,6 +1729,15 @@ export default function TakeoffCanvas() {
         addMarkup({ type: "cloud", rect: [norm(markupDraft, dp), norm(p, dp)], text: note.trim() }, dp.key);
         setMarkupDraft(null);
       }
+    } else if (tool === "highlight") {
+      // two-corner like the cloud, but no note prompt — a highlight is a pure
+      // translucent box you drop over an area; text/color/line_style come later.
+      if (!markupDraft) { setMarkupDraft(p); }
+      else {
+        const dp = panelAt(markupDraft[0]);
+        addMarkup({ type: "highlight", rect: [norm(markupDraft, dp), norm(p, dp)], text: "" }, dp.key);
+        setMarkupDraft(null);
+      }
     } else if (tool === "callout") {
       if (!markupDraft) { setMarkupDraft(p); }   // first click = the thing you're pointing at
       else {
@@ -1757,7 +1799,7 @@ export default function TakeoffCanvas() {
     const sp = panelByKey(m.sheet_id);
     if (!sp || !sp.img.w) return false;
     let anchor;
-    if (m.type === "cloud" && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
     else if (m.type === "callout") anchor = m.at || m.target;
     else anchor = m.at;
     if (!anchor) return false;
@@ -1772,6 +1814,7 @@ export default function TakeoffCanvas() {
   }
   function flyToMarkup(m) {
     if (!m) return;
+    setShowMarkups(true);   // flying to a markup reveals the layer, so you never land on an invisible selection
     if (!panelKeySet.has(m.sheet_id)) { pendingFlyRef.current = m; openSheets([m.sheet_id], false); return; }
     // open already, but its bitmap may still be mid-render (img.w === 0) — if the
     // inline center can't run yet, hand off to the phase-2 effect below.
@@ -2038,7 +2081,7 @@ export default function TakeoffCanvas() {
           <Icon name="hiRes" size={15} />
         </button>
         <div style={{ flex: 1 }} />
-        {markupDraft && (tool === "cloud" || tool === "callout") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "cloud" ? "opposite corner" : "label spot"}…</span>}
+        {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : "opposite corner"}…</span>}
         {finishOk && (
           <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
         )}
@@ -2108,6 +2151,13 @@ export default function TakeoffCanvas() {
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ color: "var(--ink-muted)" }}>Line</span>
             {PALETTE.map((p) => <button key={p} title={p} onClick={() => updateCond({ color: p })} style={{ width: 16, height: 16, borderRadius: 4, background: p, border: aCond.color === p ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Outline style for this condition's floor-area & linear shapes (surface walls keep dash-dot; deducts stay red-dashed)">
+            <span style={{ color: "var(--ink-muted)" }}>Style</span>
+            <select value={aCond.line_style || "solid"} onChange={(e) => updateCond({ line_style: e.target.value })}
+              style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "2px 4px" }}>
+              {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+            </select>
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ color: "var(--ink-muted)" }}>Fill</span>
@@ -2254,10 +2304,12 @@ export default function TakeoffCanvas() {
                         return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4.5 : 3.5) / z} strokeDasharray={`${10 / z} ${3 / z} ${2 / z} ${3 / z}`} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       if (s.measure_role === "linear") {
-                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeLinecap="round" strokeLinejoin="round" />;
+                        // line_style governs linear outlines (surface_area keeps its dash-dot identity above)
+                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       const ded = s.measure_role === "deduct";
-                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : "0"} />;
+                      // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
+                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
                     {/* vertex handles for the selected shape (drag to reshape) */}
                     {selectedId && (() => {
@@ -2277,53 +2329,84 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })()}
-                    {/* markup layer — clouds / callouts / text notes on this panel.
-                        A selected markup wears a CONTRASTING halo (white outer ring +
-                        cobalt inner) so it stays visible on cobalt-tinted RFI markups. */}
-                    {markups.filter((m) => m.sheet_id === p.key).map((m) => {
-                      const mk = m.rfi_id ? "#1f3fc7" : "#c47a10";
+                    {/* markup layer — highlights / clouds / callouts / text notes on this
+                        panel. Highlights draw FIRST (behind) so their translucent fill never
+                        dims the linework above. A selected markup wears a CONTRASTING halo
+                        (white outer ring + cobalt inner). Per-markup color drives the STROKE/
+                        FILL (dark-boosted on the dark canvas); RFI linkage is an unconditional
+                        ⬢/number badge, independent of the note text. Layer hides via showMarkups. */}
+                    {showMarkups && markups.filter((m) => m.sheet_id === p.key)
+                      .slice().sort((a, b) => (a.type === "highlight" ? 0 : 1) - (b.type === "highlight" ? 0 : 1))
+                      .map((m) => {
+                      const z = tf.scale;
+                      const base = m.color || (m.rfi_id ? "#1f3fc7" : "#c47a10");
+                      const mk = darkMode ? boostForDark(base) : base;   // literal — SVG attrs don't resolve CSS vars
+                      const dash = dashArrayFor(m.line_style || "solid", z);
                       const selM = m.id === selectedMarkupId;
-                      // literal colors — SVG presentation attrs don't resolve CSS vars
+                      // linkage badge — unconditional for any linked markup (a note-less
+                      // recolored cloud still reads as linked); kept in cobalt for legibility
+                      // regardless of the user's color, pinned clear of the halo.
+                      const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                      const badgeCol = darkMode ? boostForDark("#1f3fc7") : "#1f3fc7";
+                      const badge = (bx, by) => (m.rfi_id ? (
+                        <text x={bx} y={by} fill={badgeCol} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{"⬢"}{linked && linked.number != null && linked.number !== "" ? " " + linked.number : ""}</text>
+                      ) : null);
                       const halo = (x0, y0, x1, y1) => (selM ? (
                         <>
-                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={5 / tf.scale} />
-                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={2 / tf.scale} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={5 / z} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={2 / z} />
                         </>
                       ) : null);
+                      if (m.type === "highlight") {
+                        const [c0, c1] = m.rect;
+                        const hx0 = Math.min(c0[0], c1[0]) * p.img.w, hy0 = Math.min(c0[1], c1[1]) * p.img.h;
+                        const hx1 = Math.max(c0[0], c1[0]) * p.img.w, hy1 = Math.max(c0[1], c1[1]) * p.img.h;
+                        const pad = 5 / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <rect x={hx0} y={hy0} width={hx1 - hx0} height={hy1 - hy0} fill={mk} fillOpacity={0.18} stroke={mk} strokeWidth={2 / z} strokeDasharray={dash} />
+                            {badge(hx0, hy0 - pad - 9 / z)}
+                          </g>
+                        );
+                      }
                       if (m.type === "cloud") {
                         const [c0, c1] = m.rect;
-                        const pad = 5 / tf.scale;
+                        const pad = 5 / z;
                         const bx0 = Math.min(c0[0], c1[0]) * p.img.w - pad, by0 = Math.min(c0[1], c1[1]) * p.img.h - pad;
                         const bx1 = Math.max(c0[0], c1[0]) * p.img.w + pad, by1 = Math.max(c0[1], c1[1]) * p.img.h + pad;
                         return (
                           <g key={m.id}>
                             {halo(bx0, by0, bx1, by1)}
-                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={2 / tf.scale} />
-                            {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / tf.scale} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>}
+                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={2 / z} strokeDasharray={dash} />
+                            {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(bx0, by0 - 9 / z)}
                           </g>
                         );
                       }
                       if (m.type === "callout") {
                         const [tx, ty] = m.target, [ax, ay] = m.at;
-                        const lw = (m.text.length * 7 + 10) / tf.scale;
+                        const lw = ((m.text?.length || 1) * 7 + 10) / z;
                         return (
                           <g key={m.id}>
-                            {halo(ax * p.img.w - 4 / tf.scale, ay * p.img.h - 18 / tf.scale, ax * p.img.w + lw + 4 / tf.scale, ay * p.img.h + 4 / tf.scale)}
-                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={2 / tf.scale} />
+                            {halo(ax * p.img.w - 4 / z, ay * p.img.h - 18 / z, ax * p.img.w + lw + 4 / z, ay * p.img.h + 4 / z)}
+                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={2 / z} strokeDasharray={dash} />
                             {/* arrowhead at the target end — replaces the old vertex star */}
-                            <path d={arrowheadPath(ax * p.img.w, ay * p.img.h, tx * p.img.w, ty * p.img.h, 9 / tf.scale)} fill={mk} />
-                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / tf.scale} width={lw} height={20 / tf.scale} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
-                            <text x={(ax * p.img.w) + 5 / tf.scale} y={(ay * p.img.h) - 2 / tf.scale} fill="#0e1a2e" fontSize={12 / tf.scale}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>
+                            <path d={arrowheadPath(ax * p.img.w, ay * p.img.h, tx * p.img.w, ty * p.img.h, 9 / z)} fill={mk} />
+                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / z} width={lw} height={20 / z} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / z} strokeDasharray={dash} rx={3 / z} />
+                            <text x={(ax * p.img.w) + 5 / z} y={(ay * p.img.h) - 2 / z} fill="#0e1a2e" fontSize={12 / z}>{m.text}</text>
+                            {badge(ax * p.img.w, ay * p.img.h - 24 / z)}
                           </g>
                         );
                       }
                       const [x, y] = m.at;
-                      const lw = (m.text.length * 7 + 10) / tf.scale;
+                      const lw = ((m.text?.length || 1) * 7 + 10) / z;
                       return (
                         <g key={m.id}>
-                          {halo(x * p.img.w - 5 / tf.scale, y * p.img.h - 16 / tf.scale, x * p.img.w + lw + 3 / tf.scale, y * p.img.h + 6 / tf.scale)}
-                          <rect x={x * p.img.w - 3 / tf.scale} y={y * p.img.h - 14 / tf.scale} width={lw} height={20 / tf.scale} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
-                          <text x={x * p.img.w + 2 / tf.scale} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / tf.scale} fontWeight="600">{m.rfi_id ? "⬢ " : ""}{m.text}</text>
+                          {halo(x * p.img.w - 5 / z, y * p.img.h - 16 / z, x * p.img.w + lw + 3 / z, y * p.img.h + 6 / z)}
+                          <rect x={x * p.img.w - 3 / z} y={y * p.img.h - 14 / z} width={lw} height={20 / z} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / z} strokeDasharray={dash} rx={3 / z} />
+                          <text x={x * p.img.w + 2 / z} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / z} fontWeight="600">{m.text}</text>
+                          {badge(x * p.img.w, y * p.img.h - 22 / z)}
                         </g>
                       );
                     })}
@@ -2345,6 +2428,7 @@ export default function TakeoffCanvas() {
               <line ref={rubberRef} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={1.5 / tf.scale} strokeOpacity={0.85} strokeLinecap="round" style={{ display: "none" }} />
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               <path ref={cloudRef} fill="rgba(37,99,235,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale} strokeDasharray={`${5 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
+              <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               {poly.length >= 2 && (tool === "linear" || tool === "surface"
                 ? <polyline points={poly.map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
                 : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} />)}
@@ -2461,10 +2545,21 @@ export default function TakeoffCanvas() {
           <div style={{ position: "absolute", left: 14, top: 14, width: 320, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff", borderRadius: 0 }}>
               <strong>Markups · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
+                    (can't select/delete/fly-to an invisible markup); orthogonal to the
+                    marked-set export, which still includes markups. */}
+                <button
+                  onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
+                  title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
+                  style={{ background: "none", border: "1px solid rgba(255,255,255,.5)", color: "#fff", fontSize: 11, cursor: "pointer", padding: "2px 7px", borderRadius: 0 }}>
+                  {showMarkups ? "Hide layer" : "Show layer"}
+                </button>
+                <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+              </span>
             </div>
             <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
-              Pick <b>☁ Cloud</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
+              Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
             </div>
             {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
               <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
@@ -2476,6 +2571,17 @@ export default function TakeoffCanvas() {
                   <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
                   <button onClick={() => { const t = window.prompt("Edit text:", m.text || ""); if (t != null) updateMarkup(m.id, { text: t.trim() }); }} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
                   <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
+                </div>
+                {/* appearance — per-markup color (reuse PALETTE) + line style; both
+                    additive: unset color falls back to the cobalt(linked)/amber default,
+                    unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
+                  <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
+                  {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+                  <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                    {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                  </select>
                 </div>
                 {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
                 {(() => {
