@@ -4,7 +4,7 @@ import { unzipSync, strFromU8 } from "fflate";
 // xlsx.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
 import { escXml, colLetter, sanitizeSheetName, sheetXml, buildXlsx, reportWorkbook } from "../src/lib/xlsx.js";
 import { conditionTotals, sheetTotals } from "../src/lib/totals.js";
-import { CSV_PROFILE, visibleCols } from "../src/lib/reportColumns.js";
+import { CSV_PROFILE, customColProfile, visibleCols } from "../src/lib/reportColumns.js";
 import { shapesDetail } from "../src/lib/shapesExport.js";
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,21 @@ test("reportWorkbook: four tabs, Conditions mirrors the CSV columns and numbers"
   assert.equal(shapeTab.rows.length, 2 + shapes.length);
   const s2 = shapeTab.rows.find((r: any[]) => r[0] === "s2");
   assert.equal(s2![6], 25); // measured LF — no multiplier
+});
+
+test("reportWorkbook: custom column in cols — header, per-row value, blank TOTAL cell", () => {
+  const custom = customColProfile([{ id: "div", name: "CSI Division", values: ["09 30 00"] }]);
+  const tabs = reportWorkbook({
+    ...workbookArgs(),
+    cols: [...cols, ...custom],
+    ctx: { attrsByCond: new Map([["c1", { div: "09 30 00" }]]) },
+  });
+  const cTab = tabs[0];
+  const ci = cols.length;                        // appended after the CSV columns
+  assert.equal(cTab.rows[0][ci], "CSI Division");
+  assert.equal(cTab.rows[1][ci], "09 30 00");    // c1 assigned
+  assert.equal(cTab.rows[2][ci], "");            // c2 unassigned → cell skipped in the XML
+  assert.equal(cTab.rows[cTab.rows.length - 1][ci], ""); // TOTAL stays blank
 });
 
 test("reportWorkbook: materials quantity matches conditionTotals (measured basis, whole units)", () => {

@@ -10,7 +10,7 @@ no server.
 
 1. **Open plans** — drag a PDF, image, or `.zip` plan set onto the canvas (or use **Open plans**). The **gallery** (`G`) shows every sheet; click one (or several) to open.
 2. **Set the scale** — on each sheet, click **Scale** and either pick a standard scale or **Calibrate**: click two points along a known dimension, type the real length in feet, **Apply**. Scale is remembered **per sheet**.
-3. **Pick a condition** — the **Conditions** bar holds your finishes (WD‑1, LVT‑1, …). Click one to arm it (or press its number, `1`–`9`). Edit its color / hatch / waste / height in the bar.
+3. **Pick a condition** — the **Takeoffs panel** (docked on the right) holds your finishes (WD‑1, LVT‑1, …). Click a row to arm it (or press its number, `1`–`9`); the active row unfolds its properties — tag, color, hatch, ×N, waste, height, thickness. Drag the panel's left edge to resize, collapse it with **»** (the ☰ rail button brings it back), and turn on the optional **strip** (panel header) for a compact horizontal bar.
 4. **Draw the takeoff** — pick a Measure tool and trace. Each shape is color‑coded to its condition.
 5. **Add supporting materials** *(optional)* — open **Assemblies** on the condition (adhesive, sealer, poly…) with coverage rates; order quantities derive automatically.
 6. **Report** — open **Report** for the per‑condition breakdown (SF/LF/EA, waste, SY) and the materials buy list; export **CSV**, **Excel (.xlsx)**, or **JSON**.
@@ -69,6 +69,9 @@ With the **45°** toggle on (it's on by default, next to Snap), the segment you'
 
 ## 3. What each part does
 
+### The Takeoffs panel
+Conditions live in a **docked, resizable panel** on the right (drag the left edge; width, collapse, and view prefs are remembered per browser). Each row shows the finish with its running totals and shape count; the active row unfolds the full property editor. At scale: **filter** box, **A→Z** natural sort (CT‑2 before CT‑10), and **≡ grp** grouping by tag family (CPT, LVT, …) — all views only, so `1`–`9` keep their numbering. **⌘‑click / ⇧‑click** rows to multi‑select for bulk waste / color / delete; **⌖** (or double‑click) zooms the canvas to a condition's takeoffs. The **Library** tab stores reusable condition templates (browser‑wide): save the active condition, apply templates anywhere, and fresh workspaces seed from your library instead of the built‑in defaults.
+
 ### Conditions (finishes)
 A condition is one finish (e.g. `WD-1` red oak). It carries:
 - **Line / fill color**, a **hatch pattern** (plank, herringbone, tile, terrazzo, …), and a **line style** (solid / dashed / dotted / dash-dot) so each finish reads like the real drawing. The line style applies to positive **floor-area** and **linear** outlines; **surface** walls keep their dash-dot look and **deducts** keep their red dashing.
@@ -79,6 +82,12 @@ A condition is one finish (e.g. `WD-1` red oak). It carries:
 
 ### Supporting materials (assemblies)
 Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, grout, cove‑base adhesive…). Each has a **coverage rate** and a **basis** (floor SF / linear LF / each). Order qty = measured ÷ coverage, **rounded up** to whole units. Adhesive lines get a **trowel picker** that fills the SF/gal from the notch size. A `note` field carries trowel notch / # of coats. The Report sums these into a **buy list**.
+
+### Material library
+The Takeoffs panel's **Materials** tab holds reusable materials, browser‑wide. Attaching one to a condition (**+ from library…** in the assemblies editor) **copies** its values onto the condition and keeps a link (⛓) — so totals, exports, and snapshots never depend on the library. Edit a linked line freely: fields that differ from the library tint **amber** with a per‑field **↺** revert. Library edits never propagate silently — **update linked (N)** pushes them explicitly. Deleting a library material only removes the link; lines keep their values. **→ lib** on any material line saves it to the library.
+
+### Custom columns
+Classify conditions along your own dimension — **CSI Division**, bid package, trade. The Takeoffs panel's **Columns** tab defines project-wide columns with a list of values; once columns exist, the active condition's properties (Takeoffs tab) pick one value per condition. Renaming a value updates every assigned condition; deleting one keeps the assignment, shown as *"(removed)"*. The Report can **group** by any custom column. Columns are hidden in the table/CSV by default — toggle them in the **Columns** picker (grouping by a column always includes it in CSV/XLSX); the JSON export always carries definitions and values.
 
 ### Measure roles → totals (the math)
 | Role | Adds to |
@@ -123,7 +132,7 @@ Turn a markup into a tracked **Request For Information**. Open the markup panel,
 - **Export** — from the Report: an **RFI log** (CSV / JSON), the RFIs embedded in the report **JSON**, and an **RFI schedule page** in the **Marked set** PDF (with the RFI number printed on each linked markup).
 
 ### Report & export
-Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, an **RFI log** (CSV / JSON), and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn, a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown), and an **RFI schedule page** when RFIs exist. Revision clouds export with real scalloped edges and their △ revision deltas. Untick the **Markups** checkbox beside the Marked-set button to ship a takeoff-only set (RFI-only exports still work). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
+Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, an **RFI log** (CSV / JSON), and a **Group** select — restructure the table by **sheet** (each sheet's slice with waste and ×N applied, subtotaled) or by any **custom column**, with the grouping named on the printed page — plus **CSV / XLSX / JSON** export and **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn, a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown), and an **RFI schedule page** when RFIs exist. Revision clouds export with real scalloped edges and their △ revision deltas. Untick the **Markups** checkbox beside the Marked-set button to ship a takeoff-only set (RFI-only exports still work). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
 
 **XLSX** downloads a four-tab Excel workbook, built entirely in your browser: **Conditions** (the report table — it follows your Columns picker, same as the CSV), **By sheet** (measured base quantities per sheet), **Materials** (per-condition lines plus the combined buy list), and **Shapes** (per-shape measured detail — no multiplier, no waste). The numbers are the same ones on screen: waste is applied only to order quantities, never to measured values.
 

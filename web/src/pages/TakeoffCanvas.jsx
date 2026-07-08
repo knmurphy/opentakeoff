@@ -9,7 +9,7 @@
 // scroll pans (any tool); pinch (ctrl-wheel) zooms; Space-drag / middle-drag pan.
 // Geometry math reads tfRef (always current), so drawing stays accurate.
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
@@ -18,10 +18,13 @@ import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
+import TakeoffsPanel, { clampPanelW } from "../components/TakeoffsPanel.jsx";
+import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
-import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
+import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale } from "../lib/sheets";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
@@ -65,32 +68,18 @@ const DETAIL_MARGIN = 0.5;   // render this much extra region beyond the viewpor
 const SYNC_MS = 90;          // React tf-mirror sync cadence during gestures (~11Hz)
 const GESTURE_MS = 140;      // wheel/pinch quiet window before the detail view re-renders
 const COLORS = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#475569"];
+// Hatch templates, palette, NO_FILL, and the HatchPattern/HatchSwatch pieces
+// live in components/hatches.jsx — shared with the TakeoffsPanel.
 
-// Architectural / flooring hatch templates. Each condition gets a line color, a
-// fill color (or No Fill), and one hatch style — rendered as an SVG <pattern> so
-// finishes read like a real drawing.
-const HATCHES = [
-  { id: "solid", label: "Solid" },
-  { id: "diag", label: "Diagonal" },
-  { id: "diag2", label: "Diagonal reverse" },
-  { id: "cross", label: "Crosshatch" },
-  { id: "diagdense", label: "Diagonal dense" },
-  { id: "horiz", label: "Horizontal" },
-  { id: "vert", label: "Vertical" },
-  { id: "grid", label: "Square / tile" },
-  { id: "brick", label: "Brick / running bond" },
-  { id: "plank", label: "Plank / wood" },
-  { id: "herring", label: "Herringbone" },
-  { id: "basket", label: "Basketweave" },
-  { id: "checker", label: "Checker" },
-  { id: "wave", label: "Wave / scallop" },
-  { id: "dots", label: "Sand / dots" },
-  { id: "speckle", label: "Terrazzo / speckle" },
-];
-const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
-const NO_FILL = "none";
+// Docked Takeoffs panel geometry — per-user UI prefs (localStorage, diff-only
+// overrides like the report column prefs), NEVER in the takeoff payload: panel
+// width inside buildPayload would show up as noise in every snapshot diff.
+// (The width clamp (clampPanelW, wrapping PANEL_MIN_W/PANEL_MAX_W) is exported
+// by the panel itself — ONE clamp, so a future range change can't diverge
+// between the panel's own drag clamp and the load-time clamp here.)
+const PANEL_PREFS_KEY = "opentakeoff_panel";
+const PANEL_DEFAULTS = { w: 320, collapsed: false, strip: false, az: false, group: false };
 
-// SVG <pattern> for a condition (userSpaceOnUse → scales with the plan, CAD-style).
 // Invert a canvas's pixels in place: one difference-with-white pass (an
 // involution — applying it again flips back). This is how the negative/dark
 // view works: pixel inversion costs one pass at draw time, where a CSS
@@ -109,51 +98,12 @@ function invertCanvasPixels(cv) {
   ctx.restore();
 }
 
-function HatchPattern({ id, type, line, fill, dark }) {
-  const sw = 1.1;
-  // dark mode legibility comes from brighter alphas baked into the pattern —
-  // never a CSS filter over the shape overlay (that re-rasterizes the whole
-  // layer on every sync)
-  const bg = fill && fill !== NO_FILL ? <rect width={10} height={10} fill={fill} opacity={dark ? 0.32 : 0.18} /> : null;
-  const s = (d) => <path d={d} stroke={line} strokeWidth={sw} fill="none" />;
-  const wrap = (kids) => <pattern id={id} patternUnits="userSpaceOnUse" width={10} height={10}>{bg}{kids}</pattern>;
-  switch (type) {
-    case "diag": return wrap(s("M0,10 L10,0 M-3,3 L3,-3 M7,13 L13,7"));
-    case "diag2": return wrap(s("M0,0 L10,10 M-3,7 L3,13 M7,-3 L13,3"));
-    case "cross": return wrap(<>{s("M0,10 L10,0 M-3,3 L3,-3 M7,13 L13,7")}{s("M0,0 L10,10 M-3,7 L3,13 M7,-3 L13,3")}</>);
-    case "diagdense": return wrap(s("M0,5 L5,0 M0,10 L10,0 M5,10 L10,5 M-2.5,2.5 L2.5,-2.5 M7.5,12.5 L12.5,7.5"));
-    case "horiz": return wrap(s("M0,3 L10,3 M0,7 L10,7"));
-    case "vert": return wrap(s("M3,0 L3,10 M7,0 L7,10"));
-    case "grid": return wrap(s("M0,3 L10,3 M0,7 L10,7 M3,0 L3,10 M7,0 L7,10"));
-    case "brick": return wrap(<>{s("M0,3 L10,3 M0,7 L10,7")}{s("M5,0 L5,3 M0,3 L0,7 M10,3 L10,7 M5,7 L5,10")}</>);
-    case "plank": return wrap(<>{s("M0,0 L10,0 M0,5 L10,5 M0,10 L10,10")}{s("M3,0 L3,5 M7,5 L7,10")}</>);
-    case "herring": return wrap(<>{s("M0,5 L5,0 L10,5")}{s("M0,10 L5,5 L10,10")}</>);
-    case "basket": return wrap(<>{s("M0,2 L5,2 M0,4 L5,4")}{s("M7,0 L7,5 M9,0 L9,5")}{s("M2,5 L2,10 M4,5 L4,10")}{s("M5,7 L10,7 M5,9 L10,9")}</>);
-    case "checker": return wrap(<>{<rect x={0} y={0} width={5} height={5} fill={line} opacity={0.4} />}{<rect x={5} y={5} width={5} height={5} fill={line} opacity={0.4} />}</>);
-    case "wave": return wrap(<>{s("M0,4 Q2.5,1 5,4 T10,4")}{s("M0,8 Q2.5,5 5,8 T10,8")}</>);
-    case "dots": return wrap(<>{[2, 6].map((y) => [2, 6].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.1} fill={line} />))}</>);
-    case "speckle": return wrap(<>{[[1.5, 2, 1.3], [6, 1.5, 0.8], [3.5, 5, 1], [8, 5.5, 1.4], [1.5, 8, 0.9], [6.5, 8.5, 1.2]].map(([x, y, r], i) => <circle key={i} cx={x} cy={y} r={r} fill={line} />)}</>);
-    default: return wrap(null);  // solid: only the fill bg
-  }
-}
-
-// Preview swatch — renders the ACTUAL pattern so the picker always matches the draw.
-function HatchSwatch({ type, line, fill }) {
-  const fc = fill && fill !== NO_FILL ? fill : null;
-  const pid = `sw-${type}-${String(line).replace("#", "")}-${String(fill).replace("#", "")}`;
-  return (
-    <svg width="26" height="18" style={{ display: "block", overflow: "hidden" }}>
-      {type !== "solid" && <defs><HatchPattern id={pid} type={type} line={line} fill={fill} /></defs>}
-      <rect x="0.5" y="0.5" width="25" height="17" stroke="#a39e8d"
-        fill={type === "solid" ? (fc || "#fff") : `url(#${pid})`}
-        fillOpacity={type === "solid" ? (fc ? 0.45 : 1) : 1} />
-    </svg>
-  );
-}
-
 let _idn = 0;
 const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
 const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+// shared by the status-bar tone AND the auto-dismiss skip (below) — one
+// definition of "this message is bad news" for both readers
+const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
 // Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
 // hit-testing) live in lib/geometry.js — byte-identical with Spline's copy.
 const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
@@ -186,81 +136,40 @@ const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
 // Each default also carries a couple of editable starter materials — quantities
 // derive deterministically from measured area/linear ÷ a coverage rate you set
 // (off the product data sheet). Delete/edit freely; they're just sensible seeds.
-// Adhesive coverage by trowel notch, SF per gallon. Typical wood-adhesive range is
-// ~40–70 SF/gal: a wider/coarser notch lays more glue and covers less per gallon.
-// Picking a notch fills the coverage rate + notes it. Always verify against the
-// current product data sheet for your subfloor + flooring type.
-const TROWEL_PRESETS = [
-  { label: "fine",     per: 70 },
-  { label: "medium",   per: 58 },
-  { label: "standard", per: 50 },
-  { label: "coarse",   per: 40 },
-];
-const isAdhesive = (name) => /adhes|glue|bond|mastic/i.test(name || "");
-
+// Expressed in TEMPLATE shape (finish_tag/waste_pct/materials, no fill — it
+// defaults from color) so seeding and the Library run the same constructor.
 const FLOORING_DEFAULTS = [
-  { tag: "CPT-1", color: "#2f7d54", hatch: "speckle", waste: 5,  mats: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Carpet tile
-  { tag: "BRD-1", color: "#be185d", hatch: "dots",    waste: 10, mats: [{ name: "Adhesive", per: 120, basis: "area", unit: "gal" }] },                                    // Broadloom carpet (roll goods)
-  { tag: "LVT-1", color: "#b8860b", hatch: "plank",   waste: 8,  mats: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Luxury vinyl plank/tile
-  { tag: "WD-1",  color: "#9a3412", hatch: "plank",   waste: 10, mats: [                                                                                                  // Unfinished 2.25″ solid red oak — glue-down + site-finished
+  { finish_tag: "CPT-1", color: "#2f7d54", hatch: "speckle", waste_pct: 5,  materials: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Carpet tile
+  { finish_tag: "BRD-1", color: "#be185d", hatch: "dots",    waste_pct: 10, materials: [{ name: "Adhesive", per: 120, basis: "area", unit: "gal" }] },                                    // Broadloom carpet (roll goods)
+  { finish_tag: "LVT-1", color: "#b8860b", hatch: "plank",   waste_pct: 8,  materials: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Luxury vinyl plank/tile
+  { finish_tag: "WD-1",  color: "#9a3412", hatch: "plank",   waste_pct: 10, materials: [                                                                                                  // Unfinished 2.25″ solid red oak — glue-down + site-finished
     { name: "Adhesive (wood, SMP)",     per: 50,  basis: "area", unit: "gal", note: "standard notch · SMP, solid wood" },
     { name: "Sealer (primer coat)",     per: 400, basis: "area", unit: "gal", note: "1 prime coat (~10 m²/L)" },
     { name: "Polyurethane (2K finish)", per: 136, basis: "area", unit: "gal", note: "≈3 coats @ ~408 SF/gal/coat (2K 10:1)" },
   ] },
-  { tag: "VCT-1", color: "#2563eb", hatch: "checker", waste: 5,  mats: [{ name: "Adhesive", per: 350, basis: "area", unit: "gal" }] },                                    // Vinyl composition tile
-  { tag: "SV-1",  color: "#0d9488", hatch: "solid",   waste: 10, mats: [{ name: "Adhesive", per: 150, basis: "area", unit: "gal" }] },                                    // Sheet vinyl
-  { tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste: 10, mats: [{ name: "Thinset", per: 95, basis: "area", unit: "bag" }, { name: "Grout", per: 120, basis: "area", unit: "bag" }] }, // Ceramic / porcelain tile
-  { tag: "RB-1",  color: "#475569", hatch: "horiz",   waste: 5,  mats: [{ name: "Cove base adhesive", per: 40, basis: "linear", unit: "tube" }] },                        // Rubber / resilient wall base (linear)
-  { tag: "TR-1",  color: "#c96442", hatch: "vert",    waste: 0,  mats: [] },                                                                                              // Transitions / reducers (linear)
+  { finish_tag: "VCT-1", color: "#2563eb", hatch: "checker", waste_pct: 5,  materials: [{ name: "Adhesive", per: 350, basis: "area", unit: "gal" }] },                                    // Vinyl composition tile
+  { finish_tag: "SV-1",  color: "#0d9488", hatch: "solid",   waste_pct: 10, materials: [{ name: "Adhesive", per: 150, basis: "area", unit: "gal" }] },                                    // Sheet vinyl
+  { finish_tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste_pct: 10, materials: [{ name: "Thinset", per: 95, basis: "area", unit: "bag" }, { name: "Grout", per: 120, basis: "area", unit: "bag" }] }, // Ceramic / porcelain tile
+  { finish_tag: "RB-1",  color: "#475569", hatch: "horiz",   waste_pct: 5,  materials: [{ name: "Cove base adhesive", per: 40, basis: "linear", unit: "tube" }] },                        // Rubber / resilient wall base (linear)
+  { finish_tag: "TR-1",  color: "#c96442", hatch: "vert",    waste_pct: 0,  materials: [] },                                                                                              // Transitions / reducers (linear)
 ];
-function seedConditions() {
-  return FLOORING_DEFAULTS.map((d) => ({
-    id: uid("cnd"), finish_tag: d.tag, color: d.color, fill: d.color,
-    hatch: d.hatch, multiplier: 1, waste_pct: d.waste,
-    materials: (d.mats || []).map((m) => ({ id: uid("mat"), round: true, ...m })),
-  }));
-}
+// A template is a condition minus ids (finish_tag, colors, hatch, waste,
+// H/T params, materials) — instantiation mints fresh condition/material ids.
+const instantiateTemplate = (t) => ({
+  id: uid("cnd"), finish_tag: t.finish_tag || "?",
+  color: t.color || PALETTE[0], fill: t.fill ?? t.color ?? PALETTE[0],
+  hatch: t.hatch || "solid", multiplier: 1, waste_pct: Number(t.waste_pct) || 0,
+  ...(t.height_ft != null ? { height_ft: t.height_ft } : {}),
+  ...(t.thickness_in != null ? { thickness_in: t.thickness_in } : {}),
+  materials: (t.materials || []).map((m) => ({ round: true, ...m, id: uid("mat") })),
+});
+// Fresh-workspace seeding reads the user's template library first; the
+// built-in flooring defaults are only the empty-library fallback. Both paths
+// run instantiateTemplate — ONE condition constructor, no drift.
+const seedConditions = (library) => (library?.length ? library : FLOORING_DEFAULTS).map(instantiateTemplate);
 
-// Editable supporting-materials rows — the assembly behind a condition. Shared
-// by the top-bar editor and the Takeoffs side panel so the two never drift.
-function MaterialsEditor({ materials, onAdd, onUpdate, onRemove }) {
-  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
-  return (
-    <>
-      {(materials || []).map((m) => (
-        <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-          <input value={m.name} onChange={(e) => onUpdate(m.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)" style={{ ...ip, width: 160 }} />
-          <span style={{ color: "var(--ink-muted)" }}>1</span>
-          <input value={m.unit} onChange={(e) => onUpdate(m.id, { unit: e.target.value })} placeholder="unit" style={{ ...ip, width: 60 }} />
-          <span style={{ color: "var(--ink-muted)" }}>per</span>
-          <input type="number" min="0" step="any" value={m.per || ""} onChange={(e) => onUpdate(m.id, { per: Math.max(0, parseFloat(e.target.value) || 0) })} placeholder="0" style={{ ...ip, width: 66 }} />
-          <select value={m.basis || "area"} onChange={(e) => onUpdate(m.id, { basis: e.target.value })} style={{ ...ip, background: "var(--paper-bright)" }}>
-            <option value="area">floor SF</option>
-            <option value="linear">linear LF</option>
-            <option value="count">each</option>
-          </select>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
-            <input type="checkbox" checked={m.round !== false} onChange={(e) => onUpdate(m.id, { round: e.target.checked })} />round up
-          </label>
-          {isAdhesive(m.name) && (m.basis || "area") === "area" && (
-            <select value={TROWEL_PRESETS.some((t) => t.label === m.note) ? m.note : ""}
-              onChange={(e) => { const t = TROWEL_PRESETS.find((x) => x.label === e.target.value); if (t) onUpdate(m.id, { note: t.label, per: t.per }); }}
-              title="Trowel notch — sets the adhesive coverage (SF/gal). Verify against the data sheet."
-              style={{ ...ip, background: "var(--paper-bright)" }}>
-              <option value="">trowel…</option>
-              {TROWEL_PRESETS.map((t) => <option key={t.label} value={t.label}>{t.label} · {t.per} SF/gal</option>)}
-            </select>
-          )}
-          <input value={m.note || ""} onChange={(e) => onUpdate(m.id, { note: e.target.value })} placeholder="note (coats, trowel…)" style={{ ...ip, width: 150 }} />
-          <button onClick={() => onRemove(m.id)} title="Remove this material"
-            style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
-        </div>
-      ))}
-      <button onClick={onAdd}
-        style={{ marginTop: 2, padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add material</button>
-    </>
-  );
-}
+// The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
+// live in components/TakeoffsPanel.jsx — the panel is their only surface now.
 
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
@@ -275,16 +184,27 @@ export default function TakeoffCanvas() {
   const [sheetGroup, setSheetGroup] = useState([]);   // sheetKeys shown side-by-side; [] = single-sheet mode
   const [lastGroup, setLastGroup] = useState([]);     // most recent side-by-side composition — "Regroup" restores it
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
-  const [hatchOpen, setHatchOpen] = useState(false);         // hatch picker popover (declutters the row)
-  const [matOpen, setMatOpen] = useState(false);             // supporting-materials editor panel
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
   const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
   const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
   const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
-  const [showTakeoffs, setShowTakeoffs] = useState(false);    // side panel: takeoffs list (conditions + totals)
-  const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
+  // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
+  // persist per user in localStorage as diffs against PANEL_DEFAULTS.
+  const [panelPrefs, setPanelPrefs] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || "{}");
+      return { ...PANEL_DEFAULTS, ...(p && typeof p === "object" && !Array.isArray(p) ? p : {}) };
+    } catch { return { ...PANEL_DEFAULTS }; }
+  });
+  // Panel VIEW state (tab, filter, collapsed groups, ⌘/⇧ multi-select) lives
+  // in the TakeoffsPanel component. Two hooks back into it from here:
+  const [panelEpoch, setPanelEpoch] = useState(0);   // bumped by hydrate — the panel clears the transients that described the replaced conditions
+  const panelSelectionRef = useRef(null);            // the panel registers "dismiss the bulk selection" here; activateCondition calls it
+  const [templates, setTemplates] = useState([]);             // condition template library (browser-global, meta store)
+  const templatesRef = useRef([]);                            // readable inside hydrate (seeding a fresh workspace)
+  const [matLib, setMatLib] = useState([]);                   // material library (browser-global; conditions COPY on attach + carry lib_id)
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
   const [status, setStatus] = useState("loading");
@@ -299,6 +219,28 @@ export default function TakeoffCanvas() {
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
+  // diff-only prefs (cf. reportColumns): only keys that differ from the
+  // defaults persist, so a future default change reaches existing users
+  useEffect(() => {
+    try {
+      const diff = {};
+      for (const k of Object.keys(PANEL_DEFAULTS)) if (panelPrefs[k] !== PANEL_DEFAULTS[k]) diff[k] = panelPrefs[k];
+      localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(diff));
+    } catch { /* private mode */ }
+  }, [panelPrefs]);
+  const panelW = clampPanelW(Number(panelPrefs.w) || PANEL_DEFAULTS.w);
+  const takeoffsOpen = !panelPrefs.collapsed;
+  const toggleTakeoffs = () => setPanelPrefs((p) => ({ ...p, collapsed: !p.collapsed }));
+  // Panel resize lives INSIDE TakeoffsPanel (mid-drag width goes straight to
+  // its DOM node; the pref commits ONCE on release via setPanelPrefs). Each
+  // committed width change reflows the canvas container — coordinate math is
+  // safe (pointer→image reads the rect at event time; the stage transform is
+  // anchored top-left, so content stays put and we deliberately do NOT
+  // re-fit) — but the hi-res detail crop only re-renders on transform change,
+  // so the detail effect also keys on panelW/takeoffsOpen below, and mid-drag
+  // the panel holds the gesture window open through this callback (like wheel
+  // zoom) so the crop re-renders once per drag, on settle.
+  const holdPanelGesture = useCallback(() => { gestureUntilRef.current = performance.now() + GESTURE_MS; }, []);
   // negative view is baked into the canvas PIXELS (invertCanvasPixels), never a
   // CSS filter — track which canvases currently hold inverted pixels (only
   // canvases that finished a render get an entry), + darkMode readable from
@@ -312,6 +254,7 @@ export default function TakeoffCanvas() {
   const [pendingLen, setPendingLen] = useState("");
 
   const [conditions, setConditions] = useState([]);
+  const [conditionColumns, setConditionColumns] = useState([]);  // project-level custom-column vocabulary [{ id, name, values }] — assignments live on c.attrs
   const [activeCond, setActiveCond] = useState("");
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
@@ -329,7 +272,29 @@ export default function TakeoffCanvas() {
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
   const [saveState, setSaveState] = useState("idle");
-  const [commitMsg, setCommitMsg] = useState("");   // transient status line (misnamed for history; just the message bar)
+  // internal state is { text }, minted FRESH on every setCommitMsg call — a
+  // byte-identical message (e.g. two "Couldn't open X" in a row) still gets a
+  // new object identity, so the effect below (keyed on this object) restarts
+  // its clock instead of no-op'ing on an unchanged dep. setCommitMsg(text) is
+  // a thin, stable-shaped wrapper so the ~48 call sites below stay untouched.
+  const [commitMsgState, setCommitMsgState] = useState({ text: "" });
+  const commitMsg = commitMsgState.text;   // misnamed for history; just the message bar
+  const setCommitMsg = (text) => setCommitMsgState({ text });
+  // transient means transient: every message dismisses itself after ~6s (a
+  // repeat message restarts the clock — see above). Three things don't age
+  // out on a timer: the stale-tab lockout (STALE_TAB_MESSAGE — sticky until
+  // the user reloads; it's the only story this tab has left to tell), any
+  // other failure message (isDangerMsg — "Couldn't…"/"Commit failed…" — stays
+  // until the NEXT message replaces it, not a clock), and in-progress messages
+  // (the file's own "…" convention — "Reading files…", "Building the marked
+  // set…", ingestFiles' onProgress strings — which must not vanish mid-op;
+  // grep setCommitMsg to see every message and confirm the convention holds).
+  useEffect(() => {
+    const text = commitMsgState.text;
+    if (!text || isDangerMsg(text) || text.endsWith("…")) return;
+    const t = setTimeout(() => setCommitMsg(""), 6000);
+    return () => clearTimeout(t);
+  }, [commitMsgState]);
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [showSnapshots, setShowSnapshots] = useState(false); // Snapshots modal (save / compare / restore)
   const [projectName, setProjectName] = useState("");   // optional label for the report header
@@ -476,7 +441,17 @@ export default function TakeoffCanvas() {
     return best;
   };
   const panelKeySet = new Set(groupKeys);
-  const visibleShapes = shapes.filter((s) => panelKeySet.has(s.sheet_id));
+  // memoized: feeds the per-condition totals map the memoized TakeoffsPanel
+  // takes as a prop — identity must hold across canvas-only renders. Builds
+  // its own key set from sheetGroup/sheetKey (what groupKeys/panelKeySet above
+  // are themselves derived from) rather than depending on groupSig or the
+  // panelKeySet instance above — both are new on every render, so depending on
+  // either honestly would recompute every render regardless; these are the
+  // real, referentially-stable inputs.
+  const visibleShapes = useMemo(() => {
+    const keys = new Set(sheetGroup.length ? sheetGroup : [sheetKey]);
+    return shapes.filter((s) => keys.has(s.sheet_id));
+  }, [shapes, sheetGroup, sheetKey]);
   const visibleMarkups = markups.filter((m) => panelKeySet.has(m.sheet_id));
   // scale is PER PAGE (plan sets are never one uniform scale) — set it once per
   // sheet and it's remembered. In group mode the scale dropdown and hints target
@@ -584,9 +559,17 @@ export default function TakeoffCanvas() {
     setClientInfo(Object.fromEntries(Object.entries(
       a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
     ).filter(([, v]) => typeof v === "string")));
-    const conds = a.conditions || [];
+    setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
+    const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
-    else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
+    else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
+    // panel transients reset with the conditions they described — a snapshot
+    // Load must not keep a checked set / range anchor / filter / collapsed
+    // groups aimed at the PRE-load list (bulk edits would misfire on ids that
+    // happen to survive). That state lives in the TakeoffsPanel now: bump its
+    // epoch and it clears them in place (panel tab + width survive, as they
+    // always did). On the mount load this is a no-op (fresh panel state).
+    setPanelEpoch((e) => e + 1);
     setShapes(a.shapes || []);
     // normalize hydrated markups: legacy workspaces may hold markups with no id
     // (pre-dating the id field) — seed a stable id + default rfi_id so the new
@@ -620,7 +603,15 @@ export default function TakeoffCanvas() {
   };
   useEffect(() => {
     let off = false;
-    store.loadAnnotations().then((a) => {
+    // templates load BEFORE annotations: hydrate's fresh-workspace seeding
+    // reads templatesRef, so the library must be in hand first
+    store.loadTemplates().catch(() => []).then((tpl) => {
+      if (!off) { templatesRef.current = tpl; setTemplates(tpl); }
+      return store.loadMaterialLibrary().catch(() => []);
+    }).then((ml) => {
+      if (!off) setMatLib(ml);
+      return store.loadAnnotations();
+    }).then((a) => {
       if (off) return;
       hydrate(a);
       hydrated.current = true;
@@ -633,6 +624,32 @@ export default function TakeoffCanvas() {
       hydrated.current = true;
     });
     return () => { off = true; };
+  }, []);
+
+  // library freshness: BOTH browser-global records — the condition template
+  // library AND the material library (each sanitized at load, same as the
+  // mount effect above) — may have been edited by another tab since our mount
+  // load; re-read each on tab focus. Safe to swap in wholesale because every
+  // library mutation persists immediately (nothing unsaved lives only in this
+  // tab's state). Skip the setState when the freshly loaded list is
+  // byte-identical to what we're already holding (a cheap JSON signature
+  // compare) — TakeoffsPanel is memoized on these arrays' identity, and an
+  // unconditional set would defeat that memo on every tab focus even when
+  // nothing actually changed. This NARROWS the multi-tab last-write-wins
+  // window on both records; it doesn't close it.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      store.loadTemplates().then((tpl) => {
+        if (JSON.stringify(tpl) === JSON.stringify(templatesRef.current)) return;
+        templatesRef.current = tpl; setTemplates(tpl);
+      }).catch(() => { /* keep what we have */ });
+      store.loadMaterialLibrary().then((ml) => {
+        setMatLib((cur) => (JSON.stringify(ml) === JSON.stringify(cur) ? cur : ml));
+      }).catch(() => { /* keep what we have */ });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
   // remember every live composition so Regroup works after ANY exit from group
@@ -892,8 +909,10 @@ export default function TakeoffCanvas() {
       if (detailKeyRef.current === renderKey) detailKeyRef.current = "";   // let the next tick retry this crop
       if (e?.name !== "RenderingCancelledException") console.error("[detail] render failed:", e);
     });
+    // panelW/takeoffsOpen: docking or resizing the Takeoffs panel changes the
+    // container rect without a transform change — re-run so the crop resyncs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tf, groupSig, status, focusKey]);
+  }, [tf, groupSig, status, focusKey, panelW, takeoffsOpen]);
 
   // the doc cache holds whole PDFs in the worker — tear it down when the
   // project view unmounts or the project changes
@@ -930,7 +949,7 @@ export default function TakeoffCanvas() {
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
-  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
+  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
@@ -945,7 +964,7 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1067,16 +1086,20 @@ export default function TakeoffCanvas() {
   // remember the last armed measure tool — the Measure menu face shows it
   useEffect(() => { if (MEASURE_TOOLS.some((t) => t.id === tool)) lastMeasureRef.current = tool; }, [tool]);
 
-  // Number keys 1–9 switch the active condition (material) fast.
+  // Number keys 1–9 switch the active condition (material) fast — through
+  // activateCondition with reassign:false: a digit press has no visual
+  // reassign affordance (unlike the panel row / strip button), so it must
+  // never silently move a selected shape's quantities. It still dismisses a
+  // live bulk selection, same as every activation surface.
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
       const n = parseInt(e.key, 10);
-      if (n >= 1 && n <= 9 && conditions[n - 1]) { setActiveCond(conditions[n - 1].id); }
+      if (n >= 1 && n <= 9 && conditions[n - 1]) activateCondition(conditions[n - 1].id, { reassign: false });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [conditions]);
+  }, [conditions, tool, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Undo a wrong click: Backspace/Delete (or Cmd/Ctrl+Z) removes the last placed
   // point; Escape cancels the whole in-progress shape.
@@ -1603,7 +1626,7 @@ export default function TakeoffCanvas() {
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
     if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
     const h = Number(aCond?.height_ft) || 0;
-    if (!(h > 0)) { setCommitMsg(`Set a height for ${aCond?.finish_tag || "this condition"} (H in the condition bar) — Surface Area = traced LF × height.`); return; }
+    if (!(h > 0)) { setCommitMsg(`Set a height for ${aCond?.finish_tag || "this condition"} (H in the Takeoffs panel) — Surface Area = traced LF × height.`); return; }
     const LF = openLen(points) * upp;
     setShapes((s) => [...s, {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "surface_area", height_ft: h,
@@ -1754,7 +1777,7 @@ export default function TakeoffCanvas() {
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
-      }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
+      }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
         dark: darkMode, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
@@ -1943,6 +1966,29 @@ export default function TakeoffCanvas() {
   function deleteSelected() { if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); } }
   function reassignSelected(condId) { if (selectedId) setShapes((ss) => ss.map((s) => (s.id === selectedId ? { ...s, condition_id: condId } : s))); }
 
+  // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
+  // the panel's ⌖ / double-click navigation. Fit zoom is capped so a lone
+  // count marker doesn't slam the view to maximum magnification.
+  function locateCondition(id) {
+    const el = containerRef.current;
+    if (!el) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, found = false;
+    for (const s of visibleShapes) {
+      if (s.condition_id !== id) continue;
+      const sp = panelByKey(s.sheet_id);
+      for (const [nx, ny] of s.verts_norm) {
+        const x = nx * sp.img.w + sp.xOffset, y = ny * sp.img.h;
+        x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+        found = true;
+      }
+    }
+    if (!found) { setCommitMsg(`No takeoffs for ${condById[id]?.finish_tag || "this condition"} on the open sheet${groupKeys.length > 1 ? "s" : ""} yet.`); return; }
+    const r = el.getBoundingClientRect();
+    const w = Math.max(x1 - x0, 1), h = Math.max(y1 - y0, 1), pad = 90;
+    const scale = clamp(Math.min((r.width - pad) / w, (r.height - pad) / h, 1.5));
+    setTfNow({ x: (r.width - w * scale) / 2 - x0 * scale, y: (r.height - h * scale) / 2 - y0 * scale, scale });
+  }
+
   function addCondition() {
     const tag = (window.prompt("Finish tag for this condition (e.g. LVT-1):") || "").trim();
     if (!tag) return;
@@ -1957,7 +2003,8 @@ export default function TakeoffCanvas() {
       waste_pct: 0,         // flooring waste allowance (manual) — applied in the Report
       materials: [],        // supporting materials (adhesive, grout, …) with coverage rates
     };
-    setConditions((cs) => [...cs, c]); setActiveCond(c.id);
+    setConditions((cs) => [...cs, c]);
+    activateCondition(c.id, { reassign: false });   // no reassign affordance on +condition; still dismisses a live bulk selection
   }
   const updateCond = (patch) => setConditions((cs) => cs.map((c) => (c.id === activeCond ? { ...c, ...patch } : c)));
 
@@ -1971,8 +2018,39 @@ export default function TakeoffCanvas() {
     if (owned.length) setShapes((ss) => ss.filter((s) => s.condition_id !== id));
     setConditions(next);
     if (activeCond === id) setActiveCond(next[0]?.id || "");
+    // no bulk-selection pruning needed here: the panel derives liveness from
+    // the conditions prop (liveChecked = conditions ∩ checked), so a deleted
+    // id left in its checked set is inert by construction
     setCommitMsg(`Deleted ${c.finish_tag}${owned.length ? ` and ${owned.length} takeoff${owned.length === 1 ? "" : "s"}` : ""}.`);
   }
+
+  // custom columns: project-scoped vocabulary editing + per-condition assignment.
+  // Snapshot-compare asymmetry, accepted: the diff (COND_FIELDS quantities) is
+  // blind to attrs/definition changes, yet Load restores them — an assignments-
+  // only change diffs as "unchanged". Known, not a bug.
+  const assignAttr = (colId, v) => {
+    // hydrate sanitizes attrs (sanitizeConditionAttrs), so spreading is safe;
+    // an absent attrs spreads to {}
+    const attrs = { ...aCond?.attrs };
+    if (v) attrs[colId] = v; else delete attrs[colId];   // Unassigned = key absent, never ""
+    updateCond({ attrs });
+  };
+  const addColumn = () => setConditionColumns((cols) => [...cols, { id: uid("col"), name: "", values: [] }]);
+  const renameColumn = (colId, name) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, name } : cc)));   // id stays — assignments follow automatically
+  const addColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId && !cc.values.includes(v) ? { ...cc, values: [...cc.values, v] } : cc)));
+  const removeColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.filter((x) => x !== v) } : cc)));   // assigned conditions keep the string — selects show "(removed)"
+  const renameColumnVal = (colId, oldV) => {
+    const newV = (window.prompt("Rename value:", oldV) || "").trim();
+    if (!newV || newV === oldV) return;
+    // rename into an existing value = merge (values are unique — they key the chips and the select options)
+    setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.includes(newV) ? cc.values.filter((x) => x !== oldV) : cc.values.map((x) => (x === oldV ? newV : x)) } : cc)));
+    setConditions((cs) => renameColumnValue(cs, colId, oldV, newV));   // assignments follow the vocabulary
+  };
+  const deleteColumn = (colId) => {
+    const cc = conditionColumns.find((c) => c.id === colId);
+    if (!window.confirm(`Delete column "${columnLabel(cc)}" for the whole project? Conditions keep their values but they're no longer shown or exported.`)) return;
+    setConditionColumns((cols) => cols.filter((c) => c.id !== colId));   // orphaned attrs[colId] stay behind — harmless, nothing iterates raw attrs
+  };
 
   // supporting-materials editing (operates on the active condition)
   const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
@@ -2025,9 +2103,10 @@ export default function TakeoffCanvas() {
   const condMult = aCond?.multiplier || 1;
   // HUD + Takeoffs panel are sheet-scoped ("this sheet"): they total the
   // VISIBLE shapes through the same conditionTotals rules the Report uses —
-  // one source of role math, two scopes.
-  const visRows = conditionTotals(conditions, visibleShapes);
-  const visRowById = new Map(visRows.map((r) => [r.id, r]));
+  // one source of role math, two scopes. Memoized: visRowById is a prop of the
+  // memoized panel, so its identity must only change when the totals can.
+  const visRows = useMemo(() => conditionTotals(conditions, visibleShapes), [conditions, visibleShapes]);
+  const visRowById = useMemo(() => new Map(visRows.map((r) => [r.id, r])), [visRows]);
   const condRow = visRowById.get(activeCond);
   const condTotal = condRow?.floor_sf || 0;
   const lfTotal = condRow?.lf || 0;
@@ -2077,6 +2156,203 @@ export default function TakeoffCanvas() {
     </button>
   );
   const vRule = <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)", margin: "0 3px" }} />;
+
+  // The panel's condition-list VIEW (search / natural sort / grouping / the
+  // ⌘/⇧ multi-select) lives in components/TakeoffsPanel.jsx.
+
+  // one activation path — the panel row, the compact strip, the 1–9 hotkeys,
+  // +condition, and Library Apply all funnel here so the reassign-in-Select
+  // and clear-multi-select semantics can never drift between surfaces. Only
+  // surfaces with a VISIBLE reassign affordance (the panel row and the strip
+  // button — both show the "reassign selected shape" hint once a shape is
+  // selected) actually reassign; { reassign: false } is for keyboard/
+  // programmatic activations (hotkeys, +condition, Library Apply) that offer
+  // no such affordance — a digit press or an Apply click must never silently
+  // move a selected shape's quantities. EVERY activation surface, reassigning
+  // or not, dismisses a live bulk selection.
+  const activateCondition = (id, { reassign = true } = {}) => {
+    if (reassign && tool === "select" && selectedId) reassignSelected(id);
+    setActiveCond(id);
+    panelSelectionRef.current?.();   // plain activation dismisses a live bulk selection (panel view state)
+  };
+
+  // Bulk mutations — the multi-selection is TakeoffsPanel view state; every
+  // callback takes the LIVE id set the panel computed (conditions ∩ checked),
+  // so counts and names here can never claim rows the list already lost.
+  const bulkWasteConditions = (ids, v) => {
+    setConditions((cs) => cs.map((c) => (ids.has(c.id) ? { ...c, waste_pct: v } : c)));
+    setCommitMsg(`Waste set to ${v}% on ${ids.size} condition${ids.size === 1 ? "" : "s"}.`);
+  };
+  const bulkColorConditions = (ids, color) => setConditions((cs) => cs.map((c) => (ids.has(c.id) ? { ...c, color } : c)));
+  // returns whether the delete went through — the panel clears its selection only then
+  const bulkDeleteConditions = (ids) => {
+    const live = conditions.filter((c) => ids.has(c.id));
+    if (!live.length) return false;
+    const owned = shapes.filter((s) => ids.has(s.condition_id)).length;
+    // name what dies while the list still reads at a glance (≤5); count beyond
+    const what = live.length <= 5 ? live.map((c) => c.finish_tag).join(", ") : `${live.length} conditions`;
+    if (!window.confirm(`Delete ${what}${owned ? ` and their ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}? This can't be undone.`)) return false;
+    setConditions((cs) => cs.filter((c) => !ids.has(c.id)));
+    if (owned) setShapes((ss) => ss.filter((s) => !ids.has(s.condition_id)));
+    if (ids.has(activeCond)) setActiveCond(conditions.find((c) => !ids.has(c.id))?.id || "");
+    setCommitMsg(`Deleted ${live.length} condition${live.length === 1 ? "" : "s"}${owned ? ` and ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}.`);
+    return true;
+  };
+
+  // ── condition template library ops (browser-global; store meta key) ───────
+  const persistTemplates = (next) => {
+    templatesRef.current = next; setTemplates(next);
+    store.saveTemplates(next).catch((e) => setCommitMsg(`Couldn't save the library: ${e.message || e}`));
+  };
+  const condToTemplate = (c) => ({
+    finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
+    waste_pct: c.waste_pct || 0,
+    ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
+    ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
+    materials: (c.materials || []).map(({ id: _id, ...m }) => m),   // ids are minted on instantiation
+  });
+  const saveActiveAsTemplate = () => {
+    if (!aCond) return;
+    const tpl = condToTemplate(aCond);
+    const at = templates.findIndex((t) => t.finish_tag === tpl.finish_tag);
+    if (at >= 0 && !window.confirm(`A “${tpl.finish_tag}” template is already in the library — replace it?`)) return;
+    persistTemplates(at >= 0 ? templates.map((t, i) => (i === at ? tpl : t)) : [...templates, tpl]);
+    setCommitMsg(`Saved ${tpl.finish_tag} to the library.`);
+  };
+  const applyTemplate = (t) => {
+    const c = instantiateTemplate(t);
+    setConditions((cs) => [...cs, c]);
+    // reassign:false — Library Apply has no visual reassign affordance, but it
+    // still dismisses a live bulk selection like every other activation surface
+    activateCondition(c.id, { reassign: false });
+    // the panel switches itself back to the Takeoffs tab (its Apply handler)
+    setCommitMsg(`Added ${c.finish_tag} from the library.`);
+  };
+  // idx addresses the template BY POSITION (the panel's plain templates.map
+  // index — it doesn't filter/sort). The focus-refresh above now skips the
+  // setState when the loaded library is unchanged, which closes off the
+  // common way idx would go stale mid-session; a same-length edit landing
+  // from another tab in the sub-second window between render and click can
+  // still retarget these by position — accepted residual risk, not fully
+  // closed. Guard the deref so a stale idx (list shrank out from under us)
+  // reports rather than throwing.
+  const renameTemplate = (idx) => {
+    const t = templates[idx];
+    if (!t) { setCommitMsg("The library changed in another tab — try again."); return; }
+    const tag = (window.prompt("Template tag:", t.finish_tag) || "").trim();
+    if (!tag || tag === t.finish_tag) return;
+    persistTemplates(templates.map((x, i) => (i === idx ? { ...x, finish_tag: tag } : x)));
+  };
+  const deleteTemplate = (idx) => {
+    const t = templates[idx];
+    if (!t) { setCommitMsg("The library changed in another tab — try again."); return; }
+    if (!window.confirm(`Remove the ${t.finish_tag} template from the library? Existing conditions are unaffected.`)) return;
+    persistTemplates(templates.filter((_, i) => i !== idx));
+  };
+
+  // ── material library ops (#47: copy-on-attach with a live link) ───────────
+  // Conditions always own fully materialized material lines; lib_id is an
+  // ADDITIVE link. Nothing here can affect totals, exports, or old snapshots
+  // unless the user explicitly pushes an update.
+  // memoized: both derivations feed the memoized TakeoffsPanel as props, so
+  // they must hold identity across canvas-only renders (tf mirror, crosshair)
+  const matLibById = useMemo(() => Object.fromEntries(matLib.map((m) => [m.id, m])), [matLib]);
+  const persistMatLib = (next) => {
+    setMatLib(next);
+    store.saveMaterialLibrary(next).catch((e) => setCommitMsg(`Couldn't save the material library: ${e.message || e}`));
+  };
+  const libFields = (lm) => ({ name: lm.name || "", unit: lm.unit || "", per: lm.per || 0, basis: lm.basis || "area", round: lm.round !== false, note: lm.note || "" });
+  // overridden = this line's field differs from its linked library entry
+  const matFieldOverridden = (m, lm, f) => {
+    if (!lm) return false;
+    const L = libFields(lm);
+    if (f === "per") return (Number(m.per) || 0) !== L.per;
+    if (f === "round") return (m.round !== false) !== L.round;
+    if (f === "basis") return (m.basis || "area") !== L.basis;   // absent basis means "area" everywhere else — don't flag it
+    return String(m[f] || "") !== String(L[f] || "");
+  };
+  const attachLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm || !aCond) return;
+    updateCond({ materials: [...(aCond.materials || []), { id: uid("mat"), ...libFields(lm), lib_id: lm.id }] });
+  };
+  const promoteMaterial = (m) => {
+    if (!m.name) { setCommitMsg("Name the material before saving it to the library."); return; }
+    const entry = { id: uid("lib"), ...libFields(m) };
+    persistMatLib([...matLib, entry]);
+    updateMaterial(m.id, { lib_id: entry.id });
+    setCommitMsg(`Saved ${m.name} to the material library.`);
+  };
+  const revertMatField = (m, f) => {
+    const lm = matLibById[m.lib_id];
+    if (lm) updateMaterial(m.id, { [f]: libFields(lm)[f] });
+  };
+  const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  // one pass per conditions change, not per library row — the Materials tab reads this per row
+  const linkedCountById = useMemo(() => {
+    const by = {};
+    for (const c of conditions) for (const m of c.materials || []) if (m.lib_id) by[m.lib_id] = (by[m.lib_id] || 0) + 1;
+    return by;
+  }, [conditions]);
+  const linkedCount = (libId) => linkedCountById[libId] || 0;
+  const pushLibUpdate = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm) return;
+    const n = linkedCount(libId);
+    if (!n) { setCommitMsg("No condition lines link this material yet."); return; }
+    if (!window.confirm(`Update ${n} linked line${n === 1 ? "" : "s"} across conditions to the library values? Overrides on those lines are replaced.`)) return;
+    setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => (m.lib_id === libId ? { ...m, ...libFields(lm) } : m)) })));
+    setCommitMsg(`Updated ${n} linked line${n === 1 ? "" : "s"} from the library.`);
+  };
+  const deleteLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    const n = linkedCount(libId);
+    if (!window.confirm(`Remove ${lm?.name || "this material"} from the library?${n ? (n === 1 ? " 1 linked line keeps its values — only the link is removed." : ` ${n} linked lines keep their values — only the links are removed.`) : ""}`)) return;
+    persistMatLib(matLib.filter((x) => x.id !== libId));
+    if (n) setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    // condition templates carry lib_id too (so applying re-links to a live
+    // entry) — detach them here as well, or a deleted entry would leave
+    // dangling links inside saved templates
+    if (templates.some((t) => (t.materials || []).some((m) => m.lib_id === libId))) {
+      persistTemplates(templates.map((t) => ({ ...t, materials: (t.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    }
+  };
+  const addLibMaterial = () => persistMatLib([...matLib, { id: uid("lib"), name: "", unit: "", per: 0, basis: "area", round: true, note: "" }]);
+
+  // ── TakeoffsPanel wiring ───────────────────────────────────────────────────
+  // The docked panel is memoized (React.memo) so canvas-only renders — the
+  // ~11Hz tf mirror during pan/zoom, crosshair/status churn — skip its whole
+  // subtree. That only works if its props hold identity, and the handlers
+  // above close over fresh state every render; so the panel gets STABLE
+  // forwarders (minted once) that read the current handler through this ref
+  // at call time. Add a handler here and it's automatically stable.
+  const panelHandlersRef = useRef(null);
+  panelHandlersRef.current = {
+    onActivate: activateCondition, onLocate: locateCondition,
+    onAddCondition: addCondition, onDeleteCondition: deleteCondition,
+    onUpdateCond: updateCond, onSetCondParam: setCondParam, onAssignAttr: assignAttr,
+    onAddMaterial: addMaterial, onUpdateMaterial: updateMaterial, onRemoveMaterial: removeMaterial,
+    onBulkWaste: bulkWasteConditions, onBulkColor: bulkColorConditions, onBulkDelete: bulkDeleteConditions,
+    onSaveTemplate: saveActiveAsTemplate, onApplyTemplate: applyTemplate,
+    onRenameTemplate: renameTemplate, onDeleteTemplate: deleteTemplate,
+    onAddColumn: addColumn, onRenameColumn: renameColumn, onDeleteColumn: deleteColumn,
+    onAddColumnValue: addColumnValue, onRemoveColumnValue: removeColumnValue, onRenameColumnValue: renameColumnVal,
+    onAttachLibMaterial: attachLibMaterial, onPromoteMaterial: promoteMaterial, onRevertMatField: revertMatField,
+    onUpdateLibMaterial: updateLibMaterial, onPushLibUpdate: pushLibUpdate,
+    onDeleteLibMaterial: deleteLibMaterial, onAddLibMaterial: addLibMaterial,
+    matFieldOverridden,   // pure helper, not an event handler — the forwarder returns its result
+    onToggleCollapse: toggleTakeoffs,
+    // these three are ALREADY stable on their own (setState identity, and
+    // holdPanelGesture is a useCallback with an empty dep array) — routed
+    // through the registry anyway so the memo contract has exactly ONE
+    // convention to audit, not "stable via the registry, except these three"
+    onPanelPrefs: setPanelPrefs, onSetActive: setActiveCond, onHoldGesture: holdPanelGesture,
+  };
+  const [panelHandlers] = useState(() => {
+    const stable = {};
+    for (const k of Object.keys(panelHandlersRef.current)) stable[k] = (...a) => panelHandlersRef.current[k](...a);
+    return stable;
+  });
 
   return (
     // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
@@ -2243,104 +2519,24 @@ export default function TakeoffCanvas() {
         </div>
       )}
 
-      {/* conditions palette */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
-        <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-muted)" }}>Conditions</span>
-        {conditions.map((c, i) => {
-          const on = c.id === activeCond;
-          return (
-            <button key={c.id} onClick={() => { if (tool === "select" && selectedId) reassignSelected(c.id); setActiveCond(c.id); }} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (i < 9 ? `Press ${i + 1}` : "")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed #1f3fc7" : "1px solid var(--ink-faint)"), background: on ? "#fff" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
-              {i < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", borderRadius: 3, padding: "0 3px" }}>{i + 1}</span>}
-              <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
-            </button>
-          );
-        })}
-        <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
-        <span style={{ fontSize: 10.5, color: "var(--ink-faint)", marginLeft: 4 }}>⌫ undo point · Esc cancel · scroll = zoom · pan mid-measure: just press-and-drag (click without dragging places the point)</span>
-        {commitMsg && <span style={{ marginLeft: "auto", fontSize: 12, color: commitMsg === STALE_TAB_MESSAGE || commitMsg.startsWith("Commit failed") ? "#b03a26" : "var(--c-positive)" }}>{commitMsg}</span>}
-      </div>
-
-      {/* appearance editor for the active condition */}
-      {aCond && (
-        <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "6px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11 }}>
-          <input value={aCond.finish_tag} onChange={(e) => updateCond({ finish_tag: e.target.value })}
-            title="Rename this condition / finish tag"
-            style={{ width: 88, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontFamily: "var(--f-mono)", fontWeight: 700, fontSize: 12, color: "var(--ink)" }} />
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ color: "var(--ink-muted)" }}>Line</span>
-            {PALETTE.map((p) => <button key={p} title={p} onClick={() => updateCond({ color: p })} style={{ width: 16, height: 16, borderRadius: 4, background: p, border: aCond.color === p ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Outline style for this condition's floor-area & linear shapes (surface walls keep dash-dot; deducts stay red-dashed)">
-            <span style={{ color: "var(--ink-muted)" }}>Style</span>
-            <select value={aCond.line_style || "solid"} onChange={(e) => updateCond({ line_style: e.target.value })}
-              style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "2px 4px" }}>
-              {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
-            </select>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ color: "var(--ink-muted)" }}>Fill</span>
-            <button title="No fill" onClick={() => updateCond({ fill: NO_FILL })} style={{ width: 16, height: 16, borderRadius: 4, background: "var(--paper-bright)", border: aCond.fill === NO_FILL ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 9, lineHeight: "12px", color: "#b03a26" }}>⦸</button>
-            {PALETTE.map((p) => <button key={p} title={p} onClick={() => updateCond({ fill: p })} style={{ width: 16, height: 16, borderRadius: 4, background: p, opacity: 0.55, border: aCond.fill === p ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
-            <span style={{ color: "var(--ink-muted)" }}>Hatch</span>
-            <button onClick={() => setHatchOpen((v) => !v)} title="Choose a hatch pattern"
-              style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 7px 2px 2px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", lineHeight: 0 }}>
-              <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={aCond.hatch || "solid"} line={aCond.color} fill={aCond.fill} /></span>
-              <span style={{ fontSize: 10.5, color: "var(--ink-muted)", lineHeight: 1 }}>{(HATCHES.find((h) => h.id === (aCond.hatch || "solid")) || {}).label || "Solid"} ▾</span>
-            </button>
-            {hatchOpen && (
-              <div style={{ position: "absolute", top: 26, left: 36, zIndex: 30, display: "grid", gridTemplateColumns: "repeat(8, auto)", gap: 4, padding: 8, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)" }}>
-                {HATCHES.map((h) => {
-                  const on = (aCond.hatch || "solid") === h.id;
-                  return <button key={h.id} title={h.label} onClick={() => { updateCond({ hatch: h.id }); setHatchOpen(false); }} style={{ padding: 1, borderRadius: 0, border: on ? `2px solid ${activeColor}` : "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", lineHeight: 0 }}><HatchSwatch type={h.id} line={aCond.color} fill={aCond.fill} /></button>;
-                })}
-              </div>
-            )}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Multiply this condition by N identical units (measure one, ×N)">
-            <span style={{ color: "var(--ink-muted)" }}>×</span>
-            <input type="number" min="1" step="1" value={aCond.multiplier || 1}
-              onChange={(e) => updateCond({ multiplier: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-              style={{ width: 46, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Waste % — a flooring allowance added on top of the measured quantity in the Report. You choose it per condition (e.g. ~8% straight-lay LVP, ~15% diagonal, ~20% herringbone).">
-            <span style={{ color: "var(--ink-muted)" }}>Waste</span>
-            <input type="number" min="0" step="1" value={aCond.waste_pct ?? 0}
-              onChange={(e) => updateCond({ waste_pct: Math.max(0, parseFloat(e.target.value) || 0) })}
-              style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-            <span style={{ color: "var(--ink-muted)" }}>%</span>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Height (ft) — the default for NEW wall traces (SF = LF × H) and the vertical-SF display on floor areas. Walls keep the height they were drawn at — select a wall to change just that one.">
-            <Icon name="height" size={13} /><span style={{ color: "var(--ink-muted)" }}>H</span>
-            <input type="number" min="0" step="0.25" value={aCond.height_ft ?? ""} placeholder="ft"
-              onChange={(e) => setCondParam("height_ft", e.target.value)}
-              style={{ width: 54, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Thickness (in) — a Linear run with thickness also computes border/feature-strip SF = LF × T/12. Changing it re-flows existing linear runs.">
-            <Icon name="thickness" size={13} /><span style={{ color: "var(--ink-muted)" }}>T</span>
-            <input type="number" min="0" step="0.25" value={aCond.thickness_in ?? ""} placeholder="in"
-              onChange={(e) => setCondParam("thickness_in", e.target.value)}
-              style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          </span>
-          <div style={{ flex: 1, minWidth: 8 }} />
-          <button onClick={() => setMatOpen((v) => !v)} title="Supporting materials (adhesive, grout, thinset…) — order quantities derive from coverage rates you set"
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOpen ? "var(--ink)" : "transparent", color: matOpen ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="product" size={12} />Materials{aCond.materials?.length ? ` (${aCond.materials.length})` : ""}
-          </button>
-          <button onClick={() => deleteCondition(aCond.id)} title="Delete this condition (and its takeoffs)"
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="close" size={11} />Delete
-          </button>
-        </div>
-      )}
-      {aCond && matOpen && (
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-cream)", fontSize: 11.5 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <strong style={{ fontFamily: "var(--f-display)", fontSize: 12.5, color: "var(--ink)" }}>Supporting materials — {aCond.finish_tag}</strong>
-            <span style={{ color: "var(--ink-muted)" }}>order qty = measured ÷ coverage, rounded up. Coverage comes off the product data sheet.</span>
-          </div>
-          <MaterialsEditor materials={aCond.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
+      {/* compact conditions strip — OPTIONAL small-project mode. The docked
+          Takeoffs panel is the primary conditions surface; the strip renders
+          the same state (activate/reassign, hotkey badges, + condition) for
+          users who want max panel-collapse and one-click switching. Toggled
+          from the panel header, persisted with the panel prefs. */}
+      {panelPrefs.strip && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+          <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-muted)" }}>Conditions</span>
+          {conditions.map((c, i) => {
+            const on = c.id === activeCond;
+            return (
+              <button key={c.id} onClick={() => activateCondition(c.id)} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (i < 9 ? `Press ${i + 1}` : "")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed #1f3fc7" : "1px solid var(--ink-faint)"), background: on ? "#fff" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
+                {i < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", borderRadius: 3, padding: "0 3px" }}>{i + 1}</span>}
+                <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
+              </button>
+            );
+          })}
+          <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
         </div>
       )}
 
@@ -2618,6 +2814,14 @@ export default function TakeoffCanvas() {
           </div>
         </div>
 
+        {/* status line — the transient message bar (was the right end of the old
+            conditions bar): floats bottom-center over the canvas, never blocks input */}
+        {commitMsg && (
+          <div style={{ position: "absolute", left: "50%", bottom: 14, transform: "translateX(-50%)", maxWidth: "70%", zIndex: 6, pointerEvents: "none", padding: "6px 12px", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-1)", fontSize: 12, color: isDangerMsg(commitMsg) ? "#b03a26" : "var(--c-positive)" }}>
+            {commitMsg}
+          </div>
+        )}
+
         {/* live readout — top-right */}
         <div style={{ position: "absolute", right: 14, top: 14, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, padding: "12px 16px", minWidth: 200, boxShadow: "0 4px 18px rgba(0,0,0,.12)", fontVariantNumeric: "tabular-nums", zIndex: 6 }}>
           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6 }}>{aCond?.finish_tag || "No condition"}</div>
@@ -2640,7 +2844,7 @@ export default function TakeoffCanvas() {
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#0e1a2e" }}>{num(liveLF * condH)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF wall</span></div>
                   <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{num(liveLF)} LF × {num(condH, 2)} ft</div>
                 </>
-              ) : <div style={{ fontSize: 12.5, color: "#b03a26" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition bar</div>;
+              ) : <div style={{ fontSize: 12.5, color: "#b03a26" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the Takeoffs panel</div>;
             })()
           ) : liveArea != null && poly.length >= 3 ? (
             <>
@@ -2677,12 +2881,13 @@ export default function TakeoffCanvas() {
         </div>
 
         {/* panel rail — markup/takeoffs toggles on the right edge (zoom-cluster
-            style). Moved out of the toolbar so it never wraps a third row; z above the
-            takeoffs panel (which docks at right:56) so a lit toggle also closes it. */}
+            style). Moved out of the toolbar so it never wraps a third row. The
+            takeoffs toggle mirrors the DOCKED panel's collapsed pref — the rail
+            rides the canvas edge, so it stays visible either way. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
           {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
           {panelBtn(() => setShowRfiPanel((v) => !v), "rfi", "RFI register — raise, track, and export Requests For Information", showRfiPanel, rfis.length)}
-          {panelBtn(() => setShowTakeoffs((v) => !v), "takeoffs", "Takeoffs — conditions + running totals", showTakeoffs, visibleShapes.length)}
+          {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
 
         {/* markup panel — manage clouds/callouts/text + link or create RFIs (top-left, clear of HUD/FABs) */}
@@ -2796,57 +3001,34 @@ export default function TakeoffCanvas() {
           />
         )}
 
-        {/* Takeoffs side panel — every condition on this sheet with its running totals.
-            "Takeoffs on the side": click a row to make it active, ⧉ to copy its shape. */}
-        {showTakeoffs && (
-          <div style={{ position: "absolute", right: 56, top: 118, width: panelMatOpen ? 420 : 300, maxHeight: "calc(100% - 132px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink)", borderRadius: 0, boxShadow: "var(--shadow-2)", zIndex: 7, fontSize: 12.5 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", background: "var(--ink)", color: "var(--paper-cream)", borderRadius: 0 }}>
-              <strong>Takeoffs · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <button onClick={() => setShowTakeoffs(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-            </div>
-            {conditions.length === 0 && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions yet — add one and start tracing.</div>}
-            {conditions.map((c) => {
-              const row = visRowById.get(c.id);
-              const mult = c.multiplier || 1;
-              const sf = row?.floor_sf || 0, lf = row?.lf || 0, ea = row?.ea || 0, wsf = row?.wall_sf || 0;
-              const shapeCount = row?.shape_count || 0;
-              const on = c.id === activeCond;
-              const matOn = on && panelMatOpen;
-              return (
-                <div key={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : "3px solid transparent" }}>
-                  <div onClick={() => setActiveCond(c.id)} title="Make this the active condition"
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer" }}>
-                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
-                      <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
-                        {sf ? `${num(sf)} SF` : ""}{wsf ? `${sf ? " · " : ""}${num(wsf)} SF wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${num(lf)} LF` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
-                      </div>
-                    </div>
-                    <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
-                    <button onClick={(e) => { e.stopPropagation(); setActiveCond(c.id); setPanelMatOpen((v) => (on ? !v : true)); }}
-                      title="Assemblies — supporting materials for this condition"
-                      style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOn ? "var(--ink)" : "transparent", color: matOn ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>
-                      <Icon name="product" size={11} />{c.materials?.length ? c.materials.length : ""}
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); deleteCondition(c.id); }} title="Delete this condition (and its takeoffs)"
-                      style={{ flexShrink: 0, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
-                  </div>
-                  {matOn && (
-                    <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
-                      <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Assemblies — order qty = measured ÷ coverage, rounded up.</div>
-                      <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            <div style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)", color: "var(--ink-muted)", fontSize: 10.5 }}>
-              Select a shape on the plan, then ⧉ Copy / ⎘ Paste (⌘C / ⌘V) — it lands on the sheet under your cursor.
-            </div>
-          </div>
-        )}
        </div>
+
+        {/* Takeoffs panel — DOCKED in the layout row (reflows the canvas, not an
+            overlay): every condition with its running totals, plus the Library,
+            Materials, and Columns tabs. Extracted to components/TakeoffsPanel.jsx and
+            ALWAYS mounted (it renders null while collapsed) so its view state —
+            tab, filter, multi-select — survives a collapse/expand round-trip
+            exactly as it did as canvas state. Collapse/expand keeps the current
+            transform — the stage is anchored top-left, so a re-fit would be a
+            jarring jump. */}
+        <TakeoffsPanel
+          open={takeoffsOpen}
+          width={panelW}
+          multiSheet={groupKeys.length > 1}
+          conditions={conditions}
+          activeCond={activeCond}
+          visRowById={visRowById}
+          conditionColumns={conditionColumns}
+          templates={templates}
+          matLib={matLib}
+          matLibById={matLibById}
+          linkedCountById={linkedCountById}
+          panelPrefs={panelPrefs}
+          reassigning={tool === "select" && !!selectedId}
+          epoch={panelEpoch}
+          clearSelectionRef={panelSelectionRef}
+          {...panelHandlers}
+        />
       </div>
 
       {/* gallery-first plan-set view — overlays the mounted canvas */}
@@ -2867,6 +3049,7 @@ export default function TakeoffCanvas() {
           projectName={projectName} onProjectName={setProjectName}
           clientInfo={clientInfo} onClientInfo={setClientInfo}
           conditions={conditions} shapes={shapes} markups={markups} rfis={rfis}
+          conditionColumns={conditionColumns}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}

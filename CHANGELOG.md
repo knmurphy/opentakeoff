@@ -71,10 +71,85 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   placed markup to select it (a white-ringed cobalt halo, visible even on
   cobalt RFI markups) and `Backspace` / `Delete` to remove it. Shape and markup
   selection are mutually exclusive.
+- **Material library (Materials tab).** Reusable materials, browser-wide, in a
+  new panel tab. Copy-on-attach semantics: attaching copies the values onto the
+  condition and keeps a link, so totals, exports, and old snapshots never
+  depend on the library. Linked lines mark overridden fields in amber with
+  per-field revert; library edits reach linked lines only via an explicit
+  "update linked (N)" push; deleting a library material detaches links and
+  lines keep their values; "→ lib" promotes any condition material into the
+  library. New meta-store key, no DB version bump. (#47, #48)
+- **Docked Takeoffs panel — the new home for conditions (#38).** The conditions
+  bar and its stacked editor rows are gone; a docked, resizable, collapsible
+  panel on the right now holds the condition list (running totals, shape
+  counts, inline assemblies, per-row delete, reassign-selected) with the full
+  property editor unfolding under the active row. Width, collapse, and view
+  prefs persist per browser (localStorage, diff-only). (#41, #42)
+- **Panel at scale.** Live filter, A→Z natural sort (CT-2 before CT-10), and
+  tag-family grouping with collapsible headers — all strictly view-only, so
+  the positional `1`–`9` hotkeys and the saved payload never change. ⌘/⇧-click
+  multi-select with bulk waste / line color / delete (confirm counts affected
+  takeoffs). ⌖ or double-click zooms the canvas to a condition's takeoffs.
+  (#44, #45)
+- **Condition template library.** A Library tab stores reusable condition
+  templates browser-wide (appearance, waste, H/T, materials). Save the active
+  condition, apply templates anywhere, rename/remove inline; fresh workspaces
+  seed from the library and fall back to the built-in flooring defaults. No
+  IndexedDB version bump — a new key in the existing meta store. (#46)
+- **Optional compact strip.** The old horizontal bar survives as an opt-in
+  strip (panel header toggle) rendering the same state — activate, reassign,
+  hotkey badges, + condition — for small projects with the panel collapsed.
+  The transient status message now floats bottom-center over the canvas. (#43)
+- **Columns tab.** The custom-columns manager (define columns/values) moved
+  from the toolbar strip into a Columns tab in the docked panel; per-condition
+  assignment lives in the active row's properties. Same data model and report
+  behavior as below. (#49)
+- **Custom condition columns + report grouping.** Define project-level custom
+  columns (e.g. **CSI Division**) with selectable values and assign one per
+  condition — as shipped, columns are managed in the docked panel's **Columns**
+  tab and assigned in the active row's properties (this landed on the
+  since-retired condition bar; see the Columns tab entry above). Renaming a
+  value updates every assigned condition; deleting one keeps the data, shown
+  as "(removed)". The report
+  gains a unified **Group** select: by **sheet** (ordered quantities — waste
+  and ×N applied per sheet slice, subtotaled per group) or by any custom
+  column, with the grouping named on the printed page. Custom columns join the
+  report's column picker (hidden by default), append to CSV/XLSX after the
+  frozen columns, and ride the JSON export additively; grouping by a custom
+  column force-includes that column in CSV/XLSX. (Sheet grouping restructures
+  the on-screen/printed table only — exports keep the flat conditions table
+  plus the existing base-quantity by-sheet section.) Projects that never use
+  the feature produce byte-identical payloads and CSVs. (#31, #33–#36)
 
 ### Changed
 - Callout leaders now end in a filled **arrowhead** (on canvas and in the
   Marked Set PDF), replacing the old target star.
+
+### Fixed
+- **Report print: the "By finish" materials line wraps at the page edge.** The
+  mapped nowrap spans had no whitespace between them, so a long summary was one
+  unbreakable run that overflowed the printed page; entries now move to the
+  next line as a unit and wrap internally when a single entry is wider than
+  the line. (#27)
+- **Corrupt browser-global libraries can no longer wedge or wipe every
+  project.** The condition-template and material-library records are shared
+  browser-wide, so one malformed or duplicate-id item used to throw inside
+  hydrate — or break `matLibById` and the Materials tab's row keys — and take
+  down every project at once. Both now sanitize on load (non-array records
+  reset to `[]`, items need a well-formed id, duplicate ids dedupe
+  first-wins), so a bad record can only lose the bad item, never the project.
+  (#50 review follow-up)
+- **Takeoffs panel review follow-ups.** Bulk waste/color/delete confirms now
+  count and name the actual live selection instead of a stale one; the
+  transient status bar auto-dismisses after ~6s instead of lingering, but a
+  failure ("Couldn't save…") or the stale-tab reload notice stays put until
+  you act on it or replace it; the active condition stays reachable even when
+  the filter or a collapsed tag-family group would otherwise hide it; the
+  library re-reads on tab focus, narrowing the multi-tab last-write-wins
+  window; and dragging the panel's resize handle no longer commits width
+  (and re-renders the canvas) on every pointer move, only once on release.
+  The panel also moved out of `TakeoffCanvas.jsx` into its own
+  `TakeoffsPanel.jsx` component along the way. (#50 review follow-up)
 
 ## 2026-07-07
 

@@ -115,8 +115,9 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
     sheetLabel: (id: string) => `Sheet ${id}`,
   });
   assert.equal(j.schema, "opentakeoff.report.v1");
+  // condition_columns appended after markups (additive-only v1, 2026-07-07)
   assert.deepEqual(Object.keys(j),
-    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis"]);
+    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns"]);
   // rfis[] appends after markups (additive v1); linked_markups/linked_sheets derived
   assert.deepEqual(Object.keys(j.rfis[0]),
     ["id", "number", "subject", "question", "status", "to", "priority", "cost_impact", "schedule_impact",
@@ -139,10 +140,11 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   assert.deepEqual(Object.keys(j.by_sheet[0]), ["sheet_id", "sheet", "rows"]);
   assert.deepEqual(Object.keys(j.by_sheet[0].rows[0]),
     ["id", "finish_tag", "color", "multiplier", "shape_count", "floor_sf", "wall_sf", "border_sf", "lf", "ea"]);
+  // row `columns` appended after materials (additive-only v1, 2026-07-07)
   assert.deepEqual(Object.keys(j.conditions[0]),
     ["id", "finish_tag", "color", "fill", "hatch", "multiplier", "waste_pct", "shape_count",
      "floor_sf", "wall_sf", "border_sf", "lf", "ea", "total_sf",
-     "floor_sf_net", "wall_sf_net", "border_sf_net", "lf_net", "total_sf_net", "sy_net", "materials"]);
+     "floor_sf_net", "wall_sf_net", "border_sf_net", "lf_net", "total_sf_net", "sy_net", "materials", "columns"]);
 });
 
 test("reportJson: by_sheet rows serialize round2-ed — incl. ea — with key order intact", () => {
@@ -172,6 +174,57 @@ test("reportJson: unrecorded provenance exports as the literal 'unknown'", () =>
 test("reportJson: legacy 'source' key still read as a fallback", () => {
   const j = reportJson({ scaleInfo: [{ sheet_id: "s1", source: "detected" }] });
   assert.equal(j.sheets[0].scale_source, "detected");
+});
+
+test("reportJson: custom columns — definitions emitted; row values filter orphans/non-strings/empties", () => {
+  const conds = [{ id: "a", finish_tag: "A" }, { id: "b", finish_tag: "B" }, { id: "c", finish_tag: "C" }];
+  const shapes = [area("a", 10), area("b", 20), area("c", 30)];
+  const defs = [
+    { id: "div", name: "CSI Division", values: ["09 68 00", "09 65 00"] },
+    { id: "ph", name: "Phase", values: ["1", "2"] },
+  ];
+  const attrsByCond = new Map<string, any>([
+    ["a", { div: "09 68 00", ph: "", ghost: "deleted column" }],  // "" dropped; orphaned colId dropped
+    ["b", { ph: 7 }],                                             // corrupted non-string dropped
+    ["c", { ph: "2", div: "09 65 00" }],                          // attrs order ≠ definition order
+  ]);
+  const j = reportJson({ rows: conditionTotals(conds, shapes), conditionColumns: defs, attrsByCond });
+  assert.deepEqual(j.condition_columns, defs);
+  assert.deepEqual(j.conditions[0].columns, [{ id: "div", name: "CSI Division", value: "09 68 00" }]);
+  assert.deepEqual(j.conditions[1].columns, []);
+  // definition order wins, not attrs insertion order
+  assert.deepEqual(j.conditions[2].columns, [
+    { id: "div", name: "CSI Division", value: "09 65 00" },
+    { id: "ph", name: "Phase", value: "2" },
+  ]);
+});
+
+test("reportJson: no custom columns → condition_columns: [] and row columns: [] (deterministic shape)", () => {
+  const conds = [{ id: "a", finish_tag: "A" }];
+  const j = reportJson({ rows: conditionTotals(conds, [area("a", 10)]) });
+  assert.deepEqual(j.condition_columns, []);
+  assert.deepEqual(j.conditions[0].columns, []);
+});
+
+test("reportJson: explicit null / corrupted non-array/non-Map inputs must not throw the export", () => {
+  // destructuring defaults don't apply to null, and both values can trace
+  // back to a corrupted payload — the export coerces instead of crashing
+  const conds = [{ id: "a", finish_tag: "A" }];
+  for (const [cc, ab] of [[null, null], [{ id: "x" }, {}], ["x", []]] as any[]) {
+    const j = reportJson({ rows: conditionTotals(conds, [area("a", 10)]), conditionColumns: cc, attrsByCond: ab });
+    assert.deepEqual(j.condition_columns, []);
+    assert.deepEqual(j.conditions[0].columns, []);
+  }
+});
+
+test("reportJson: malformed ITEMS inside a conditionColumns array are dropped, not thrown on", () => {
+  // an array passing the top-level coercion can still carry garbage items —
+  // the export must not die on `cc.id` / destructuring
+  const conds = [{ id: "a", finish_tag: "A" }];
+  const defs = [null, "x", { name: "no id" }, { id: 7 }, { id: "ok", name: "Div", values: "not-an-array" }] as any[];
+  const j = reportJson({ rows: conditionTotals(conds, [area("a", 10)]), conditionColumns: defs, attrsByCond: new Map([["a", { ok: "v" }]]) });
+  assert.deepEqual(j.condition_columns, [{ id: "ok", name: "Div", values: [] }]);   // non-array values coerced
+  assert.deepEqual(j.conditions[0].columns, [{ id: "ok", name: "Div", value: "v" }]);
 });
 
 test("verticalWallSf: floor perimeters × height × multiplier; 0 without a height", () => {
