@@ -52,6 +52,14 @@ test("boostForDark: a dark color is lightened", () => {
   assert.ok(luminance(out) > luminance(dark), "boosted color must be brighter");
 });
 
+test("boostForDark: always returns a valid hex, coercing malformed input (never leaks invalid CSS)", () => {
+  const isHex = (s: string) => /^#[0-9a-fA-F]{6}$/.test(s);
+  assert.equal(boostForDark("garbage"), "#888888", "unparseable → safe grey");
+  for (const bad of ["garbage", "not-a-color", "#xyzxyz", "#12", undefined as unknown as string]) {
+    assert.ok(isHex(boostForDark(bad)), `boostForDark(${bad}) returns a valid hex`);
+  }
+});
+
 test("boostForDark: a light color passes through unchanged", () => {
   assert.equal(boostForDark("#ffffff"), "#ffffff");
   assert.equal(boostForDark("#e8e2d4"), "#e8e2d4");

@@ -43,7 +43,9 @@ const HATCH_FAMILIES = {
 const hex = (h) => {
   const s = String(h || "#888").replace("#", "");
   const v = s.length === 3 ? s.split("").map((c) => c + c).join("") : s.padEnd(6, "0");
-  return [parseInt(v.slice(0, 2), 16) / 255, parseInt(v.slice(2, 4), 16) / 255, parseInt(v.slice(4, 6), 16) / 255];
+  const out = [parseInt(v.slice(0, 2), 16) / 255, parseInt(v.slice(2, 4), 16) / 255, parseInt(v.slice(4, 6), 16) / 255];
+  // a malformed color (imported/hand-edited) must never reach pdf-lib as NaN
+  return out.some(Number.isNaN) ? [0.53, 0.53, 0.53] : out;
 };
 const num = (v, d = 1) => (Math.round(v * 10 ** d) / 10 ** d || 0).toLocaleString(undefined, { maximumFractionDigits: d }); // || 0 normalizes -0 so a −0.05 delta never prints "-0"
 

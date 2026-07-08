@@ -113,8 +113,11 @@ const DARK_MIN_L = 0.62;        // floor HSL lightness so a dark stroke reads on
 
 // Return a hex string lightened for the dark canvas, or the input unchanged when
 // it's already light enough. Hue + saturation are preserved.
+const isHexColor = (h) => typeof h === "string" && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(h.trim());
 export function boostForDark(hex) {
-  if (luminance(hex) >= DARK_LUM_THRESHOLD) return typeof hex === "string" ? hex : "#888888";
+  // per-markup color is user data (can arrive via imported/hand-edited JSON), so a
+  // malformed value must never leak out as an invalid CSS/SVG color — coerce to grey.
+  if (luminance(hex) >= DARK_LUM_THRESHOLD) return isHexColor(hex) ? hex.trim() : "#888888";
   const [r, g, b] = parseHex(hex);
   const [h, s, l] = rgbToHsl(r, g, b);
   const [nr, ng, nb] = hslToRgb(h, s, Math.max(l, DARK_MIN_L));

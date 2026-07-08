@@ -588,7 +588,10 @@ export default function TakeoffCanvas() {
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
     setShapes(a.shapes || []);
-    setMarkups(Array.isArray(a.markups) ? a.markups : []);
+    // normalize hydrated markups: legacy workspaces may hold markups with no id
+    // (pre-dating the id field) — seed a stable id + default rfi_id so the new
+    // select / edit / delete / move / RFI-link flows (all keyed on m.id) work on them.
+    setMarkups(Array.isArray(a.markups) ? a.markups.map((m) => ({ ...m, id: m.id || uid("mk"), rfi_id: m.rfi_id || "" })) : []);
     setRfis(Array.isArray(a.rfis) ? a.rfis : []);   // additive — old saves without rfis load as []
     const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
     setSheetGroup(grp);

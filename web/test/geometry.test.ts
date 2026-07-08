@@ -7,7 +7,7 @@ import {
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
   type Point,
 } from "../src/lib/oneclick.ts";
-import { cloudBezier, cloudPath } from "../src/lib/geometry.js";
+import { cloudBezier, cloudPath, arrowheadPath } from "../src/lib/geometry.js";
 
 // a closed square room, as flat boundary segments in image px
 function squareSegs(x0: number, y0: number, x1: number, y1: number): number[] {
@@ -245,6 +245,15 @@ test("cloudBezier segment count matches cloudPath arc count (no canvas/PDF drift
 
 // a zero-size cloud must not produce NaN control points (the closure test compares
 // endpoints, which are exact by construction, so it can't catch NaN).
+test("arrowheadPath: a zero-length leader (from==tip) yields a valid non-degenerate triangle", () => {
+  const d = arrowheadPath(100, 100, 100, 100, 6);   // from == tip
+  const pts = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+  // 3 points × 2 coords = 6 numbers; they must not all coincide (a zero-area triangle)
+  assert.equal(pts.length, 6, "M x y L x y L x y Z → six numbers");
+  const allSame = pts[0] === pts[2] && pts[2] === pts[4] && pts[1] === pts[3] && pts[3] === pts[5];
+  assert.ok(!allSame, "degenerate leader still produces a real (up-pointing) arrowhead, not a zero-area triangle");
+});
+
 test("cloudBezier: degenerate zero-size box yields finite points", () => {
   const { start, segments } = cloudBezier(50, 50, 50, 50);
   assert.ok(Number.isFinite(start[0]) && Number.isFinite(start[1]), "start finite");

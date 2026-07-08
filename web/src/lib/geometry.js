@@ -25,7 +25,7 @@ export function starPath(cx, cy, R, points = 4, innerRatio = 0.38) {
 // path is always valid.
 export function arrowheadPath(fromX, fromY, tipX, tipY, size = 6) {
   let dx = tipX - fromX, dy = tipY - fromY;
-  const len = Math.hypot(dx, dy) || 1;
+  const len = Math.hypot(dx, dy);   // raw — so the degenerate (zero-length) guard can fire
   if (len < 1e-6) { dx = 0; dy = 1; } else { dx /= len; dy /= len; }
   const bx = tipX - dx * size, by = tipY - dy * size;   // base center, back along the leader
   const nx = -dy, ny = dx, half = size * 0.5;            // perpendicular half-width
