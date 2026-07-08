@@ -25,7 +25,7 @@ import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
-import { dashArrayFor, boostForDark, LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
+import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 
@@ -1740,17 +1740,21 @@ export default function TakeoffCanvas() {
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
   // (lib/markedset.js). Exports in the CURRENT view: dark canvas → dark PDF.
-  async function exportMarkedSet() {
+  // includeMarkups (from the ReportPanel checkbox, default true) is ORTHOGONAL to
+  // the canvas layer-hide (showMarkups): only this flag drops markups from the
+  // PDF. Off → pass []; the RFI-only export still works (empty-guard unaffected).
+  async function exportMarkedSet(includeMarkups = true) {
     try {
       setCommitMsg("Building the marked set…");
-      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...markups.map((m) => m.sheet_id)])];
+      const exportMarkups = includeMarkups ? markups : [];
+      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...exportMarkups.map((m) => m.sheet_id)])];
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
       }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
-        dark: darkMode, sheets: sheetMeta, shapes, markups, rfis, conditions,
+        dark: darkMode, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -2464,6 +2468,7 @@ export default function TakeoffCanvas() {
                       const base = m.color || (m.rfi_id ? "#1f3fc7" : "#c47a10");
                       const mk = darkMode ? boostForDark(base) : base;   // literal — SVG attrs don't resolve CSS vars
                       const dash = dashArrayFor(m.line_style || "solid", z);
+                      const w = clampWeight(m.weight);   // stroke-width multiplier over each element's base, default ×1
                       const selM = m.id === selectedMarkupId;
                       // linkage badge — unconditional for any linked markup (a note-less
                       // recolored cloud still reads as linked); kept in cobalt for legibility
@@ -2473,36 +2478,50 @@ export default function TakeoffCanvas() {
                       const badge = (bx, by) => (m.rfi_id ? (
                         <text x={bx} y={by} fill={badgeCol} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{"⬢"}{linked && linked.number != null && linked.number !== "" ? " " + linked.number : ""}</text>
                       ) : null);
+                      // revision-delta △n — a small numbered triangle at a cloud corner,
+                      // clear of the halo, the top-left RFI badge, and the centered note.
+                      // Absent/zero m.rev → nothing (legacy clouds render unchanged).
+                      // the triangle backing is ALWAYS white, so stroke/number it in the
+                      // UN-boosted color (mk's dark boost is tuned to contrast the dark
+                      // canvas, and would wash out on white).
+                      const revTri = (rx, ry) => (Number.isFinite(m.rev) && m.rev > 0 ? (
+                        <g style={{ pointerEvents: "none" }}>
+                          <path d={`M${rx},${ry - 9 / z} L${rx + 8 / z},${ry + 6 / z} L${rx - 8 / z},${ry + 6 / z} Z`} fill="#fff" stroke={base} strokeWidth={1.4 / z} />
+                          <text x={rx} y={ry + 2.5 / z} fill={base} fontSize={9 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central">{m.rev}</text>
+                        </g>
+                      ) : null);
+                      // halo ring widths scale with weight so a heavy stroke never overruns them
                       const halo = (x0, y0, x1, y1) => (selM ? (
                         <>
-                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={5 / z} />
-                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={2 / z} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={(5 * w) / z} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={(2 * w) / z} />
                         </>
                       ) : null);
                       if (m.type === "highlight") {
                         const [c0, c1] = m.rect;
                         const hx0 = Math.min(c0[0], c1[0]) * p.img.w, hy0 = Math.min(c0[1], c1[1]) * p.img.h;
                         const hx1 = Math.max(c0[0], c1[0]) * p.img.w, hy1 = Math.max(c0[1], c1[1]) * p.img.h;
-                        const pad = 5 / z;
+                        const pad = (5 * w) / z;
                         return (
                           <g key={m.id}>
                             {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
-                            <rect x={hx0} y={hy0} width={hx1 - hx0} height={hy1 - hy0} fill={mk} fillOpacity={0.18} stroke={mk} strokeWidth={2 / z} strokeDasharray={dash} />
+                            <rect x={hx0} y={hy0} width={hx1 - hx0} height={hy1 - hy0} fill={mk} fillOpacity={0.18} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
                             {badge(hx0, hy0 - pad - 9 / z)}
                           </g>
                         );
                       }
                       if (m.type === "cloud") {
                         const [c0, c1] = m.rect;
-                        const pad = 5 / z;
+                        const pad = (5 * w) / z;
                         const bx0 = Math.min(c0[0], c1[0]) * p.img.w - pad, by0 = Math.min(c0[1], c1[1]) * p.img.h - pad;
                         const bx1 = Math.max(c0[0], c1[0]) * p.img.w + pad, by1 = Math.max(c0[1], c1[1]) * p.img.h + pad;
                         return (
                           <g key={m.id}>
                             {halo(bx0, by0, bx1, by1)}
-                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={2 / z} strokeDasharray={dash} />
+                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
                             {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
                             {badge(bx0, by0 - 9 / z)}
+                            {revTri(bx1, by0 - 9 / z)}
                           </g>
                         );
                       }
@@ -2512,10 +2531,10 @@ export default function TakeoffCanvas() {
                         return (
                           <g key={m.id}>
                             {halo(ax * p.img.w - 4 / z, ay * p.img.h - 18 / z, ax * p.img.w + lw + 4 / z, ay * p.img.h + 4 / z)}
-                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={2 / z} strokeDasharray={dash} />
+                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
                             {/* arrowhead at the target end — replaces the old vertex star */}
                             <path d={arrowheadPath(ax * p.img.w, ay * p.img.h, tx * p.img.w, ty * p.img.h, 9 / z)} fill={mk} />
-                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / z} width={lw} height={20 / z} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / z} strokeDasharray={dash} rx={3 / z} />
+                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / z} width={lw} height={20 / z} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
                             <text x={(ax * p.img.w) + 5 / z} y={(ay * p.img.h) - 2 / z} fill="#0e1a2e" fontSize={12 / z}>{m.text}</text>
                             {badge(ax * p.img.w, ay * p.img.h - 24 / z)}
                           </g>
@@ -2526,7 +2545,7 @@ export default function TakeoffCanvas() {
                       return (
                         <g key={m.id}>
                           {halo(x * p.img.w - 5 / z, y * p.img.h - 16 / z, x * p.img.w + lw + 3 / z, y * p.img.h + 6 / z)}
-                          <rect x={x * p.img.w - 3 / z} y={y * p.img.h - 14 / z} width={lw} height={20 / z} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / z} strokeDasharray={dash} rx={3 / z} />
+                          <rect x={x * p.img.w - 3 / z} y={y * p.img.h - 14 / z} width={lw} height={20 / z} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
                           <text x={x * p.img.w + 2 / z} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / z} fontWeight="600">{m.text}</text>
                           {badge(x * p.img.w, y * p.img.h - 22 / z)}
                         </g>
@@ -2714,6 +2733,22 @@ export default function TakeoffCanvas() {
                   <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
                     {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
                   </select>
+                  {/* line weight — a multiplier over the element's base stroke width (default
+                      ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
+                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
+                  <select value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                    {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
+                  </select>
+                  {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
+                  {m.type === "cloud" && (
+                    <>
+                      <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
+                      <input type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
+                        onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
+                        title="Revision number for the △ delta (blank = none)"
+                        style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
+                    </>
+                  )}
                 </div>
                 {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
                 {(() => {

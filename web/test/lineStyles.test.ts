@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   LINE_STYLES, LINE_STYLE_IDS, dashArrayFor, pdfDashFor, boostForDark, luminance,
+  clampWeight, snapWeight, WEIGHT_MIN, WEIGHT_MAX,
 } from "../src/lib/lineStyles.js";
 
 test("LINE_STYLES exposes the four expected styles", () => {
@@ -60,6 +61,25 @@ test("boostForDark: hue is preserved when lightening a dark color", () => {
   // a dark saturated blue → still blue after the boost
   const [h] = rgbHsl(boostForDark("#101d6b"));
   assert.ok(Math.abs(h - 235) < 12, `expected a blue hue near 235°, got ${h}`);
+});
+
+test("clampWeight: absent/garbage → 1 (legacy markups unchanged), else clamped", () => {
+  assert.equal(clampWeight(undefined), 1, "absent weight = ×1");
+  assert.equal(clampWeight(null), 1);
+  assert.equal(clampWeight("nonsense"), 1);
+  assert.equal(clampWeight(0), 1, "non-positive falls back to 1");
+  assert.equal(clampWeight(-2), 1);
+  assert.equal(clampWeight(1.5), 1.5, "in-range passes through");
+  assert.equal(clampWeight(0.1), WEIGHT_MIN, "clamped up to the floor");
+  assert.equal(clampWeight(99), WEIGHT_MAX, "clamped down to the ceiling");
+});
+
+test("snapWeight: an off-step (imported) value maps to the nearest UI step", () => {
+  assert.equal(snapWeight(1.7), 1.5, "1.7 → nearest step 1.5");
+  assert.equal(snapWeight(0.75), 0.5, "0.75 → 0.5");
+  assert.equal(snapWeight(2.4), 2.5);
+  assert.equal(snapWeight(2), 2, "an on-step value is unchanged");
+  assert.equal(snapWeight(undefined), 1, "absent → 1 (a step)");
 });
 
 // local HSL for the hue assertion (kept out of the lib's public surface)

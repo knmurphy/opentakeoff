@@ -41,6 +41,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const matSummary = useMemo(() => materialsSummary(rows), [rows]);
   const [showContribute, setShowContribute] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  // whether the Marked Set PDF carries the markups. Default on; ORTHOGONAL to the
+  // canvas markup-layer hide — that never changes the export, only this does.
+  const [includeMarkups, setIncludeMarkups] = useState(true);
   // bumped by the Project info modal on every company save, so the print
   // masthead's loadCompany() below re-reads (a cheap localStorage parse)
   const [identityRev, setIdentityRev] = useState(0); // eslint-disable-line no-unused-vars
@@ -191,8 +194,15 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <button className="btn-ghost" onClick={exportRfisJson} disabled={!rfis.length}
           title="RFI log as JSON"><Icon name="rfi" size={13} />RFI JSON</button>
         <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length && !markups.length && !rfis.length}>Print</button>
+        {onMarkedSet && markups.length > 0 && (
+          <label title="Include your markups (clouds, callouts, notes, highlights) in the Marked Set PDF. Independent of the canvas layer toggle."
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--ink-muted)", cursor: "pointer", whiteSpace: "nowrap" }}>
+            <input type="checkbox" checked={includeMarkups} onChange={(e) => setIncludeMarkups(e.target.checked)} />
+            Markups
+          </label>
+        )}
         {onMarkedSet && (
-          <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length && !markups.length && !rfis.length}
+          <button className="btn-ghost" onClick={() => onMarkedSet(includeMarkups)} disabled={!rows.length && (!includeMarkups || !markups.length) && !rfis.length}
             title={`Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`}>
             <Icon name="document" size={13} />Marked set{markedSetDark ? " ☾" : ""}
           </button>

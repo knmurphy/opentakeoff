@@ -19,10 +19,10 @@
 // nothing until used and the app stays zero-install.
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
-import { pointInPoly, starPath, arrowheadPath } from "./geometry.js";
+import { pointInPoly, starPath, arrowheadPath, cloudBezier } from "./geometry.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
-import { pdfDashFor, boostForDark } from "./lineStyles.js";
+import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
 
 const COBALT = "#1f3fc7";
 const DEDUCT_RED = "#b03a26";
@@ -460,24 +460,39 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const mbase = m.color || (m.rfi_id ? COBALT : "#c47a10");
       const mcol = rgb(...hex(dark ? boostForDark(mbase) : mbase));
       const mdash = pdfDashFor(m.line_style || "solid");
+      const mw = clampWeight(m.weight);   // stroke-width multiplier (markups only), default ×1
       if (m.type === "highlight" && m.rect) {
         const [[nx0, ny0], [nx1, ny1]] = m.rect;
         const r = [[nx0 * W, ny0 * H], [nx1 * W, ny0 * H], [nx1 * W, ny1 * H], [nx0 * W, ny1 * H]];
-        pg.drawSvgPath(svgPath(r), { x: 0, y: 0, color: mcol, opacity: 0.18 + alphaBoost / 2, borderColor: mcol, borderWidth: 1, borderOpacity: 0.9, ...(mdash ? { borderDashArray: mdash } : {}) });
+        pg.drawSvgPath(svgPath(r), { x: 0, y: 0, color: mcol, opacity: 0.18 + alphaBoost / 2, borderColor: mcol, borderWidth: 1 * mw, borderOpacity: 0.9, ...(mdash ? { borderDashArray: mdash } : {}) });
         const t = lbl(m.text);
         if (t) text(t, Math.min(nx0, nx1) * W, Math.min(ny0, ny1) * H - 10 / ptScale, 8, mcol, bold);
       } else if (m.type === "cloud" && m.rect) {
         const [[nx0, ny0], [nx1, ny1]] = m.rect;
-        // scalloped read approximated by a dashed border — arcs don't survive
-        // arbitrary page transforms; the note text carries the meaning. An explicit
-        // line_style overrides the default [4,3] scallop dash.
-        const r = [[nx0 * W, ny0 * H], [nx1 * W, ny0 * H], [nx1 * W, ny1 * H], [nx0 * W, ny1 * H]];
-        pg.drawSvgPath(svgPath(r), { x: 0, y: 0, borderColor: mcol, borderWidth: 1.3, borderOpacity: 0.95, borderDashArray: mdash || [4, 3] });
+        // real scallops: cloudBezier's CONTROL POINTS survive the affine page
+        // transform (SVG arcs don't), so map each through toPage and emit one
+        // cubic path. An explicit line_style dashes it; default is a solid scallop.
+        const cb = cloudBezier(nx0 * W, ny0 * H, nx1 * W, ny1 * H);
+        const P = (p) => { const [px, py] = toPage(p[0], p[1]); return `${px},${-py}`; };
+        let d = `M${P(cb.start)}`;
+        for (const [c1, c2, end] of cb.segments) d += ` C${P(c1)} ${P(c2)} ${P(end)}`;
+        pg.drawSvgPath(d + " Z", { x: 0, y: 0, borderColor: mcol, borderWidth: 1.3 * mw, borderOpacity: 0.95, ...(mdash ? { borderDashArray: mdash } : {}) });
         const t = lbl(m.text);
         if (t) text(t, Math.min(nx0, nx1) * W, Math.min(ny0, ny1) * H - 10 / ptScale, 8, mcol, bold);
+        // revision-delta triangle at the top-right corner — clear of the
+        // top-left RFI label and the centered note. Absent m.rev → nothing.
+        if (Number.isFinite(m.rev) && m.rev > 0) {
+          const cxImg = Math.max(nx0, nx1) * W, cyImg = Math.min(ny0, ny1) * H, s = 9 / ptScale;
+          const tri = [[cxImg, cyImg - s], [cxImg + s, cyImg + s], [cxImg - s, cyImg + s]];
+          // the triangle is always white-filled, so stroke/number it in the un-boosted
+          // color (mcol's dark boost would wash out on the white backing).
+          const rcol = rgb(...hex(mbase));
+          pg.drawSvgPath(tri.map((p, i) => `${i ? "L" : "M"}${P(p)}`).join(" ") + " Z", { x: 0, y: 0, color: rgb(1, 1, 1), opacity: 0.9, borderColor: rcol, borderWidth: 1 });
+          text(String(m.rev), cxImg - 3 / ptScale, cyImg + s - 3 / ptScale, 7, rcol, bold);
+        }
       } else if (m.type === "callout" && m.at) {
         if (m.target) {
-          line(m.target[0] * W, m.target[1] * H, m.at[0] * W, m.at[1] * H, mcol, 0.9, 0.9, mdash);
+          line(m.target[0] * W, m.target[1] * H, m.at[0] * W, m.at[1] * H, mcol, 0.9 * mw, 0.9, mdash);
           // arrowhead at the target end, pointing from the label — page coords
           // negate y to match svgPath's convention
           const [pax, pay] = toPage(m.at[0] * W, m.at[1] * H);

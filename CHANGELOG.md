@@ -35,7 +35,22 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   hit-testing (you can't click-select or delete a hidden markup; flying to one
   from the RFI register reveals the layer first) — the escape hatch when a
   highlight shields the takeoff beneath it. It's independent of the Marked Set
-  export, which still includes markups.
+  export toggle below — hiding the canvas layer never changes the PDF.
+- **Scalloped revision clouds in the Marked Set PDF.** Clouds now export as true
+  scalloped outlines (approximated as cubic beziers so the arcs survive the page
+  transform) instead of the old dashed-rectangle stand-in, in the markup's color
+  and line style.
+- **Revision deltas (△n).** A cloud can carry a revision number, drawn as a small
+  numbered triangle at a corner — on canvas and in the Marked Set PDF. Set or
+  clear it from the cloud's markup-panel row; absent = no delta.
+- **Markup line weight.** Each markup takes a stroke-weight multiplier
+  (0.5×–3×, default 1×) from its panel row, thickening its outline/leader on
+  canvas and in the PDF (the selection halo scales with it). Conditions are
+  unaffected.
+- **Include-markups toggle for the Marked Set.** A **Markups** checkbox in the
+  report toolbar (default on) omits all markups from the Marked Set PDF when
+  unticked; the RFI-only export still works. It's separate from the canvas layer
+  hide.
 - **RFI register.** Any markup (revision cloud, callout, or text note) can be
   promoted to a tracked **Request For Information**: **Raise RFI** on a markup
   row mints `RFI-001…`, tints the markup cobalt, and opens the register (⬢ on

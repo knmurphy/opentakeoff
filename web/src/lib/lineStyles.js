@@ -37,6 +37,27 @@ export function pdfDashFor(style) {
   return pat.slice();
 }
 
+// ── markup line-weight multiplier ────────────────────────────────────────────
+// `weight` is a MULTIPLIER over each element's existing base stroke width (so
+// box proportions survive — a scalar absolute would flatten them). Default 1,
+// clamped to [WEIGHT_MIN, WEIGHT_MAX]; absent/garbage → 1 (legacy markups render
+// exactly as before). Applied on canvas AND in the marked-set PDF, and to the
+// selection-halo widths so a heavy stroke never overruns the halo rings.
+export const WEIGHT_MIN = 0.5;
+export const WEIGHT_MAX = 3;
+export const WEIGHT_STEPS = [0.5, 1, 1.5, 2, 2.5, 3];
+export function clampWeight(w) {
+  const n = Number(w);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.max(WEIGHT_MIN, Math.min(WEIGHT_MAX, n));
+}
+// snap a (clamped) weight to the nearest UI step — so a select bound to it always
+// matches an <option> even for an off-step value imported from external JSON.
+export function snapWeight(w) {
+  const c = clampWeight(w);
+  return WEIGHT_STEPS.reduce((a, b) => (Math.abs(b - c) < Math.abs(a - c) ? b : a));
+}
+
 // ── dark-mode color boost ────────────────────────────────────────────────────
 // A user color from PALETTE can be an arbitrary dark navy/ink; drawn as a flat
 // literal it vanishes on the dark canvas (#0b0e14) and dark marked sheets. This
