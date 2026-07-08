@@ -29,6 +29,7 @@ import { Icon } from "../brand/icons.jsx";
 import { attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { num } from "../lib/num.js";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
+import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
 
 export const PANEL_MIN_W = 240;
 export const PANEL_MAX_W = 560;
@@ -405,6 +406,13 @@ function TakeoffsPanel({
                     })}
                   </div>
                 )}
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Line style — the outline dash for this finish's floor-area and linear takeoffs (canvas + Marked Set PDF). Surface walls and deducts keep their own dashing.">
+                <span style={{ color: "var(--ink-muted)" }}>Style</span>
+                <select value={c.line_style || "solid"} onChange={(e) => onUpdateCond({ line_style: e.target.value })}
+                  style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                  {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                </select>
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Height (ft) — the default for NEW wall traces (SF = LF × H) and the vertical-SF display on floor areas. Walls keep the height they were drawn at — select a wall to change just that one.">
                 <Icon name="height" size={13} /><span style={{ color: "var(--ink-muted)" }}>H</span>

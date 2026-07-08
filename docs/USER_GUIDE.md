@@ -33,7 +33,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 | `D` | **Deduct** | Trace a void/column → subtracts SF. |
 | `⇧D` | **Deduct rectangle** | Rectangle deduct. |
 | `P` | **Pan** | Move around the sheet. |
-| `V` | **Select** | Select / move / edit / reassign / delete a shape. |
+| `V` | **Select** | Select / move / edit / reassign / delete a shape — or click a markup (cloud/callout/note) to select it. |
 | `G` | **Gallery** | Open the plan‑set gallery / sheet picker. |
 
 ### Conditions
@@ -48,7 +48,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 | **Press‑and‑drag** | Pan mid‑measure (without placing a point). |
 | **Scroll** | Zoom. |
 | `Enter` or **double‑click** | Finish the shape (Area/Deduct need ≥3 points; Linear/Surface ≥2). In One‑Click, `Enter` creates the selected space(s). |
-| `Backspace` / `Delete` | Remove the last placed point; if nothing's in progress, delete the **selected** shape; in One‑Click, drop the last region. |
+| `Backspace` / `Delete` | Remove the last placed point; if nothing's in progress, delete the **selected** shape **or markup**; in One‑Click, drop the last region. |
 | `⌘Z` / `Ctrl+Z` | Undo the last placed point. |
 | `Esc` | Cancel the in‑progress shape / selection / proposal. |
 | **Hold `⇧` (Shift)** | Force the next segment onto the nearest 45°/90° axis, at any cursor angle (see Angle lock below). |
@@ -74,7 +74,7 @@ Conditions live in a **docked, resizable panel** on the right (drag the left edg
 
 ### Conditions (finishes)
 A condition is one finish (e.g. `WD-1` red oak). It carries:
-- **Line / fill color** and a **hatch pattern** (plank, herringbone, tile, terrazzo, …) so each finish reads like the real drawing.
+- **Line / fill color**, a **hatch pattern** (plank, herringbone, tile, terrazzo, …), and a **line style** (solid / dashed / dotted / dash-dot) so each finish reads like the real drawing. The line style applies to positive **floor-area** and **linear** outlines; **surface** walls keep their dash-dot look and **deducts** keep their red dashing.
 - **Multiplier (×N)** — measure one identical unit, multiply by N.
 - **Waste %** — a flooring allowance applied **only in the Report** (order quantity), never to the live measured number.
 - **Height (H)** — default height for new Surface‑Area (wall) traces; also drives vertical‑SF display. Existing walls keep the height they were drawn at.
@@ -109,10 +109,30 @@ Classify conditions along your own dimension — **CSI Division**, bid package, 
 - **Dark view (☾)** — negative-print mode in the zoom cluster: sheets invert to light-on-dark, hatches stay legible, and the toggle is remembered per browser.
 
 ### Markup layer
-Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) toggle and the takeoffs (☰) collapse/expand button live on the slim **rail on the canvas's right edge** (zoom-cluster style).
+Revision clouds, callouts, text notes, and **highlight boxes** — annotations only, kept separate from measurements (never counted). The markup (◇), RFI (⬢), and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+
+**Highlight box** — pick the **Highlight** markup tool, then click two opposite corners to drop a translucent filled box over an area. It draws **behind** the other markups so it never dims them; a cloud, callout, or note sitting under a highlight stays clickable.
+
+**Color, line style & weight** — each markup row carries a color swatch (or **auto**: cobalt when linked to an RFI, amber otherwise), a line-style picker (solid / dashed / dotted / dash-dot), and a **line-weight** multiplier (0.5×–3×, default 1×) that thickens the outline/leader on canvas and in the PDF. The color is lightened automatically on the dark view so it stays visible. RFI linkage always shows as a small **⬢/number badge** regardless of color or note text.
+
+**Revision delta (△)** — a revision cloud can carry a **revision number**, set in the **Rev △** box on its panel row. It draws as a small numbered triangle at a cloud corner on the plan and in the Marked Set PDF (where clouds also export with real scalloped edges). Leave it blank for no delta.
+
+**Editing & moving** — notes are typed **inline on the plan** (no pop-up). **Double-click** a markup with the Select tool to re-edit its text in place, or use the ✎ on its panel row (handy when it's off-screen). **Drag** a placed markup with the Select tool to reposition it. Enter commits an edit, Esc cancels — cancelling a cloud's optional note keeps the drawn cloud.
+
+**Select & delete a markup** — with the **Select** tool (`V`), click a placed markup to select it (a white‑ringed cobalt halo appears — visible even on a cobalt RFI markup). `Backspace` / `Delete` removes it. Shape and markup selection are mutually exclusive: selecting one clears the other.
+
+**Show / hide the layer** — **Hide layer** in the markup panel header hides every markup on the canvas and suspends their hit-testing, so you can't select, delete, or fly to a hidden markup — the way out when a full-area highlight covers the takeoff beneath it. It's independent of the Marked Set export: hiding the canvas layer never changes the PDF. To leave markups out of the PDF, untick the **Markups** checkbox in the report toolbar (see Report & export).
+
+### RFI register
+Turn a markup into a tracked **Request For Information**. Open the markup panel, and on any markup row press **Raise RFI** (or **Link existing** to attach it to an RFI you already opened; **Unlink** detaches). A linked markup turns cobalt on the plan and carries its RFI number. Open the **RFI register** (⬢ on the right rail) to work the log:
+
+- **Fields** — number (auto, `RFI-001…`), subject, question, status (Open → Answered → Closed, or Void), ball‑in‑court, priority, cost/schedule impact flags, opened date, response + response date. Setting a status to **Answered** auto‑stamps the response date.
+- **Filter** by status; **Close** / **Void** / **Delete** an RFI (delete clears the link on every markup it was attached to — the annotations stay).
+- **Fly to** any linked markup — jumps to its sheet (opening it first if needed) and centers it, even across sheets.
+- **Export** — from the Report: an **RFI log** (CSV / JSON), the RFIs embedded in the report **JSON**, and an **RFI schedule page** in the **Marked set** PDF (with the RFI number printed on each linked markup).
 
 ### Report & export
-Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, a **Group** select — restructure the table by **sheet** (each sheet's slice with waste and ×N applied, subtotaled) or by any **custom column**, with the grouping named on the printed page — and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
+Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, an **RFI log** (CSV / JSON), and a **Group** select — restructure the table by **sheet** (each sheet's slice with waste and ×N applied, subtotaled) or by any **custom column**, with the grouping named on the printed page — plus **CSV / XLSX / JSON** export and **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn, a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown), and an **RFI schedule page** when RFIs exist. Revision clouds export with real scalloped edges and their △ revision deltas. Untick the **Markups** checkbox beside the Marked-set button to ship a takeoff-only set (RFI-only exports still work). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
 
 **XLSX** downloads a four-tab Excel workbook, built entirely in your browser: **Conditions** (the report table — it follows your Columns picker, same as the CSV), **By sheet** (measured base quantities per sheet), **Materials** (per-condition lines plus the combined buy list), and **Shapes** (per-shape measured detail — no multiplier, no waste). The numbers are the same ones on screen: waste is applied only to order quantities, never to measured values.
 

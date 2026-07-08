@@ -318,11 +318,11 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
 /**
  * @param {{projectName?: string, rows?: any[], bySheet?: any[],
  *   scaleInfo?: Array<{sheet_id: any, source?: string, [k: string]: any}>, markups?: any[],
- *   sheetLabel?: ((sheetId: any) => string)|null,
+ *   rfis?: any[], sheetLabel?: ((sheetId: any) => string)|null,
  *   conditionColumns?: Array<{id: string, name: string, values: string[]}>,
  *   attrsByCond?: Map<any, object>|null}} args
  */
-export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null, conditionColumns = [], attrsByCond = null }) {
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   // destructuring defaults don't apply to an explicit null, and both values can
   // trace back to a corrupted payload — coerce (and drop malformed items) so
@@ -356,6 +356,30 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     // convention — see scale_source above): a cloud with empty text was fully
     // anonymous in the export. Legacy markups: id → null, rfi_id → "".
     markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
+    // rfis APPENDS after markups (additive-only v1 — old exports had no RFI
+    // register). linked_markups/linked_sheets are DERIVED from markup.rfi_id,
+    // never a second store of the link.
+    rfis: (rfis || []).map((r) => {
+      const linked = (markups || []).filter((m) => m.rfi_id === r.id);
+      return {
+        id: r.id ?? null,
+        number: r.number || "",
+        subject: r.subject || "",
+        question: r.question || "",
+        status: r.status || "open",
+        to: r.to || "",
+        priority: r.priority || "",
+        cost_impact: !!r.cost_impact,
+        schedule_impact: !!r.schedule_impact,
+        date: r.date || "",
+        response: r.response || "",
+        response_date: r.response_date || "",
+        sheet_id: r.sheet_id ?? null,
+        sheet: r.sheet_id != null ? label(r.sheet_id) : null,
+        linked_markups: linked.length,
+        linked_sheets: [...new Set(linked.map((m) => label(m.sheet_id)))],
+      };
+    }),
     // the custom-column definitions themselves, so row `columns` values can be
     // read against the project vocabulary
     condition_columns: colDefs.map(({ id, name, values }) => ({ id, name, values: Array.isArray(values) ? values : [] })),

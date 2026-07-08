@@ -5,6 +5,72 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ## 2026-07-08
 
 ### Added
+- **Per-markup color.** Any revision cloud, callout, text note, or highlight can
+  be recolored from a palette swatch on its markup-panel row (or reset to
+  **auto** — cobalt when linked to an RFI, amber otherwise). The color drives the
+  drawn mark on canvas and in the Marked Set PDF, and is lightened automatically
+  on the dark view so a dark color never vanishes. RFI linkage is now shown by an
+  **unconditional ⬢/number badge** independent of the note text, so a recolored,
+  note-less linked cloud still reads as linked.
+- **Line styles.** Conditions and markups carry a **solid / dashed / dotted /
+  dash-dot** outline style (a picker beside Line/Fill/Hatch for conditions, on
+  each markup row). It applies to positive **floor-area** and **linear** outlines
+  and to markup borders/leaders — on canvas **and** in the Marked Set PDF.
+  Surface (wall) runs keep their dash-dot identity and deducts keep their
+  danger-red dashing; both are exempt.
+- **Highlight box markup.** A new **Highlight** markup tool drops a translucent
+  filled box over an area (two corners, like the cloud). It renders behind the
+  other markups so it never dims them, takes a color and line style, an optional
+  note (double-click to add), and can be linked to an RFI. A non-highlight markup
+  under a highlight stays clickable.
+- **Inline note editing.** Placing a cloud, callout, or text note now types the
+  note directly on the plan in an inline field — no browser prompt. Double-click a
+  markup (Select tool) to re-edit it in place; the markup panel's ✎ edits notes on
+  markups that are off-screen or on another sheet. Enter commits, Esc cancels — and
+  cancelling a cloud's optional note keeps the drawn cloud.
+- **Drag to move a markup.** With the Select tool, drag a placed markup (cloud,
+  highlight, callout, or text note) to reposition it; the leader on a callout moves
+  with it.
+- **Show/hide the markup layer.** A **Hide layer** / **Show layer** toggle in the
+  markup panel header hides all markups on the canvas and suspends their
+  hit-testing (you can't click-select or delete a hidden markup; flying to one
+  from the RFI register reveals the layer first) — the escape hatch when a
+  highlight shields the takeoff beneath it. It's independent of the Marked Set
+  export toggle below — hiding the canvas layer never changes the PDF.
+- **Scalloped revision clouds in the Marked Set PDF.** Clouds now export as true
+  scalloped outlines (approximated as cubic beziers so the arcs survive the page
+  transform) instead of the old dashed-rectangle stand-in, in the markup's color
+  and line style.
+- **Revision deltas (△n).** A cloud can carry a revision number, drawn as a small
+  numbered triangle at a corner — on canvas and in the Marked Set PDF. Set or
+  clear it from the cloud's markup-panel row; absent = no delta.
+- **Markup line weight.** Each markup takes a stroke-weight multiplier
+  (0.5×–3×, default 1×) from its panel row, thickening its outline/leader on
+  canvas and in the PDF (the selection halo scales with it). Conditions are
+  unaffected.
+- **Include-markups toggle for the Marked Set.** A **Markups** checkbox in the
+  report toolbar (default on) omits all markups from the Marked Set PDF when
+  unticked; the RFI-only export still works. It's separate from the canvas layer
+  hide.
+- **RFI register.** Any markup (revision cloud, callout, or text note) can be
+  promoted to a tracked **Request For Information**: **Raise RFI** on a markup
+  row mints `RFI-001…`, tints the markup cobalt, and opens the register (⬢ on
+  the right rail). Each RFI carries subject, question, status (Open → Answered →
+  Closed / Void), ball-in-court, priority, cost/schedule impact flags, dates,
+  and a response — with the response date auto-stamped on the Open→Answered
+  transition. One RFI links to many markups (**Link existing** / **Unlink**);
+  deleting an RFI clears the link on every markup it touched (the annotation
+  stays). **Fly to** any linked markup jumps to its sheet — opening it first if
+  needed — and centers it, even across sheets.
+- **RFI export.** An **RFI log** (CSV / JSON) in the Report, the RFIs embedded
+  in the report **JSON**, and a dedicated **RFI schedule page** in the
+  **Marked Set PDF** — with each linked markup carrying its RFI number burned
+  onto the sheet (drawn even when the markup has no note). A live RFI that has
+  outlived its markups still exports (cover + schedule, no per-sheet pages).
+- **Select & delete markups on canvas.** With the **Select** tool (`V`), click a
+  placed markup to select it (a white-ringed cobalt halo, visible even on
+  cobalt RFI markups) and `Backspace` / `Delete` to remove it. Shape and markup
+  selection are mutually exclusive.
 - **Material library (Materials tab).** Reusable materials, browser-wide, in a
   new panel tab. Copy-on-attach semantics: attaching copies the values onto the
   condition and keeps a link, so totals, exports, and old snapshots never
@@ -54,6 +120,10 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   the on-screen/printed table only — exports keep the flat conditions table
   plus the existing base-quantity by-sheet section.) Projects that never use
   the feature produce byte-identical payloads and CSVs. (#31, #33–#36)
+
+### Changed
+- Callout leaders now end in a filled **arrowhead** (on canvas and in the
+  Marked Set PDF), replacing the old target star.
 
 ### Fixed
 - **Report print: the "By finish" materials line wraps at the page edge.** The

@@ -18,6 +18,20 @@ export function starPath(cx, cy, R, points = 4, innerRatio = 0.38) {
   return d + "Z";
 }
 
+// Small filled arrowhead at (tipX,tipY), pointing along the direction from
+// (fromX,fromY) → (tipX,tipY). Returns a closed SVG path (a triangle) — used
+// for the callout leader's target end on-canvas and in the marked-set PDF.
+// Degenerate (zero-length) leaders fall back to pointing straight up so the
+// path is always valid.
+export function arrowheadPath(fromX, fromY, tipX, tipY, size = 6) {
+  let dx = tipX - fromX, dy = tipY - fromY;
+  const len = Math.hypot(dx, dy);   // raw — so the degenerate (zero-length) guard can fire
+  if (len < 1e-6) { dx = 0; dy = 1; } else { dx /= len; dy /= len; }
+  const bx = tipX - dx * size, by = tipY - dy * size;   // base center, back along the leader
+  const nx = -dy, ny = dx, half = size * 0.5;            // perpendicular half-width
+  return `M${tipX},${tipY} L${bx + nx * half},${by + ny * half} L${bx - nx * half},${by - ny * half} Z`;
+}
+
 // Revision-cloud path: a scalloped rectangle around [x0,y0]-[x1,y1] (image px).
 export function cloudPath(x0, y0, x1, y1) {
   const ax0 = Math.min(x0, x1), ay0 = Math.min(y0, y1), ax1 = Math.max(x0, x1), ay1 = Math.max(y0, y1);
@@ -33,6 +47,70 @@ export function cloudPath(x0, y0, x1, y1) {
   };
   edge(ax0, ay0, ax1, ay0); edge(ax1, ay0, ax1, ay1); edge(ax1, ay1, ax0, ay1); edge(ax0, ay1, ax0, ay0);
   return d + " Z";
+}
+
+// One SVG elliptical-arc (equal radii `r`, no x-rotation) from (x0,y0) to
+// (x1,y1) with the given large-arc/sweep flags, approximated by a SINGLE cubic
+// bezier. Returns [c1x, c1y, c2x, c2y] (the two control points; the end point is
+// the caller's (x1,y1)). Endpoint→center conversion per SVG F.6.5, then the
+// classic tangent construction alpha = 4/3·tan(Δθ/4) (alpha is computed from the
+// REAL sweep Δθ, ~106° for the default r*1.6 scallop spacing — kappa≈0.5523 is the
+// 90° reference; one cubic per scallop stays sub-percent error at this angle).
+// Control points are plain points, so — unlike an `A` command — they survive an
+// arbitrary affine page transform. Used to draw revision-cloud scallops in the
+// marked-set PDF (arcs there would flatten under toPage).
+function arcToBezier(x0, y0, x1, y1, r, laf, sf) {
+  const dx = (x0 - x1) / 2, dy = (y0 - y1) / 2;   // F.6.5.1 (no rotation)
+  let rr = Math.abs(r) || 1;
+  const lambda = (dx * dx + dy * dy) / (rr * rr);
+  if (lambda > 1) rr *= Math.sqrt(lambda);        // F.6.6.2: grow r to reach the chord
+  const sign = laf !== sf ? 1 : -1;
+  const num = rr * rr * rr * rr - rr * rr * dy * dy - rr * rr * dx * dx;
+  const den = rr * rr * dy * dy + rr * rr * dx * dx;
+  const coef = sign * Math.sqrt(Math.max(0, den === 0 ? 0 : num / den));
+  const cxp = coef * dy, cyp = -coef * dx;        // center in the primed frame
+  const ang = (ux, uy, vx, vy) => {
+    const dot = ux * vx + uy * vy, len = Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1;
+    let a = Math.acos(Math.max(-1, Math.min(1, dot / len)));
+    if (ux * vy - uy * vx < 0) a = -a;
+    return a;
+  };
+  const th1 = ang(1, 0, (dx - cxp) / rr, (dy - cyp) / rr);
+  let dth = ang((dx - cxp) / rr, (dy - cyp) / rr, (-dx - cxp) / rr, (-dy - cyp) / rr);
+  if (!sf && dth > 0) dth -= 2 * Math.PI;
+  if (sf && dth < 0) dth += 2 * Math.PI;
+  const th2 = th1 + dth;
+  const alpha = (4 / 3) * Math.tan(dth / 4);      // signed with dth → correct sweep
+  return [
+    x0 - alpha * rr * Math.sin(th1), y0 + alpha * rr * Math.cos(th1),
+    x1 + alpha * rr * Math.sin(th2), y1 - alpha * rr * Math.cos(th2),
+  ];
+}
+
+// Revision cloud as cubic-bezier segments — the transform-safe twin of
+// cloudPath. Same scallop geometry (identical `r` and per-edge arc count), but
+// each `A` arc becomes one cubic bezier so the outline survives the marked-set
+// affine page transform (control points map correctly; arcs don't). Coordinate-
+// space agnostic (feed it image px, like cloudPath). Returns { start:[x,y],
+// segments:[[[c1x,c1y],[c2x,c2y],[endx,endy]], …] } — a closed loop
+// (last end ≈ start). Consumers emit `M start C c1 c2 end … Z`.
+export function cloudBezier(x0, y0, x1, y1) {
+  const ax0 = Math.min(x0, x1), ay0 = Math.min(y0, y1), ax1 = Math.max(x0, x1), ay1 = Math.max(y0, y1);
+  const r = Math.max(6, Math.min(22, (ax1 - ax0 + ay1 - ay0) / 22));
+  const arc = (len) => Math.max(1, Math.round(len / (r * 1.6)));
+  const segments = [];
+  let px = ax0, py = ay0;
+  const edge = (fromX, fromY, toX, toY) => {
+    const n = arc(Math.hypot(toX - fromX, toY - fromY));
+    for (let i = 1; i <= n; i++) {
+      const qx = fromX + (toX - fromX) * (i / n), qy = fromY + (toY - fromY) * (i / n);
+      const [c1x, c1y, c2x, c2y] = arcToBezier(px, py, qx, qy, r, 0, 1);
+      segments.push([[c1x, c1y], [c2x, c2y], [qx, qy]]);
+      px = qx; py = qy;
+    }
+  };
+  edge(ax0, ay0, ax1, ay0); edge(ax1, ay0, ax1, ay1); edge(ax1, ay1, ax0, ay1); edge(ax0, ay1, ax0, ay0);
+  return { start: [ax0, ay0], segments };
 }
 
 // ── snap-to-vector spatial hash. The op-list walk that feeds it (endpoints +

@@ -7,6 +7,7 @@ import {
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
   type Point,
 } from "../src/lib/oneclick.ts";
+import { cloudBezier, cloudPath, arrowheadPath } from "../src/lib/geometry.js";
 
 // a closed square room, as flat boundary segments in image px
 function squareSegs(x0: number, y0: number, x1: number, y1: number): number[] {
@@ -182,6 +183,83 @@ test("hatch: a hatched room with a real door gap still refuses (no faked region)
   const all = [...border, ...gapped, ...hatch];
   const f = floodRegion(buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all)), 400, 300);
   assert.notEqual(f.status, "ok");
+});
+
+// ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
+test("cloudBezier: closed loop of cubic segments, more segments for a longer perimeter", () => {
+  const small = cloudBezier(0, 0, 100, 60);
+  const big = cloudBezier(0, 0, 400, 300);
+  // each segment is [c1, c2, end], each a point
+  for (const seg of small.segments) {
+    assert.equal(seg.length, 3, "a segment is c1, c2, end");
+    for (const p of seg) assert.equal(p.length, 2, "each control/end is an [x,y] point");
+  }
+  // closed: the last endpoint returns to the start corner (within fp tolerance)
+  const last = small.segments[small.segments.length - 1][2];
+  assert.ok(Math.hypot(last[0] - small.start[0], last[1] - small.start[1]) < 1e-6, "path closes");
+  // a corner-only degenerate box still yields the four base scallops
+  assert.ok(small.segments.length >= 4, `>=4 scallops, got ${small.segments.length}`);
+  assert.ok(big.segments.length > small.segments.length, "longer perimeter → more scallops");
+});
+
+test("cloudBezier: control points stay within the scallop-padded bbox", () => {
+  const { start, segments } = cloudBezier(50, 50, 250, 170);   // r = clamp((200+120)/22)=14.5
+  const PAD = 32;   // scallops bulge outward by ~r; padding must contain them
+  const pts: number[][] = [start];
+  for (const [c1, c2, end] of segments) { pts.push(c1, c2, end); }
+  for (const [x, y] of pts) {
+    assert.ok(x >= 50 - PAD && x <= 250 + PAD, `x ${x} within padded bbox`);
+    assert.ok(y >= 50 - PAD && y <= 170 + PAD, `y ${y} within padded bbox`);
+  }
+});
+
+test("cloudBezier: normalizes corner order (x1<x0, y1<y0 gives the same outline)", () => {
+  const a = cloudBezier(0, 0, 120, 80);
+  const b = cloudBezier(120, 80, 0, 0);
+  assert.deepEqual(a.start, b.start, "start pinned to min corner regardless of input order");
+  assert.equal(a.segments.length, b.segments.length, "same scallop count either way");
+});
+
+// the ONE property that makes it a revision cloud: scallops bulge OUTWARD, not
+// inward. Endpoints chain by construction (so the closure/bbox tests can't catch
+// a flipped sweep), so pin the sweep direction explicitly on a control point.
+test("cloudBezier: scallops bulge outward (sweep direction pinned)", () => {
+  const { segments } = cloudBezier(0, 0, 200, 200);
+  // a top-edge scallop (both x-coords strictly inside 0..200, y near the top edge)
+  // must have a control point ABOVE the top edge (y < 0); a bottom-edge scallop
+  // must have one BELOW (y > 200). Inward/flat scallops would fail both.
+  const anyAbove = segments.some(([c1, c2]) => (c1[1] < -1 || c2[1] < -1) && c1[0] > 1 && c1[0] < 199);
+  const anyBelow = segments.some(([c1, c2]) => (c1[1] > 201 || c2[1] > 201) && c1[0] > 1 && c1[0] < 199);
+  assert.ok(anyAbove, "top-edge scallops bulge above the box");
+  assert.ok(anyBelow, "bottom-edge scallops bulge below the box");
+});
+
+// guard against canvas↔PDF drift: cloudBezier (PDF) must have exactly one cubic
+// per SVG `A` arc emitted by cloudPath (canvas) for the same box.
+test("cloudBezier segment count matches cloudPath arc count (no canvas/PDF drift)", () => {
+  for (const box of [[0, 0, 100, 60], [50, 50, 250, 170], [0, 0, 400, 90]] as const) {
+    const arcs = (cloudPath(...box).match(/A/g) || []).length;
+    assert.equal(cloudBezier(...box).segments.length, arcs, `segment count == arc count for ${box}`);
+  }
+});
+
+// a zero-size cloud must not produce NaN control points (the closure test compares
+// endpoints, which are exact by construction, so it can't catch NaN).
+test("arrowheadPath: a zero-length leader (from==tip) yields a valid non-degenerate triangle", () => {
+  const d = arrowheadPath(100, 100, 100, 100, 6);   // from == tip
+  const pts = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+  // 3 points × 2 coords = 6 numbers; they must not all coincide (a zero-area triangle)
+  assert.equal(pts.length, 6, "M x y L x y L x y Z → six numbers");
+  const allSame = pts[0] === pts[2] && pts[2] === pts[4] && pts[1] === pts[3] && pts[3] === pts[5];
+  assert.ok(!allSame, "degenerate leader still produces a real (up-pointing) arrowhead, not a zero-area triangle");
+});
+
+test("cloudBezier: degenerate zero-size box yields finite points", () => {
+  const { start, segments } = cloudBezier(50, 50, 50, 50);
+  assert.ok(Number.isFinite(start[0]) && Number.isFinite(start[1]), "start finite");
+  for (const seg of segments) for (const [x, y] of seg) {
+    assert.ok(Number.isFinite(x) && Number.isFinite(y), "control/end finite");
+  }
 });
 
 test("classifyHatchSegs: extremal rows hard, wide member hard, curve exempt, clip soft", () => {

@@ -27,7 +27,10 @@ import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
-import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape } from "../lib/geometry.js";
+import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
+import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
+import { nextRfiNumber } from "../lib/rfi.js";
+import RfiPanel from "../components/RfiPanel.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -122,6 +125,7 @@ const MARKUP_TOOLS = [
   { id: "cloud", icon: "cloud", label: "Revision cloud" },
   { id: "callout", icon: "callout", label: "Callout" },
   { id: "text", icon: "textNote", label: "Text note" },
+  { id: "highlight", icon: "highlight", label: "Highlight box" },
 ];
 const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
 
@@ -181,8 +185,11 @@ export default function TakeoffCanvas() {
   const [lastGroup, setLastGroup] = useState([]);     // most recent side-by-side composition — "Regroup" restores it
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
-  const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
+  const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
+  const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
+  const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
+  const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
   // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
   // persist per user in localStorage as diffs against PANEL_DEFAULTS.
   const [panelPrefs, setPanelPrefs] = useState(() => {
@@ -253,6 +260,14 @@ export default function TakeoffCanvas() {
   const [poly, setPoly] = useState([]);
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
+  const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
+  const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
+  const [showRfiPanel, setShowRfiPanel] = useState(false);
+  // selecting a shape clears any markup selection and vice-versa — one live
+  // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
+  const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
+  const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
+  const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
@@ -305,6 +320,7 @@ export default function TakeoffCanvas() {
   const rubberRef = useRef(null);
   const rectRef = useRef(null);
   const cloudRef = useRef(null);       // live cloud preview (first corner → cursor)
+  const highlightRef = useRef(null);   // live highlight-box preview (first corner → cursor; own translucent fill, NOT rectRef's condition fill)
   const snapRef = useRef(null);        // current snapped image point (or null)
   const snapGridsRef = useRef(new Map()); // sheetKey → {cell, map} spatial hash of vector endpoints
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
@@ -314,7 +330,10 @@ export default function TakeoffCanvas() {
   const angleRef = useRef(null);       // current angle-locked image point (or null) — the click commits it
   const aimMarkRef = useRef(null);     // four floating liquid-glass pickets thickening the crosshair crossing
   const aimChipRef = useRef(null);     // readout chip by the cursor (locked angle · live segment length)
-  const dragRef = useRef(null);        // {kind:'move'|'vertex', shapeId, vIndex?, start:[x,y], orig:verts_norm}
+  const dragRef = useRef(null);        // {kind:'move'|'vertex'|'markupMove', shapeId?/markupId?, vIndex?, start:[x,y], orig:verts_norm/markup coords, moved?}
+  const editingRef = useRef(false);    // true while the inline text editor is open — read in moveCrosshair/onPointerDown/wheel (a REF, never per-mousemove state) to suppress the crosshair and freeze pan/zoom
+  const editorRef = useRef(null);      // mirror of the open editor object, so finishEditor can commit without a stale-closure race
+  const editorInputRef = useRef(null); // the live <input> element (uncontrolled — value read on commit)
   const lastPtrRef = useRef(null);     // last pointer CLIENT coords — paste targets the sheet under the cursor
   const pendingClickRef = useRef(null); // deferred draw click {p,cx,cy} — drag >5px converts to a pan
   const hoverRef = useRef(null);        // hover tooltip div (DOM-direct like the crosshair)
@@ -433,6 +452,7 @@ export default function TakeoffCanvas() {
     const keys = new Set(sheetGroup.length ? sheetGroup : [sheetKey]);
     return shapes.filter((s) => keys.has(s.sheet_id));
   }, [shapes, sheetGroup, sheetKey]);
+  const visibleMarkups = markups.filter((m) => panelKeySet.has(m.sheet_id));
   // scale is PER PAGE (plan sets are never one uniform scale) — set it once per
   // sheet and it's remembered. In group mode the scale dropdown and hints target
   // the FOCUSED panel (the one last clicked); single mode focuses the lone panel.
@@ -551,7 +571,11 @@ export default function TakeoffCanvas() {
     // always did). On the mount load this is a no-op (fresh panel state).
     setPanelEpoch((e) => e + 1);
     setShapes(a.shapes || []);
-    setMarkups(Array.isArray(a.markups) ? a.markups : []);
+    // normalize hydrated markups: legacy workspaces may hold markups with no id
+    // (pre-dating the id field) — seed a stable id + default rfi_id so the new
+    // select / edit / delete / move / RFI-link flows (all keyed on m.id) work on them.
+    setMarkups(Array.isArray(a.markups) ? a.markups.map((m) => ({ ...m, id: m.id || uid("mk"), rfi_id: m.rfi_id || "" })) : []);
+    setRfis(Array.isArray(a.rfis) ? a.rfis : []);   // additive — old saves without rfis load as []
     const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
     setSheetGroup(grp);
     const lg = Array.isArray(a.last_group) ? a.last_group.slice(0, MAX_GROUP) : grp;
@@ -704,7 +728,7 @@ export default function TakeoffCanvas() {
     if (!active) return;
     const seq = ++renderSeqRef.current;
     const stale = () => seq !== renderSeqRef.current;
-    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setSelectedId(null); setProposal(null);
+    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
     for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } }
     renderTasksRef.current.clear();
     snapGridsRef.current.clear();
@@ -905,10 +929,27 @@ export default function TakeoffCanvas() {
     if (hit) { setPage(parseInt(hit[0], 10)); wantSheetRef.current = ""; }
   }, [pageLabels]);
 
+  // fly-to phase 2: a pending fly-to whose sheet just finished opening (its panel
+  // now has a real bitmap) gets centered here — never on the same tick openSheets
+  // was called (dims are still {0,0} then).
+  useEffect(() => {
+    const m = pendingFlyRef.current;
+    if (!m) return;
+    // drop a stale pending fly-to: the target sheet failed to render, or the markup
+    // was deleted — either way it will never complete, so don't let it fire later.
+    if (status === "error" || !markups.some((x) => x.id === m.id)) { pendingFlyRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(m.sheet_id)) return;
+    const sp = panels.find((p) => p.key === m.sheet_id);
+    // once the panel bitmap exists, center (or give up if the markup has no anchor)
+    // and clear the ref regardless, so an unanchored markup can't get stuck pending.
+    if (sp && sp.img.w) { centerOnMarkup(m); pendingFlyRef.current = null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status]);
+
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
-  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
+  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
@@ -923,7 +964,7 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, conditionColumns, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -983,6 +1024,7 @@ export default function TakeoffCanvas() {
       }
     };
     const onWheel = (e) => {
+      if (editingRef.current) return;   // freeze pan/zoom while the inline editor is pinned to its anchor
       e.preventDefault();
       gestureUntilRef.current = performance.now() + GESTURE_MS;  // detail view waits for wheel quiet
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
@@ -1071,8 +1113,9 @@ export default function TakeoffCanvas() {
         if (poly.length) { setPoly((q) => q.slice(0, -1)); setCalib((c) => c.slice(0, -1)); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
+        else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
         else setCalib((c) => c.slice(0, -1));
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); setSelectedId(null); setMarkupDraft(null); setProposal(null); }
+      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1080,11 +1123,14 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, selectedMarkupId, showMarkups, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
     if (status !== "ready") return;
+    // inline editor open: the blur that follows this click commits it; swallow the
+    // canvas interaction so pan/zoom stays frozen and no stray point is placed
+    if (editingRef.current) return;
     // Pan WITHOUT leaving the draw tool: middle-drag, right-drag, Space-drag, or Pan tool.
     if (tool === "pan" || e.button === 1 || e.button === 2 || spaceRef.current) {
       panRef.current = { sx: e.clientX, sy: e.clientY, ox: tfRef.current.x, oy: tfRef.current.y };
@@ -1114,63 +1160,140 @@ export default function TakeoffCanvas() {
       if (poly.length === 0) setPoly([p]);
       else { const a = poly[0]; commitPoly([[a[0], a[1]], [p[0], a[1]], [p[0], p[1]], [a[0], p[1]]], tool === "deduct-rect"); setPoly([]); }
     }
-    else if (tool === "cloud" || tool === "callout" || tool === "text") placeMarkup(p);
+    else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
+  }
+  // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
+  // hitShape can't test them — this is a purpose-built bbox/point test in the
+  // markup's OWN panel frame. p is stage px. Labels are screen-constant, so their
+  // extent divides by the current scale.
+  function hitMarkup(m, p, thr) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    const W = sp.img.w, H = sp.img.h, ox = sp.xOffset;
+    const X = p[0], Y = p[1], sc = tfRef.current.scale;
+    if (m.type === "cloud" && m.rect) {
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      // a cloud renders hollow (fill="none"), so hit only its border band — a shape
+      // (or vertex) enclosed by the cloud must stay clickable through the interior.
+      const inX = X >= x0 - thr && X <= x1 + thr, inY = Y >= y0 - thr && Y <= y1 + thr;
+      const onV = inX && (Math.abs(Y - y0) <= thr || Math.abs(Y - y1) <= thr);
+      const onH = inY && (Math.abs(X - x0) <= thr || Math.abs(X - x1) <= thr);
+      return onV || onH;
+    }
+    if (m.type === "callout" && m.at) {
+      const ax = m.at[0] * W + ox, ay = m.at[1] * H;
+      const lw = ((m.text?.length || 1) * 7 + 14) / sc;
+      if (X >= ax - thr && X <= ax + lw && Y >= ay - 18 / sc - thr && Y <= ay + thr) return true;
+      if (m.target) {
+        const tx = m.target[0] * W + ox, ty = m.target[1] * H;
+        if (Math.hypot(X - tx, Y - ty) < thr * 2) return true;
+        if (distToSeg(X, Y, tx, ty, ax, ay) < thr) return true;
+      }
+      return false;
+    }
+    if (m.type === "text" && m.at) {
+      const ax = m.at[0] * W + ox, ay = m.at[1] * H;
+      const lw = ((m.text?.length || 1) * 7 + 14) / sc;
+      return X >= ax - thr && X <= ax + lw && Y >= ay - 16 / sc - thr && Y <= ay + thr;
+    }
+    if (m.type === "highlight" && m.rect) {
+      // a highlight is FILLED and meant to be grabbed — hit its interior (with a
+      // small margin) so it selects; precedence in selectAt keeps other markups
+      // under it clickable.
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      return X >= x0 - thr && X <= x1 + thr && Y >= y0 - thr && Y <= y1 + thr;
+    }
+    return false;
   }
   // Select tool: pick a shape (or a vertex of the selected one) and start dragging
   // it. Every shape hit-tests in ITS panel's local frame (stage x minus xOffset).
   function selectAt(p, e) {
     const thr = 8 / tfRef.current.scale;
-    if (selectedId) {
-      const sel = shapes.find((s) => s.id === selectedId);
-      const sp = sel && panelKeySet.has(sel.sheet_id) ? panelByKey(sel.sheet_id) : null;
-      if (sel && sp && sel.measure_role !== "count") {
-        const pts = sel.verts_norm.map(([nx, ny]) => [nx * sp.img.w + sp.xOffset, ny * sp.img.h]);
-        const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
-        for (let i = 0; i < pts.length; i++) {
-          if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) < thr * 1.6) {
-            if (e.altKey) {
-              // ⌥-click removes the point (a polygon keeps ≥3, a run keeps ≥2)
-              const min = closed ? 3 : 2;
-              if (sel.verts_norm.length > min) {
-                setShapes((ss) => ss.map((s) => {
-                  if (s.id !== sel.id) return s;
-                  const vn = s.verts_norm.filter((_, j) => j !== i);
-                  return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
-                }));
-              } else setCommitMsg(closed ? "A shape needs at least 3 points." : "A run needs at least 2 points.");
-              return;
-            }
-            dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i };
-            e.currentTarget.setPointerCapture(e.pointerId); return;
+    const sel = selectedId ? shapes.find((s) => s.id === selectedId) : null;
+    const selSp = sel && panelKeySet.has(sel.sheet_id) ? panelByKey(sel.sheet_id) : null;
+    // 1. Handles of the ALREADY-selected shape win first, so a shape (or vertex)
+    //    enclosed by a markup — e.g. a revision cloud drawn around a room — stays
+    //    editable rather than being shielded by the markup's hit area.
+    if (sel && selSp && sel.measure_role !== "count") {
+      const pts = sel.verts_norm.map(([nx, ny]) => [nx * selSp.img.w + selSp.xOffset, ny * selSp.img.h]);
+      const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
+      for (let i = 0; i < pts.length; i++) {
+        if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) < thr * 1.6) {
+          if (e.altKey) {
+            // ⌥-click removes the point (a polygon keeps ≥3, a run keeps ≥2)
+            const min = closed ? 3 : 2;
+            if (sel.verts_norm.length > min) {
+              setShapes((ss) => ss.map((s) => {
+                if (s.id !== sel.id) return s;
+                const vn = s.verts_norm.filter((_, j) => j !== i);
+                return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
+              }));
+            } else setCommitMsg(closed ? "A shape needs at least 3 points." : "A run needs at least 2 points.");
+            return;
           }
-        }
-        // midpoint handles: click an edge's midpoint to INSERT a new lever point
-        // and drag it away in the same gesture
-        const edges = closed ? pts.length : pts.length - 1;
-        for (let i = 0; i < edges; i++) {
-          const a = pts[i], b = pts[(i + 1) % pts.length];
-          if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
-            const nv = [(p[0] - sp.xOffset) / sp.img.w, p[1] / sp.img.h];
-            setShapes((ss) => ss.map((s) => {
-              if (s.id !== sel.id) return s;
-              const vn = [...s.verts_norm.slice(0, i + 1), nv, ...s.verts_norm.slice(i + 1)];
-              return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
-            }));
-            dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i + 1 };
-            e.currentTarget.setPointerCapture(e.pointerId); return;
-          }
+          dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i };
+          e.currentTarget.setPointerCapture(e.pointerId); return;
         }
       }
-      if (sel && sp && hitShape(sel, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr)) {
-        dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
-        e.currentTarget.setPointerCapture(e.pointerId); return;
+      // midpoint handles: click an edge's midpoint to INSERT a new lever point
+      // and drag it away in the same gesture
+      const edges = closed ? pts.length : pts.length - 1;
+      for (let i = 0; i < edges; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
+          const nv = [(p[0] - selSp.xOffset) / selSp.img.w, p[1] / selSp.img.h];
+          setShapes((ss) => ss.map((s) => {
+            if (s.id !== sel.id) return s;
+            const vn = [...s.verts_norm.slice(0, i + 1), nv, ...s.verts_norm.slice(i + 1)];
+            return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
+          }));
+          dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i + 1 };
+          e.currentTarget.setPointerCapture(e.pointerId); return;
+        }
       }
     }
+    // 2. markups render ON TOP of shapes (:2137 > :2093), so a markup hit wins over a
+    //    plain shape click — but NOT over the selected shape's handles above.
+    //    When the markup layer is hidden (showMarkups false), skip the search
+    //    entirely — you can't select/delete/fly-to an invisible markup.
+    if (showMarkups) {
+      const rev = [...visibleMarkups].reverse();
+      // a NON-highlight markup hit beats a highlight at the same point (test
+      // highlights last), so a linked cloud/callout under a highlight stays
+      // clickable; a highlight still wins over a plain shape (it shields it).
+      const mHit = rev.find((m) => m.type !== "highlight" && hitMarkup(m, p, thr))
+                || rev.find((m) => m.type === "highlight" && hitMarkup(m, p, thr));
+      if (mHit) {
+        selectMarkup(mHit.id);
+        // arm a move drag — snapshot the markup's current normalized coords (all four
+        // shapes: cloud/highlight rect, callout at+target, text at). The move stays a
+        // no-op until it passes the threshold in onPointerMove, so a pure click (or the
+        // first click of a double-click re-edit) never nudges the markup.
+        const orig = (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
+          : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
+            : { at: mHit.at };
+        // raw start (markups don't snap/angle-lock; matches the raw tracking point in
+        // onPointerMove so the delta can't be contaminated by a stale snap/angle ref)
+        dragRef.current = { kind: "markupMove", markupId: mHit.id, sheetId: mHit.sheet_id, start: toImage(e.clientX, e.clientY), orig, moved: false };
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
+    // 3. move the selected shape if its body (not a handle) was hit
+    if (sel && selSp && hitShape(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
+      dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
+      e.currentTarget.setPointerCapture(e.pointerId); return;
+    }
+    // 4. otherwise pick a shape (or clear the selection)
     const hit = [...visibleShapes].reverse().find((s) => {
       const sp = panelByKey(s.sheet_id);
       return hitShape(s, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr);
     });
-    setSelectedId(hit ? hit.id : null);
+    selectShape(hit ? hit.id : null);
     if (hit) { dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm }; e.currentTarget.setPointerCapture(e.pointerId); }
   }
   // Geometry from the shape's OWN sheet: its panel's pixel dims × that sheet's
@@ -1200,6 +1323,7 @@ export default function TakeoffCanvas() {
     return { area_sf: +(met.area * u * u).toFixed(2), perimeter_lf: +(met.perim * u).toFixed(2) };
   }
   function moveCrosshair(e) {
+    if (editingRef.current) return;   // inline editor open — no aim crosshair (ref check, never per-mousemove state)
     if (tool === "pan" || tool === "select" || status !== "ready" || !containerRef.current) return;
     // snap-to-vector: nearest PDF endpoint within threshold becomes the active
     // point — looked up in the hovered panel's grid, in that panel's local frame
@@ -1307,9 +1431,20 @@ export default function TakeoffCanvas() {
         cloudRef.current.style.display = "block";
       } else cloudRef.current.style.display = "none";
     }
+    // live highlight preview: a translucent box, first corner → cursor (its own
+    // ref, NOT rectRef which carries the active condition fill)
+    if (highlightRef.current) {
+      if (!panRef.current && tool === "highlight" && markupDraft) {
+        highlightRef.current.setAttribute("x", Math.min(markupDraft[0], cur[0]));
+        highlightRef.current.setAttribute("y", Math.min(markupDraft[1], cur[1]));
+        highlightRef.current.setAttribute("width", Math.abs(cur[0] - markupDraft[0]));
+        highlightRef.current.setAttribute("height", Math.abs(cur[1] - markupDraft[1]));
+        highlightRef.current.style.display = "block";
+      } else highlightRef.current.style.display = "none";
+    }
   }
   function hideCrosshair() {
-    for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
+    for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, highlightRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
     if (hoverRef.current) hoverRef.current.style.display = "none";
     hoverIdRef.current = "";
     angleRef.current = null;
@@ -1378,6 +1513,28 @@ export default function TakeoffCanvas() {
           const sp = panelByKey(s.sheet_id);
           const dx = (p[0] - d.start[0]) / sp.img.w, dy = (p[1] - d.start[1]) / sp.img.h;
           return { ...s, verts_norm: d.orig.map(([nx, ny]) => [nx + dx, ny + dy]) };
+        }));
+      } else if (d.kind === "markupMove") {
+        // raw cursor point — markups aren't snapped/angle-locked, and this matches the
+        // raw d.start so the delta can't jump from a stale snap/angle ref.
+        const mp = toImage(e.clientX, e.clientY);
+        // dblclick-safe: stay inert until the pointer travels past the ~5px pan
+        // threshold, so a click / first click of a double-click never moves it
+        const sc = tfRef.current.scale;
+        if (!d.moved && Math.hypot(mp[0] - d.start[0], mp[1] - d.start[1]) < 5 / sc) return;
+        d.moved = true;
+        const sp = panelByKey(d.sheetId);
+        if (!sp || !sp.img.w) return;
+        // start and mp are both stage px, so xOffset cancels in the delta; normalize
+        // by the markup's OWN panel dims. Live setMarkups each move (mirrors the shape
+        // `move` pattern; NOT commit-on-release). Persistence is automatic.
+        const dx = (mp[0] - d.start[0]) / sp.img.w, dy = (mp[1] - d.start[1]) / sp.img.h;
+        const o = d.orig;
+        setMarkups((ms) => ms.map((m) => {
+          if (m.id !== d.markupId) return m;
+          if (o.rect) return { ...m, rect: [[o.rect[0][0] + dx, o.rect[0][1] + dy], [o.rect[1][0] + dx, o.rect[1][1] + dy]] };
+          if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
+          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };
         }));
       }
       return;
@@ -1589,7 +1746,7 @@ export default function TakeoffCanvas() {
       return { ...s, computed: recomputeShape(s) };
     });
     setShapes((s) => [...s, ...made]);
-    setSelectedId(made[made.length - 1].id);
+    selectShape(made[made.length - 1].id);
     setTool("select");
     setCommitMsg(`Pasted ${made.length} takeoff${made.length === 1 ? "" : "s"}${cross ? ` onto ${labelFor(tp)}` : ""} — drag to position.`);
   }
@@ -1609,17 +1766,21 @@ export default function TakeoffCanvas() {
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
   // (lib/markedset.js). Exports in the CURRENT view: dark canvas → dark PDF.
-  async function exportMarkedSet() {
+  // includeMarkups (from the ReportPanel checkbox, default true) is ORTHOGONAL to
+  // the canvas layer-hide (showMarkups): only this flag drops markups from the
+  // PDF. Off → pass []; the RFI-only export still works (empty-guard unaffected).
+  async function exportMarkedSet(includeMarkups = true) {
     try {
       setCommitMsg("Building the marked set…");
-      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...markups.map((m) => m.sheet_id)])];
+      const exportMarkups = includeMarkups ? markups : [];
+      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...exportMarkups.map((m) => m.sheet_id)])];
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
       }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
-        dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
+        dark: darkMode, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -1630,32 +1791,176 @@ export default function TakeoffCanvas() {
     }
   }
 
+  // ── inline text editor — a screen-space <input> overlay (retires window.prompt).
+  // An HTML input can't live in the zoom/pan-transformed SVG group, so it is
+  // absolutely positioned in CONTAINER px, converting the anchor (stage px) through
+  // tfRef. Pan/zoom is frozen while editing (onPointerDown / onWheel bail on
+  // editingRef) so the overlay stays pinned to its anchor; the crosshair is
+  // suppressed via the same ref inside moveCrosshair. Keys are handled on the
+  // input's OWN onKeyDown/onBlur — the global window keydown returns early for
+  // INPUT targets, so it never interferes.
+  function markupAnchorStage(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return null;
+    let nx, ny;
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
+    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }
+    else return null;
+    return [nx * sp.img.w + sp.xOffset, ny * sp.img.h];
+  }
+  function openTextEditor({ anchorStage, value = "", multiline = false, commit }) {
+    const el = containerRef.current;
+    if (!el) return;
+    const t = tfRef.current;
+    hideCrosshair();                 // the OS cursor / aim crosshair steps aside while you type
+    editingRef.current = true;
+    const ed = { left: anchorStage[0] * t.scale + t.x, top: anchorStage[1] * t.scale + t.y, value, multiline, commit };
+    editorRef.current = ed;
+    setEditor(ed);
+  }
+  // commit=true → run the editor's commit with the current input text; either way
+  // tear down. Guarded on editingRef so the blur that fires when we unmount the
+  // focused input (after Enter/Esc) is a harmless no-op — no double commit.
+  function finishEditor(commit) {
+    if (!editingRef.current) return;
+    editingRef.current = false;
+    const ed = editorRef.current;
+    const val = editorInputRef.current ? editorInputRef.current.value : (ed ? ed.value : "");
+    editorRef.current = null;
+    setEditor(null);
+    if (commit && ed && ed.commit) ed.commit(val);
+  }
+  // defense-in-depth: editingRef locks pan/zoom/crosshair while the overlay is up.
+  // If the input ever unmounts by a route other than finishEditor, this keeps the
+  // ref from stranding true and freezing the canvas.
+  useEffect(() => { if (!editor) editingRef.current = false; }, [editor]);
+  // double-click a markup (Select tool) to edit its text in place — find the target
+  // via toImage + hitMarkup (non-highlight beats highlight, mirroring selectAt) and
+  // open the overlay at its anchor.
+  function editMarkupAt(e) {
+    if (!showMarkups) return;
+    const p = toImage(e.clientX, e.clientY);
+    const thr = 8 / tfRef.current.scale;
+    const rev = [...visibleMarkups].reverse();
+    const m = rev.find((mm) => mm.type !== "highlight" && hitMarkup(mm, p, thr))
+      || rev.find((mm) => mm.type === "highlight" && hitMarkup(mm, p, thr));
+    if (!m) return;
+    const anchor = markupAnchorStage(m);
+    if (!anchor) return;
+    selectMarkup(m.id);
+    openTextEditor({ anchorStage: anchor, value: m.text || "", commit: (t) => updateMarkup(m.id, { text: (t || "").trim() }) });
+  }
+
   function placeMarkup(p) {
     const tp = panelAt(p[0]);
     const norm = (q, panel) => [(q[0] - panel.xOffset) / panel.img.w, q[1] / panel.img.h];
     if (tool === "text") {
-      const t = window.prompt("Text note:");
-      if (t && t.trim()) addMarkup({ type: "text", at: norm(p, tp), text: t.trim() }, tp.key);
+      // empty text is not committed (preserves the old `if (t && t.trim())` reject)
+      openTextEditor({ anchorStage: p, commit: (t) => { const tx = (t || "").trim(); if (tx) addMarkup({ type: "text", at: norm(p, tp), text: tx }, tp.key); } });
     } else if (tool === "cloud") {
       if (!markupDraft) { setMarkupDraft(p); }
       else {
-        const note = window.prompt("Cloud note (optional):") || "";
         const dp = panelAt(markupDraft[0]);
-        addMarkup({ type: "cloud", rect: [norm(markupDraft, dp), norm(p, dp)], text: note.trim() }, dp.key);
+        const rect = [norm(markupDraft, dp), norm(p, dp)];
+        setMarkupDraft(null);
+        // create the cloud NOW (like highlight) so Esc/cancel in the note editor
+        // keeps the drawn box — only the optional note is discarded, not the geometry
+        const id = uid("mk");
+        addMarkup({ id, type: "cloud", rect, text: "" }, dp.key);
+        openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(id, { text: (t || "").trim() }) });
+      }
+    } else if (tool === "highlight") {
+      // two-corner like the cloud, but no note prompt — a highlight is a pure
+      // translucent box you drop over an area; text/color/line_style come later.
+      if (!markupDraft) { setMarkupDraft(p); }
+      else {
+        const dp = panelAt(markupDraft[0]);
+        addMarkup({ type: "highlight", rect: [norm(markupDraft, dp), norm(p, dp)], text: "" }, dp.key);
         setMarkupDraft(null);
       }
     } else if (tool === "callout") {
       if (!markupDraft) { setMarkupDraft(p); }   // first click = the thing you're pointing at
       else {
-        const t = window.prompt("Callout text:");
         const dp = panelAt(markupDraft[0]);
-        if (t && t.trim()) addMarkup({ type: "callout", target: norm(markupDraft, dp), at: norm(p, dp), text: t.trim() }, dp.key);
+        const target = norm(markupDraft, dp), at = norm(p, dp);
         setMarkupDraft(null);
+        // empty callout text is not committed (preserves the old reject)
+        openTextEditor({ anchorStage: p, commit: (t) => { const tx = (t || "").trim(); if (tx) addMarkup({ type: "callout", target, at, text: tx }, dp.key); } });
       }
     }
   }
   function updateMarkup(mid, patch) { setMarkups((ms) => ms.map((m) => (m.id === mid ? { ...m, ...patch } : m))); }
   function deleteMarkup(mid) { setMarkups((ms) => ms.filter((m) => m.id !== mid)); }
+
+  // ── RFI register — the dormant markup.rfi_id hook made real. One RFI ↔ many
+  // markups (markup.rfi_id === rfi.id); linked markups are DERIVED, never stored
+  // twice. rfi.js stays PURE — every date is stamped HERE, at the event, so no
+  // renderer computes an RFI field with new Date().
+  function raiseRfi(markup) {
+    if (!markup) return;
+    const id = uid("rfi");
+    const number = nextRfiNumber(rfis);
+    const rec = {
+      id, number, subject: (markup.text || "").trim(), question: "", status: "open",
+      to: "", priority: "normal", cost_impact: false, schedule_impact: false,
+      date: new Date().toISOString().slice(0, 10), response: "", response_date: "",
+      sheet_id: markup.sheet_id,
+    };
+    setRfis((rs) => [...rs, rec]);
+    updateMarkup(markup.id, { rfi_id: id });
+    setShowRfiPanel(true);
+    setCommitMsg(`Raised ${number}.`);
+  }
+  const linkRfi = (markup, rfiId) => { if (markup && rfiId) updateMarkup(markup.id, { rfi_id: rfiId }); };
+  const unlinkRfi = (markup) => { if (markup) updateMarkup(markup.id, { rfi_id: "" }); };
+  // hard delete: drop the record AND clear the dangling pointer on every linked
+  // markup (void is a status; delete removes — both must leave no orphan link)
+  function deleteRfi(id) {
+    setRfis((rs) => rs.filter((r) => r.id !== id));
+    setMarkups((ms) => ms.map((m) => (m.rfi_id === id ? { ...m, rfi_id: "" } : m)));
+  }
+  // parent-owned update path: the status→response_date auto-stamp lives HERE (not
+  // in the view) so the date is data, stamped once on the transition into Answered.
+  function updateRfi(id, patch) {
+    setRfis((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, ...patch };
+      if (patch.status && next.status === "answered" && r.status !== "answered" && !next.response_date) {
+        next.response_date = new Date().toISOString().slice(0, 10);
+      }
+      return next;
+    }));
+  }
+
+  // Fly to a linked markup from the register. Two-phase because openSheets only
+  // fires state setters and a sheet's bitmap dims load async: if the target sheet
+  // isn't open, stash it in pendingFlyRef + openSheets, and the effect below
+  // centers once the panel has non-zero img.w. If already open, center inline.
+  function centerOnMarkup(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    let anchor;
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
+    else if (m.type === "callout") anchor = m.at || m.target;
+    else anchor = m.at;
+    if (!anchor) return false;
+    const el = containerRef.current;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const scale = tfRef.current.scale;
+    const sx = anchor[0] * sp.img.w + sp.xOffset, sy = anchor[1] * sp.img.h;
+    setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    selectMarkup(m.id);
+    return true;
+  }
+  function flyToMarkup(m) {
+    if (!m) return;
+    setShowMarkups(true);   // flying to a markup reveals the layer, so you never land on an invisible selection
+    if (!panelKeySet.has(m.sheet_id)) { pendingFlyRef.current = m; openSheets([m.sheet_id], false); return; }
+    // open already, but its bitmap may still be mid-render (img.w === 0) — if the
+    // inline center can't run yet, hand off to the phase-2 effect below.
+    if (!centerOnMarkup(m)) pendingFlyRef.current = m;
+  }
 
   function finishShape() { if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]); }
   function deleteSelected() { if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); } }
@@ -2170,7 +2475,7 @@ export default function TakeoffCanvas() {
           <Icon name="hiRes" size={15} />
         </button>
         <div style={{ flex: 1 }} />
-        {markupDraft && (tool === "cloud" || tool === "callout") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "cloud" ? "opposite corner" : "label spot"}…</span>}
+        {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : "opposite corner"}…</span>}
         {finishOk && (
           <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
         )}
@@ -2252,8 +2557,8 @@ export default function TakeoffCanvas() {
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
-          onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
-          onDoubleClick={() => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") finishShape(); }}
+          onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
+          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
@@ -2274,6 +2579,17 @@ export default function TakeoffCanvas() {
           <div ref={aimChipRef} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", display: "none", zIndex: 6, padding: "2px 8px", background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-1)", fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", willChange: "transform" }} />
           {/* hover readout — what takeoff is under the cursor (DOM-direct) */}
           <div ref={hoverRef} style={{ position: "absolute", display: "none", pointerEvents: "none", zIndex: 8, background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-1)", padding: "4px 8px", fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink)", whiteSpace: "nowrap" }} />
+          {/* inline on-canvas text editor — a screen-space overlay pinned to its anchor
+              (pan/zoom is frozen while open). Enter commits, Esc cancels, blur commits;
+              all on the input's OWN handlers so the global keydown (which returns early
+              for INPUT) never interferes. cursor:text overrides the stage's cursor:none. */}
+          {editor && (
+            <input ref={editorInputRef} autoFocus defaultValue={editor.value}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); finishEditor(true); } else if (e.key === "Escape") { e.preventDefault(); finishEditor(false); } }}
+              onBlur={() => finishEditor(true)}
+              placeholder="Type, Enter to place · Esc cancels"
+              style={{ position: "absolute", left: editor.left, top: editor.top, zIndex: 9, minWidth: 160, padding: "3px 6px", font: "13px var(--f-body, sans-serif)", color: "var(--ink)", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 2px 10px rgba(0,0,0,.18)", borderRadius: 0, cursor: "text", outline: "none" }} />
+          )}
           <div ref={stageRef} style={{ position: "absolute", transformOrigin: "0 0", willChange: "transform", width: stage.w || undefined, height: stage.h || undefined }}>
             {panels.map((p) => (
               <canvas key={p.key} ref={(el) => { if (el) panelCanvasRefs.current.set(p.key, el); else panelCanvasRefs.current.delete(p.key); }}
@@ -2313,10 +2629,12 @@ export default function TakeoffCanvas() {
                         return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4.5 : 3.5) / z} strokeDasharray={`${10 / z} ${3 / z} ${2 / z} ${3 / z}`} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       if (s.measure_role === "linear") {
-                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeLinecap="round" strokeLinejoin="round" />;
+                        // line_style governs linear outlines (surface_area keeps its dash-dot identity above)
+                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       const ded = s.measure_role === "deduct";
-                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : "0"} />;
+                      // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
+                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
                     {/* vertex handles for the selected shape (drag to reshape) */}
                     {selectedId && (() => {
@@ -2336,34 +2654,100 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })()}
-                    {/* markup layer — clouds / callouts / text notes on this panel */}
-                    {markups.filter((m) => m.sheet_id === p.key).map((m) => {
-                      const mk = m.rfi_id ? "#1f3fc7" : "#c47a10";
-                      if (m.type === "cloud") {
+                    {/* markup layer — highlights / clouds / callouts / text notes on this
+                        panel. Highlights draw FIRST (behind) so their translucent fill never
+                        dims the linework above. A selected markup wears a CONTRASTING halo
+                        (white outer ring + cobalt inner). Per-markup color drives the STROKE/
+                        FILL (dark-boosted on the dark canvas); RFI linkage is an unconditional
+                        ⬢/number badge, independent of the note text. Layer hides via showMarkups. */}
+                    {showMarkups && markups.filter((m) => m.sheet_id === p.key)
+                      .slice().sort((a, b) => (a.type === "highlight" ? 0 : 1) - (b.type === "highlight" ? 0 : 1))
+                      .map((m) => {
+                      const z = tf.scale;
+                      const base = m.color || (m.rfi_id ? "#1f3fc7" : "#c47a10");
+                      const mk = darkMode ? boostForDark(base) : base;   // literal — SVG attrs don't resolve CSS vars
+                      const dash = dashArrayFor(m.line_style || "solid", z);
+                      const w = clampWeight(m.weight);   // stroke-width multiplier over each element's base, default ×1
+                      const selM = m.id === selectedMarkupId;
+                      // linkage badge — unconditional for any linked markup (a note-less
+                      // recolored cloud still reads as linked); kept in cobalt for legibility
+                      // regardless of the user's color, pinned clear of the halo.
+                      const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                      const badgeCol = darkMode ? boostForDark("#1f3fc7") : "#1f3fc7";
+                      const badge = (bx, by) => (m.rfi_id ? (
+                        <text x={bx} y={by} fill={badgeCol} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{"⬢"}{linked && linked.number != null && linked.number !== "" ? " " + linked.number : ""}</text>
+                      ) : null);
+                      // revision-delta △n — a small numbered triangle at a cloud corner,
+                      // clear of the halo, the top-left RFI badge, and the centered note.
+                      // Absent/zero m.rev → nothing (legacy clouds render unchanged).
+                      // the triangle backing is ALWAYS white, so stroke/number it in the
+                      // UN-boosted color (mk's dark boost is tuned to contrast the dark
+                      // canvas, and would wash out on white).
+                      const revTri = (rx, ry) => (Number.isFinite(m.rev) && m.rev > 0 ? (
+                        <g style={{ pointerEvents: "none" }}>
+                          <path d={`M${rx},${ry - 9 / z} L${rx + 8 / z},${ry + 6 / z} L${rx - 8 / z},${ry + 6 / z} Z`} fill="#fff" stroke={base} strokeWidth={1.4 / z} />
+                          <text x={rx} y={ry + 2.5 / z} fill={base} fontSize={9 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central">{m.rev}</text>
+                        </g>
+                      ) : null);
+                      // halo ring widths scale with weight so a heavy stroke never overruns them
+                      const halo = (x0, y0, x1, y1) => (selM ? (
+                        <>
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={(5 * w) / z} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={(2 * w) / z} />
+                        </>
+                      ) : null);
+                      if (m.type === "highlight") {
                         const [c0, c1] = m.rect;
+                        const hx0 = Math.min(c0[0], c1[0]) * p.img.w, hy0 = Math.min(c0[1], c1[1]) * p.img.h;
+                        const hx1 = Math.max(c0[0], c1[0]) * p.img.w, hy1 = Math.max(c0[1], c1[1]) * p.img.h;
+                        const pad = (5 * w) / z;
                         return (
                           <g key={m.id}>
-                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={2 / tf.scale} />
-                            {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / tf.scale} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>}
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <rect x={hx0} y={hy0} width={hx1 - hx0} height={hy1 - hy0} fill={mk} fillOpacity={0.18} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={(hx0 + hx1) / 2} y={(hy0 + hy1) / 2} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(hx0, hy0 - pad - 9 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "cloud") {
+                        const [c0, c1] = m.rect;
+                        const pad = (5 * w) / z;
+                        const bx0 = Math.min(c0[0], c1[0]) * p.img.w - pad, by0 = Math.min(c0[1], c1[1]) * p.img.h - pad;
+                        const bx1 = Math.max(c0[0], c1[0]) * p.img.w + pad, by1 = Math.max(c0[1], c1[1]) * p.img.h + pad;
+                        return (
+                          <g key={m.id}>
+                            {halo(bx0, by0, bx1, by1)}
+                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(bx0, by0 - 9 / z)}
+                            {revTri(bx1, by0 - 9 / z)}
                           </g>
                         );
                       }
                       if (m.type === "callout") {
                         const [tx, ty] = m.target, [ax, ay] = m.at;
+                        const lw = ((m.text?.length || 1) * 7 + 10) / z;
                         return (
                           <g key={m.id}>
-                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={2 / tf.scale} />
-                            <path d={starPath(tx * p.img.w, ty * p.img.h, 4 / tf.scale)} fill={mk} />
-                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / tf.scale} width={(m.text.length * 7 + 10) / tf.scale} height={20 / tf.scale} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
-                            <text x={(ax * p.img.w) + 5 / tf.scale} y={(ay * p.img.h) - 2 / tf.scale} fill="#0e1a2e" fontSize={12 / tf.scale}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>
+                            {halo(ax * p.img.w - 4 / z, ay * p.img.h - 18 / z, ax * p.img.w + lw + 4 / z, ay * p.img.h + 4 / z)}
+                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {/* arrowhead at the target end — replaces the old vertex star */}
+                            <path d={arrowheadPath(ax * p.img.w, ay * p.img.h, tx * p.img.w, ty * p.img.h, 9 / z)} fill={mk} />
+                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / z} width={lw} height={20 / z} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
+                            <text x={(ax * p.img.w) + 5 / z} y={(ay * p.img.h) - 2 / z} fill="#0e1a2e" fontSize={12 / z}>{m.text}</text>
+                            {badge(ax * p.img.w, ay * p.img.h - 24 / z)}
                           </g>
                         );
                       }
                       const [x, y] = m.at;
+                      const lw = ((m.text?.length || 1) * 7 + 10) / z;
                       return (
                         <g key={m.id}>
-                          <rect x={x * p.img.w - 3 / tf.scale} y={y * p.img.h - 14 / tf.scale} width={(m.text.length * 7 + 10) / tf.scale} height={20 / tf.scale} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
-                          <text x={x * p.img.w + 2 / tf.scale} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / tf.scale} fontWeight="600">{m.rfi_id ? "⬢ " : ""}{m.text}</text>
+                          {halo(x * p.img.w - 5 / z, y * p.img.h - 16 / z, x * p.img.w + lw + 3 / z, y * p.img.h + 6 / z)}
+                          <rect x={x * p.img.w - 3 / z} y={y * p.img.h - 14 / z} width={lw} height={20 / z} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
+                          <text x={x * p.img.w + 2 / z} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / z} fontWeight="600">{m.text}</text>
+                          {badge(x * p.img.w, y * p.img.h - 22 / z)}
                         </g>
                       );
                     })}
@@ -2385,6 +2769,7 @@ export default function TakeoffCanvas() {
               <line ref={rubberRef} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={1.5 / tf.scale} strokeOpacity={0.85} strokeLinecap="round" style={{ display: "none" }} />
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               <path ref={cloudRef} fill="rgba(37,99,235,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale} strokeDasharray={`${5 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
+              <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               {poly.length >= 2 && (tool === "linear" || tool === "surface"
                 ? <polyline points={poly.map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
                 : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} />)}
@@ -2501,6 +2886,7 @@ export default function TakeoffCanvas() {
             rides the canvas edge, so it stays visible either way. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
           {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
+          {panelBtn(() => setShowRfiPanel((v) => !v), "rfi", "RFI register — raise, track, and export Requests For Information", showRfiPanel, rfis.length)}
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
 
@@ -2509,10 +2895,21 @@ export default function TakeoffCanvas() {
           <div style={{ position: "absolute", left: 14, top: 14, width: 320, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff", borderRadius: 0 }}>
               <strong>Markups · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
+                    (can't select/delete/fly-to an invisible markup); orthogonal to the
+                    marked-set export, which still includes markups. */}
+                <button
+                  onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
+                  title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
+                  style={{ background: "none", border: "1px solid rgba(255,255,255,.5)", color: "#fff", fontSize: 11, cursor: "pointer", padding: "2px 7px", borderRadius: 0 }}>
+                  {showMarkups ? "Hide layer" : "Show layer"}
+                </button>
+                <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+              </span>
             </div>
             <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
-              Pick <b>☁ Cloud</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
+              Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
             </div>
             {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
               <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
@@ -2521,13 +2918,87 @@ export default function TakeoffCanvas() {
               <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
-                  <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
-                  <button onClick={() => { const t = window.prompt("Edit text:", m.text || ""); if (t != null) updateMarkup(m.id, { text: t.trim() }); }} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
+                  {/* inline edit — the panel's fallback for the canvas overlay, since a
+                      markup here may be off-screen or on another sheet (no click point).
+                      Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
+                  {panelEditId === m.id ? (
+                    <input autoFocus defaultValue={m.text || ""}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
+                      onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
+                      style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
+                  ) : (
+                    <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
+                  )}
+                  <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
                   <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
                 </div>
+                {/* appearance — per-markup color (reuse PALETTE) + line style; both
+                    additive: unset color falls back to the cobalt(linked)/amber default,
+                    unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
+                  <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
+                  {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+                  <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                    {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                  </select>
+                  {/* line weight — a multiplier over the element's base stroke width (default
+                      ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
+                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
+                  <select value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                    {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
+                  </select>
+                  {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
+                  {m.type === "cloud" && (
+                    <>
+                      <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
+                      <input type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
+                        onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
+                        title="Revision number for the △ delta (blank = none)"
+                        style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
+                    </>
+                  )}
+                </div>
+                {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
+                {(() => {
+                  const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                  const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                      {linked ? (
+                        <>
+                          <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "#1f3fc7" }}>⬢ {String(linked.number ?? "")}</span>
+                          <button onClick={() => { setShowRfiPanel(true); }} style={{ ...ctrl, color: "#1f3fc7" }} title="Open the RFI register">Open</button>
+                          <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "#1f3fc7", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
+                          {rfis.length > 0 && (
+                            <select value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
+                              title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
+                              <option value="">Link existing…</option>
+                              {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
+                            </select>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
+        )}
+
+        {/* RFI register — project-global (not sheet-scoped like the markup panel):
+            list/filter/edit/close/void/delete + fly to a linked markup. */}
+        {showRfiPanel && (
+          <RfiPanel
+            rfis={rfis} markups={markups}
+            onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
+            sheetLabel={(k) => tabLabel(k)} onClose={() => setShowRfiPanel(false)}
+          />
         )}
 
        </div>
@@ -2577,7 +3048,7 @@ export default function TakeoffCanvas() {
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
           clientInfo={clientInfo} onClientInfo={setClientInfo}
-          conditions={conditions} shapes={shapes} markups={markups}
+          conditions={conditions} shapes={shapes} markups={markups} rfis={rfis}
           conditionColumns={conditionColumns}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
@@ -2594,7 +3065,7 @@ export default function TakeoffCanvas() {
           // a runtime load (unlike mount) can interrupt work in flight — an
           // unfinished trace/calibration/proposal must not commit into the
           // restored takeoff under a reset activeCond
-          setPoly([]); setCalib([]); setPendingLen(""); setSelectedId(null); setProposal(null);
+          setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
           hydrate(payload || {});
         }}
       />
