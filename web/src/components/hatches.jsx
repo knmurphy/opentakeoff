@@ -1,6 +1,8 @@
 // Condition appearance primitives — shared by the canvas (shape fills, the
 // compact strip) and the TakeoffsPanel (row swatches, the hatch picker).
-// Extracted from TakeoffCanvas so neither file imports the other.
+// TakeoffCanvas already imports TakeoffsPanel, so a TakeoffsPanel -> TakeoffCanvas
+// import back would be a cycle; living here instead gives the shared SVG
+// primitives a neutral home both files can import without one.
 
 import React from "react";
 

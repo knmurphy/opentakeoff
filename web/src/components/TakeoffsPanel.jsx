@@ -24,13 +24,15 @@
 // The panel stays MOUNTED while collapsed (open=false renders null), so all of
 // that transient state survives a collapse/expand round-trip.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { attrValue, columnLabel } from "../lib/conditionColumns.js";
+import { num } from "../lib/num.js";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 
 export const PANEL_MIN_W = 240;
 export const PANEL_MAX_W = 560;
+export const clampPanelW = (w) => Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, w));
 
 // tag family = the text before the dash (CPT-1 → CPT) — the grouping key for
 // the panel's grouped view. VIEW-ONLY, like sort and search: the conditions
@@ -41,7 +43,12 @@ const tagFamily = (t) => (String(t || "").split("-")[0].trim().toUpperCase() || 
 // (~56× slower, benchmarked), and natCompare runs n·log n per sorted view
 const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const natCompare = (a, b) => coll.compare(String(a), String(b));
-const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
+
+// shared style atoms — these were re-declared at every call site (one even
+// fresh per matLib row per render); hoisted so identical controls can't drift
+const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
+const btnAddFull = { width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 };
+const btnClearX = { border: "none", background: "none", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0 };
 
 // Adhesive coverage by trowel notch, SF per gallon. Typical wood-adhesive range is
 // ~40–70 SF/gal: a wider/coarser notch lays more glue and covers less per gallon.
@@ -57,7 +64,6 @@ const isAdhesive = (name) => /adhes|glue|bond|mastic/i.test(name || "");
 
 // Editable supporting-materials rows — the assembly behind a condition.
 function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libById, overridden, onRevert, onAttach, onPromote }) {
-  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
   // library link affordances (#47, all optional so the editor works standalone):
   // linked lines show ⛓; a field differing from its library entry tints amber
   // and grows a per-field ↺ revert; unlinked lines can be promoted to the library
@@ -130,7 +136,6 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
 // Unassigned = attrs key absent; a value deleted from the vocabulary
 // keeps the condition's string, shown as "<value> (removed)".
 function ColumnSelects({ columns, cond, onAssign }) {
-  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, background: "var(--paper-bright)" };
   return (
     <>
       {columns.map((cc) => {
@@ -138,7 +143,7 @@ function ColumnSelects({ columns, cond, onAssign }) {
         return (
           <label key={cc.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginRight: 12, marginBottom: 6 }}>
             <span style={{ color: "var(--ink-muted)" }}>{columnLabel(cc)}</span>
-            <select value={v} onChange={(e) => onAssign(cc.id, e.target.value)} style={ip}>
+            <select value={v} onChange={(e) => onAssign(cc.id, e.target.value)} style={{ ...ip, background: "var(--paper-bright)" }}>
               <option value="">Unassigned</option>
               {cc.values.map((val) => <option key={val} value={val}>{val}</option>)}
               {v && !cc.values.includes(v) && <option value={v}>{v} (removed)</option>}
@@ -154,7 +159,6 @@ function ColumnSelects({ columns, cond, onAssign }) {
 function AddValueInput({ onAdd }) {
   const [v, setV] = useState("");
   const commit = () => { const t = v.trim(); if (t) onAdd(t); setV(""); };
-  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && commit()} placeholder="add value" style={{ ...ip, width: 90 }} />
@@ -218,15 +222,20 @@ function TakeoffsPanel({
   // (c, i) pairs keep each condition's ORIGINAL index so the hotkey badge
   // stays honest under any view — 1–9 always map to array positions.
   const condQ = condQuery.trim().toLowerCase();
+  const matQ = matLibQuery.trim().toLowerCase();   // Materials tab filter — hoisted so the row map below computes it once, not per row
+  // the one finish-tag match rule — condView's filter and searchMiss must
+  // agree on what "matches" means, or a row could show while the "no match"
+  // message also shows (or vice versa)
+  const matchesQuery = useCallback((c) => (c.finish_tag || "").toLowerCase().includes(condQ), [condQ]);
   const condView = useMemo(() => {
     let v = conditions.map((c, i) => ({ c, i }));
     // the ACTIVE condition is force-included past the filter: hotkeys, the
     // strip, and applyTemplate can activate a row the query hides, and the
     // properties editor lives only in the active row — it must stay reachable
-    if (condQ) v = v.filter(({ c }) => (c.finish_tag || "").toLowerCase().includes(condQ) || c.id === activeCond);
+    if (condQ) v = v.filter(({ c }) => matchesQuery(c) || c.id === activeCond);
     if (panelPrefs.az) v = [...v].sort((a, b) => natCompare(a.c.finish_tag, b.c.finish_tag));
     return v;
-  }, [conditions, condQ, activeCond, panelPrefs.az]);
+  }, [conditions, condQ, matchesQuery, activeCond, panelPrefs.az]);
   const condGroups = useMemo(() => {
     if (!panelPrefs.group) return [{ name: null, items: condView }];
     const by = new Map();
@@ -239,14 +248,23 @@ function TakeoffsPanel({
   }, [condView, panelPrefs.group]);
   // "no match" keys on the QUERY missing, not on an empty view — the forced-in
   // active row would otherwise hide the message forever (includes("") is true)
-  const searchMiss = conditions.length > 0 && !condView.some(({ c }) => (c.finish_tag || "").toLowerCase().includes(condQ));
+  const searchMiss = conditions.length > 0 && !condView.some(({ c }) => matchesQuery(c));
 
+  // the one "which rows does a collapsed group show" rule — a collapsed
+  // group still renders its ACTIVE row: hotkeys, the strip, and applyTemplate
+  // can activate a condition the view hides, and the editor lives only in
+  // that row. Shared by the ⇧-range order below AND the render, below, so
+  // they can never disagree on what's visible.
+  const groupVisibleItems = useCallback(
+    (g) => (g.name != null && closedGroups.has(g.name) ? g.items.filter((it) => it.c.id === activeCond) : g.items),
+    [closedGroups, activeCond]
+  );
   // bulk selection helpers — ranges follow the DISPLAYED order (current view,
   // skipping collapsed groups — except the active row, which a collapsed group
   // still renders, so ⇧-ranges anchored on or through it must see it too)
   const visibleCondOrder = useMemo(
-    () => condGroups.flatMap((g) => (g.name != null && closedGroups.has(g.name) ? g.items.filter((it) => it.c.id === activeCond) : g.items).map((it) => it.c.id)),
-    [condGroups, closedGroups, activeCond]
+    () => condGroups.flatMap((g) => groupVisibleItems(g).map((it) => it.c.id)),
+    [condGroups, groupVisibleItems]
   );
   // bulk actions run on the LIVE intersection — checkedConds is view state and
   // deletes elsewhere (or a stale set) must never inflate a count or a patch
@@ -289,7 +307,7 @@ function TakeoffsPanel({
     const d = dragRef.current; if (!d) return;
     if (e.buttons === 0) { onResizeEnd(e); return; }   // release happened off-window — a missed pointerup must not leave a phantom drag
     onHoldGesture();
-    d.w = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, d.sw + (d.sx - e.clientX)));
+    d.w = clampPanelW(d.sw + (d.sx - e.clientX));
     if (rootRef.current) rootRef.current.style.width = `${d.w}px`;
   };
   // shared by pointerup / pointercancel / lostpointercapture — any way the
@@ -449,7 +467,7 @@ function TakeoffsPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", borderBottom: "1px solid var(--ink-faint)", flexShrink: 0 }}>
           <input value={condQuery} onChange={(e) => setCondQuery(e.target.value)} placeholder="filter conditions…"
             style={{ flex: 1, minWidth: 0, padding: "4px 8px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          {condQuery && <button onClick={() => setCondQuery("")} title="Clear the filter" style={{ border: "none", background: "none", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0 }}>×</button>}
+          {condQuery && <button onClick={() => setCondQuery("")} title="Clear the filter" style={btnClearX}>×</button>}
           <button onClick={() => onPanelPrefs((p) => ({ ...p, az: !p.az }))}
             title="Natural sort by tag (CT-2 before CT-10) — a view; hotkeys 1–9 keep their original numbering"
             style={{ padding: "3px 7px", borderRadius: 0, border: `1px solid ${panelPrefs.az ? "var(--cobalt)" : "var(--ink-faint)"}`, background: panelPrefs.az ? "var(--cobalt)" : "transparent", color: panelPrefs.az ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)", lineHeight: 1.4 }}>A→Z</button>
@@ -491,10 +509,9 @@ function TakeoffsPanel({
                   <span>· {g.items.length}</span>
                 </div>
               )}
-              {/* a collapsed group still renders its ACTIVE row: hotkeys,
-                  the strip, and applyTemplate can activate a condition
-                  the view hides, and the editor lives only in that row */}
-              {(closedGroups.has(g.name) ? g.items.filter(({ c }) => c.id === activeCond) : g.items).map(({ c, i }) => renderCondRow(c, i))}
+              {/* groupVisibleItems: a collapsed group still renders its
+                  ACTIVE row (see the shared rule above visibleCondOrder) */}
+              {groupVisibleItems(g).map(({ c, i }) => renderCondRow(c, i))}
             </React.Fragment>
           ))}
           {searchMiss && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions match “{condQuery}”.</div>}
@@ -552,12 +569,11 @@ function TakeoffsPanel({
             <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px 8px" }}>
               <input value={matLibQuery} onChange={(e) => setMatLibQuery(e.target.value)} placeholder="filter materials…"
                 style={{ flex: 1, minWidth: 0, padding: "4px 8px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-              {matLibQuery && <button onClick={() => setMatLibQuery("")} title="Clear the filter" style={{ border: "none", background: "none", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0 }}>×</button>}
+              {matLibQuery && <button onClick={() => setMatLibQuery("")} title="Clear the filter" style={btnClearX}>×</button>}
             </div>
             {matLib.length === 0 && <div style={{ padding: "2px 12px 12px", color: "var(--ink-muted)" }}>No library materials yet — add one below, or use “→ lib” on a condition's material line.</div>}
-            {matLib.filter((lm) => !matLibQuery.trim() || (lm.name || "").toLowerCase().includes(matLibQuery.trim().toLowerCase())).map((lm) => {
+            {matLib.filter((lm) => !matQ || (lm.name || "").toLowerCase().includes(matQ)).map((lm) => {
               const n = linkedCountById[lm.id] || 0;
-              const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
               return (
                 <div key={lm.id} style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -590,8 +606,7 @@ function TakeoffsPanel({
               );
             })}
             <div style={{ padding: "6px 12px", borderTop: matLib.length ? "1px solid var(--ink-faint)" : "none" }}>
-              <button onClick={onAddLibMaterial}
-                style={{ width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add library material</button>
+              <button onClick={onAddLibMaterial} style={btnAddFull}>+ add library material</button>
             </div>
           </div>
         )}
@@ -627,8 +642,7 @@ function TakeoffsPanel({
               </div>
             ))}
             <div style={{ padding: "6px 12px", borderTop: conditionColumns.length ? "1px solid var(--ink-faint)" : "none" }}>
-              <button onClick={onAddColumn}
-                style={{ width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add column</button>
+              <button onClick={onAddColumn} style={btnAddFull}>+ add column</button>
             </div>
           </div>
         )}

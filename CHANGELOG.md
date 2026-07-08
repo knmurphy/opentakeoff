@@ -61,6 +61,25 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   unbreakable run that overflowed the printed page; entries now move to the
   next line as a unit and wrap internally when a single entry is wider than
   the line. (#27)
+- **Corrupt browser-global libraries can no longer wedge or wipe every
+  project.** The condition-template and material-library records are shared
+  browser-wide, so one malformed or duplicate-id item used to throw inside
+  hydrate — or break `matLibById` and the Materials tab's row keys — and take
+  down every project at once. Both now sanitize on load (non-array records
+  reset to `[]`, items need a well-formed id, duplicate ids dedupe
+  first-wins), so a bad record can only lose the bad item, never the project.
+  (#50 review follow-up)
+- **Takeoffs panel review follow-ups.** Bulk waste/color/delete confirms now
+  count and name the actual live selection instead of a stale one; the
+  transient status bar auto-dismisses after ~6s instead of lingering, but a
+  failure ("Couldn't save…") or the stale-tab reload notice stays put until
+  you act on it or replace it; the active condition stays reachable even when
+  the filter or a collapsed tag-family group would otherwise hide it; the
+  library re-reads on tab focus, narrowing the multi-tab last-write-wins
+  window; and dragging the panel's resize handle no longer commits width
+  (and re-renders the canvas) on every pointer move, only once on release.
+  The panel also moved out of `TakeoffCanvas.jsx` into its own
+  `TakeoffsPanel.jsx` component along the way. (#50 review follow-up)
 
 ## 2026-07-07
 

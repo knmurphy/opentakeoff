@@ -18,7 +18,7 @@ import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
-import TakeoffsPanel, { PANEL_MIN_W, PANEL_MAX_W } from "../components/TakeoffsPanel.jsx";
+import TakeoffsPanel, { clampPanelW } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale } from "../lib/sheets";
@@ -71,7 +71,9 @@ const COLORS = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488"
 // Docked Takeoffs panel geometry — per-user UI prefs (localStorage, diff-only
 // overrides like the report column prefs), NEVER in the takeoff payload: panel
 // width inside buildPayload would show up as noise in every snapshot diff.
-// (The width clamp PANEL_MIN_W/PANEL_MAX_W is exported by the panel itself.)
+// (The width clamp (clampPanelW, wrapping PANEL_MIN_W/PANEL_MAX_W) is exported
+// by the panel itself — ONE clamp, so a future range change can't diverge
+// between the panel's own drag clamp and the load-time clamp here.)
 const PANEL_PREFS_KEY = "opentakeoff_panel";
 const PANEL_DEFAULTS = { w: 320, collapsed: false, strip: false, az: false, group: false };
 
@@ -96,6 +98,9 @@ function invertCanvasPixels(cv) {
 let _idn = 0;
 const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
 const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+// shared by the status-bar tone AND the auto-dismiss skip (below) — one
+// definition of "this message is bad news" for both readers
+const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
 // Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
 // hit-testing) live in lib/geometry.js — byte-identical with Spline's copy.
 const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
@@ -216,7 +221,7 @@ export default function TakeoffCanvas() {
       localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(diff));
     } catch { /* private mode */ }
   }, [panelPrefs]);
-  const panelW = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, Number(panelPrefs.w) || PANEL_DEFAULTS.w));
+  const panelW = clampPanelW(Number(panelPrefs.w) || PANEL_DEFAULTS.w);
   const takeoffsOpen = !panelPrefs.collapsed;
   const toggleTakeoffs = () => setPanelPrefs((p) => ({ ...p, collapsed: !p.collapsed }));
   // Panel resize lives INSIDE TakeoffsPanel (mid-drag width goes straight to
@@ -252,16 +257,29 @@ export default function TakeoffCanvas() {
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
   const [saveState, setSaveState] = useState("idle");
-  const [commitMsg, setCommitMsg] = useState("");   // transient status line (misnamed for history; just the message bar)
-  // transient means transient: every message dismisses itself after ~6s (each
-  // new message restarts the clock) so the bar never shows stale state. ONE
-  // sticky exception: the stale-tab lockout stays until the user reloads —
-  // it's the only story this tab has left to tell.
+  // internal state is { text }, minted FRESH on every setCommitMsg call — a
+  // byte-identical message (e.g. two "Couldn't open X" in a row) still gets a
+  // new object identity, so the effect below (keyed on this object) restarts
+  // its clock instead of no-op'ing on an unchanged dep. setCommitMsg(text) is
+  // a thin, stable-shaped wrapper so the ~48 call sites below stay untouched.
+  const [commitMsgState, setCommitMsgState] = useState({ text: "" });
+  const commitMsg = commitMsgState.text;   // misnamed for history; just the message bar
+  const setCommitMsg = (text) => setCommitMsgState({ text });
+  // transient means transient: every message dismisses itself after ~6s (a
+  // repeat message restarts the clock — see above). Three things don't age
+  // out on a timer: the stale-tab lockout (STALE_TAB_MESSAGE — sticky until
+  // the user reloads; it's the only story this tab has left to tell), any
+  // other failure message (isDangerMsg — "Couldn't…"/"Commit failed…" — stays
+  // until the NEXT message replaces it, not a clock), and in-progress messages
+  // (the file's own "…" convention — "Reading files…", "Building the marked
+  // set…", ingestFiles' onProgress strings — which must not vanish mid-op;
+  // grep setCommitMsg to see every message and confirm the convention holds).
   useEffect(() => {
-    if (!commitMsg || commitMsg === STALE_TAB_MESSAGE) return;
+    const text = commitMsgState.text;
+    if (!text || isDangerMsg(text) || text.endsWith("…")) return;
     const t = setTimeout(() => setCommitMsg(""), 6000);
     return () => clearTimeout(t);
-  }, [commitMsg]);
+  }, [commitMsgState]);
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [showSnapshots, setShowSnapshots] = useState(false); // Snapshots modal (save / compare / restore)
   const [projectName, setProjectName] = useState("");   // optional label for the report header
@@ -405,9 +423,16 @@ export default function TakeoffCanvas() {
   };
   const panelKeySet = new Set(groupKeys);
   // memoized: feeds the per-condition totals map the memoized TakeoffsPanel
-  // takes as a prop — identity must hold across canvas-only renders
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const visibleShapes = useMemo(() => shapes.filter((s) => panelKeySet.has(s.sheet_id)), [shapes, groupSig]);
+  // takes as a prop — identity must hold across canvas-only renders. Builds
+  // its own key set from sheetGroup/sheetKey (what groupKeys/panelKeySet above
+  // are themselves derived from) rather than depending on groupSig or the
+  // panelKeySet instance above — both are new on every render, so depending on
+  // either honestly would recompute every render regardless; these are the
+  // real, referentially-stable inputs.
+  const visibleShapes = useMemo(() => {
+    const keys = new Set(sheetGroup.length ? sheetGroup : [sheetKey]);
+    return shapes.filter((s) => keys.has(s.sheet_id));
+  }, [shapes, sheetGroup, sheetKey]);
   // scale is PER PAGE (plan sets are never one uniform scale) — set it once per
   // sheet and it's remembered. In group mode the scale dropdown and hints target
   // the FOCUSED panel (the one last clicked); single mode focuses the lone panel.
@@ -577,15 +602,27 @@ export default function TakeoffCanvas() {
     return () => { off = true; };
   }, []);
 
-  // library freshness: the record is browser-global, so another tab may have
-  // edited it since our mount load — re-read on tab focus. Safe to swap in
-  // wholesale because every library mutation persists immediately (nothing
-  // unsaved lives only in this tab's state). This NARROWS the multi-tab
-  // last-write-wins window on the library record; it doesn't close it.
+  // library freshness: BOTH browser-global records — the condition template
+  // library AND the material library (each sanitized at load, same as the
+  // mount effect above) — may have been edited by another tab since our mount
+  // load; re-read each on tab focus. Safe to swap in wholesale because every
+  // library mutation persists immediately (nothing unsaved lives only in this
+  // tab's state). Skip the setState when the freshly loaded list is
+  // byte-identical to what we're already holding (a cheap JSON signature
+  // compare) — TakeoffsPanel is memoized on these arrays' identity, and an
+  // unconditional set would defeat that memo on every tab focus even when
+  // nothing actually changed. This NARROWS the multi-tab last-write-wins
+  // window on both records; it doesn't close it.
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== "visible") return;
-      store.loadTemplates().then((tpl) => { templatesRef.current = tpl; setTemplates(tpl); }).catch(() => { /* keep what we have */ });
+      store.loadTemplates().then((tpl) => {
+        if (JSON.stringify(tpl) === JSON.stringify(templatesRef.current)) return;
+        templatesRef.current = tpl; setTemplates(tpl);
+      }).catch(() => { /* keep what we have */ });
+      store.loadMaterialLibrary().then((ml) => {
+        setMatLib((cur) => (JSON.stringify(ml) === JSON.stringify(cur) ? cur : ml));
+      }).catch(() => { /* keep what we have */ });
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
@@ -1008,12 +1045,15 @@ export default function TakeoffCanvas() {
   useEffect(() => { if (MEASURE_TOOLS.some((t) => t.id === tool)) lastMeasureRef.current = tool; }, [tool]);
 
   // Number keys 1–9 switch the active condition (material) fast — through
-  // activateCondition, so a hotkey reassigns/clears exactly like a row click.
+  // activateCondition with reassign:false: a digit press has no visual
+  // reassign affordance (unlike the panel row / strip button), so it must
+  // never silently move a selected shape's quantities. It still dismisses a
+  // live bulk selection, same as every activation surface.
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
       const n = parseInt(e.key, 10);
-      if (n >= 1 && n <= 9 && conditions[n - 1]) activateCondition(conditions[n - 1].id);
+      if (n >= 1 && n <= 9 && conditions[n - 1]) activateCondition(conditions[n - 1].id, { reassign: false });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1658,7 +1698,8 @@ export default function TakeoffCanvas() {
       waste_pct: 0,         // flooring waste allowance (manual) — applied in the Report
       materials: [],        // supporting materials (adhesive, grout, …) with coverage rates
     };
-    setConditions((cs) => [...cs, c]); setActiveCond(c.id);
+    setConditions((cs) => [...cs, c]);
+    activateCondition(c.id, { reassign: false });   // no reassign affordance on +condition; still dismisses a live bulk selection
   }
   const updateCond = (patch) => setConditions((cs) => cs.map((c) => (c.id === activeCond ? { ...c, ...patch } : c)));
 
@@ -1814,11 +1855,18 @@ export default function TakeoffCanvas() {
   // The panel's condition-list VIEW (search / natural sort / grouping / the
   // ⌘/⇧ multi-select) lives in components/TakeoffsPanel.jsx.
 
-  // one activation path — the panel row, the compact strip, and the 1–9
-  // hotkeys all funnel here so the reassign-in-Select and clear-multi-select
-  // semantics can never drift between surfaces
-  const activateCondition = (id) => {
-    if (tool === "select" && selectedId) reassignSelected(id);
+  // one activation path — the panel row, the compact strip, the 1–9 hotkeys,
+  // +condition, and Library Apply all funnel here so the reassign-in-Select
+  // and clear-multi-select semantics can never drift between surfaces. Only
+  // surfaces with a VISIBLE reassign affordance (the panel row and the strip
+  // button — both show the "reassign selected shape" hint once a shape is
+  // selected) actually reassign; { reassign: false } is for keyboard/
+  // programmatic activations (hotkeys, +condition, Library Apply) that offer
+  // no such affordance — a digit press or an Apply click must never silently
+  // move a selected shape's quantities. EVERY activation surface, reassigning
+  // or not, dismisses a live bulk selection.
+  const activateCondition = (id, { reassign = true } = {}) => {
+    if (reassign && tool === "select" && selectedId) reassignSelected(id);
     setActiveCond(id);
     panelSelectionRef.current?.();   // plain activation dismisses a live bulk selection (panel view state)
   };
@@ -1869,18 +1917,30 @@ export default function TakeoffCanvas() {
   const applyTemplate = (t) => {
     const c = instantiateTemplate(t);
     setConditions((cs) => [...cs, c]);
-    setActiveCond(c.id);
+    // reassign:false — Library Apply has no visual reassign affordance, but it
+    // still dismisses a live bulk selection like every other activation surface
+    activateCondition(c.id, { reassign: false });
     // the panel switches itself back to the Takeoffs tab (its Apply handler)
     setCommitMsg(`Added ${c.finish_tag} from the library.`);
   };
+  // idx addresses the template BY POSITION (the panel's plain templates.map
+  // index — it doesn't filter/sort). The focus-refresh above now skips the
+  // setState when the loaded library is unchanged, which closes off the
+  // common way idx would go stale mid-session; a same-length edit landing
+  // from another tab in the sub-second window between render and click can
+  // still retarget these by position — accepted residual risk, not fully
+  // closed. Guard the deref so a stale idx (list shrank out from under us)
+  // reports rather than throwing.
   const renameTemplate = (idx) => {
     const t = templates[idx];
+    if (!t) { setCommitMsg("The library changed in another tab — try again."); return; }
     const tag = (window.prompt("Template tag:", t.finish_tag) || "").trim();
     if (!tag || tag === t.finish_tag) return;
     persistTemplates(templates.map((x, i) => (i === idx ? { ...x, finish_tag: tag } : x)));
   };
   const deleteTemplate = (idx) => {
     const t = templates[idx];
+    if (!t) { setCommitMsg("The library changed in another tab — try again."); return; }
     if (!window.confirm(`Remove the ${t.finish_tag} template from the library? Existing conditions are unaffected.`)) return;
     persistTemplates(templates.filter((_, i) => i !== idx));
   };
@@ -1977,6 +2037,11 @@ export default function TakeoffCanvas() {
     onDeleteLibMaterial: deleteLibMaterial, onAddLibMaterial: addLibMaterial,
     matFieldOverridden,   // pure helper, not an event handler — the forwarder returns its result
     onToggleCollapse: toggleTakeoffs,
+    // these three are ALREADY stable on their own (setState identity, and
+    // holdPanelGesture is a useCallback with an empty dep array) — routed
+    // through the registry anyway so the memo contract has exactly ONE
+    // convention to audit, not "stable via the registry, except these three"
+    onPanelPrefs: setPanelPrefs, onSetActive: setActiveCond, onHoldGesture: holdPanelGesture,
   };
   const [panelHandlers] = useState(() => {
     const stable = {};
@@ -2367,7 +2432,7 @@ export default function TakeoffCanvas() {
         {/* status line — the transient message bar (was the right end of the old
             conditions bar): floats bottom-center over the canvas, never blocks input */}
         {commitMsg && (
-          <div style={{ position: "absolute", left: "50%", bottom: 14, transform: "translateX(-50%)", maxWidth: "70%", zIndex: 6, pointerEvents: "none", padding: "6px 12px", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-1)", fontSize: 12, color: commitMsg === STALE_TAB_MESSAGE || commitMsg.startsWith("Commit failed") || commitMsg.startsWith("Couldn't") ? "#b03a26" : "var(--c-positive)" }}>
+          <div style={{ position: "absolute", left: "50%", bottom: 14, transform: "translateX(-50%)", maxWidth: "70%", zIndex: 6, pointerEvents: "none", padding: "6px 12px", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-1)", fontSize: 12, color: isDangerMsg(commitMsg) ? "#b03a26" : "var(--c-positive)" }}>
             {commitMsg}
           </div>
         )}
@@ -2488,12 +2553,9 @@ export default function TakeoffCanvas() {
           matLibById={matLibById}
           linkedCountById={linkedCountById}
           panelPrefs={panelPrefs}
-          onPanelPrefs={setPanelPrefs}
-          onSetActive={setActiveCond}
           reassigning={tool === "select" && !!selectedId}
           epoch={panelEpoch}
           clearSelectionRef={panelSelectionRef}
-          onHoldGesture={holdPanelGesture}
           {...panelHandlers}
         />
       </div>
