@@ -206,10 +206,11 @@ function TakeoffsPanel({
   const searchMiss = conditions.length > 0 && !condView.some(({ c }) => (c.finish_tag || "").toLowerCase().includes(condQ));
 
   // bulk selection helpers — ranges follow the DISPLAYED order (current view,
-  // skipping collapsed groups), which is what ⇧-click means visually
+  // skipping collapsed groups — except the active row, which a collapsed group
+  // still renders, so ⇧-ranges anchored on or through it must see it too)
   const visibleCondOrder = useMemo(
-    () => condGroups.flatMap((g) => (g.name != null && closedGroups.has(g.name) ? [] : g.items.map((it) => it.c.id))),
-    [condGroups, closedGroups]
+    () => condGroups.flatMap((g) => (g.name != null && closedGroups.has(g.name) ? g.items.filter((it) => it.c.id === activeCond) : g.items).map((it) => it.c.id)),
+    [condGroups, closedGroups, activeCond]
   );
   // bulk actions run on the LIVE intersection — checkedConds is view state and
   // deletes elsewhere (or a stale set) must never inflate a count or a patch
