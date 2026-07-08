@@ -19,6 +19,7 @@ import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
+import { areaVal, areaUnit, lenVal, lenUnit, calInputToFeet } from "../lib/units";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
@@ -79,7 +80,7 @@ const HATCHES = [
   { id: "basket", label: "Basketweave" },
   { id: "checker", label: "Checker" },
   { id: "wave", label: "Wave / scallop" },
-  { id: "dots", label: "Sand / dots" },
+  { id: "fleur", label: "Fleur-de-lis" },
   { id: "speckle", label: "Terrazzo / speckle" },
 ];
 const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
@@ -132,7 +133,15 @@ function HatchPattern({ id, type, line, fill, dark }) {
     case "basket": return wrap(<>{s("M0,3 L6,3")}{s("M9,0 L9,6")}{s("M3,6 L3,12")}{s("M6,9 L12,9")}</>);
     case "checker": return wrap(<>{<rect x={0} y={0} width={6} height={6} fill={line} opacity={dark ? 0.30 : 0.22} />}{<rect x={6} y={6} width={6} height={6} fill={line} opacity={dark ? 0.30 : 0.22} />}</>);
     case "wave": return wrap(<>{s("M0,3 Q3,0 6,3 T12,3")}{s("M0,9 Q3,6 6,9 T12,9")}</>);
-    case "dots": return wrap(<>{[[3, 3], [9, 9]].map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.05} fill={line} fillOpacity={so} />)}</>);
+    case "dots": return wrap(<>{[[3, 3], [9, 9]].map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.05} fill={line} fillOpacity={so} />)}</>);  // legacy — off the picker, still renders
+    case "fleur": return wrap(
+      <g fill={line} fillOpacity={so} stroke="none">
+        <path d="M8 2.2 C6.7 4 6.7 6.2 8 8.2 C9.3 6.2 9.3 4 8 2.2 Z" />
+        <path d="M4.6 4.8 C3 5.9 2.9 8.2 4.9 8.7 C4.6 7.4 4.7 6 4.6 4.8 Z" />
+        <path d="M11.4 4.8 C13 5.9 13.1 8.2 11.1 8.7 C11.4 7.4 11.3 6 11.4 4.8 Z" />
+        <rect x="5.4" y="9.3" width="5.2" height="1.2" />
+        <path d="M8 10.9 C7.1 11.9 7.1 12.9 8 13.8 C8.9 12.9 8.9 11.9 8 10.9 Z" />
+      </g>, 16, 16);
     case "speckle": return wrap(<>{[[3, 4, 1.3], [11, 2.5, 0.8], [7.5, 9, 1.1], [13.5, 12.5, 1.3], [4, 13, 0.8]].map(([x, y, r], i) => <circle key={i} cx={x} cy={y} r={r} fill={line} fillOpacity={so} />)}</>, 16, 16);
     default: return wrap(null);  // solid: only the fill bg
   }
@@ -284,6 +293,7 @@ export default function TakeoffCanvas() {
   const [matOpen, setMatOpen] = useState(false);             // supporting-materials editor panel
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
+  const [selectedMarkupId, setSelectedMarkupId] = useState(null); // a picked highlight stroke — Select tool; ⌫ deletes, drag moves
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
   const [showTakeoffs, setShowTakeoffs] = useState(false);    // side panel: takeoffs list (conditions + totals)
   const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
@@ -311,6 +321,8 @@ export default function TakeoffCanvas() {
   });
   const [calib, setCalib] = useState([]);
   const [pendingLen, setPendingLen] = useState("");
+  const [units, setUnits] = useState(() => (localStorage.getItem("opentakeoff_units") === "metric" ? "metric" : "imperial"));
+  useEffect(() => { try { localStorage.setItem("opentakeoff_units", units); } catch { /* private mode */ } }, [units]);
 
   const [conditions, setConditions] = useState([]);
   const [activeCond, setActiveCond] = useState("");
@@ -590,6 +602,7 @@ export default function TakeoffCanvas() {
       else setView("gallery");
       const sc = {};
       for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) sc[s.sheet_id] = s.units_per_px;
+      if (a.units === "metric" || a.units === "imperial") setUnits(a.units);
       setScales(sc);
       hydrated.current = true;
     }).catch(() => { hydrated.current = true; });
@@ -876,7 +889,7 @@ export default function TakeoffCanvas() {
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
-    const payload = { project_name: projectName, sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
+    const payload = { project_name: projectName, units, sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
     const t = setTimeout(() => {
@@ -1024,11 +1037,12 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
+        if (selectedMarkupId) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); return; }
         if (poly.length) { setPoly((q) => q.slice(0, -1)); setCalib((c) => c.slice(0, -1)); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
         else setCalib((c) => c.slice(0, -1));
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); setSelectedId(null); setMarkupDraft(null); setProposal(null); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; }
+      } else if (e.key === "Escape") { setPoly([]); setCalib([]); setSelectedId(null); setSelectedMarkupId(null); setMarkupDraft(null); setProposal(null); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1036,7 +1050,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, selectedMarkupId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
@@ -1143,7 +1157,20 @@ export default function TakeoffCanvas() {
       return hitShape(s, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr);
     });
     setSelectedId(hit ? hit.id : null);
-    if (hit) { dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm }; e.currentTarget.setPointerCapture(e.pointerId); }
+    if (hit) { setSelectedMarkupId(null); dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm }; e.currentTarget.setPointerCapture(e.pointerId); return; }
+    // no takeoff hit — highlighter ink is pickable too (delete/move like any markup)
+    const mkHit = [...markups].reverse().find((m) => {
+      if (m.type !== "highlight" || !panelKeySet.has(m.sheet_id) || (m.pts || []).length < 2) return false;
+      const mp = panelByKey(m.sheet_id);
+      const px = p[0] - mp.xOffset, py = p[1];
+      const w = (m.w || 0.01) * mp.img.w;
+      const reach = Math.max(w / 2, thr);
+      const ip = m.pts.map(([nx, ny]) => [nx * mp.img.w, ny * mp.img.h]);
+      for (let i = 1; i < ip.length; i++) if (distToSeg(px, py, ip[i - 1][0], ip[i - 1][1], ip[i][0], ip[i][1]) < reach) return true;
+      return false;
+    });
+    setSelectedMarkupId(mkHit ? mkHit.id : null);
+    if (mkHit) { dragRef.current = { kind: "markup", markupId: mkHit.id, start: p, orig: mkHit.pts.map((v) => [...v]) }; e.currentTarget.setPointerCapture(e.pointerId); }
   }
   // Geometry from the shape's OWN sheet: its panel's pixel dims × that sheet's
   // scale. This is what makes cross-sheet paste and group-mode edits honest.
@@ -1289,13 +1316,13 @@ export default function TakeoffCanvas() {
     const tag = condById[s.condition_id]?.finish_tag || "?";
     const a = s.computed?.area_sf || 0, lf = s.computed?.perimeter_lf || 0;
     if (s.measure_role === "count") return `${tag} · ${num(s.computed?.count || 1, 0)} EA`;
-    if (s.measure_role === "deduct") return `${tag} · −${num(a)} SF deduct`;
+    if (s.measure_role === "deduct") return `${tag} · −${fa(a)} deduct`;
     if (s.measure_role === "surface_area") {
       const h = s.height_ft || condById[s.condition_id]?.height_ft;
-      return `${tag} · ${num(a)} SF wall (${num(lf)} LF × ${num(Number(h) || 0, 2)}′)`;
+      return `${tag} · ${fa(a)} wall (${fl(lf)} × ${num(Number(h) || 0, 2)}′)`;
     }
-    if (s.measure_role === "linear") return `${tag} · ${num(lf)} LF${a > 0 ? ` · ${num(a)} SF border` : ""}`;
-    return `${tag} · ${num(a)} SF · ${num(a / 9)} SY`;
+    if (s.measure_role === "linear") return `${tag} · ${fl(lf)}${a > 0 ? ` · ${fa(a)} border` : ""}`;
+    return `${tag} · ${faSY(a)}`;
   }
   // STACK-style hover readout: small, follows the cursor, gone on hover-off
   function updateHover(e) {
@@ -1352,6 +1379,13 @@ export default function TakeoffCanvas() {
           const vn = s.verts_norm.map((v, i) => (i === d.vIndex ? [(p[0] - sp.xOffset) / sp.img.w, p[1] / sp.img.h] : v));
           return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
         }));
+      } else if (d.kind === "markup") {
+        const mk = markups.find((m) => m.id === d.markupId);
+        const mp = mk && panelByKey(mk.sheet_id);
+        if (mp) {
+          const dx = (p[0] - d.start[0]) / mp.img.w, dy = (p[1] - d.start[1]) / mp.img.h;
+          updateMarkup(d.markupId, { pts: d.orig.map(([nx, ny]) => [nx + dx, ny + dy]) });
+        }
       } else if (d.kind === "move") {
         setShapes((ss) => ss.map((s) => {
           if (s.id !== d.shapeId) return s;
@@ -1410,7 +1444,7 @@ export default function TakeoffCanvas() {
   }
 
   function applyCalibration() {
-    const feet = parseFloat(pendingLen);
+    const feet = calInputToFeet(parseFloat(pendingLen), units);
     if (!(feet > 0) || calib.length !== 2) return;
     const pa = panelAt(calib[0][0]), pb = panelAt(calib[1][0]);
     if (pa.key !== pb.key) {
@@ -1607,7 +1641,7 @@ export default function TakeoffCanvas() {
         return { key, file, page, label: tabLabel(key) };
       }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
       const { bytes, filename } = await buildMarkedSetPdf({
-        projectName, dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
+        projectName, dark: darkMode, units, sheets: sheetMeta, shapes, markups, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -1743,6 +1777,10 @@ export default function TakeoffCanvas() {
   // display-only Kreo-style derived metric: floor-area perimeters × the condition height
   const vertTotal = verticalWallSf(visibleShapes, activeCond, aCond?.height_ft, condMult);
   const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
+  // unit-system display edge: internal math is always feet (lib/units.ts)
+  const fa = (sf, d = 1) => `${num(areaVal(sf, units), d)} ${areaUnit(units)}`;
+  const fl = (lf, d = 1) => `${num(lenVal(lf, units), d)} ${lenUnit(units)}`;
+  const faSY = (sf) => (units === "metric" ? fa(sf) : `${num(sf)} SF · ${num(sf / 9)} SY`);
   const stdValue = unitsPerPx ? (STANDARD_SCALES.find((s) => Math.abs(s.upp - unitsPerPx) < 1e-9)?.label || "") : "";
 
   const markupCount = markups.filter((m) => panelKeySet.has(m.sheet_id)).length;
@@ -1929,6 +1967,11 @@ export default function TakeoffCanvas() {
         </button>
         {vRule}
         {/* scale group: standard dropdown + plan-note chip + calibrate */}
+        <button onClick={() => setUnits((u) => (u === "metric" ? "imperial" : "metric"))}
+          title={units === "metric" ? "Metric display (m² / m) — click for imperial. Calibrate in meters; 1:50-style scales in the list." : "Imperial display (SF / LF) — click for metric (m² / m, calibrate in meters, 1:50-style scales)."}
+          style={{ padding: "6px 10px", border: `1px solid ${units === "metric" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: units === "metric" ? "var(--cobalt)" : "transparent", color: units === "metric" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11 }}>
+          {units === "metric" ? "m" : "ft"}
+        </button>
         <select value={stdValue} onChange={(e) => { const f = STANDARD_SCALES.find((s) => s.label === e.target.value); if (f) setScales((s) => ({ ...s, [focusPanel.key]: f.upp })); }}
           title={`Set the scale for ${labelFor(focusPanel)} — remembered per sheet${groupKeys.length > 1 ? " (targets the sheet you last clicked)" : ""}`}
           style={{ padding: 6, border: unitsPerPx ? "1px solid var(--c-positive)" : "1px solid var(--ink-faint)", background: "transparent", color: unitsPerPx ? "var(--c-positive)" : "var(--c-danger)", fontSize: 12 }}>
@@ -2103,7 +2146,7 @@ export default function TakeoffCanvas() {
         <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid #f0d9c0", fontSize: 14 }}>
           {calib.length < 2 ? <span>Custom scale: click two points along a known dimension ({calib.length}/2). Tip: use the longest dimension. (Or just pick a standard scale above.)</span> : (
             <span>Real length:{" "}
-              <input type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder="feet" autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> ft
+              <input type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder={units === "metric" ? "meters" : "feet"} autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
               <button onClick={applyCalibration} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Apply</button>
               <button onClick={() => setCalib([])} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
             </span>
@@ -2206,9 +2249,16 @@ export default function TakeoffCanvas() {
                         const ip = (m.pts || []).map(([nx, ny]) => [nx * p.img.w, ny * p.img.h]);
                         if (ip.length < 2) return null;
                         const w = (m.w || 0.01) * p.img.w, o = darkMode ? 0.42 : 0.32;
-                        return m.tip === "chisel"
-                          ? <path key={m.id} d={"M" + chiselRibbon(ip, w, 45).map((q) => q.join(",")).join(" L") + " Z"} fill={m.color || "#ffd60a"} fillOpacity={o} />
-                          : <path key={m.id} d={strokePathD(ip)} fill="none" stroke={m.color || "#ffd60a"} strokeOpacity={o} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" />;
+                        const sel = m.id === selectedMarkupId;
+                        const ink = m.tip === "chisel"
+                          ? <path d={"M" + chiselRibbon(ip, w, 45).map((q) => q.join(",")).join(" L") + " Z"} fill={m.color || "#ffd60a"} fillOpacity={o} />
+                          : <path d={strokePathD(ip)} fill="none" stroke={m.color || "#ffd60a"} strokeOpacity={o} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" />;
+                        return (
+                          <g key={m.id}>
+                            {sel && <path d={strokePathD(ip)} fill="none" stroke="#1f3fc7" strokeOpacity={0.55} strokeWidth={w + 5 / tf.scale} strokeLinecap="round" strokeLinejoin="round" />}
+                            {ink}
+                          </g>
+                        );
                       }
                       if (m.type === "cloud") {
                         const [c0, c1] = m.rect;
@@ -2310,8 +2360,8 @@ export default function TakeoffCanvas() {
             const sf = pos.reduce((n, r) => n + r.area_sf, 0) - neg.reduce((n, r) => n + r.area_sf, 0);
             return (
               <>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#1f3fc7" }}>{num(sf)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF selected</span></div>
-                <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""} · {num(sf / 9)} SY</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#1f3fc7" }}>{num(areaVal(sf, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} selected</span></div>
+                <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""}{units === "metric" ? "" : ` · ${num(sf / 9)} SY`}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
               </>
             );
@@ -2320,16 +2370,16 @@ export default function TakeoffCanvas() {
               const liveLF = openLen(poly) * liveUpp;
               return condH > 0 ? (
                 <>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#0e1a2e" }}>{num(liveLF * condH)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF wall</span></div>
-                  <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{num(liveLF)} LF × {num(condH, 2)} ft</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "#0e1a2e" }}>{num(areaVal(liveLF * condH, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} wall</span></div>
+                  <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{fl(liveLF)} × {num(condH, 2)} ft</div>
                 </>
               ) : <div style={{ fontSize: 12.5, color: "#b03a26" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition bar</div>;
             })()
           ) : liveArea != null && poly.length >= 3 ? (
             <>
-              <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "#b03a26" : "#0e1a2e" }}>{tool === "deduct" ? "−" : ""}{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF</span></div>
-              <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{num(liveArea / 9)} SY &nbsp;·&nbsp; {num(livePerim)} LF perim</div>
-              {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {num(livePerim * condH)} SF vert · {num((liveArea * condH) / 27)} CY</div>}
+              <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "#b03a26" : "#0e1a2e" }}>{tool === "deduct" ? "−" : ""}{num(areaVal(liveArea, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)}</span></div>
+              <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{units === "metric" ? `${fl(livePerim)} perim` : `${num(liveArea / 9)} SY  ·  ${num(livePerim)} LF perim`}</div>
+              {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {fa(livePerim * condH)} vert{units === "metric" ? "" : ` · ${num((liveArea * condH) / 27)} CY`}</div>}
             </>
           ) : (
             <div style={{ fontSize: 12.5, opacity: 0.6 }}>{!unitsPerPx ? "Set scale first" : !activeCond ? "Pick a condition" : tool === "oneclick" ? "Click inside a room — it selects itself" : tool === "surface" ? "Trace the wall run" : "Click to trace an area"}</div>
@@ -2341,7 +2391,7 @@ export default function TakeoffCanvas() {
               <input type="number" min="0" step="0.25" value={selShape.height_ft ?? ""}
                 onChange={(e) => setShapeHeight(e.target.value)}
                 style={{ width: 56, padding: "2px 5px", border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>ft → {num(selShape.computed?.area_sf || 0)} SF</span>
+              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>ft → {fa(selShape.computed?.area_sf || 0)}</span>
               {condH > 0 && Number(selShape.height_ft) !== condH && (
                 <button onClick={clearShapeHeight} title="Set this wall to the condition height" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0 }}>↺</button>
               )}
@@ -2349,12 +2399,12 @@ export default function TakeoffCanvas() {
           )}
           <div style={{ height: 1, background: "#eee6d8", margin: "8px 0" }} />
           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, opacity: 0.5 }}>{aCond?.finish_tag || "—"} total ({condRow?.shape_count || 0}{condMult > 1 ? ` ×${condMult}` : ""})</div>
-          {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(condTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF</span> <span style={{ fontSize: 12, fontWeight: 500, color: "#5b544a" }}>· {num(condTotal / 9)} SY</span></div>}
-          {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(wallTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF wall</span></div>}
-          {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(borderTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF border</span></div>}
-          {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lfTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>LF</span></div>}
+          {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(condTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)}</span> {units === "imperial" && <span style={{ fontSize: 12, fontWeight: 500, color: "#5b544a" }}>· {num(condTotal / 9)} SY</span>}</div>}
+          {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(wallTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)} wall</span></div>}
+          {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(borderTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)} border</span></div>}
+          {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lenVal(lfTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{lenUnit(units)}</span></div>}
           {countTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(countTotal, 0)} <span style={{ fontSize: 12, fontWeight: 600 }}>EA</span></div>}
-          {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{num(vertTotal)} SF vert (perim × H)</div>}
+          {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{fa(vertTotal)} vert (perim × H)</div>}
           {condTotal === 0 && lfTotal === 0 && countTotal === 0 && wallTotal === 0 && borderTotal === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginTop: 2 }}>—</div>}
           <div style={{ fontSize: 10.5, opacity: 0.45, marginTop: 6 }}>{visibleShapes.length} shapes on {groupKeys.length > 1 ? `${groupKeys.length} sheets` : "sheet"} · zoom {(tf.scale * 100).toFixed(0)}%</div>
         </div>
@@ -2417,7 +2467,7 @@ export default function TakeoffCanvas() {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
                       <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
-                        {sf ? `${num(sf)} SF` : ""}{wsf ? `${sf ? " · " : ""}${num(wsf)} SF wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${num(lf)} LF` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
+                        {sf ? fa(sf) : ""}{wsf ? `${sf ? " · " : ""}${fa(wsf)} wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${fl(lf)}` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
                       </div>
                     </div>
                     <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
@@ -2462,7 +2512,7 @@ export default function TakeoffCanvas() {
       {showReport && (
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
-          conditions={conditions} shapes={shapes}
+          conditions={conditions} shapes={shapes} units={units}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
           onClose={() => setShowReport(false)}

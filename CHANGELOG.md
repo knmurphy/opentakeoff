@@ -2,6 +2,13 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-08
+
+### Added
+- **Metric units for EU plans.** A `ft`/`m` toggle beside the scale picker switches the whole display layer: readouts, shape chips, the takeoffs panel, the Report, CSV, and the Marked Set legend read in m² / m (the SY column retires in metric). Calibrate by typing **meters**, and the scale list gains the ratio presets — 1:20, 1:25, 1:50, 1:75, 1:100, 1:125, 1:200, 1:250, 1:500 — which auto-detect from title blocks too. All stored data stays in feet internally, so toggling units never rewrites a takeoff. Supporting-material coverage rates stay as entered (SF/LF-based) for now.
+- **Fleur-de-lis hatch.** A new pattern takes the Sand/dots slot in the picker (16 stays 16); anything already painted with dots keeps rendering.
+- **Highlighter strokes are pickable.** With Select, click a stroke (cobalt glow), drag to move it, Backspace/Delete to remove it.
+
 ## 2026-07-07
 
 ### Added
