@@ -22,6 +22,14 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   filled box over an area (two corners, like the cloud). It renders behind the
   other markups so it never dims them, takes a color and line style, and can be
   linked to an RFI. A non-highlight markup under a highlight stays clickable.
+- **Inline note editing.** Placing a cloud, callout, or text note now types the
+  note directly on the plan in an inline field — no browser prompt. Double-click a
+  markup (Select tool) to re-edit it in place; the markup panel's ✎ edits notes on
+  markups that are off-screen or on another sheet. Enter commits, Esc cancels — and
+  cancelling a cloud's optional note keeps the drawn cloud.
+- **Drag to move a markup.** With the Select tool, drag a placed markup (cloud,
+  highlight, callout, or text note) to reposition it; the leader on a callout moves
+  with it.
 - **Show/hide the markup layer.** A **Hide layer** / **Show layer** toggle in the
   markup panel header hides all markups on the canvas and suspends their
   hit-testing (you can't click-select or delete a hidden markup; flying to one

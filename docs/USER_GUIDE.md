@@ -106,6 +106,8 @@ Revision clouds, callouts, text notes, and **highlight boxes** — annotations o
 
 **Color & line style** — each markup row carries a color swatch (or **auto**: cobalt when linked to an RFI, amber otherwise) and a line-style picker (solid / dashed / dotted / dash-dot). The color is lightened automatically on the dark view so it stays visible. RFI linkage always shows as a small **⬢/number badge** regardless of color or note text.
 
+**Editing & moving** — notes are typed **inline on the plan** (no pop-up). **Double-click** a markup with the Select tool to re-edit its text in place, or use the ✎ on its panel row (handy when it's off-screen). **Drag** a placed markup with the Select tool to reposition it. Enter commits an edit, Esc cancels — cancelling a cloud's optional note keeps the drawn cloud.
+
 **Select & delete a markup** — with the **Select** tool (`V`), click a placed markup to select it (a white‑ringed cobalt halo appears — visible even on a cobalt RFI markup). `Backspace` / `Delete` removes it. Shape and markup selection are mutually exclusive: selecting one clears the other.
 
 **Show / hide the layer** — **Hide layer** in the markup panel header hides every markup on the canvas and suspends their hit-testing, so you can't select, delete, or fly to a hidden markup — the way out when a full-area highlight covers the takeoff beneath it. It's independent of the Marked Set export, which still includes markups.

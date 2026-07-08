@@ -281,6 +281,8 @@ export default function TakeoffCanvas() {
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
   const [showMarkupPanel, setShowMarkupPanel] = useState(false);
   const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
+  const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
+  const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
   const [showTakeoffs, setShowTakeoffs] = useState(false);    // side panel: takeoffs list (conditions + totals)
   const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
@@ -363,7 +365,10 @@ export default function TakeoffCanvas() {
   const angleRef = useRef(null);       // current angle-locked image point (or null) — the click commits it
   const aimMarkRef = useRef(null);     // four floating liquid-glass pickets thickening the crosshair crossing
   const aimChipRef = useRef(null);     // readout chip by the cursor (locked angle · live segment length)
-  const dragRef = useRef(null);        // {kind:'move'|'vertex', shapeId, vIndex?, start:[x,y], orig:verts_norm}
+  const dragRef = useRef(null);        // {kind:'move'|'vertex'|'markupMove', shapeId?/markupId?, vIndex?, start:[x,y], orig:verts_norm/markup coords, moved?}
+  const editingRef = useRef(false);    // true while the inline text editor is open — read in moveCrosshair/onPointerDown/wheel (a REF, never per-mousemove state) to suppress the crosshair and freeze pan/zoom
+  const editorRef = useRef(null);      // mirror of the open editor object, so finishEditor can commit without a stale-closure race
+  const editorInputRef = useRef(null); // the live <input> element (uncontrolled — value read on commit)
   const lastPtrRef = useRef(null);     // last pointer CLIENT coords — paste targets the sheet under the cursor
   const pendingClickRef = useRef(null); // deferred draw click {p,cx,cy} — drag >5px converts to a pan
   const hoverRef = useRef(null);        // hover tooltip div (DOM-direct like the crosshair)
@@ -997,6 +1002,7 @@ export default function TakeoffCanvas() {
       }
     };
     const onWheel = (e) => {
+      if (editingRef.current) return;   // freeze pan/zoom while the inline editor is pinned to its anchor
       e.preventDefault();
       gestureUntilRef.current = performance.now() + GESTURE_MS;  // detail view waits for wheel quiet
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
@@ -1096,6 +1102,9 @@ export default function TakeoffCanvas() {
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
     if (status !== "ready") return;
+    // inline editor open: the blur that follows this click commits it; swallow the
+    // canvas interaction so pan/zoom stays frozen and no stray point is placed
+    if (editingRef.current) return;
     // Pan WITHOUT leaving the draw tool: middle-drag, right-drag, Space-drag, or Pan tool.
     if (tool === "pan" || e.button === 1 || e.button === 2 || spaceRef.current) {
       panRef.current = { sx: e.clientX, sy: e.clientY, ox: tfRef.current.x, oy: tfRef.current.y };
@@ -1232,7 +1241,21 @@ export default function TakeoffCanvas() {
       // clickable; a highlight still wins over a plain shape (it shields it).
       const mHit = rev.find((m) => m.type !== "highlight" && hitMarkup(m, p, thr))
                 || rev.find((m) => m.type === "highlight" && hitMarkup(m, p, thr));
-      if (mHit) { selectMarkup(mHit.id); return; }
+      if (mHit) {
+        selectMarkup(mHit.id);
+        // arm a move drag — snapshot the markup's current normalized coords (all four
+        // shapes: cloud/highlight rect, callout at+target, text at). The move stays a
+        // no-op until it passes the threshold in onPointerMove, so a pure click (or the
+        // first click of a double-click re-edit) never nudges the markup.
+        const orig = (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
+          : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
+            : { at: mHit.at };
+        // raw start (markups don't snap/angle-lock; matches the raw tracking point in
+        // onPointerMove so the delta can't be contaminated by a stale snap/angle ref)
+        dragRef.current = { kind: "markupMove", markupId: mHit.id, sheetId: mHit.sheet_id, start: toImage(e.clientX, e.clientY), orig, moved: false };
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
+      }
     }
     // 3. move the selected shape if its body (not a handle) was hit
     if (sel && selSp && hitShape(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
@@ -1274,6 +1297,7 @@ export default function TakeoffCanvas() {
     return { area_sf: +(met.area * u * u).toFixed(2), perimeter_lf: +(met.perim * u).toFixed(2) };
   }
   function moveCrosshair(e) {
+    if (editingRef.current) return;   // inline editor open — no aim crosshair (ref check, never per-mousemove state)
     if (tool === "pan" || tool === "select" || status !== "ready" || !containerRef.current) return;
     // snap-to-vector: nearest PDF endpoint within threshold becomes the active
     // point — looked up in the hovered panel's grid, in that panel's local frame
@@ -1463,6 +1487,28 @@ export default function TakeoffCanvas() {
           const sp = panelByKey(s.sheet_id);
           const dx = (p[0] - d.start[0]) / sp.img.w, dy = (p[1] - d.start[1]) / sp.img.h;
           return { ...s, verts_norm: d.orig.map(([nx, ny]) => [nx + dx, ny + dy]) };
+        }));
+      } else if (d.kind === "markupMove") {
+        // raw cursor point — markups aren't snapped/angle-locked, and this matches the
+        // raw d.start so the delta can't jump from a stale snap/angle ref.
+        const mp = toImage(e.clientX, e.clientY);
+        // dblclick-safe: stay inert until the pointer travels past the ~5px pan
+        // threshold, so a click / first click of a double-click never moves it
+        const sc = tfRef.current.scale;
+        if (!d.moved && Math.hypot(mp[0] - d.start[0], mp[1] - d.start[1]) < 5 / sc) return;
+        d.moved = true;
+        const sp = panelByKey(d.sheetId);
+        if (!sp || !sp.img.w) return;
+        // start and mp are both stage px, so xOffset cancels in the delta; normalize
+        // by the markup's OWN panel dims. Live setMarkups each move (mirrors the shape
+        // `move` pattern; NOT commit-on-release). Persistence is automatic.
+        const dx = (mp[0] - d.start[0]) / sp.img.w, dy = (mp[1] - d.start[1]) / sp.img.h;
+        const o = d.orig;
+        setMarkups((ms) => ms.map((m) => {
+          if (m.id !== d.markupId) return m;
+          if (o.rect) return { ...m, rect: [[o.rect[0][0] + dx, o.rect[0][1] + dy], [o.rect[1][0] + dx, o.rect[1][1] + dy]] };
+          if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
+          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };
         }));
       }
       return;
@@ -1715,19 +1761,83 @@ export default function TakeoffCanvas() {
     }
   }
 
+  // ── inline text editor — a screen-space <input> overlay (retires window.prompt).
+  // An HTML input can't live in the zoom/pan-transformed SVG group, so it is
+  // absolutely positioned in CONTAINER px, converting the anchor (stage px) through
+  // tfRef. Pan/zoom is frozen while editing (onPointerDown / onWheel bail on
+  // editingRef) so the overlay stays pinned to its anchor; the crosshair is
+  // suppressed via the same ref inside moveCrosshair. Keys are handled on the
+  // input's OWN onKeyDown/onBlur — the global window keydown returns early for
+  // INPUT targets, so it never interferes.
+  function markupAnchorStage(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return null;
+    let nx, ny;
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
+    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }
+    else return null;
+    return [nx * sp.img.w + sp.xOffset, ny * sp.img.h];
+  }
+  function openTextEditor({ anchorStage, value = "", multiline = false, commit }) {
+    const el = containerRef.current;
+    if (!el) return;
+    const t = tfRef.current;
+    hideCrosshair();                 // the OS cursor / aim crosshair steps aside while you type
+    editingRef.current = true;
+    const ed = { left: anchorStage[0] * t.scale + t.x, top: anchorStage[1] * t.scale + t.y, value, multiline, commit };
+    editorRef.current = ed;
+    setEditor(ed);
+  }
+  // commit=true → run the editor's commit with the current input text; either way
+  // tear down. Guarded on editingRef so the blur that fires when we unmount the
+  // focused input (after Enter/Esc) is a harmless no-op — no double commit.
+  function finishEditor(commit) {
+    if (!editingRef.current) return;
+    editingRef.current = false;
+    const ed = editorRef.current;
+    const val = editorInputRef.current ? editorInputRef.current.value : (ed ? ed.value : "");
+    editorRef.current = null;
+    setEditor(null);
+    if (commit && ed && ed.commit) ed.commit(val);
+  }
+  // defense-in-depth: editingRef locks pan/zoom/crosshair while the overlay is up.
+  // If the input ever unmounts by a route other than finishEditor, this keeps the
+  // ref from stranding true and freezing the canvas.
+  useEffect(() => { if (!editor) editingRef.current = false; }, [editor]);
+  // double-click a markup (Select tool) to edit its text in place — find the target
+  // via toImage + hitMarkup (non-highlight beats highlight, mirroring selectAt) and
+  // open the overlay at its anchor.
+  function editMarkupAt(e) {
+    if (!showMarkups) return;
+    const p = toImage(e.clientX, e.clientY);
+    const thr = 8 / tfRef.current.scale;
+    const rev = [...visibleMarkups].reverse();
+    const m = rev.find((mm) => mm.type !== "highlight" && hitMarkup(mm, p, thr))
+      || rev.find((mm) => mm.type === "highlight" && hitMarkup(mm, p, thr));
+    if (!m) return;
+    const anchor = markupAnchorStage(m);
+    if (!anchor) return;
+    selectMarkup(m.id);
+    openTextEditor({ anchorStage: anchor, value: m.text || "", commit: (t) => updateMarkup(m.id, { text: (t || "").trim() }) });
+  }
+
   function placeMarkup(p) {
     const tp = panelAt(p[0]);
     const norm = (q, panel) => [(q[0] - panel.xOffset) / panel.img.w, q[1] / panel.img.h];
     if (tool === "text") {
-      const t = window.prompt("Text note:");
-      if (t && t.trim()) addMarkup({ type: "text", at: norm(p, tp), text: t.trim() }, tp.key);
+      // empty text is not committed (preserves the old `if (t && t.trim())` reject)
+      openTextEditor({ anchorStage: p, commit: (t) => { const tx = (t || "").trim(); if (tx) addMarkup({ type: "text", at: norm(p, tp), text: tx }, tp.key); } });
     } else if (tool === "cloud") {
       if (!markupDraft) { setMarkupDraft(p); }
       else {
-        const note = window.prompt("Cloud note (optional):") || "";
         const dp = panelAt(markupDraft[0]);
-        addMarkup({ type: "cloud", rect: [norm(markupDraft, dp), norm(p, dp)], text: note.trim() }, dp.key);
+        const rect = [norm(markupDraft, dp), norm(p, dp)];
         setMarkupDraft(null);
+        // create the cloud NOW (like highlight) so Esc/cancel in the note editor
+        // keeps the drawn box — only the optional note is discarded, not the geometry
+        const id = uid("mk");
+        addMarkup({ id, type: "cloud", rect, text: "" }, dp.key);
+        openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(id, { text: (t || "").trim() }) });
       }
     } else if (tool === "highlight") {
       // two-corner like the cloud, but no note prompt — a highlight is a pure
@@ -1741,10 +1851,11 @@ export default function TakeoffCanvas() {
     } else if (tool === "callout") {
       if (!markupDraft) { setMarkupDraft(p); }   // first click = the thing you're pointing at
       else {
-        const t = window.prompt("Callout text:");
         const dp = panelAt(markupDraft[0]);
-        if (t && t.trim()) addMarkup({ type: "callout", target: norm(markupDraft, dp), at: norm(p, dp), text: t.trim() }, dp.key);
+        const target = norm(markupDraft, dp), at = norm(p, dp);
         setMarkupDraft(null);
+        // empty callout text is not committed (preserves the old reject)
+        openTextEditor({ anchorStage: p, commit: (t) => { const tx = (t || "").trim(); if (tx) addMarkup({ type: "callout", target, at, text: tx }, dp.key); } });
       }
     }
   }
@@ -2243,8 +2354,8 @@ export default function TakeoffCanvas() {
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
-          onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
-          onDoubleClick={() => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") finishShape(); }}
+          onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
+          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
@@ -2265,6 +2376,17 @@ export default function TakeoffCanvas() {
           <div ref={aimChipRef} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", display: "none", zIndex: 6, padding: "2px 8px", background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-1)", fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", willChange: "transform" }} />
           {/* hover readout — what takeoff is under the cursor (DOM-direct) */}
           <div ref={hoverRef} style={{ position: "absolute", display: "none", pointerEvents: "none", zIndex: 8, background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-1)", padding: "4px 8px", fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink)", whiteSpace: "nowrap" }} />
+          {/* inline on-canvas text editor — a screen-space overlay pinned to its anchor
+              (pan/zoom is frozen while open). Enter commits, Esc cancels, blur commits;
+              all on the input's OWN handlers so the global keydown (which returns early
+              for INPUT) never interferes. cursor:text overrides the stage's cursor:none. */}
+          {editor && (
+            <input ref={editorInputRef} autoFocus defaultValue={editor.value}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); finishEditor(true); } else if (e.key === "Escape") { e.preventDefault(); finishEditor(false); } }}
+              onBlur={() => finishEditor(true)}
+              placeholder="Type, Enter to place · Esc cancels"
+              style={{ position: "absolute", left: editor.left, top: editor.top, zIndex: 9, minWidth: 160, padding: "3px 6px", font: "13px var(--f-body, sans-serif)", color: "var(--ink)", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 2px 10px rgba(0,0,0,.18)", borderRadius: 0, cursor: "text", outline: "none" }} />
+          )}
           <div ref={stageRef} style={{ position: "absolute", transformOrigin: "0 0", willChange: "transform", width: stage.w || undefined, height: stage.h || undefined }}>
             {panels.map((p) => (
               <canvas key={p.key} ref={(el) => { if (el) panelCanvasRefs.current.set(p.key, el); else panelCanvasRefs.current.delete(p.key); }}
@@ -2568,8 +2690,18 @@ export default function TakeoffCanvas() {
               <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
-                  <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
-                  <button onClick={() => { const t = window.prompt("Edit text:", m.text || ""); if (t != null) updateMarkup(m.id, { text: t.trim() }); }} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
+                  {/* inline edit — the panel's fallback for the canvas overlay, since a
+                      markup here may be off-screen or on another sheet (no click point).
+                      Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
+                  {panelEditId === m.id ? (
+                    <input autoFocus defaultValue={m.text || ""}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
+                      onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
+                      style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
+                  ) : (
+                    <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
+                  )}
+                  <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
                   <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
                 </div>
                 {/* appearance — per-markup color (reuse PALETTE) + line style; both
