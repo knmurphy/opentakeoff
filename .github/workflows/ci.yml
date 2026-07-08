@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+  workflow_dispatch:   # allow running the check on demand (e.g. for a branch whose PR was opened by an app token, which doesn't trigger the pull_request event)
 
 permissions:
   contents: read
