@@ -4,10 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { conditionTotals, sheetTotals, totalsToCsv, round2 } from "../src/lib/totals.js";
+import { conditionTotals, grandTotals, sheetTotals, totalsToCsv, round2 } from "../src/lib/totals.js";
 import {
   GETTERS, CSV_PROFILE, TABLE_PROFILE, customColProfile,
-  loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf,
+  partitionRowsBy, forceIncludeGroupCol,
+  loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf,
 } from "../src/lib/reportColumns.js";
 import { conditions, shapes, projectName, sheetLabel } from "./fixtures/report.fixture.ts";
 
@@ -163,4 +164,96 @@ test("loadColPrefs returns {} without localStorage; saveColPrefs swallows too", 
   assert.equal(typeof globalThis.localStorage, "undefined"); // node test env
   assert.deepEqual(loadColPrefs(), {});
   assert.doesNotThrow(() => saveColPrefs({ waste_sf: true }));
+});
+
+// ── grouping the report by a custom column (issue #35) ──────────────────────
+// fixture rows (shape_count > 0): ct1, lvt2, rb1, wt1, cnt
+
+test("partitionRowsBy: vocabulary order first, ad-hoc sorted after, Unassigned last, empty groups dropped", () => {
+  const col = { id: "div", name: "CSI Division", values: ["09 68 00", "09 65 00", "09 30 00"] };
+  const attrs = new Map([
+    ["ct1", { div: "09 65 00" }],
+    ["lvt2", { div: "zz removed" }],   // not in the vocabulary → ad-hoc
+    ["rb1", { div: "09 68 00" }],
+    ["wt1", { div: "aa removed" }],    // ad-hoc, sorts before "zz removed"
+    // cnt has no entry at all → Unassigned
+  ]);
+  const groups = partitionRowsBy(rows, col, attrs);
+  // vocabulary order (NOT assignment order: 09 68 00 before 09 65 00), then
+  // ad-hoc sorted, then null last; "09 30 00" (no rows) dropped
+  assert.deepEqual(groups.map((g: any) => g.value), ["09 68 00", "09 65 00", "aa removed", "zz removed", null]);
+  assert.deepEqual(groups.map((g: any) => g.label), ["09 68 00", "09 65 00", "aa removed", "zz removed", "Unassigned"]);
+  assert.deepEqual(groups.map((g: any) => g.rows.map((r: any) => r.id)), [["rb1"], ["ct1"], ["wt1"], ["lvt2"], ["cnt"]]);
+});
+
+test("partitionRowsBy: '' and non-string attrs fold into the null group — never an empty-labeled ad-hoc group", () => {
+  const col = { id: "d", name: "X", values: ["real"] };
+  const attrs = new Map([
+    ["ct1", { d: "" }],                // empty string → null group
+    ["lvt2", { d: 42 }],               // non-string → null group
+    ["rb1", { d: null }],              // null → null group
+    ["wt1", {}],                       // key absent → null group
+    // cnt: no map entry at all
+  ]);
+  const groups = partitionRowsBy(rows, col, attrs);
+  // everything folded into one group → single-group partition is detectable
+  // (ReportPanel suppresses all group chrome on length === 1)
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].value, null);
+  assert.equal(groups[0].label, "Unassigned");
+  assert.equal(groups[0].rows.length, rows.length);
+  // no attrsByCond at all → same single Unassigned group
+  assert.equal(partitionRowsBy(rows, col, undefined).length, 1);
+});
+
+test("partitionRowsBy: a vocabulary value literally named 'Unassigned' stays separate from the null group", () => {
+  const col = { id: "d", name: "X", values: ["Unassigned"] };
+  const attrs = new Map([["ct1", { d: "Unassigned" }]]);
+  const groups = partitionRowsBy(rows, col, attrs);
+  assert.deepEqual(groups.map((g: any) => [g.value, g.label]), [["Unassigned", "Unassigned"], [null, "Unassigned"]]);
+  assert.deepEqual(groups[0].rows.map((r: any) => r.id), ["ct1"]);
+  assert.equal(groups[1].rows.length, rows.length - 1);
+});
+
+test("grandTotals over partitioned groups: subtotals match hand-derived sums and reconcile to the whole", () => {
+  const col = { id: "d", name: "Type", values: ["hard", "soft"] };
+  const attrs = new Map([
+    ["ct1", { d: "hard" }], ["rb1", { d: "hard" }],
+    ["lvt2", { d: "soft" }], ["wt1", { d: "soft" }], ["cnt", { d: "soft" }],
+  ]);
+  const groups = partitionRowsBy(rows, col, attrs);
+  assert.equal(groups.length, 2);
+  const [hard, soft] = groups.map((g: any) => grandTotals(g.rows));
+  // hard: ct1 546.9 × 1.10 = 601.59 + rb1 border 43.29 × 1.05 = 45.45
+  assert.equal(hard.total_sf_net, 647.04);
+  // soft: lvt2 210.55 × 2 = 421.1 + wt1 wall 305.62 (cnt contributes 0 SF)
+  assert.equal(soft.total_sf_net, 726.72);
+  // groups partition the rows, so subtotals reconcile to the grand total
+  const whole = grandTotals(rows);
+  assert.equal(round2(hard.total_sf_net + soft.total_sf_net), whole.total_sf_net);
+  assert.equal(hard.ea + soft.ea, whole.ea);
+});
+
+test("forceIncludeGroupCol: hidden group-by column appended exactly once; visible → untouched", () => {
+  const defs = [{ id: "div", name: "CSI Division", values: [] }];
+  const customCols = customColProfile(defs);
+  // hidden (defaultVisible: false, no pref) → appended at the very end
+  const hidden = visibleCols([...CSV_PROFILE, ...customCols], {});
+  const forced = forceIncludeGroupCol(hidden, customCols, "div");
+  assert.equal(forced.length, hidden.length + 1);
+  assert.equal(forced[forced.length - 1].key, "custom:div");
+  assert.equal(forced.filter((c: any) => c.key === "custom:div").length, 1);
+  // already visible via the picker → same array back, no duplicate
+  const visible = visibleCols([...CSV_PROFILE, ...customCols], { "custom:div": true });
+  assert.equal(forceIncludeGroupCol(visible, customCols, "div"), visible);
+  assert.equal(visible.filter((c: any) => c.key === "custom:div").length, 1);
+  // not grouping / not a custom column ("sheet" once #36 lands) → untouched
+  assert.equal(forceIncludeGroupCol(hidden, customCols, ""), hidden);
+  assert.equal(forceIncludeGroupCol(hidden, customCols, "sheet"), hidden);
+});
+
+test("loadGroupBy returns '' without localStorage; saveGroupBy swallows too", () => {
+  assert.equal(typeof globalThis.localStorage, "undefined"); // node test env
+  assert.equal(loadGroupBy(), "");
+  assert.doesNotThrow(() => saveGroupBy("col-x"));
 });

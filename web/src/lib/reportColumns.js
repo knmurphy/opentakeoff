@@ -94,6 +94,56 @@ export function customColProfile(conditionColumns) {
   }));
 }
 
+// Partition condition rows by one custom column's assigned value, for the
+// report's grouped view → [{ value: string|null, label, rows }]. Order:
+// vocabulary order first, then ad-hoc values (assigned strings missing from
+// the vocabulary — the "(removed)" case) sorted, then the null/Unassigned
+// group LAST. Empty groups dropped. Groups key on value: string|null so a
+// vocabulary value literally named "Unassigned" can't merge with the null
+// group. Same coercion chokepoint as customColProfile: non-strings AND ""
+// fold into the null group — never an empty-labeled ad-hoc group.
+export function partitionRowsBy(rows, columnDef, attrsByCond) {
+  const byValue = new Map(); // assigned value → rows, in first-seen order
+  const nullRows = [];
+  for (const r of rows) {
+    const v = attrsByCond?.get(r.id)?.[columnDef.id];
+    if (typeof v === "string" && v) {
+      if (!byValue.has(v)) byValue.set(v, []);
+      byValue.get(v).push(r);
+    } else {
+      nullRows.push(r);
+    }
+  }
+  const groups = [];
+  // vocabulary values first, in vocabulary order; delete as consumed so a
+  // duplicated vocabulary entry can't emit the same group twice
+  for (const v of columnDef.values || []) {
+    if (!byValue.has(v)) continue; // empty group dropped
+    groups.push({ value: v, label: v, rows: byValue.get(v) });
+    byValue.delete(v);
+  }
+  // what's left is ad-hoc (assigned but not in the vocabulary), sorted
+  for (const v of [...byValue.keys()].sort()) {
+    groups.push({ value: v, label: v, rows: byValue.get(v) });
+  }
+  if (nullRows.length) groups.push({ value: null, label: "Unassigned", rows: nullRows });
+  return groups;
+}
+
+// D7 force-include: a grouped report's CSV/XLSX always carries its grouping
+// column, even when hidden in the picker. cols = a visibleCols() result;
+// customCols = the full customColProfile() list (the descriptor to append
+// lives there). groupBy values that aren't a custom column ("" / "sheet")
+// pass cols through untouched. tableCols never go through this — the table
+// shows the values as group headers already.
+export function forceIncludeGroupCol(cols, customCols, groupBy) {
+  if (!groupBy) return cols;
+  const key = "custom:" + groupBy;
+  if (cols.some((c) => c.key === key)) return cols; // already visible — no duplicate
+  const col = customCols.find((c) => c.key === key);
+  return col ? [...cols, col] : cols;
+}
+
 // One visibility pref shared by table + CSV: a JSON object of key → boolean
 // OVERRIDES of defaultVisible (diffs only), so new defaults reach old prefs.
 const PREFS_KEY = "opentakeoff_report_cols";
@@ -110,6 +160,30 @@ export function loadColPrefs() {
 export function saveColPrefs(prefs) {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs || {}));
+  } catch {
+    /* private mode */
+  }
+}
+
+// Group-by choice for the report table: "" (none) | "sheet" | a custom column
+// id. Stored raw; ReportPanel normalizes against the current definitions on
+// EVERY render — never trust the stored value (a stale colId in a React
+// select whose value matches no option misrenders while still partitioning
+// everything into Unassigned).
+const GROUPBY_KEY = "opentakeoff_report_groupby";
+
+export function loadGroupBy() {
+  try {
+    const v = localStorage.getItem(GROUPBY_KEY);
+    return typeof v === "string" ? v : "";
+  } catch {
+    return ""; // private mode / SSR
+  }
+}
+
+export function saveGroupBy(v) {
+  try {
+    localStorage.setItem(GROUPBY_KEY, v || "");
   } catch {
     /* private mode */
   }
