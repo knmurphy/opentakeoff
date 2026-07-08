@@ -300,6 +300,12 @@ export default function TakeoffCanvas() {
   const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
   const [condQuery, setCondQuery] = useState("");             // live filter over the panel's condition list (transient, never persisted)
   const [closedGroups, setClosedGroups] = useState(() => new Set()); // collapsed tag-family groups in the panel's grouped view
+  // multi-select for bulk edit — VIEW STATE ONLY, never persisted. ⌘/ctrl-click
+  // toggles a row into the set, ⇧-click ranges from the last toggle in the
+  // current view order, plain click clears (and activates, as always).
+  const [checkedConds, setCheckedConds] = useState(() => new Set());
+  const [bulkWaste, setBulkWaste] = useState("");
+  const checkAnchorRef = useRef(null);
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
   const [status, setStatus] = useState("loading");
@@ -1877,6 +1883,39 @@ export default function TakeoffCanvas() {
   })();
   const searchMiss = conditions.length > 0 && condView.length === 0;
 
+  // bulk selection helpers — ranges follow the DISPLAYED order (current view,
+  // skipping collapsed groups), which is what ⇧-click means visually
+  const visibleCondOrder = condGroups.flatMap((g) => (g.name != null && closedGroups.has(g.name) ? [] : g.items.map((it) => it.c.id)));
+  const toggleChecked = (id) => {
+    setCheckedConds((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    checkAnchorRef.current = id;
+  };
+  const rangeCheck = (id) => {
+    const a = checkAnchorRef.current;
+    const ai = a ? visibleCondOrder.indexOf(a) : -1, bi = visibleCondOrder.indexOf(id);
+    if (ai < 0 || bi < 0) { toggleChecked(id); return; }
+    const [lo, hi] = ai < bi ? [ai, bi] : [bi, ai];
+    setCheckedConds((s) => { const n = new Set(s); for (let k = lo; k <= hi; k++) n.add(visibleCondOrder[k]); return n; });
+  };
+  const bulkPatch = (patch) => setConditions((cs) => cs.map((c) => (checkedConds.has(c.id) ? { ...c, ...patch } : c)));
+  const applyBulkWaste = () => {
+    const v = Math.max(0, parseFloat(bulkWaste));
+    if (!Number.isFinite(v)) return;
+    bulkPatch({ waste_pct: v });
+    setCommitMsg(`Waste set to ${v}% on ${checkedConds.size} condition${checkedConds.size === 1 ? "" : "s"}.`);
+  };
+  const bulkDelete = () => {
+    const ids = checkedConds;
+    if (!ids.size) return;
+    const owned = shapes.filter((s) => ids.has(s.condition_id)).length;
+    if (!window.confirm(`Delete ${ids.size} condition${ids.size === 1 ? "" : "s"}${owned ? ` and their ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}? This can't be undone.`)) return;
+    setConditions((cs) => cs.filter((c) => !ids.has(c.id)));
+    if (owned) setShapes((ss) => ss.filter((s) => !ids.has(s.condition_id)));
+    if (ids.has(activeCond)) setActiveCond(conditions.find((c) => !ids.has(c.id))?.id || "");
+    setCheckedConds(new Set());
+    setCommitMsg(`Deleted ${ids.size} condition${ids.size === 1 ? "" : "s"}${owned ? ` and ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}.`);
+  };
+
   const renderCondRow = (c, i) => {
     const row = visRowById.get(c.id);
     const mult = c.multiplier || 1;
@@ -1885,12 +1924,19 @@ export default function TakeoffCanvas() {
     const on = c.id === activeCond;
     const matOn = on && panelMatOpen;
     const reassigning = tool === "select" && selectedId;
+    const checked = checkedConds.has(c.id);
     return (
-      <div key={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : "3px solid transparent" }}>
-        <div onClick={() => { if (reassigning) reassignSelected(c.id); setActiveCond(c.id); }}
+      <div key={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: checked ? "#e8eefc" : on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : checked ? "3px solid #1f3fc7" : "3px solid transparent" }}>
+        <div onClick={(e) => {
+            if (e.metaKey || e.ctrlKey) { toggleChecked(c.id); return; }
+            if (e.shiftKey) { rangeCheck(c.id); return; }
+            if (reassigning) reassignSelected(c.id);
+            setActiveCond(c.id);
+            if (checkedConds.size) setCheckedConds(new Set());
+          }}
           onDoubleClick={() => locateCondition(c.id)}
-          title={reassigning ? "Reassign selected shape to this condition" : "Make this the active condition (double-click zooms to its takeoffs)"}
-          style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", outline: reassigning ? "1px dashed #1f3fc7" : "none", outlineOffset: -3 }}>
+          title={reassigning ? "Reassign selected shape to this condition" : "Make this the active condition (double-click zooms to its takeoffs · ⌘-click / ⇧-click selects for bulk edit)"}
+          style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", outline: reassigning ? "1px dashed #1f3fc7" : "none", outlineOffset: -3, userSelect: "none" }}>
           {i < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", borderRadius: 3, padding: "0 3px", flexShrink: 0 }}>{i + 1}</span>}
           <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
           <div style={{ minWidth: 0, flex: 1 }}>
@@ -2499,6 +2545,26 @@ export default function TakeoffCanvas() {
                   title="Group by tag family (the text before the dash: CPT, LVT, CT…)"
                   style={{ padding: "3px 7px", borderRadius: 0, border: `1px solid ${panelPrefs.group ? "var(--cobalt)" : "var(--ink-faint)"}`, background: panelPrefs.group ? "var(--cobalt)" : "transparent", color: panelPrefs.group ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)", lineHeight: 1.4 }}>≡ grp</button>
               </div>
+              {/* bulk actions — appear while a ⌘/⇧ multi-selection is live */}
+              {checkedConds.size > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "6px 10px", borderBottom: "1px solid var(--ink-faint)", background: "#e8eefc", flexShrink: 0, flexWrap: "wrap", fontSize: 11 }}>
+                  <strong style={{ color: "#1f3fc7" }}>{checkedConds.size} selected</strong>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }} title="Set the waste % on every selected condition">
+                    <span style={{ color: "var(--ink-muted)" }}>Waste</span>
+                    <input type="number" min="0" step="1" value={bulkWaste} onChange={(e) => setBulkWaste(e.target.value)} placeholder="%"
+                      onKeyDown={(e) => e.key === "Enter" && applyBulkWaste()}
+                      style={{ width: 44, padding: "2px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 11 }} />
+                    <button onClick={applyBulkWaste} title="Apply waste % to the selection" style={{ padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 }}>✓</button>
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }} title="Set the line color on every selected condition">
+                    {PALETTE.map((p) => <button key={p} title={p} onClick={() => bulkPatch({ color: p })} style={{ width: 13, height: 13, borderRadius: 3, background: p, border: "1px solid var(--ink-faint)", cursor: "pointer", padding: 0 }} />)}
+                  </span>
+                  <button onClick={bulkDelete} title="Delete every selected condition (and their takeoffs)"
+                    style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Delete</button>
+                  <button onClick={() => setCheckedConds(new Set())} title="Clear the selection"
+                    style={{ marginLeft: "auto", padding: "2px 6px", border: "none", background: "none", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>✕</button>
+                </div>
+              )}
               <div style={{ flex: 1, overflow: "auto" }}>
                 {conditions.length === 0 && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions yet — add one and start tracing.</div>}
                 {condGroups.map((g) => (
