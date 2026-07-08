@@ -32,9 +32,11 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   behavior as below. (#49)
 - **Custom condition columns + report grouping.** Define project-level custom
   columns (e.g. **CSI Division**) with selectable values and assign one per
-  condition — from the condition bar's **Custom columns** strip or the takeoffs
-  panel's **Condition details**. Renaming a value updates every assigned
-  condition; deleting one keeps the data, shown as "(removed)". The report
+  condition — as shipped, columns are managed in the docked panel's **Columns**
+  tab and assigned in the active row's properties (this landed on the
+  since-retired condition bar; see the Columns tab entry above). Renaming a
+  value updates every assigned condition; deleting one keeps the data, shown
+  as "(removed)". The report
   gains a unified **Group** select: by **sheet** (ordered quantities — waste
   and ×N applied per sheet slice, subtotaled per group) or by any custom
   column, with the grouping named on the printed page. Custom columns join the
