@@ -4,6 +4,7 @@
 // conditionTotals rows are spread into an external contribution payload, so
 // derived columns live HERE (getters), never as new row fields.
 import { round2 } from "./num.js";
+import { attrValue, columnLabel } from "./conditionColumns.js";
 
 // key → (row, ctx) => primitive. ctx (optional):
 //   { perimByCond: Map(condition_id → unrounded floor-perimeter LF) }
@@ -72,6 +73,82 @@ export const CSV_PROFILE = [
   { key: "perimeter_ref", header: "Perimeter LF (ref, incl. openings)", defaultVisible: false },
 ];
 
+// The one getter-resolution rule for a column descriptor: custom columns
+// carry their own get; built-ins come from GETTERS. Table (renderCell), CSV
+// (totalsToCsv), and XLSX (reportWorkbook) all resolve through here so the
+// three outputs can never read different values for the same column.
+export const colGetter = (c) => c.get || GETTERS[c.key];
+
+// User-defined condition columns → runtime column descriptors, appended after
+// either profile. Keys are "custom:<colId>" — can't collide with built-in
+// keys, grandTotals keys, or colPrefs. Descriptors carry their own `get`
+// (call sites fall back to GETTERS for built-ins); values arrive via
+// ctx.attrsByCond (Map(condition_id → attrs)), never as new row fields —
+// conditionTotals rows are spread into the contribution payload.
+export function customColProfile(conditionColumns) {
+  // require an array — a truthy non-array from a corrupted payload must not throw
+  return (Array.isArray(conditionColumns) ? conditionColumns : []).map((cc) => ({
+    key: "custom:" + cc.id,
+    header: columnLabel(cc),
+    defaultVisible: false,
+    custom: true,
+    // attrValue is the one definition of "assigned" — hydrate strips corrupt
+    // values (sanitizeConditionAttrs), and this keeps table/CSV/XLSX on the
+    // same rule as grouping, JSON, and the canvas UI
+    get: (r, ctx) => attrValue(ctx?.attrsByCond?.get(r.id), cc.id),
+  }));
+}
+
+// Partition condition rows by one custom column's assigned value, for the
+// report's grouped view → [{ value: string|null, label, rows }]. Order:
+// vocabulary order first, then ad-hoc values (assigned strings missing from
+// the vocabulary — the "(removed)" case) sorted, then the null/Unassigned
+// group LAST. Empty groups dropped. Groups key on value: string|null so a
+// vocabulary value literally named "Unassigned" can't merge with the null
+// group. attrValue's shared rule folds non-strings, "" and whitespace-only
+// into the null group — never an empty-labeled ad-hoc group.
+export function partitionRowsBy(rows, columnDef, attrsByCond) {
+  const byValue = new Map(); // assigned value → rows, in first-seen order
+  const nullRows = [];
+  for (const r of rows) {
+    const v = attrValue(attrsByCond?.get(r.id), columnDef.id);
+    if (v) {
+      if (!byValue.has(v)) byValue.set(v, []);
+      byValue.get(v).push(r);
+    } else {
+      nullRows.push(r);
+    }
+  }
+  const groups = [];
+  // vocabulary values first, in vocabulary order; delete as consumed so a
+  // duplicated vocabulary entry can't emit the same group twice
+  for (const v of columnDef.values || []) {
+    if (!byValue.has(v)) continue; // empty group dropped
+    groups.push({ value: v, label: v, rows: byValue.get(v) });
+    byValue.delete(v);
+  }
+  // what's left is ad-hoc (assigned but not in the vocabulary), sorted
+  for (const v of [...byValue.keys()].sort()) {
+    groups.push({ value: v, label: v, rows: byValue.get(v) });
+  }
+  if (nullRows.length) groups.push({ value: null, label: "Unassigned", rows: nullRows });
+  return groups;
+}
+
+// D7 force-include: a grouped report's CSV/XLSX always carries its grouping
+// column, even when hidden in the picker. cols = a visibleCols() result;
+// customCols = the full customColProfile() list (the descriptor to append
+// lives there). groupBy values that aren't a custom column ("" / "sheet")
+// pass cols through untouched. tableCols never go through this — the table
+// shows the values as group headers already.
+export function forceIncludeGroupCol(cols, customCols, groupBy) {
+  if (!groupBy) return cols;
+  const key = "custom:" + groupBy;
+  if (cols.some((c) => c.key === key)) return cols; // already visible — no duplicate
+  const col = customCols.find((c) => c.key === key);
+  return col ? [...cols, col] : cols;
+}
+
 // One visibility pref shared by table + CSV: a JSON object of key → boolean
 // OVERRIDES of defaultVisible (diffs only), so new defaults reach old prefs.
 const PREFS_KEY = "opentakeoff_report_cols";
@@ -88,6 +165,30 @@ export function loadColPrefs() {
 export function saveColPrefs(prefs) {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs || {}));
+  } catch {
+    /* private mode */
+  }
+}
+
+// Group-by choice for the report table: "" (none) | "sheet" | a custom column
+// id. Stored raw; ReportPanel normalizes against the current definitions on
+// EVERY render — never trust the stored value (a stale colId in a React
+// select whose value matches no option misrenders while still partitioning
+// everything into Unassigned).
+const GROUPBY_KEY = "opentakeoff_report_groupby";
+
+export function loadGroupBy() {
+  try {
+    const v = localStorage.getItem(GROUPBY_KEY);
+    return typeof v === "string" ? v : "";
+  } catch {
+    return ""; // private mode / SSR
+  }
+}
+
+export function saveGroupBy(v) {
+  try {
+    localStorage.setItem(GROUPBY_KEY, v || "");
   } catch {
     /* private mode */
   }

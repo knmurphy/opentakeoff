@@ -13,7 +13,7 @@
 // materialsSummary, shapesDetail — so the four tabs carry the same numbers as
 // the on-screen table: waste applied only to order quantities, never measured.
 
-import { GETTERS } from "./reportColumns.js";
+import { GETTERS, colGetter } from "./reportColumns.js";
 import { grandTotals, materialsSummary, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 
 // ---------------------------------------------------------------------------
@@ -157,7 +157,8 @@ export async function buildXlsx(sheets) {
  * @param {any[]} args.shapeRows shapesDetail() result
  * @param {Array<{key: string, header: string}>} [args.cols] visible CSV_PROFILE
  *   columns — the Conditions tab honors the same column picker the CSV uses
- * @param {{perimByCond?: Map<any, number>}|null} [args.ctx] handed to GETTERS
+ * @param {{perimByCond?: Map<any, number>, attrsByCond?: Map<any, object>}|null}
+ *   [args.ctx] handed to the getters
  * @param {((sheetId: any) => string)|null} [args.sheetLabel]
  * @returns {Array<{name: string, rows: any[][]}>}
  */
@@ -165,9 +166,10 @@ export function reportWorkbook({ rows = [], bySheet = [], shapeRows = [], cols =
   const columns = cols || [];
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
 
-  // Conditions — same columns, getters, and TOTAL row as totalsToCsv
+  // Conditions — same columns, getters, and TOTAL row as totalsToCsv (per-
+  // column get, i.e. custom columns, falls back to the shared GETTERS)
   const conditions = [columns.map((c) => c.header)];
-  for (const r of rows) conditions.push(columns.map((c) => GETTERS[c.key]?.(r, ctx)));
+  for (const r of rows) conditions.push(columns.map((c) => colGetter(c)?.(r, ctx)));
   const g = grandTotals(rows);
   conditions.push(columns.map((c) => {
     if (c.key === "finish") return "TOTAL";

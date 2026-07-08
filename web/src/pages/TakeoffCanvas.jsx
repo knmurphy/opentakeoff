@@ -19,9 +19,10 @@ import SheetGallery from "../components/SheetGallery.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
 import { Icon } from "../brand/icons.jsx";
-import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale } from "../lib/sheets";
+import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale } from "../lib/sheets";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape } from "../lib/geometry.js";
@@ -285,6 +286,45 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove }) {
   );
 }
 
+// Per-condition custom-column assignment — one select per defined column.
+// Shared by the edit-bar strip and the Takeoffs side panel so the two never
+// drift. Unassigned = attrs key absent; a value deleted from the vocabulary
+// keeps the condition's string, shown as "<value> (removed)".
+function ColumnSelects({ columns, cond, onAssign }) {
+  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, background: "var(--paper-bright)" };
+  return (
+    <>
+      {columns.map((cc) => {
+        const v = attrValue(cond?.attrs, cc.id);   // the shared assigned-value rule (hydrate sanitizes, this keeps the display consistent)
+        return (
+          <label key={cc.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, marginRight: 12, marginBottom: 6 }}>
+            <span style={{ color: "var(--ink-muted)" }}>{columnLabel(cc)}</span>
+            <select value={v} onChange={(e) => onAssign(cc.id, e.target.value)} style={ip}>
+              <option value="">Unassigned</option>
+              {cc.values.map((val) => <option key={val} value={val}>{val}</option>)}
+              {v && !cc.values.includes(v) && <option value={v}>{v} (removed)</option>}
+            </select>
+          </label>
+        );
+      })}
+    </>
+  );
+}
+
+// add-value input for the column manager — local draft state, commit on Enter/+
+function AddValueInput({ onAdd }) {
+  const [v, setV] = useState("");
+  const commit = () => { const t = v.trim(); if (t) onAdd(t); setV(""); };
+  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <input value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && commit()} placeholder="add value" style={{ ...ip, width: 90 }} />
+      <button onClick={commit} title="Add this value to the list"
+        style={{ padding: "2px 7px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+</button>
+    </span>
+  );
+}
+
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
   const [sheets, setSheets] = useState([]);
@@ -384,6 +424,7 @@ export default function TakeoffCanvas() {
   const [pendingLen, setPendingLen] = useState("");
 
   const [conditions, setConditions] = useState([]);
+  const [conditionColumns, setConditionColumns] = useState([]);  // project-level custom-column vocabulary [{ id, name, values }] — assignments live on c.attrs
   const [activeCond, setActiveCond] = useState("");
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
@@ -643,7 +684,8 @@ export default function TakeoffCanvas() {
     setClientInfo(Object.fromEntries(Object.entries(
       a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
     ).filter(([, v]) => typeof v === "string")));
-    const conds = a.conditions || [];
+    setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
+    const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
     setShapes(a.shapes || []);
@@ -975,7 +1017,7 @@ export default function TakeoffCanvas() {
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
-  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
+  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
@@ -990,7 +1032,7 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1679,7 +1721,7 @@ export default function TakeoffCanvas() {
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
-      }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
+      }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
         dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
@@ -1777,6 +1819,34 @@ export default function TakeoffCanvas() {
     if (activeCond === id) setActiveCond(next[0]?.id || "");
     setCommitMsg(`Deleted ${c.finish_tag}${owned.length ? ` and ${owned.length} takeoff${owned.length === 1 ? "" : "s"}` : ""}.`);
   }
+
+  // custom columns: project-scoped vocabulary editing + per-condition assignment.
+  // Snapshot-compare asymmetry, accepted: the diff (COND_FIELDS quantities) is
+  // blind to attrs/definition changes, yet Load restores them — an assignments-
+  // only change diffs as "unchanged". Known, not a bug.
+  const assignAttr = (colId, v) => {
+    // hydrate sanitizes attrs (sanitizeConditionAttrs), so spreading is safe;
+    // an absent attrs spreads to {}
+    const attrs = { ...aCond?.attrs };
+    if (v) attrs[colId] = v; else delete attrs[colId];   // Unassigned = key absent, never ""
+    updateCond({ attrs });
+  };
+  const addColumn = () => setConditionColumns((cols) => [...cols, { id: uid("col"), name: "", values: [] }]);
+  const renameColumn = (colId, name) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, name } : cc)));   // id stays — assignments follow automatically
+  const addColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId && !cc.values.includes(v) ? { ...cc, values: [...cc.values, v] } : cc)));
+  const removeColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.filter((x) => x !== v) } : cc)));   // assigned conditions keep the string — selects show "(removed)"
+  const renameColumnVal = (colId, oldV) => {
+    const newV = (window.prompt("Rename value:", oldV) || "").trim();
+    if (!newV || newV === oldV) return;
+    // rename into an existing value = merge (values are unique — they key the chips and the select options)
+    setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.includes(newV) ? cc.values.filter((x) => x !== oldV) : cc.values.map((x) => (x === oldV ? newV : x)) } : cc)));
+    setConditions((cs) => renameColumnValue(cs, colId, oldV, newV));   // assignments follow the vocabulary
+  };
+  const deleteColumn = (colId) => {
+    const cc = conditionColumns.find((c) => c.id === colId);
+    if (!window.confirm(`Delete column "${columnLabel(cc)}" for the whole project? Conditions keep their values but they're no longer shown or exported.`)) return;
+    setConditionColumns((cols) => cols.filter((c) => c.id !== colId));   // orphaned attrs[colId] stay behind — harmless, nothing iterates raw attrs
+  };
 
   // supporting-materials editing (operates on the active condition)
   const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
@@ -2076,6 +2146,11 @@ export default function TakeoffCanvas() {
                   style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
               </span>
             </div>
+            {conditionColumns.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", rowGap: 2 }} title="Classify this condition — the Report can group and export by these (manage columns in the Columns tab)">
+                <ColumnSelects columns={conditionColumns} cond={c} onAssign={assignAttr} />
+              </div>
+            )}
           </div>
         )}
         {matOn && (
@@ -2584,7 +2659,7 @@ export default function TakeoffCanvas() {
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 12px", background: "var(--ink)", color: "var(--paper-cream)", flexShrink: 0 }}>
                 <span style={{ display: "inline-flex", gap: 2 }}>
-                  {[["takeoffs", `Takeoffs · ${groupKeys.length > 1 ? "these sheets" : "this sheet"}`], ["library", `Library${templates.length ? ` (${templates.length})` : ""}`]].map(([id, label]) => (
+                  {[["takeoffs", `Takeoffs · ${groupKeys.length > 1 ? "these sheets" : "this sheet"}`], ["library", `Library${templates.length ? ` (${templates.length})` : ""}`], ["columns", `Columns${conditionColumns.length ? ` (${conditionColumns.length})` : ""}`]].map(([id, label]) => (
                     <button key={id} onClick={() => setPanelTab(id)}
                       style={{ padding: "3px 8px", border: "none", borderBottom: panelTab === id ? "2px solid var(--paper-cream)" : "2px solid transparent", background: "none", color: "var(--paper-cream)", opacity: panelTab === id ? 1 : 0.65, cursor: "pointer", fontWeight: 700, fontSize: 12.5 }}>{label}</button>
                   ))}
@@ -2690,6 +2765,43 @@ export default function TakeoffCanvas() {
                   ))}
                 </div>
               )}
+              {/* Columns tab — the custom-columns manager (#31/#33): project-level
+                  vocabulary; per-condition assignment lives in the active row's
+                  properties on the Takeoffs tab */}
+              {panelTab === "columns" && (
+                <div style={{ flex: 1, overflow: "auto", fontSize: 11.5 }}>
+                  <div style={{ padding: "8px 12px 4px", color: "var(--ink-muted)", fontSize: 11 }}>
+                    Custom columns (e.g. CSI Division) classify conditions for report grouping and exports. Columns and values apply to the whole project; assign values on a condition in the Takeoffs tab.
+                  </div>
+                  {conditionColumns.length === 0 && <div style={{ padding: "2px 12px 8px", color: "var(--ink-muted)" }}>Add a column, e.g. CSI Division.</div>}
+                  {conditionColumns.map((cc) => (
+                    <div key={cc.id} style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <input value={cc.name} onChange={(e) => renameColumn(cc.id, e.target.value)} placeholder="Column name (e.g. CSI Division)"
+                          style={{ padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, flex: 1, minWidth: 0 }} />
+                        <button onClick={() => deleteColumn(cc.id)} title="Delete this column (whole project)"
+                          style={{ flexShrink: 0, padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕ column</button>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {cc.values.map((v) => (
+                          <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 3px 2px 8px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11.5, color: "var(--ink)" }}>
+                            {v}
+                            <button onClick={() => renameColumnVal(cc.id, v)} title="Rename this value — assigned conditions follow"
+                              style={{ padding: "0 3px", border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>✎</button>
+                            <button onClick={() => removeColumnValue(cc.id, v)} title="Remove from the list — conditions keep the value, shown as (removed)"
+                              style={{ padding: "0 3px", border: "none", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11 }}>✕</button>
+                          </span>
+                        ))}
+                        <AddValueInput onAdd={(v) => addColumnValue(cc.id, v)} />
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ padding: "6px 12px", borderTop: conditionColumns.length ? "1px solid var(--ink-faint)" : "none" }}>
+                    <button onClick={addColumn}
+                      style={{ width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add column</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2713,6 +2825,7 @@ export default function TakeoffCanvas() {
           projectName={projectName} onProjectName={setProjectName}
           clientInfo={clientInfo} onClientInfo={setClientInfo}
           conditions={conditions} shapes={shapes} markups={markups}
+          conditionColumns={conditionColumns}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}

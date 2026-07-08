@@ -26,6 +26,31 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   strip (panel header toggle) rendering the same state — activate, reassign,
   hotkey badges, + condition — for small projects with the panel collapsed.
   The transient status message now floats bottom-center over the canvas. (#43)
+- **Columns tab.** The custom-columns manager (define columns/values) moved
+  from the toolbar strip into a Columns tab in the docked panel; per-condition
+  assignment lives in the active row's properties. Same data model and report
+  behavior as below. (#49)
+- **Custom condition columns + report grouping.** Define project-level custom
+  columns (e.g. **CSI Division**) with selectable values and assign one per
+  condition — from the condition bar's **Custom columns** strip or the takeoffs
+  panel's **Condition details**. Renaming a value updates every assigned
+  condition; deleting one keeps the data, shown as "(removed)". The report
+  gains a unified **Group** select: by **sheet** (ordered quantities — waste
+  and ×N applied per sheet slice, subtotaled per group) or by any custom
+  column, with the grouping named on the printed page. Custom columns join the
+  report's column picker (hidden by default), append to CSV/XLSX after the
+  frozen columns, and ride the JSON export additively; grouping by a custom
+  column force-includes that column in CSV/XLSX. (Sheet grouping restructures
+  the on-screen/printed table only — exports keep the flat conditions table
+  plus the existing base-quantity by-sheet section.) Projects that never use
+  the feature produce byte-identical payloads and CSVs. (#31, #33–#36)
+
+### Fixed
+- **Report print: the "By finish" materials line wraps at the page edge.** The
+  mapped nowrap spans had no whitespace between them, so a long summary was one
+  unbreakable run that overflowed the printed page; entries now move to the
+  next line as a unit and wrap internally when a single entry is wider than
+  the line. (#27)
 
 ## 2026-07-07
 
