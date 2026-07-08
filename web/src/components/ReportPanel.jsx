@@ -392,10 +392,16 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             <p style={{ maxWidth: 980, margin: "10px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.7 }}>
               <strong>By finish:</strong>{" "}
               {rows.filter((r) => r.materials?.length).map((r) => (
-                <span key={r.id} style={{ marginRight: 14, whiteSpace: "nowrap" }}>
-                  <strong style={{ fontFamily: "var(--f-mono)" }}>{r.finish_tag}</strong>{" "}
-                  {r.materials.map((m) => `${m.name} ${num(m.qty, 2)}${m.unit ? " " + m.unit : ""}${m.note ? ` (${m.note})` : ""}`).join(" · ")}
-                </span>
+                // inline-block + a trailing space outside the span: each finish
+                // moves to the next line as a unit when it fits, and wraps
+                // internally instead of running off the page edge when it
+                // doesn't (#27)
+                <React.Fragment key={r.id}>
+                  <span style={{ marginRight: 14, display: "inline-block" }}>
+                    <strong style={{ fontFamily: "var(--f-mono)" }}>{r.finish_tag}</strong>{" "}
+                    {r.materials.map((m) => `${m.name} ${num(m.qty, 2)}${m.unit ? " " + m.unit : ""}${m.note ? ` (${m.note})` : ""}`).join(" · ")}
+                  </span>{" "}
+                </React.Fragment>
               ))}
               <br />Each quantity = measured {`{area / linear / count}`} ÷ your coverage rate, rounded up to whole units.
             </p>
