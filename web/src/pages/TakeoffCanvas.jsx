@@ -1717,10 +1717,9 @@ export default function TakeoffCanvas() {
   // blind to attrs/definition changes, yet Load restores them — an assignments-
   // only change diffs as "unchanged". Known, not a bug.
   const assignAttr = (colId, v) => {
-    // conditions hydrate wholesale — coerce a corrupted non-object attrs to {}
-    // instead of spreading it back into the payload
-    const cur = aCond?.attrs;
-    const attrs = { ...(cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {}) };
+    // hydrate sanitizes attrs (sanitizeConditionAttrs), so spreading is safe;
+    // an absent attrs spreads to {}
+    const attrs = { ...aCond?.attrs };
     if (v) attrs[colId] = v; else delete attrs[colId];   // Unassigned = key absent, never ""
     updateCond({ attrs });
   };

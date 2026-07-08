@@ -13,7 +13,7 @@
 // materialsSummary, shapesDetail — so the four tabs carry the same numbers as
 // the on-screen table: waste applied only to order quantities, never measured.
 
-import { GETTERS } from "./reportColumns.js";
+import { GETTERS, colGetter } from "./reportColumns.js";
 import { grandTotals, materialsSummary, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 
 // ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ export function reportWorkbook({ rows = [], bySheet = [], shapeRows = [], cols =
   // Conditions — same columns, getters, and TOTAL row as totalsToCsv (per-
   // column get, i.e. custom columns, falls back to the shared GETTERS)
   const conditions = [columns.map((c) => c.header)];
-  for (const r of rows) conditions.push(columns.map((c) => (c.get || GETTERS[c.key])?.(r, ctx)));
+  for (const r of rows) conditions.push(columns.map((c) => colGetter(c)?.(r, ctx)));
   const g = grandTotals(rows);
   conditions.push(columns.map((c) => {
     if (c.key === "finish") return "TOTAL";

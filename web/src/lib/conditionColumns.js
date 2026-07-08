@@ -4,6 +4,11 @@
 // column ID so renames never orphan assignments; unassigned = key absent.
 // Pure helpers here so hydrate defensiveness and the rename-rewrite are testable.
 
+// The visible-string rule everything below shares: a string with visible
+// content counts; anything else — non-string, empty, whitespace-only — is
+// nothing. Returned untrimmed (stored strings are never mutated).
+const visible = (v) => (typeof v === "string" && v.trim() ? v : "");
+
 // Defensive hydrate for condition_columns: non-array → [], items must carry a
 // non-empty string id and a string name, values string-filtered — the same
 // hazard hydrate string-filters client_info for (a corrupted record must not
@@ -24,17 +29,15 @@ export function sanitizeConditionColumns(raw) {
       seenIds.add(c.id);
       return true;
     })
-    .map((c) => ({ ...c, values: [...new Set((Array.isArray(c.values) ? c.values : []).filter((v) => typeof v === "string" && v.trim()))] }));
+    .map((c) => ({ ...c, values: [...new Set((Array.isArray(c.values) ? c.values : []).filter(visible))] }));
 }
 
 // The assigned-value rule, shared by EVERY attrs reader (table/CSV getter,
-// grouping, JSON export, selects, badge): a string with visible content is
-// assigned; anything else — absent, non-string, empty, whitespace-only — is
-// unassigned. sanitizeConditionAttrs strips violating values at hydrate, but
-// readers still route through here so the rule has exactly one definition.
+// grouping, JSON export, selects, badge). sanitizeConditionAttrs strips
+// violating values at hydrate, but readers still route through here so the
+// rule has exactly one definition.
 export function attrValue(attrs, colId) {
-  const v = attrs?.[colId];
-  return typeof v === "string" && v.trim() ? v : "";
+  return visible(attrs?.[colId]);
 }
 
 // Defensive hydrate for per-condition attrs (the client_info precedent —
@@ -48,7 +51,7 @@ export function sanitizeConditionAttrs(conditions) {
     if (cur === undefined) return c;
     const attrs = {};
     if (cur && typeof cur === "object" && !Array.isArray(cur)) {
-      for (const [k, v] of Object.entries(cur)) if (typeof v === "string" && v.trim()) attrs[k] = v;
+      for (const [k, v] of Object.entries(cur)) if (visible(v)) attrs[k] = v;
     }
     return { ...c, attrs };
   });

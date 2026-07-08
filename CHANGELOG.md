@@ -14,9 +14,18 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   and ×N applied per sheet slice, subtotaled per group) or by any custom
   column, with the grouping named on the printed page. Custom columns join the
   report's column picker (hidden by default), append to CSV/XLSX after the
-  frozen columns, ride the JSON export additively, and the grouped-by column
-  always exports. Projects that never use the feature produce byte-identical
-  payloads and CSVs. (#31, #33–#36)
+  frozen columns, and ride the JSON export additively; grouping by a custom
+  column force-includes that column in CSV/XLSX. (Sheet grouping restructures
+  the on-screen/printed table only — exports keep the flat conditions table
+  plus the existing base-quantity by-sheet section.) Projects that never use
+  the feature produce byte-identical payloads and CSVs. (#31, #33–#36)
+
+### Fixed
+- **Report print: the "By finish" materials line wraps at the page edge.** The
+  mapped nowrap spans had no whitespace between them, so a long summary was one
+  unbreakable run that overflowed the printed page; entries now move to the
+  next line as a unit and wrap internally when a single entry is wider than
+  the line. (#27)
 
 ## 2026-07-07
 

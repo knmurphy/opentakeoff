@@ -81,7 +81,7 @@ A condition is one finish (e.g. `WD-1` red oak). It carries:
 Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, grout, cove‑base adhesive…). Each has a **coverage rate** and a **basis** (floor SF / linear LF / each). Order qty = measured ÷ coverage, **rounded up** to whole units. Adhesive lines get a **trowel picker** that fills the SF/gal from the notch size. A `note` field carries trowel notch / # of coats. The Report sums these into a **buy list**.
 
 ### Custom columns
-Classify conditions along your own dimension — **CSI Division**, bid package, trade. Open **Custom columns** on the condition bar (or a row's **Condition details** in the takeoffs panel): define a column with a list of values (project-wide), then pick one value per condition. Renaming a value updates every assigned condition; deleting one keeps the assignment, shown as *"(removed)"*. The Report can **group** by any custom column and carries the values in CSV/XLSX/JSON.
+Classify conditions along your own dimension — **CSI Division**, bid package, trade. Open **Custom columns** on the condition bar to define a column with a list of values (project-wide) and pick one value per condition; once columns exist, a row's **Condition details** in the takeoffs panel can also assign them. Renaming a value updates every assigned condition; deleting one keeps the assignment, shown as *"(removed)"*. The Report can **group** by any custom column. Columns are hidden in the table/CSV by default — toggle them in the **Columns** picker (grouping by a column always includes it in CSV/XLSX); the JSON export always carries definitions and values.
 
 ### Measure roles → totals (the math)
 | Role | Adds to |

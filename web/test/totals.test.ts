@@ -207,6 +207,16 @@ test("reportJson: explicit null / corrupted non-array/non-Map inputs must not th
   }
 });
 
+test("reportJson: malformed ITEMS inside a conditionColumns array are dropped, not thrown on", () => {
+  // an array passing the top-level coercion can still carry garbage items —
+  // the export must not die on `cc.id` / destructuring
+  const conds = [{ id: "a", finish_tag: "A" }];
+  const defs = [null, "x", { name: "no id" }, { id: 7 }, { id: "ok", name: "Div", values: "not-an-array" }] as any[];
+  const j = reportJson({ rows: conditionTotals(conds, [area("a", 10)]), conditionColumns: defs, attrsByCond: new Map([["a", { ok: "v" }]]) });
+  assert.deepEqual(j.condition_columns, [{ id: "ok", name: "Div", values: [] }]);   // non-array values coerced
+  assert.deepEqual(j.conditions[0].columns, [{ id: "ok", name: "Div", value: "v" }]);
+});
+
 test("verticalWallSf: floor perimeters × height × multiplier; 0 without a height", () => {
   const shapes = [
     { condition_id: "c", measure_role: "floor_area", computed: { area_sf: 100, perimeter_lf: 40 } },

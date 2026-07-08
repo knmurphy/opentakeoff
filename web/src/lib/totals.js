@@ -20,7 +20,7 @@
 
 import { round2 } from "./num.js";
 import { csvEsc as esc } from "./csv.js";
-import { GETTERS, CSV_PROFILE, floorPerimeterLf } from "./reportColumns.js";
+import { GETTERS, CSV_PROFILE, colGetter, floorPerimeterLf } from "./reportColumns.js";
 import { attrValue } from "./conditionColumns.js";
 import { compareSheetKeys } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
@@ -255,8 +255,7 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {
-    // per-column get (custom columns) falls back to the shared GETTERS
-    lines.push(columns.map((c) => esc((c.get || GETTERS[c.key])?.(r, ctx))).join(","));
+    lines.push(columns.map((c) => esc(colGetter(c)?.(r, ctx))).join(","));
   }
   const g = grandTotals(rows);
   // TOTAL row, column-driven: "TOTAL" under the finish column, grand-total
@@ -326,8 +325,9 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
 export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null, conditionColumns = [], attrsByCond = null }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   // destructuring defaults don't apply to an explicit null, and both values can
-  // trace back to a corrupted payload — coerce so the export can't throw
-  const colDefs = Array.isArray(conditionColumns) ? conditionColumns : [];
+  // trace back to a corrupted payload — coerce (and drop malformed items) so
+  // the export can't throw
+  const colDefs = (Array.isArray(conditionColumns) ? conditionColumns : []).filter((cc) => cc && typeof cc === "object" && typeof cc.id === "string");
   const attrs = attrsByCond instanceof Map ? attrsByCond : new Map();
   return {
     schema: "opentakeoff.report.v1",
@@ -336,9 +336,8 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     sheets: scaleInfo.map((si) => ({ sheet_id: si.sheet_id, sheet: label(si.sheet_id), scale_source: si.scale_source ?? si.source ?? "unknown" })),
     // custom-column values APPEND after materials (row key order otherwise
     // untouched). Iterating the DEFINED columns — never raw attrs — naturally
-    // drops orphaned colIds; the typeof filter keeps corrupted non-string and
-    // empty values out of the export (the customColProfile chokepoint's rule,
-    // covering the JSON path too).
+    // drops orphaned colIds; attrValue (the shared assigned-value rule) keeps
+    // corrupted and empty values out of the export.
     conditions: rows.map((r) => ({
       ...r,
       columns: colDefs.flatMap((cc) => {
@@ -359,7 +358,7 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
     // the custom-column definitions themselves, so row `columns` values can be
     // read against the project vocabulary
-    condition_columns: colDefs.map(({ id, name, values }) => ({ id, name, values })),
+    condition_columns: colDefs.map(({ id, name, values }) => ({ id, name, values: Array.isArray(values) ? values : [] })),
   };
 }
 

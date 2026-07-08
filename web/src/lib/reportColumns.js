@@ -73,6 +73,12 @@ export const CSV_PROFILE = [
   { key: "perimeter_ref", header: "Perimeter LF (ref, incl. openings)", defaultVisible: false },
 ];
 
+// The one getter-resolution rule for a column descriptor: custom columns
+// carry their own get; built-ins come from GETTERS. Table (renderCell), CSV
+// (totalsToCsv), and XLSX (reportWorkbook) all resolve through here so the
+// three outputs can never read different values for the same column.
+export const colGetter = (c) => c.get || GETTERS[c.key];
+
 // User-defined condition columns → runtime column descriptors, appended after
 // either profile. Keys are "custom:<colId>" — can't collide with built-in
 // keys, grandTotals keys, or colPrefs. Descriptors carry their own `get`
