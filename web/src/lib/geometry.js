@@ -18,6 +18,20 @@ export function starPath(cx, cy, R, points = 4, innerRatio = 0.38) {
   return d + "Z";
 }
 
+// Small filled arrowhead at (tipX,tipY), pointing along the direction from
+// (fromX,fromY) → (tipX,tipY). Returns a closed SVG path (a triangle) — used
+// for the callout leader's target end on-canvas and in the marked-set PDF.
+// Degenerate (zero-length) leaders fall back to pointing straight up so the
+// path is always valid.
+export function arrowheadPath(fromX, fromY, tipX, tipY, size = 6) {
+  let dx = tipX - fromX, dy = tipY - fromY;
+  const len = Math.hypot(dx, dy) || 1;
+  if (len < 1e-6) { dx = 0; dy = 1; } else { dx /= len; dy /= len; }
+  const bx = tipX - dx * size, by = tipY - dy * size;   // base center, back along the leader
+  const nx = -dy, ny = dx, half = size * 0.5;            // perpendicular half-width
+  return `M${tipX},${tipY} L${bx + nx * half},${by + ny * half} L${bx - nx * half},${by - ny * half} Z`;
+}
+
 // Revision-cloud path: a scalloped rectangle around [x0,y0]-[x1,y1] (image px).
 export function cloudPath(x0, y0, x1, y1) {
   const ax0 = Math.min(x0, x1), ay0 = Math.min(y0, y1), ax1 = Math.max(x0, x1), ay1 = Math.max(y0, y1);

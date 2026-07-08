@@ -107,13 +107,23 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
     scaleInfo: [{ sheet_id: "sh1", units_per_px: 0.02, scale_source: "calibrated" }],
     markups: [
       { type: "cloud", sheet_id: "sh1", text: "verify", rect: [[0, 0], [1, 1]] },   // legacy: no id/rfi_id
-      { type: "cloud", sheet_id: "sh1", text: "", id: "mk-2", rfi_id: "RFI-014", rect: [[0, 0], [1, 1]] },
+      { type: "cloud", sheet_id: "sh1", text: "", id: "mk-2", rfi_id: "rfi-1", rect: [[0, 0], [1, 1]] },
+    ],
+    rfis: [
+      { id: "rfi-1", number: "RFI-014", subject: "Slab", status: "open", to: "GC", priority: "high", cost_impact: true, schedule_impact: false, date: "7/8", question: "q?", response: "", response_date: "", sheet_id: "sh1" },
     ],
     sheetLabel: (id: string) => `Sheet ${id}`,
   });
   assert.equal(j.schema, "opentakeoff.report.v1");
   assert.deepEqual(Object.keys(j),
-    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups"]);
+    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis"]);
+  // rfis[] appends after markups (additive v1); linked_markups/linked_sheets derived
+  assert.deepEqual(Object.keys(j.rfis[0]),
+    ["id", "number", "subject", "question", "status", "to", "priority", "cost_impact", "schedule_impact",
+     "date", "response", "response_date", "sheet_id", "sheet", "linked_markups", "linked_sheets"]);
+  assert.equal(j.rfis[0].linked_markups, 1);          // the mk-2 cloud links to rfi-1
+  assert.deepEqual(j.rfis[0].linked_sheets, ["Sheet sh1"]);
+  assert.equal(j.rfis[0].sheet, "Sheet sh1");
   // sheets: provenance under scale_source (the persisted-payload key); NO
   // units_per_px — that figure is internal (RENDER_SCALE-coupled)
   assert.deepEqual(Object.keys(j.sheets[0]), ["sheet_id", "sheet", "scale_source"]);
@@ -124,7 +134,7 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   assert.equal(j.markups[0].id, null);              // legacy markup: null id, empty rfi
   assert.equal(j.markups[0].rfi_id, "");
   assert.equal(j.markups[1].id, "mk-2");            // an id-bearing cloud with empty text
-  assert.equal(j.markups[1].rfi_id, "RFI-014");     // is no longer anonymous
+  assert.equal(j.markups[1].rfi_id, "rfi-1");       // links to the RFI record by its id
   assert.equal(j.markups[1].text, "");
   assert.deepEqual(Object.keys(j.by_sheet[0]), ["sheet_id", "sheet", "rows"]);
   assert.deepEqual(Object.keys(j.by_sheet[0].rows[0]),
