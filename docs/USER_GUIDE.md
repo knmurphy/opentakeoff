@@ -10,7 +10,7 @@ no server.
 
 1. **Open plans** — drag a PDF, image, or `.zip` plan set onto the canvas (or use **Open plans**). The **gallery** (`G`) shows every sheet; click one (or several) to open.
 2. **Set the scale** — on each sheet, click **Scale** and either pick a standard scale or **Calibrate**: click two points along a known dimension, type the real length in feet, **Apply**. Scale is remembered **per sheet**.
-3. **Pick a condition** — the **Conditions** bar holds your finishes (WD‑1, LVT‑1, …). Click one to arm it (or press its number, `1`–`9`). Edit its color / hatch / waste / height in the bar.
+3. **Pick a condition** — the **Takeoffs panel** (docked on the right) holds your finishes (WD‑1, LVT‑1, …). Click a row to arm it (or press its number, `1`–`9`); the active row unfolds its properties — tag, color, hatch, ×N, waste, height, thickness. Drag the panel's left edge to resize, collapse it with **»** (the ☰ rail button brings it back), and turn on the optional **strip** (panel header) for a compact horizontal bar.
 4. **Draw the takeoff** — pick a Measure tool and trace. Each shape is color‑coded to its condition.
 5. **Add supporting materials** *(optional)* — open **Assemblies** on the condition (adhesive, sealer, poly…) with coverage rates; order quantities derive automatically.
 6. **Report** — open **Report** for the per‑condition breakdown (SF/LF/EA, waste, SY) and the materials buy list; export **CSV**, **Excel (.xlsx)**, or **JSON**.
@@ -69,6 +69,9 @@ With the **45°** toggle on (it's on by default, next to Snap), the segment you'
 
 ## 3. What each part does
 
+### The Takeoffs panel
+Conditions live in a **docked, resizable panel** on the right (drag the left edge; width, collapse, and view prefs are remembered per browser). Each row shows the finish with its running totals and shape count; the active row unfolds the full property editor. At scale: **filter** box, **A→Z** natural sort (CT‑2 before CT‑10), and **≡ grp** grouping by tag family (CPT, LVT, …) — all views only, so `1`–`9` keep their numbering. **⌘‑click / ⇧‑click** rows to multi‑select for bulk waste / color / delete; **⌖** (or double‑click) zooms the canvas to a condition's takeoffs. The **Library** tab stores reusable condition templates (browser‑wide): save the active condition, apply templates anywhere, and fresh workspaces seed from your library instead of the built‑in defaults.
+
 ### Conditions (finishes)
 A condition is one finish (e.g. `WD-1` red oak). It carries:
 - **Line / fill color** and a **hatch pattern** (plank, herringbone, tile, terrazzo, …) so each finish reads like the real drawing.
@@ -100,7 +103,7 @@ Per condition, list the consumables (adhesive, sealer, polyurethane, thinset, gr
 - **Dark view (☾)** — negative-print mode in the zoom cluster: sheets invert to light-on-dark, hatches stay legible, and the toggle is remembered per browser.
 
 ### Markup layer
-Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) and takeoffs (☰) panel toggles live on the slim **rail on the canvas's right edge** (zoom-cluster style); the takeoffs panel docks beside it.
+Revision clouds, callouts, and text notes — annotations only, kept separate from measurements (never counted). The markup (◇) toggle and the takeoffs (☰) collapse/expand button live on the slim **rail on the canvas's right edge** (zoom-cluster style).
 
 ### Report & export
 Per‑condition breakdown (Floor/Wall/Border SF, LF, EA, Total SF, SY, with and without waste), a combined materials buy list, and **CSV / XLSX / JSON** export — plus **Marked set**: a distribution-ready PDF of every sheet that carries takeoffs or markups, with the work burned in as drawn and a legend cover (net totals, waste-adjusted order quantities, by-sheet breakdown). It exports in your current view — dark canvas → dark PDF. Share it with a PM or GC; they need nothing but a PDF reader.
