@@ -20,8 +20,9 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   danger-red dashing; both are exempt.
 - **Highlight box markup.** A new **Highlight** markup tool drops a translucent
   filled box over an area (two corners, like the cloud). It renders behind the
-  other markups so it never dims them, takes a color and line style, and can be
-  linked to an RFI. A non-highlight markup under a highlight stays clickable.
+  other markups so it never dims them, takes a color and line style, an optional
+  note (double-click to add), and can be linked to an RFI. A non-highlight markup
+  under a highlight stays clickable.
 - **Inline note editing.** Placing a cloud, callout, or text note now types the
   note directly on the plan in an inline field — no browser prompt. Double-click a
   markup (Select tool) to re-edit it in place; the markup panel's ✎ edits notes on
