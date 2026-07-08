@@ -7,6 +7,7 @@ import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
+import { rfisToCsv, rfisToJson } from "../lib/rfi.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
@@ -31,7 +32,7 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
   const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
@@ -80,8 +81,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel }), null, 2),
+    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, rfis, sheetLabel }), null, 2),
     "application/json");
+  const exportRfisCsv = () => downloadText(`${baseName}_rfis.csv`, rfisToCsv(rfis, markups, projectName, sheetLabel), "text/csv");
+  const exportRfisJson = () => downloadText(`${baseName}_rfis.json`,
+    JSON.stringify(rfisToJson(rfis, projectName), null, 2), "application/json");
   // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
   // column picker like the CSV); buildXlsx lazy-loads fflate on first use
   const exportXlsx = async () => {
@@ -177,14 +181,18 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
         <button className="btn-ghost" onClick={exportXlsx} disabled={!rows.length}
           title="Excel workbook — Conditions / By sheet / Materials / Shapes"><Icon name="document" size={13} />XLSX</button>
-        <button className="btn-ghost" onClick={exportJson} disabled={!rows.length && !markups.length}><Icon name="document" size={13} />JSON</button>
+        <button className="btn-ghost" onClick={exportJson} disabled={!rows.length && !markups.length && !rfis.length}><Icon name="document" size={13} />JSON</button>
         <button className="btn-ghost" onClick={exportShapesCsv} disabled={!shapes.length}
           title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes CSV</button>
         <button className="btn-ghost" onClick={exportShapesJson} disabled={!shapes.length}
           title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes JSON</button>
-        <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length && !markups.length}>Print</button>
+        <button className="btn-ghost" onClick={exportRfisCsv} disabled={!rfis.length}
+          title="RFI log — one row per RFI with linked markups/sheets derived"><Icon name="rfi" size={13} />RFI CSV</button>
+        <button className="btn-ghost" onClick={exportRfisJson} disabled={!rfis.length}
+          title="RFI log as JSON"><Icon name="rfi" size={13} />RFI JSON</button>
+        <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length && !markups.length && !rfis.length}>Print</button>
         {onMarkedSet && (
-          <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length && !markups.length}
+          <button className="btn-ghost" onClick={onMarkedSet} disabled={!rows.length && !markups.length && !rfis.length}
             title={`Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`}>
             <Icon name="document" size={13} />Marked set{markedSetDark ? " ☾" : ""}
           </button>

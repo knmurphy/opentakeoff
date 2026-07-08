@@ -24,7 +24,9 @@ import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertice
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
-import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape } from "../lib/geometry.js";
+import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
+import { nextRfiNumber } from "../lib/rfi.js";
+import RfiPanel from "../components/RfiPanel.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -310,6 +312,14 @@ export default function TakeoffCanvas() {
   const [poly, setPoly] = useState([]);
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
+  const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
+  const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
+  const [showRfiPanel, setShowRfiPanel] = useState(false);
+  // selecting a shape clears any markup selection and vice-versa — one live
+  // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
+  const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
+  const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
+  const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
@@ -458,6 +468,7 @@ export default function TakeoffCanvas() {
   };
   const panelKeySet = new Set(groupKeys);
   const visibleShapes = shapes.filter((s) => panelKeySet.has(s.sheet_id));
+  const visibleMarkups = markups.filter((m) => panelKeySet.has(m.sheet_id));
   // scale is PER PAGE (plan sets are never one uniform scale) — set it once per
   // sheet and it's remembered. In group mode the scale dropdown and hints target
   // the FOCUSED panel (the one last clicked); single mode focuses the lone panel.
@@ -569,6 +580,7 @@ export default function TakeoffCanvas() {
     else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
     setShapes(a.shapes || []);
     setMarkups(Array.isArray(a.markups) ? a.markups : []);
+    setRfis(Array.isArray(a.rfis) ? a.rfis : []);   // additive — old saves without rfis load as []
     const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
     setSheetGroup(grp);
     const lg = Array.isArray(a.last_group) ? a.last_group.slice(0, MAX_GROUP) : grp;
@@ -687,7 +699,7 @@ export default function TakeoffCanvas() {
     if (!active) return;
     const seq = ++renderSeqRef.current;
     const stale = () => seq !== renderSeqRef.current;
-    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setSelectedId(null); setProposal(null);
+    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
     for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } }
     renderTasksRef.current.clear();
     snapGridsRef.current.clear();
@@ -886,10 +898,27 @@ export default function TakeoffCanvas() {
     if (hit) { setPage(parseInt(hit[0], 10)); wantSheetRef.current = ""; }
   }, [pageLabels]);
 
+  // fly-to phase 2: a pending fly-to whose sheet just finished opening (its panel
+  // now has a real bitmap) gets centered here — never on the same tick openSheets
+  // was called (dims are still {0,0} then).
+  useEffect(() => {
+    const m = pendingFlyRef.current;
+    if (!m) return;
+    // drop a stale pending fly-to: the target sheet failed to render, or the markup
+    // was deleted — either way it will never complete, so don't let it fire later.
+    if (status === "error" || !markups.some((x) => x.id === m.id)) { pendingFlyRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(m.sheet_id)) return;
+    const sp = panels.find((p) => p.key === m.sheet_id);
+    // once the panel bitmap exists, center (or give up if the markup has no anchor)
+    // and clear the ref regardless, so an unanchored markup can't get stuck pending.
+    if (sp && sp.img.w) { centerOnMarkup(m); pendingFlyRef.current = null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status]);
+
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
-  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
+  const buildPayload = () => ({ project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs });
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
@@ -904,7 +933,7 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, scaleSources, markups, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1048,8 +1077,9 @@ export default function TakeoffCanvas() {
         if (poly.length) { setPoly((q) => q.slice(0, -1)); setCalib((c) => c.slice(0, -1)); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
+        else if (selectedMarkupId) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
         else setCalib((c) => c.slice(0, -1));
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); setSelectedId(null); setMarkupDraft(null); setProposal(null); }
+      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1057,7 +1087,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, selectedMarkupId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
@@ -1093,61 +1123,106 @@ export default function TakeoffCanvas() {
     }
     else if (tool === "cloud" || tool === "callout" || tool === "text") placeMarkup(p);
   }
+  // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
+  // hitShape can't test them — this is a purpose-built bbox/point test in the
+  // markup's OWN panel frame. p is stage px. Labels are screen-constant, so their
+  // extent divides by the current scale.
+  function hitMarkup(m, p, thr) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    const W = sp.img.w, H = sp.img.h, ox = sp.xOffset;
+    const X = p[0], Y = p[1], sc = tfRef.current.scale;
+    if (m.type === "cloud" && m.rect) {
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      // a cloud renders hollow (fill="none"), so hit only its border band — a shape
+      // (or vertex) enclosed by the cloud must stay clickable through the interior.
+      const inX = X >= x0 - thr && X <= x1 + thr, inY = Y >= y0 - thr && Y <= y1 + thr;
+      const onV = inX && (Math.abs(Y - y0) <= thr || Math.abs(Y - y1) <= thr);
+      const onH = inY && (Math.abs(X - x0) <= thr || Math.abs(X - x1) <= thr);
+      return onV || onH;
+    }
+    if (m.type === "callout" && m.at) {
+      const ax = m.at[0] * W + ox, ay = m.at[1] * H;
+      const lw = ((m.text?.length || 1) * 7 + 14) / sc;
+      if (X >= ax - thr && X <= ax + lw && Y >= ay - 18 / sc - thr && Y <= ay + thr) return true;
+      if (m.target) {
+        const tx = m.target[0] * W + ox, ty = m.target[1] * H;
+        if (Math.hypot(X - tx, Y - ty) < thr * 2) return true;
+        if (distToSeg(X, Y, tx, ty, ax, ay) < thr) return true;
+      }
+      return false;
+    }
+    if (m.type === "text" && m.at) {
+      const ax = m.at[0] * W + ox, ay = m.at[1] * H;
+      const lw = ((m.text?.length || 1) * 7 + 14) / sc;
+      return X >= ax - thr && X <= ax + lw && Y >= ay - 16 / sc - thr && Y <= ay + thr;
+    }
+    return false;
+  }
   // Select tool: pick a shape (or a vertex of the selected one) and start dragging
   // it. Every shape hit-tests in ITS panel's local frame (stage x minus xOffset).
   function selectAt(p, e) {
     const thr = 8 / tfRef.current.scale;
-    if (selectedId) {
-      const sel = shapes.find((s) => s.id === selectedId);
-      const sp = sel && panelKeySet.has(sel.sheet_id) ? panelByKey(sel.sheet_id) : null;
-      if (sel && sp && sel.measure_role !== "count") {
-        const pts = sel.verts_norm.map(([nx, ny]) => [nx * sp.img.w + sp.xOffset, ny * sp.img.h]);
-        const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
-        for (let i = 0; i < pts.length; i++) {
-          if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) < thr * 1.6) {
-            if (e.altKey) {
-              // ⌥-click removes the point (a polygon keeps ≥3, a run keeps ≥2)
-              const min = closed ? 3 : 2;
-              if (sel.verts_norm.length > min) {
-                setShapes((ss) => ss.map((s) => {
-                  if (s.id !== sel.id) return s;
-                  const vn = s.verts_norm.filter((_, j) => j !== i);
-                  return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
-                }));
-              } else setCommitMsg(closed ? "A shape needs at least 3 points." : "A run needs at least 2 points.");
-              return;
-            }
-            dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i };
-            e.currentTarget.setPointerCapture(e.pointerId); return;
+    const sel = selectedId ? shapes.find((s) => s.id === selectedId) : null;
+    const selSp = sel && panelKeySet.has(sel.sheet_id) ? panelByKey(sel.sheet_id) : null;
+    // 1. Handles of the ALREADY-selected shape win first, so a shape (or vertex)
+    //    enclosed by a markup — e.g. a revision cloud drawn around a room — stays
+    //    editable rather than being shielded by the markup's hit area.
+    if (sel && selSp && sel.measure_role !== "count") {
+      const pts = sel.verts_norm.map(([nx, ny]) => [nx * selSp.img.w + selSp.xOffset, ny * selSp.img.h]);
+      const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
+      for (let i = 0; i < pts.length; i++) {
+        if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) < thr * 1.6) {
+          if (e.altKey) {
+            // ⌥-click removes the point (a polygon keeps ≥3, a run keeps ≥2)
+            const min = closed ? 3 : 2;
+            if (sel.verts_norm.length > min) {
+              setShapes((ss) => ss.map((s) => {
+                if (s.id !== sel.id) return s;
+                const vn = s.verts_norm.filter((_, j) => j !== i);
+                return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
+              }));
+            } else setCommitMsg(closed ? "A shape needs at least 3 points." : "A run needs at least 2 points.");
+            return;
           }
-        }
-        // midpoint handles: click an edge's midpoint to INSERT a new lever point
-        // and drag it away in the same gesture
-        const edges = closed ? pts.length : pts.length - 1;
-        for (let i = 0; i < edges; i++) {
-          const a = pts[i], b = pts[(i + 1) % pts.length];
-          if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
-            const nv = [(p[0] - sp.xOffset) / sp.img.w, p[1] / sp.img.h];
-            setShapes((ss) => ss.map((s) => {
-              if (s.id !== sel.id) return s;
-              const vn = [...s.verts_norm.slice(0, i + 1), nv, ...s.verts_norm.slice(i + 1)];
-              return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
-            }));
-            dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i + 1 };
-            e.currentTarget.setPointerCapture(e.pointerId); return;
-          }
+          dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i };
+          e.currentTarget.setPointerCapture(e.pointerId); return;
         }
       }
-      if (sel && sp && hitShape(sel, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr)) {
-        dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
-        e.currentTarget.setPointerCapture(e.pointerId); return;
+      // midpoint handles: click an edge's midpoint to INSERT a new lever point
+      // and drag it away in the same gesture
+      const edges = closed ? pts.length : pts.length - 1;
+      for (let i = 0; i < edges; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
+          const nv = [(p[0] - selSp.xOffset) / selSp.img.w, p[1] / selSp.img.h];
+          setShapes((ss) => ss.map((s) => {
+            if (s.id !== sel.id) return s;
+            const vn = [...s.verts_norm.slice(0, i + 1), nv, ...s.verts_norm.slice(i + 1)];
+            return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
+          }));
+          dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i + 1 };
+          e.currentTarget.setPointerCapture(e.pointerId); return;
+        }
       }
     }
+    // 2. markups render ON TOP of shapes (:2137 > :2093), so a markup hit wins over a
+    //    plain shape click — but NOT over the selected shape's handles above.
+    const mHit = [...visibleMarkups].reverse().find((m) => hitMarkup(m, p, thr));
+    if (mHit) { selectMarkup(mHit.id); return; }
+    // 3. move the selected shape if its body (not a handle) was hit
+    if (sel && selSp && hitShape(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
+      dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
+      e.currentTarget.setPointerCapture(e.pointerId); return;
+    }
+    // 4. otherwise pick a shape (or clear the selection)
     const hit = [...visibleShapes].reverse().find((s) => {
       const sp = panelByKey(s.sheet_id);
       return hitShape(s, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr);
     });
-    setSelectedId(hit ? hit.id : null);
+    selectShape(hit ? hit.id : null);
     if (hit) { dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm }; e.currentTarget.setPointerCapture(e.pointerId); }
   }
   // Geometry from the shape's OWN sheet: its panel's pixel dims × that sheet's
@@ -1566,7 +1641,7 @@ export default function TakeoffCanvas() {
       return { ...s, computed: recomputeShape(s) };
     });
     setShapes((s) => [...s, ...made]);
-    setSelectedId(made[made.length - 1].id);
+    selectShape(made[made.length - 1].id);
     setTool("select");
     setCommitMsg(`Pasted ${made.length} takeoff${made.length === 1 ? "" : "s"}${cross ? ` onto ${labelFor(tp)}` : ""} — drag to position.`);
   }
@@ -1596,7 +1671,7 @@ export default function TakeoffCanvas() {
       }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: loadCompany(),
-        dark: darkMode, sheets: sheetMeta, shapes, markups, conditions,
+        dark: darkMode, sheets: sheetMeta, shapes, markups, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -1633,6 +1708,75 @@ export default function TakeoffCanvas() {
   }
   function updateMarkup(mid, patch) { setMarkups((ms) => ms.map((m) => (m.id === mid ? { ...m, ...patch } : m))); }
   function deleteMarkup(mid) { setMarkups((ms) => ms.filter((m) => m.id !== mid)); }
+
+  // ── RFI register — the dormant markup.rfi_id hook made real. One RFI ↔ many
+  // markups (markup.rfi_id === rfi.id); linked markups are DERIVED, never stored
+  // twice. rfi.js stays PURE — every date is stamped HERE, at the event, so no
+  // renderer computes an RFI field with new Date().
+  function raiseRfi(markup) {
+    if (!markup) return;
+    const id = uid("rfi");
+    const number = nextRfiNumber(rfis);
+    const rec = {
+      id, number, subject: (markup.text || "").trim(), question: "", status: "open",
+      to: "", priority: "normal", cost_impact: false, schedule_impact: false,
+      date: new Date().toISOString().slice(0, 10), response: "", response_date: "",
+      sheet_id: markup.sheet_id,
+    };
+    setRfis((rs) => [...rs, rec]);
+    updateMarkup(markup.id, { rfi_id: id });
+    setShowRfiPanel(true);
+    setCommitMsg(`Raised ${number}.`);
+  }
+  const linkRfi = (markup, rfiId) => { if (markup && rfiId) updateMarkup(markup.id, { rfi_id: rfiId }); };
+  const unlinkRfi = (markup) => { if (markup) updateMarkup(markup.id, { rfi_id: "" }); };
+  // hard delete: drop the record AND clear the dangling pointer on every linked
+  // markup (void is a status; delete removes — both must leave no orphan link)
+  function deleteRfi(id) {
+    setRfis((rs) => rs.filter((r) => r.id !== id));
+    setMarkups((ms) => ms.map((m) => (m.rfi_id === id ? { ...m, rfi_id: "" } : m)));
+  }
+  // parent-owned update path: the status→response_date auto-stamp lives HERE (not
+  // in the view) so the date is data, stamped once on the transition into Answered.
+  function updateRfi(id, patch) {
+    setRfis((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, ...patch };
+      if (patch.status && next.status === "answered" && r.status !== "answered" && !next.response_date) {
+        next.response_date = new Date().toISOString().slice(0, 10);
+      }
+      return next;
+    }));
+  }
+
+  // Fly to a linked markup from the register. Two-phase because openSheets only
+  // fires state setters and a sheet's bitmap dims load async: if the target sheet
+  // isn't open, stash it in pendingFlyRef + openSheets, and the effect below
+  // centers once the panel has non-zero img.w. If already open, center inline.
+  function centerOnMarkup(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    let anchor;
+    if (m.type === "cloud" && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
+    else if (m.type === "callout") anchor = m.at || m.target;
+    else anchor = m.at;
+    if (!anchor) return false;
+    const el = containerRef.current;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const scale = tfRef.current.scale;
+    const sx = anchor[0] * sp.img.w + sp.xOffset, sy = anchor[1] * sp.img.h;
+    setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    selectMarkup(m.id);
+    return true;
+  }
+  function flyToMarkup(m) {
+    if (!m) return;
+    if (!panelKeySet.has(m.sheet_id)) { pendingFlyRef.current = m; openSheets([m.sheet_id], false); return; }
+    // open already, but its bitmap may still be mid-render (img.w === 0) — if the
+    // inline center can't run yet, hand off to the phase-2 effect below.
+    if (!centerOnMarkup(m)) pendingFlyRef.current = m;
+  }
 
   function finishShape() { if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]); }
   function deleteSelected() { if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); } }
@@ -2133,13 +2277,27 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })()}
-                    {/* markup layer — clouds / callouts / text notes on this panel */}
+                    {/* markup layer — clouds / callouts / text notes on this panel.
+                        A selected markup wears a CONTRASTING halo (white outer ring +
+                        cobalt inner) so it stays visible on cobalt-tinted RFI markups. */}
                     {markups.filter((m) => m.sheet_id === p.key).map((m) => {
                       const mk = m.rfi_id ? "#1f3fc7" : "#c47a10";
+                      const selM = m.id === selectedMarkupId;
+                      // literal colors — SVG presentation attrs don't resolve CSS vars
+                      const halo = (x0, y0, x1, y1) => (selM ? (
+                        <>
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={5 / tf.scale} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={2 / tf.scale} />
+                        </>
+                      ) : null);
                       if (m.type === "cloud") {
                         const [c0, c1] = m.rect;
+                        const pad = 5 / tf.scale;
+                        const bx0 = Math.min(c0[0], c1[0]) * p.img.w - pad, by0 = Math.min(c0[1], c1[1]) * p.img.h - pad;
+                        const bx1 = Math.max(c0[0], c1[0]) * p.img.w + pad, by1 = Math.max(c0[1], c1[1]) * p.img.h + pad;
                         return (
                           <g key={m.id}>
+                            {halo(bx0, by0, bx1, by1)}
                             <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={2 / tf.scale} />
                             {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / tf.scale} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>}
                           </g>
@@ -2147,19 +2305,24 @@ export default function TakeoffCanvas() {
                       }
                       if (m.type === "callout") {
                         const [tx, ty] = m.target, [ax, ay] = m.at;
+                        const lw = (m.text.length * 7 + 10) / tf.scale;
                         return (
                           <g key={m.id}>
+                            {halo(ax * p.img.w - 4 / tf.scale, ay * p.img.h - 18 / tf.scale, ax * p.img.w + lw + 4 / tf.scale, ay * p.img.h + 4 / tf.scale)}
                             <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={2 / tf.scale} />
-                            <path d={starPath(tx * p.img.w, ty * p.img.h, 4 / tf.scale)} fill={mk} />
-                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / tf.scale} width={(m.text.length * 7 + 10) / tf.scale} height={20 / tf.scale} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
+                            {/* arrowhead at the target end — replaces the old vertex star */}
+                            <path d={arrowheadPath(ax * p.img.w, ay * p.img.h, tx * p.img.w, ty * p.img.h, 9 / tf.scale)} fill={mk} />
+                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / tf.scale} width={lw} height={20 / tf.scale} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
                             <text x={(ax * p.img.w) + 5 / tf.scale} y={(ay * p.img.h) - 2 / tf.scale} fill="#0e1a2e" fontSize={12 / tf.scale}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>
                           </g>
                         );
                       }
                       const [x, y] = m.at;
+                      const lw = (m.text.length * 7 + 10) / tf.scale;
                       return (
                         <g key={m.id}>
-                          <rect x={x * p.img.w - 3 / tf.scale} y={y * p.img.h - 14 / tf.scale} width={(m.text.length * 7 + 10) / tf.scale} height={20 / tf.scale} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
+                          {halo(x * p.img.w - 5 / tf.scale, y * p.img.h - 16 / tf.scale, x * p.img.w + lw + 3 / tf.scale, y * p.img.h + 6 / tf.scale)}
+                          <rect x={x * p.img.w - 3 / tf.scale} y={y * p.img.h - 14 / tf.scale} width={lw} height={20 / tf.scale} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
                           <text x={x * p.img.w + 2 / tf.scale} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / tf.scale} fontWeight="600">{m.rfi_id ? "⬢ " : ""}{m.text}</text>
                         </g>
                       );
@@ -2289,6 +2452,7 @@ export default function TakeoffCanvas() {
             takeoffs panel (which docks at right:56) so a lit toggle also closes it. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
           {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
+          {panelBtn(() => setShowRfiPanel((v) => !v), "rfi", "RFI register — raise, track, and export Requests For Information", showRfiPanel, rfis.length)}
           {panelBtn(() => setShowTakeoffs((v) => !v), "takeoffs", "Takeoffs — conditions + running totals", showTakeoffs, visibleShapes.length)}
         </div>
 
@@ -2313,9 +2477,46 @@ export default function TakeoffCanvas() {
                   <button onClick={() => { const t = window.prompt("Edit text:", m.text || ""); if (t != null) updateMarkup(m.id, { text: t.trim() }); }} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
                   <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
                 </div>
+                {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
+                {(() => {
+                  const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                  const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                      {linked ? (
+                        <>
+                          <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "#1f3fc7" }}>⬢ {String(linked.number ?? "")}</span>
+                          <button onClick={() => { setShowRfiPanel(true); }} style={{ ...ctrl, color: "#1f3fc7" }} title="Open the RFI register">Open</button>
+                          <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "#1f3fc7", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
+                          {rfis.length > 0 && (
+                            <select value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
+                              title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
+                              <option value="">Link existing…</option>
+                              {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
+                            </select>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>
+        )}
+
+        {/* RFI register — project-global (not sheet-scoped like the markup panel):
+            list/filter/edit/close/void/delete + fly to a linked markup. */}
+        {showRfiPanel && (
+          <RfiPanel
+            rfis={rfis} markups={markups}
+            onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
+            sheetLabel={(k) => tabLabel(k)} onClose={() => setShowRfiPanel(false)}
+          />
         )}
 
         {/* Takeoffs side panel — every condition on this sheet with its running totals.
@@ -2388,7 +2589,7 @@ export default function TakeoffCanvas() {
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
           clientInfo={clientInfo} onClientInfo={setClientInfo}
-          conditions={conditions} shapes={shapes} markups={markups}
+          conditions={conditions} shapes={shapes} markups={markups} rfis={rfis}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
@@ -2404,7 +2605,7 @@ export default function TakeoffCanvas() {
           // a runtime load (unlike mount) can interrupt work in flight — an
           // unfinished trace/calibration/proposal must not commit into the
           // restored takeoff under a reset activeCond
-          setPoly([]); setCalib([]); setPendingLen(""); setSelectedId(null); setProposal(null);
+          setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
           hydrate(payload || {});
         }}
       />
