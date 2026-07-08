@@ -35,7 +35,7 @@ const HATCH_FAMILIES = {
   diagdense: [[45, 8.4]], horiz: [[0, 16]], vert: [[90, 16]],
   grid: [[0, 20], [90, 20]], brick: [[0, 16], [90, 32]], plank: [[0, 16]],
   herring: [[45, 17], [135, 17]], basket: [[0, 18], [90, 18]],
-  checker: [[45, 12]], wave: [[0, 18]], dots: [[45, 17]], speckle: [[45, 24]],
+  checker: [[45, 12]], wave: [[0, 18]], dots: [[45, 17]], speckle: [[45, 24]], fleur: [[45, 32]],
 };
 
 const hex = (h) => {
@@ -92,14 +92,17 @@ function hatchLines(poly, style) {
   return out;
 }
 
-function shapeChip(shape, cond) {
+function shapeChip(shape, cond, M = false) {
   const cp = shape.computed || {};
   const tag = cond?.finish_tag || "";
+  const uA = (sf) => (M ? sf * 0.09290304 : sf);
+  const uL = (lf) => (M ? lf * 0.3048 : lf);
+  const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
   switch (shape.measure_role) {
-    case "floor_area": return `${tag} · ${num(cp.area_sf || 0)} SF`;
-    case "deduct": return `-${num(cp.area_sf || 0)} SF deduct`;
-    case "surface_area": return `${tag} · ${num(cp.area_sf || 0)} SF wall`;
-    case "linear": return `${tag} · ${num(cp.perimeter_lf || 0)} LF`;
+    case "floor_area": return `${tag} · ${num(uA(cp.area_sf || 0))} ${AU}`;
+    case "deduct": return `-${num(uA(cp.area_sf || 0))} ${AU} deduct`;
+    case "surface_area": return `${tag} · ${num(uA(cp.area_sf || 0))} ${AU} wall`;
+    case "linear": return `${tag} · ${num(uL(cp.perimeter_lf || 0))} ${LU}`;
     default: return "";
   }
 }
@@ -120,7 +123,11 @@ function invertPixels(cv) {
   ctx.restore();
 }
 
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, conditions, getPage, loadPdfData }) {
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, conditions, getPage, loadPdfData, units = "imperial" }) {
+  const M = units === "metric";
+  const uA = (sf) => (M ? sf * 0.09290304 : sf);
+  const uL = (lf) => (M ? lf * 0.3048 : lf);
+  const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
   const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle } = await import("pdf-lib");
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   const byKey = (arr) => {
@@ -158,8 +165,8 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       pg.drawRectangle({ x: 52, y: y - 2, width: 14, height: 10, color: rgb(...hex(c.color)), opacity: 0.8, borderColor: rgb(...hex(c.color)), borderWidth: 0.7 });
       pg.drawText(`${r.finish_tag}${r.multiplier > 1 ? ` ×${r.multiplier}` : ""}`, { x: 72, y, size: 10.5, font: bold, color: ink });
       const qty = [
-        r.floor_sf ? `${num(r.floor_sf)} SF` : "", r.wall_sf ? `${num(r.wall_sf)} SF wall` : "",
-        r.border_sf ? `${num(r.border_sf)} SF border` : "", r.lf ? `${num(r.lf)} LF` : "", r.ea ? `${num(r.ea, 0)} EA` : "",
+        r.floor_sf ? `${num(uA(r.floor_sf))} ${AU}` : "", r.wall_sf ? `${num(uA(r.wall_sf))} ${AU} wall` : "",
+        r.border_sf ? `${num(uA(r.border_sf))} ${AU} border` : "", r.lf ? `${num(uL(r.lf))} ${LU}` : "", r.ea ? `${num(r.ea, 0)} EA` : "",
       ].filter(Boolean).join(" · ");
       pg.drawText(qty || "-", { x: 190, y, size: 10, font, color: ink });
       pg.drawText(`${c.hatch && c.hatch !== "solid" ? c.hatch + " · " : ""}waste ${r.waste_pct}% -> ${num(r.total_sf_net)} SF`, { x: 420, y, size: 8.5, font, color: muted });
@@ -255,11 +262,11 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         if (!isDeduct && cond?.hatch && cond.hatch !== "solid") {
           for (const [ax, ay, bx, by] of hatchLines(pts, cond.hatch)) line(ax, ay, bx, by, col, 0.5, 0.55 + alphaBoost);
         }
-        chip(shapeChip(s, cond), ...centroid(pts), col);
+        chip(shapeChip(s, cond, M), ...centroid(pts), col);
       } else if (s.measure_role === "linear" || s.measure_role === "surface_area") {
         for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], col, 1.4, 0.95);
         const mid = pts[Math.floor((pts.length - 1) / 2)];
-        chip(shapeChip(s, cond), mid[0], mid[1] - 14, col);
+        chip(shapeChip(s, cond, M), mid[0], mid[1] - 14, col);
       } else if (s.measure_role === "count") {
         const [px, py] = toPage(pts[0][0], pts[0][1]);
         pg.drawEllipse({ x: px, y: py, xScale: 4.5, yScale: 4.5, borderColor: col, borderWidth: 1.2, color: col, opacity: 0.35 });
