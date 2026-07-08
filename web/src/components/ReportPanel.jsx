@@ -4,7 +4,7 @@
 // "Contribute to the open flooring model" flow.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
+import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { GETTERS, TABLE_PROFILE, CSV_PROFILE, customColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
@@ -52,12 +52,12 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // custom), so toggling one can never disturb the frozen CSV prefix
   const customCols = customColProfile(conditionColumns);
   const tableCols = visibleCols([...TABLE_PROFILE, ...customCols], colPrefs);
-  // group-by choice: "" (none) | a custom column id; normalized ONCE per
-  // render and used everywhere (select value AND partitioning) — a stale
-  // colId must fall back to None, never reach the select or the partitioner.
-  // A stored "sheet" also falls back to None until sheet grouping lands (#36).
+  // group-by choice: "" (none) | "sheet" | a custom column id; normalized
+  // ONCE per render and used everywhere (select value AND partitioning) — a
+  // stale colId must fall back to None, never reach the select or the
+  // partitioner.
   const [groupByRaw, setGroupByRaw] = useState(loadGroupBy);
-  const groupBy = conditionColumns.some((cc) => cc.id === groupByRaw) ? groupByRaw : "";
+  const groupBy = groupByRaw === "sheet" || conditionColumns.some((cc) => cc.id === groupByRaw) ? groupByRaw : "";
   // grouping force-includes its column in the CSV/XLSX even when hidden in
   // the picker (D7) — a grouped report's export always carries its grouping
   const csvCols = forceIncludeGroupCol(visibleCols([...CSV_PROFILE, ...customCols], colPrefs), customCols, groupBy);
@@ -66,11 +66,20 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // (conditionTotals rows are spread into the contribution payload)
   const attrsByCond = useMemo(() => new Map(conditions.map((c) => [c.id, c.attrs || {}])), [conditions]);
   const ctx = { perimByCond, attrsByCond };
-  // grouped view: partition the already-computed rows (no recompute). A
-  // single-group partition renders exactly as ungrouped — its lone subtotal
-  // would duplicate the grand TOTAL directly below it.
-  const groupCol = groupBy ? conditionColumns.find((cc) => cc.id === groupBy) : null;
-  const groups = useMemo(() => (groupCol ? partitionRowsBy(rows, groupCol, attrsByCond) : null), [rows, groupCol, attrsByCond]);
+  // grouped view. Custom-column mode partitions the already-computed rows
+  // (no recompute); sheet mode re-runs conditionTotals per sheet's shapes —
+  // ORDERED quantities per slice (waste + ×N applied), each group carrying
+  // its own per-sheet perimByCond for that group's cells. sheetLabel is an
+  // inline arrow recreated per parent render — apply it at render time,
+  // never in the memo deps. A single-group partition renders exactly as
+  // ungrouped in either mode (single-sheet project / nothing assigned) —
+  // its lone subtotal would duplicate the grand TOTAL directly below it.
+  const groupCol = groupBy && groupBy !== "sheet" ? conditionColumns.find((cc) => cc.id === groupBy) : null;
+  const colGroups = useMemo(() => (groupCol ? partitionRowsBy(rows, groupCol, attrsByCond) : null), [rows, groupCol, attrsByCond]);
+  const sheetGroups = useMemo(() => (groupBy === "sheet" ? sheetGroupedRows(conditions, shapes) : null), [groupBy, conditions, shapes]);
+  const groups = sheetGroups
+    ? sheetGroups.map((gp) => ({ value: gp.sheet_id, label: sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id, rows: gp.rows, perimByCond: gp.perimByCond }))
+    : colGroups;
   const grouped = Boolean(groups && groups.length > 1);
 
   // while the report is up, the print stylesheet (app.css @media print) hides
@@ -118,10 +127,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
 
   // one condition-table cell, keyed off the column profile; values come
-  // through GETTERS so the table and the CSV read the same numbers
-  const renderCell = (col, r) => {
+  // through GETTERS so the table and the CSV read the same numbers. Sheet
+  // groups pass their own ctx (per-sheet perimByCond) via cellCtx.
+  const renderCell = (col, r, cellCtx = ctx) => {
     const get = col.get || GETTERS[col.key];
-    const v = get ? get(r, ctx) : r[col.key];
+    const v = get ? get(r, cellCtx) : r[col.key];
     // custom columns: plain left-aligned text (already coerced to string by
     // the customColProfile getter); TOTAL cells stay blank (no foot)
     if (col.custom) return <td key={col.key} style={{ ...td, textAlign: "left" }}>{v || "—"}</td>;
@@ -176,15 +186,15 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <div style={{ flex: 1 }} />
         <button className="btn-ghost" onClick={() => setShowInfo(true)}
           title="Your company identity and the client/job details for the print header and marked-set cover">Project info</button>
-        {/* always rendered, even with zero custom columns — the Sheet option
-            joins this select when sheet grouping lands (#36) */}
+        {/* always rendered, even with zero custom columns — Sheet grouping
+            is useful on its own */}
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--ink)", whiteSpace: "nowrap" }}
           title="Break the condition table into sections with subtotals">
           Group:
           <select value={groupBy} onChange={(e) => { setGroupByRaw(e.target.value); saveGroupBy(e.target.value); }}
             style={{ padding: "5px 6px", border: "1px solid var(--ink-faint)", background: "transparent", fontSize: 12, maxWidth: 160 }}>
             <option value="">None</option>
-            {/* "sheet" option lands with sheet grouping (#36) */}
+            <option value="sheet">Sheet</option>
             {conditionColumns.map((cc) => (
               <option key={cc.id} value={cc.id}>{cc.name || "Untitled"}</option>
             ))}
@@ -301,7 +311,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               the partition degenerates to one group. */}
           {grouped && (
             <p style={{ maxWidth: 980, margin: "0 auto 8px", fontSize: 11.5, color: "var(--ink-muted)" }}>
-              Grouped by <strong>{groupCol.name || "Untitled"}</strong>
+              Grouped by <strong>{groupCol ? (groupCol.name || "Untitled") : "sheet"}</strong>
             </p>
           )}
           <table style={{ width: "100%", maxWidth: 980, margin: "0 auto", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
@@ -314,12 +324,16 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               </tr>
             </thead>
             {grouped ? (
-              // one tbody PER GROUP (#36's sheet mode reuses this structure,
-              // where the same condition repeats across groups — r.id is only
-              // unique within a group's tbody). thead + grand-total tfoot stay
-              // exactly as ungrouped, so print pagination is untouched.
+              // one tbody PER GROUP (in sheet mode the same condition repeats
+              // across groups — r.id is only unique within a group's tbody).
+              // thead + grand-total tfoot stay exactly as ungrouped, so print
+              // pagination is untouched.
               groups.map((gp) => {
                 const sub = grandTotals(gp.rows);
+                // sheet groups carry a per-sheet perimByCond — the panel-wide
+                // map would show whole-project perimeter next to per-slice
+                // quantities
+                const gctx = gp.perimByCond ? { perimByCond: gp.perimByCond, attrsByCond } : ctx;
                 return (
                   <tbody key={gp.value ?? "∅"}>
                     {/* breakAfter is a print nicety only — unreliable on table
@@ -332,7 +346,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                     </tr>
                     {gp.rows.map((r) => (
                       <tr key={r.id}>
-                        {tableCols.map((c) => renderCell(c, r))}
+                        {tableCols.map((c) => renderCell(c, r, gctx))}
                       </tr>
                     ))}
                     {/* single-row group: skip the subtotal — it would repeat
@@ -385,6 +399,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             traces (run × height); Border SF from Linear runs with a thickness.
             {tableCols.some((c) => c.key === "perimeter_ref") && (
               <> Perim LF (ref) sums floor-trace perimeters — includes door openings and shared walls; reference only, never totaled or waste-adjusted.</>
+            )}
+            {/* bridge to the base-quantity By-sheet section below — the two
+                slice the same shapes with different semantics */}
+            {groupBy === "sheet" && grouped && (
+              <> Groups show ordered quantities (waste and ×N applied per sheet); the By-sheet section below shows base measured quantities.</>
             )}
           </p>
         )}

@@ -20,7 +20,7 @@
 
 import { round2 } from "./num.js";
 import { csvEsc as esc } from "./csv.js";
-import { GETTERS, CSV_PROFILE } from "./reportColumns.js";
+import { GETTERS, CSV_PROFILE, floorPerimeterLf } from "./reportColumns.js";
 import { parseSheetKey } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
 
 // Re-export so existing consumers (markedset, snapshotDiff, ReportPanel, tests)
@@ -133,6 +133,44 @@ export function sheetTotals(conditions, shapes) {
     });
     return { sheet_id, rows };
   }).filter((g) => g.rows.length);   // orphan shapes (dead condition_id) can't render a row
+}
+
+// Sheet-grouped ORDERED quantities for the report's group-by-sheet view —
+// deliberately different from sheetTotals above (base quantities): each
+// group's rows are conditionTotals restricted to that sheet's shapes, so
+// waste % and ×N apply per slice and every column keeps its ungrouped
+// meaning. Returns [{ sheet_id, rows, perimByCond }] in the same canonical
+// file→page order as sheetTotals; a condition traced on N sheets appears in
+// N groups. perimByCond is per-sheet (floorPerimeterLf over that sheet's
+// shapes) — the global map would show whole-project perimeter next to
+// per-slice quantities.
+//   - Rows carry per-slice materials with per-slice ceil — tbody display
+//     only, never aggregate (summing per-slice ceils overstates the buy).
+//   - Negative slices (a deduct on a different sheet than its positive area)
+//     are returned as-is — rendered with a bare minus in v1, unlike the
+//     by-sheet section's red-paren style.
+//   - Empty groups dropped: orphan shapes (dead condition_id) can make a
+//     sheet all-orphan, mirroring the sheetTotals guard.
+export function sheetGroupedRows(conditions, shapes) {
+  const bySheet = new Map();        // sheet_id → that sheet's shapes
+  for (const s of shapes) {
+    let arr = bySheet.get(s.sheet_id);
+    if (!arr) { arr = []; bySheet.set(s.sheet_id, arr); }
+    arr.push(s);
+  }
+  // file name, then numeric page — the same sort as sheetTotals
+  const order = [...bySheet.keys()].sort((ka, kb) => {
+    const a = parseSheetKey(String(ka)), b = parseSheetKey(String(kb));
+    return a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file);
+  });
+  return order.map((sheet_id) => {
+    const sheetShapes = bySheet.get(sheet_id);
+    return {
+      sheet_id,
+      rows: conditionTotals(conditions, sheetShapes).filter((r) => r.shape_count > 0),
+      perimByCond: floorPerimeterLf(sheetShapes),
+    };
+  }).filter((g) => g.rows.length);
 }
 
 // The one base-quantities footnote, shared by CSV ("# " prefix, golden-
