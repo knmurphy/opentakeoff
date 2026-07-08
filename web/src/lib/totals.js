@@ -212,16 +212,18 @@ export function grandTotals(rows) {
  * @param {((sheetId: any) => string)|null} [sheetLabel] sheet_id → display label
  * @param {Array<{key: string, header: string}>|null} [cols] CSV_PROFILE-shaped
  *   column list to emit; null → the default-visible CSV_PROFILE columns
- *   (byte-identical to the frozen v1 export). Opt-ins append after the base 13.
- * @param {{perimByCond?: Map<any, number>}|null} [ctx] handed to GETTERS
- *   (perimeter_ref needs it)
+ *   (byte-identical to the frozen v1 export). Opt-ins append after the base 13;
+ *   custom columns (customColProfile) carry their own `get` and append after.
+ * @param {{perimByCond?: Map<any, number>, attrsByCond?: Map<any, object>}|null}
+ *   [ctx] handed to the getters (perimeter_ref / custom columns need it)
  * @returns {string}
  */
 export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null) {
   const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {
-    lines.push(columns.map((c) => esc(GETTERS[c.key]?.(r, ctx))).join(","));
+    // per-column get (custom columns) falls back to the shared GETTERS
+    lines.push(columns.map((c) => esc((c.get || GETTERS[c.key])?.(r, ctx))).join(","));
   }
   const g = grandTotals(rows);
   // TOTAL row, column-driven: "TOTAL" under the finish column, grand-total
@@ -272,6 +274,10 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
 
 // Report JSON envelope — schema opentakeoff.report.v1. Extracted pure so the
 // key set is testable (test/totals.test.ts pins it; schema drift fails there).
+// v1 is additive-only: new keys APPEND after the existing ones (see markups'
+// id/rfi_id, row `columns`, top-level `condition_columns`) and are always
+// emitted — empty arrays, never conditionally absent — so the shape stays
+// deterministic for downstream parsers.
 //   - sheets[] carries scale provenance under `scale_source` — the SAME key the
 //     persisted payload uses ("unknown" when unrecorded).
 //   - sheets[] deliberately omits units_per_px: that figure is feet per
@@ -280,16 +286,29 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
 /**
  * @param {{projectName?: string, rows?: any[], bySheet?: any[],
  *   scaleInfo?: Array<{sheet_id: any, source?: string, [k: string]: any}>, markups?: any[],
- *   sheetLabel?: ((sheetId: any) => string)|null}} args
+ *   sheetLabel?: ((sheetId: any) => string)|null,
+ *   conditionColumns?: Array<{id: string, name: string, values: string[]}>,
+ *   attrsByCond?: Map<any, object>|null}} args
  */
-export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null }) {
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null, conditionColumns = [], attrsByCond = null }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   return {
     schema: "opentakeoff.report.v1",
     project_name: projectName || null,
     generated_with: "OpenTakeoff",
     sheets: scaleInfo.map((si) => ({ sheet_id: si.sheet_id, sheet: label(si.sheet_id), scale_source: si.scale_source ?? si.source ?? "unknown" })),
-    conditions: rows,
+    // custom-column values APPEND after materials (row key order otherwise
+    // untouched). Iterating the DEFINED columns — never raw attrs — naturally
+    // drops orphaned colIds; the typeof filter keeps corrupted non-string and
+    // empty values out of the export (the customColProfile chokepoint's rule,
+    // covering the JSON path too).
+    conditions: rows.map((r) => ({
+      ...r,
+      columns: conditionColumns.flatMap((cc) => {
+        const v = attrsByCond?.get(r.id)?.[cc.id];
+        return typeof v === "string" && v ? [{ id: cc.id, name: cc.name, value: v }] : [];
+      }),
+    })),
     by_sheet: bySheet.map((gp) => ({
       sheet_id: gp.sheet_id,
       sheet: label(gp.sheet_id),
@@ -301,6 +320,9 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     // convention — see scale_source above): a cloud with empty text was fully
     // anonymous in the export. Legacy markups: id → null, rfi_id → "".
     markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
+    // the custom-column definitions themselves, so row `columns` values can be
+    // read against the project vocabulary
+    condition_columns: conditionColumns.map(({ id, name, values }) => ({ id, name, values })),
   };
 }
 

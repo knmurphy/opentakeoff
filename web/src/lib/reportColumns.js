@@ -72,6 +72,28 @@ export const CSV_PROFILE = [
   { key: "perimeter_ref", header: "Perimeter LF (ref, incl. openings)", defaultVisible: false },
 ];
 
+// User-defined condition columns → runtime column descriptors, appended after
+// either profile. Keys are "custom:<colId>" — can't collide with built-in
+// keys, grandTotals keys, or colPrefs. Descriptors carry their own `get`
+// (call sites fall back to GETTERS for built-ins); values arrive via
+// ctx.attrsByCond (Map(condition_id → attrs)), never as new row fields —
+// conditionTotals rows are spread into the contribution payload.
+export function customColProfile(conditionColumns) {
+  return (conditionColumns || []).map((cc) => ({
+    key: "custom:" + cc.id,
+    header: cc.name || "Untitled",
+    defaultVisible: false,
+    custom: true,
+    get: (r, ctx) => {
+      const v = ctx?.attrsByCond?.get(r.id)?.[cc.id];
+      // the one chokepoint sanitizing attrs values: conditions hydrate
+      // wholesale with no validation, so a corrupted non-string value must
+      // not reach a React child (or an export) — coerce to ""
+      return typeof v === "string" ? v : "";
+    },
+  }));
+}
+
 // One visibility pref shared by table + CSV: a JSON object of key → boolean
 // OVERRIDES of defaultVisible (diffs only), so new defaults reach old prefs.
 const PREFS_KEY = "opentakeoff_report_cols";

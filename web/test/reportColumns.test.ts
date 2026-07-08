@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { conditionTotals, sheetTotals, totalsToCsv, round2 } from "../src/lib/totals.js";
 import {
-  GETTERS, CSV_PROFILE, TABLE_PROFILE,
+  GETTERS, CSV_PROFILE, TABLE_PROFILE, customColProfile,
   loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf,
 } from "../src/lib/reportColumns.js";
 import { conditions, shapes, projectName, sheetLabel } from "./fixtures/report.fixture.ts";
@@ -111,6 +111,52 @@ test("CSV with opt-ins: appended at the end, base 13 untouched, TOTAL blank unde
   assert.equal(Number(totalCells[13]), round2(1373.76 - 1316.91));
   assert.equal(Number(totalCells[14]), round2(136.34 - 129.85));
   assert.equal(totalCells[15], "");
+});
+
+// ── custom (user-defined) condition columns (issue #34) ─────────────────────
+
+test("customColProfile: descriptors from definitions; get reads ctx and coerces non-strings", () => {
+  const cols = customColProfile([
+    { id: "c9", name: "CSI Division", values: ["09 68 00"] },
+    { id: "c0", name: "", values: [] },              // empty name → display fallback
+  ]);
+  assert.deepEqual(cols.map((c: any) => [c.key, c.header, c.defaultVisible, c.custom]), [
+    ["custom:c9", "CSI Division", false, true],
+    ["custom:c0", "Untitled", false, true],
+  ]);
+  const ctx = { attrsByCond: new Map([["ct1", { c9: "09 68 00", c0: 42 }]]) };
+  assert.equal(cols[0].get({ id: "ct1" }, ctx), "09 68 00");
+  assert.equal(cols[1].get({ id: "ct1" }, ctx), "");   // non-string coerced to ""
+  assert.equal(cols[0].get({ id: "zz" }, ctx), "");    // unassigned condition
+  assert.equal(cols[0].get({ id: "ct1" }), "");        // no ctx at all
+  assert.deepEqual(customColProfile(null), []);
+  assert.deepEqual(customColProfile(undefined), []);
+});
+
+test("CSV with custom columns: hostile headers escaped, values per row, TOTAL blank, frozen 13 untouched", () => {
+  const defs = [
+    { id: "div", name: "CSI Division, 2020", values: ["09 68 00", "09 65 00"] },  // comma → quoted
+    { id: "inj", name: "=SUM(A1:A9)", values: [] },                               // formula → ' guard
+  ];
+  const cols = [...visibleCols(CSV_PROFILE, {}), ...customColProfile(defs)];
+  const ctx = {
+    attrsByCond: new Map([
+      ["ct1", { div: "09 68 00" }],
+      ["lvt2", { div: "09 65 00", inj: "=HYPERLINK" }],  // formula-shaped VALUE guarded too
+    ]),
+  };
+  const csv = totalsToCsv(rows, projectName, sheetTotals(conditions, shapes), sheetLabel, cols, ctx);
+  const lines = csv.split("\n");
+  const goldenLines = golden.split("\n");
+  // frozen 13 header cells byte-identical, custom headers appended escaped
+  assert.equal(lines[1], goldenLines[1] + ',"CSI Division, 2020",\'=SUM(A1:A9)');
+  // CT-1 body row = golden row + assigned value + blank (no inj assignment)
+  assert.equal(lines[2], goldenLines[2] + ",09 68 00,");
+  assert.deepEqual(lines[3].split(",").slice(-2), ["09 65 00", "'=HYPERLINK"]);
+  // TOTAL row: custom keys absent from grandTotals → both cells blank
+  const totalCells = lines.find((l) => l.startsWith("TOTAL"))!.split(",");
+  assert.equal(totalCells.length, 15);
+  assert.deepEqual(totalCells.slice(-2), ["", ""]);
 });
 
 test("loadColPrefs returns {} without localStorage; saveColPrefs swallows too", () => {

@@ -5,7 +5,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { conditionTotals, grandTotals, sheetTotals, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
-import { GETTERS, TABLE_PROFILE, CSV_PROFILE, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
+import { GETTERS, TABLE_PROFILE, CSV_PROFILE, customColProfile, loadColPrefs, saveColPrefs, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
@@ -31,7 +31,7 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], scaleInfo = [], clientInfo = {}, onClientInfo, conditionColumns = [] }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
   const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
@@ -48,10 +48,16 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const [colPrefs, setColPrefs] = useState(loadColPrefs);
   const [showCols, setShowCols] = useState(false);
   const colsRef = useRef(null);
-  const tableCols = visibleCols(TABLE_PROFILE, colPrefs);
-  const csvCols = visibleCols(CSV_PROFILE, colPrefs);
+  // custom columns append after each profile (frozen 13 → built-in opt-ins →
+  // custom), so toggling one can never disturb the frozen CSV prefix
+  const customCols = customColProfile(conditionColumns);
+  const tableCols = visibleCols([...TABLE_PROFILE, ...customCols], colPrefs);
+  const csvCols = visibleCols([...CSV_PROFILE, ...customCols], colPrefs);
   const perimByCond = useMemo(() => floorPerimeterLf(shapes), [shapes]);
-  const ctx = { perimByCond };
+  // custom-column values reach the getters through ctx, never as row fields
+  // (conditionTotals rows are spread into the contribution payload)
+  const attrsByCond = useMemo(() => new Map(conditions.map((c) => [c.id, c.attrs || {}])), [conditions]);
+  const ctx = { perimByCond, attrsByCond };
 
   // while the report is up, the print stylesheet (app.css @media print) hides
   // the canvas chrome behind it and lets the report flow across pages
@@ -80,7 +86,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel }), null, 2),
+    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, sheetLabel, conditionColumns, attrsByCond }), null, 2),
     "application/json");
   // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
   // column picker like the CSV); buildXlsx lazy-loads fflate on first use
@@ -100,7 +106,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // one condition-table cell, keyed off the column profile; values come
   // through GETTERS so the table and the CSV read the same numbers
   const renderCell = (col, r) => {
-    const v = GETTERS[col.key] ? GETTERS[col.key](r, ctx) : r[col.key];
+    const get = col.get || GETTERS[col.key];
+    const v = get ? get(r, ctx) : r[col.key];
+    // custom columns: plain left-aligned text (already coerced to string by
+    // the customColProfile getter); TOTAL cells stay blank (no foot)
+    if (col.custom) return <td key={col.key} style={{ ...td, textAlign: "left" }}>{v || "—"}</td>;
     switch (col.key) {
       case "finish":
         return (
@@ -167,6 +177,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               {TABLE_PROFILE.filter((c) => !c.locked && c.defaultVisible).map(colCheckbox)}
               <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Optional</div>
               {TABLE_PROFILE.filter((c) => !c.locked && !c.defaultVisible).map(colCheckbox)}
+              <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Custom columns</div>
+              {customCols.length ? customCols.map(colCheckbox) : (
+                <div style={{ fontSize: 10.5, color: "var(--ink-muted)", lineHeight: 1.5 }}>No custom columns yet — define them from the condition bar in the canvas.</div>
+              )}
               <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export.</p>
             </div>
           )}
@@ -255,7 +269,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             <thead>
               <tr>
                 {tableCols.map((c) => (
-                  <th key={c.key} style={c.key === "finish" ? { ...th, textAlign: "left" } : c.accent ? { ...th, color: "var(--cobalt)" } : th}>{c.header}</th>
+                  // custom columns are text — header left-aligns with the cells
+                  <th key={c.key} style={c.key === "finish" || c.custom ? { ...th, textAlign: "left" } : c.accent ? { ...th, color: "var(--cobalt)" } : th}>{c.header}</th>
                 ))}
               </tr>
             </thead>
