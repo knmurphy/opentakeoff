@@ -79,7 +79,8 @@ export const CSV_PROFILE = [
 // ctx.attrsByCond (Map(condition_id → attrs)), never as new row fields —
 // conditionTotals rows are spread into the contribution payload.
 export function customColProfile(conditionColumns) {
-  return (conditionColumns || []).map((cc) => ({
+  // require an array — a truthy non-array from a corrupted payload must not throw
+  return (Array.isArray(conditionColumns) ? conditionColumns : []).map((cc) => ({
     key: "custom:" + cc.id,
     header: cc.name || "Untitled",
     defaultVisible: false,

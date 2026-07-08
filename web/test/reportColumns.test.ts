@@ -132,6 +132,9 @@ test("customColProfile: descriptors from definitions; get reads ctx and coerces 
   assert.equal(cols[0].get({ id: "ct1" }), "");        // no ctx at all
   assert.deepEqual(customColProfile(null), []);
   assert.deepEqual(customColProfile(undefined), []);
+  // truthy non-arrays from a corrupted payload must not throw
+  assert.deepEqual(customColProfile({ id: "c9" } as any), []);
+  assert.deepEqual(customColProfile("c9" as any), []);
 });
 
 test("CSV with custom columns: hostile headers escaped, values per row, TOTAL blank, frozen 13 untouched", () => {

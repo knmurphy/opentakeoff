@@ -52,10 +52,24 @@ test("malformed items are dropped: id/name must be strings, id non-empty", () =>
 });
 
 test("values are string-filtered; non-array values become []", () => {
-  const [a] = sanitizeConditionColumns([{ id: "col-a", name: "N", values: ["ok", 3, null, { v: "x" }, "", "also ok"] }]);
-  assert.deepEqual(a.values, ["ok", "", "also ok"]);   // "" is a string — the UI's trim/dupe guard, not hydrate, keeps it out
+  const [a] = sanitizeConditionColumns([{ id: "col-a", name: "N", values: ["ok", 3, null, { v: "x" }, "also ok"] }]);
+  assert.deepEqual(a.values, ["ok", "also ok"]);
   const [b] = sanitizeConditionColumns([{ id: "col-b", name: "N", values: "not-an-array" }]);
   assert.deepEqual(b.values, []);
+});
+
+test("values drop empties/whitespace and dedupe — '' collides with the selects' Unassigned option, dupes break React keys", () => {
+  const [a] = sanitizeConditionColumns([{ id: "col-a", name: "N", values: ["ok", "", "  ", "ok", "other"] }]);
+  assert.deepEqual(a.values, ["ok", "other"]);
+});
+
+test("later duplicate column ids are dropped, first wins — ids key options/chips and attrs", () => {
+  const out = sanitizeConditionColumns([
+    { id: "col-a", name: "First", values: ["v1"] },
+    { id: "col-b", name: "Other", values: [] },
+    { id: "col-a", name: "Impostor", values: ["v2"] },
+  ]);
+  assert.deepEqual(out.map((c) => [c.id, c.name]), [["col-a", "First"], ["col-b", "Other"]]);
 });
 
 test("unknown item fields pass through the round-trip", () => {

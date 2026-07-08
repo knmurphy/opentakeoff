@@ -196,6 +196,17 @@ test("reportJson: no custom columns → condition_columns: [] and row columns: [
   assert.deepEqual(j.conditions[0].columns, []);
 });
 
+test("reportJson: explicit null / corrupted non-array/non-Map inputs must not throw the export", () => {
+  // destructuring defaults don't apply to null, and both values can trace
+  // back to a corrupted payload — the export coerces instead of crashing
+  const conds = [{ id: "a", finish_tag: "A" }];
+  for (const [cc, ab] of [[null, null], [{ id: "x" }, {}], ["x", []]] as any[]) {
+    const j = reportJson({ rows: conditionTotals(conds, [area("a", 10)]), conditionColumns: cc, attrsByCond: ab });
+    assert.deepEqual(j.condition_columns, []);
+    assert.deepEqual(j.conditions[0].columns, []);
+  }
+});
+
 test("verticalWallSf: floor perimeters × height × multiplier; 0 without a height", () => {
   const shapes = [
     { condition_id: "c", measure_role: "floor_area", computed: { area_sf: 100, perimeter_lf: 40 } },

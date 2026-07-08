@@ -330,6 +330,10 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
  */
 export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], sheetLabel = null, conditionColumns = [], attrsByCond = null }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
+  // destructuring defaults don't apply to an explicit null, and both values can
+  // trace back to a corrupted payload — coerce so the export can't throw
+  const colDefs = Array.isArray(conditionColumns) ? conditionColumns : [];
+  const attrs = attrsByCond instanceof Map ? attrsByCond : new Map();
   return {
     schema: "opentakeoff.report.v1",
     project_name: projectName || null,
@@ -342,8 +346,8 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     // covering the JSON path too).
     conditions: rows.map((r) => ({
       ...r,
-      columns: conditionColumns.flatMap((cc) => {
-        const v = attrsByCond?.get(r.id)?.[cc.id];
+      columns: colDefs.flatMap((cc) => {
+        const v = attrs.get(r.id)?.[cc.id];
         return typeof v === "string" && v ? [{ id: cc.id, name: cc.name, value: v }] : [];
       }),
     })),
@@ -360,7 +364,7 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     markups: markups.map((m) => ({ type: m.type, sheet_id: m.sheet_id, sheet: label(m.sheet_id), text: m.text || "", id: m.id ?? null, rfi_id: m.rfi_id || "" })),
     // the custom-column definitions themselves, so row `columns` values can be
     // read against the project vocabulary
-    condition_columns: conditionColumns.map(({ id, name, values }) => ({ id, name, values })),
+    condition_columns: colDefs.map(({ id, name, values }) => ({ id, name, values })),
   };
 }
 

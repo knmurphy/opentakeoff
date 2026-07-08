@@ -7,14 +7,23 @@
 // Defensive hydrate for condition_columns: non-array → [], items must carry a
 // non-empty string id and a string name, values string-filtered — the same
 // hazard hydrate string-filters client_info for (a corrupted record must not
-// put a non-string where a React child or <option> renders). Unknown item
-// fields pass through (the scale_source precedent: stripping a future field
-// on load would persist the loss on the next autosave).
+// put a non-string where a React child or <option> renders). Values also drop
+// empties/whitespace (an empty value collides with the selects' Unassigned
+// option, value="") and dedupe, and later duplicate column ids are dropped —
+// values and ids key React options/chips, so duplicates break rendering.
+// Unknown item fields pass through (the scale_source precedent: stripping a
+// future field on load would persist the loss on the next autosave).
 export function sanitizeConditionColumns(raw) {
   if (!Array.isArray(raw)) return [];
+  const seenIds = new Set();
   return raw
-    .filter((c) => c && typeof c === "object" && !Array.isArray(c) && typeof c.id === "string" && c.id && typeof c.name === "string")
-    .map((c) => ({ ...c, values: (Array.isArray(c.values) ? c.values : []).filter((v) => typeof v === "string") }));
+    .filter((c) => {
+      if (!(c && typeof c === "object" && !Array.isArray(c) && typeof c.id === "string" && c.id && typeof c.name === "string")) return false;
+      if (seenIds.has(c.id)) return false;
+      seenIds.add(c.id);
+      return true;
+    })
+    .map((c) => ({ ...c, values: [...new Set((Array.isArray(c.values) ? c.values : []).filter((v) => typeof v === "string" && v.trim()))] }));
 }
 
 // Rewrite assignments when a vocabulary value is renamed — typo-fixing is the

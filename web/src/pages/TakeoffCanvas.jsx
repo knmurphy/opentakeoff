@@ -1717,7 +1717,14 @@ export default function TakeoffCanvas() {
   // Snapshot-compare asymmetry, accepted: the diff (COND_FIELDS quantities) is
   // blind to attrs/definition changes, yet Load restores them — an assignments-
   // only change diffs as "unchanged". Known, not a bug.
-  const assignAttr = (colId, v) => { const attrs = { ...(aCond?.attrs || {}) }; if (v) attrs[colId] = v; else delete attrs[colId]; updateCond({ attrs }); };   // Unassigned = key absent, never ""
+  const assignAttr = (colId, v) => {
+    // conditions hydrate wholesale — coerce a corrupted non-object attrs to {}
+    // instead of spreading it back into the payload
+    const cur = aCond?.attrs;
+    const attrs = { ...(cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {}) };
+    if (v) attrs[colId] = v; else delete attrs[colId];   // Unassigned = key absent, never ""
+    updateCond({ attrs });
+  };
   const addColumn = () => setConditionColumns((cols) => [...cols, { id: uid("col"), name: "", values: [] }]);
   const renameColumn = (colId, name) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, name } : cc)));   // id stays — assignments follow automatically
   const addColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId && !cc.values.includes(v) ? { ...cc, values: [...cc.values, v] } : cc)));
