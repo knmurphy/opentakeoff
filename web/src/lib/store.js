@@ -243,10 +243,37 @@ export const localStore = {
   },
 };
 
-// Optional backend adapter — implement the same four methods against the
-// `../server` AI sandbox (or any host) to enable shared/multi-device storage.
-// Left intentionally unimplemented; the default build never touches it.
-export const apiStore = null;
+// ── the mode-aware store seam ──────────────────────────────────────────────
+// The default build is byte-for-byte the old client-only app: `store` is
+// `localStore` and nothing here touches the network. The optional, team-only
+// cloud mode (Google sign-in + Drive, see lib/google/ and lib/cloudStore.js)
+// swaps in a Drive-backed adapter that implements this SAME interface, so the
+// canvas — which reads the live `store` binding at call time — needs no changes.
+//
+// `store` is a live ESM binding: importers (`import { store } from …`) see the
+// reassignment `setActiveStore` makes, so switching to cloud mode BEFORE the
+// canvas mounts is enough. The switch is driven from the app shell (main.jsx),
+// which alone pulls in the Google/Drive modules — the anonymous bundle never
+// loads them.
+export let store = localStore;
 
-export const store = localStore;
+// Point the shared `store` at a cloud (or any drop-in) adapter; pass nothing to
+// fall back to the local, browser-only store. Called from the app shell once a
+// deep-linked project is signed in and its Drive-backed store is built.
+export function setActiveStore(next) {
+  store = next || localStore;
+}
+
+// The deep-link contract with Glide: `…/?project=<driveFolderId>` selects which
+// shared-Drive project folder to open. A folder id is not a credential — Google
+// still gates who can read it — so it's safe in the URL. Empty string = the
+// default anonymous, local-only mode.
+export function projectIdFromUrl() {
+  try {
+    return new URLSearchParams(window.location.search).get("project") || "";
+  } catch {
+    return "";   // no window (SSR/tests) or a malformed query — stay local
+  }
+}
+
 export { ANN_SCHEMA };

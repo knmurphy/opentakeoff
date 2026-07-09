@@ -40,6 +40,24 @@ This repo pins the environment so drift can't happen:
   lockfile is out of sync with `package.json`, CI fails fast rather than
   silently resolving different versions.
 
+## Optional build-time env vars (team cloud mode)
+
+The default build needs **no** environment at all. Turning on the optional
+team-only cloud mode (Google sign-in + shared Drive) adds three build-time
+variables, read by Vite and inlined into `web/dist` at build:
+
+- `VITE_GOOGLE_CLIENT_ID` — the public OAuth 2.0 Web client id.
+- `VITE_GOOGLE_HD` — your Google Workspace domain (e.g. `345flooring.com`).
+- `VITE_PRICING_FILE_ID` — the Drive file id of the synced `pricing.json`.
+
+All three are **non-secret public identifiers** and are meant to ship in the
+bundle — there is no client secret or API key here, so unlike the Netlify token
+they are not repository/environment secrets. They're **optional**: leave them
+unset and the app builds and runs exactly as before (anonymous, local-only). Set
+them as build environment variables wherever `npm run check`/`build` runs (or in
+`web/.env.local` locally — see [`web/.env.example`](../web/.env.example)). Full
+one-time setup is in [`GOOGLE_SETUP.md`](GOOGLE_SETUP.md).
+
 ## Rules on `main`
 
 Enforced by GitHub branch protection (admins included):
