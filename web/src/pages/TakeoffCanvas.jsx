@@ -399,6 +399,16 @@ export default function TakeoffCanvas() {
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
   const viewRef = useRef("canvas");        // mirror for the keyboard handlers
   const hydrated = useRef(false);
+  // Autosave stays holstered until a user-originated edit. hydrate() flips every
+  // autosave dep to a fresh identity, so the effect fires once on the post-load
+  // render with no edit behind it; that lone run arms this and returns instead of
+  // writing — otherwise merely opening a shared ?project= link would CREATE
+  // annotations.json in the folder (see #68). Error paths that skip hydrate arm
+  // it directly (no echo to swallow). A snapshot Load reuses hydrate() too, but
+  // mid-session it runs with this already armed, so a restore saves — unchanged
+  // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
+  // and is not persisted; that pre-existing gap is tracked in #73.)
+  const savesArmed = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -720,7 +730,10 @@ export default function TakeoffCanvas() {
       // annotations): same rule as a stale tab — leave autosave DISARMED so empty
       // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
       if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
+      // hydrate never ran here, so there is no echo render to swallow — arm
+      // directly so the user's first edit saves without being eaten.
       hydrated.current = true;
+      savesArmed.current = true;
     });
     return () => { off = true; };
     // run-once mount load — hydrate is intentionally not a dep (re-running would
@@ -1098,6 +1111,10 @@ export default function TakeoffCanvas() {
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
+    // Swallow the hydration echo: the first run after hydrate() carries no user
+    // edit (only the fresh-identity setState from loading). Arm and skip it so a
+    // link-open reads without writing; every later run is a real edit and saves.
+    if (!savesArmed.current) { savesArmed.current = true; return; }
     const payload = buildPayload();
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
