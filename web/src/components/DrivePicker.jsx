@@ -49,6 +49,22 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
 
   useEffect(() => load(here.id), [here.id, load]);
 
+  // While the picker overlays the canvas, keys must not fall through to the
+  // takeoff behind it. The canvas' global shortcuts listen on window in the
+  // bubble phase; this capture-phase listener runs FIRST and stops them —
+  // Escape closes the picker (as the Close button advertises), and every other
+  // shortcut is swallowed unless focus is in the picker's own filter/sort field
+  // (where the canvas handlers already bail on INPUT/SELECT anyway).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); if (canClose) onClose(); return; }
+      const tag = e.target?.tagName;
+      if (tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") e.stopPropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [canClose, onClose]);
+
   const isPicked = (id) => picked.some((p) => p.id === id);
   const pickedNames = new Set(picked.map((p) => p.name));
   // A project keys its sheets by NAME, so two different Drive files can't share
