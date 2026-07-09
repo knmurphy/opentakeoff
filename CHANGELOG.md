@@ -2,23 +2,38 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-09
+
+### Added
+- **Stamp system — reusable annotation stamps (#40).** Define an annotation once,
+  save it to a **browser-wide library** (the first cross-project asset), and drop
+  it onto any sheet with a click — the Bluebeam tool-chest pattern for shop-drawing
+  markup. In the **Stamps** tab of the left dock, **Place** arms a stamp, then each
+  canvas click instantiates it as **normal, editable markups** (a number bubble
+  prompts for its value on placement). A fresh library seeds three flooring
+  directional marks — **plank/tile direction**, **seam direction**, and **pattern
+  origin**; everything else comes from import or save-as-stamp. Save any selected
+  markup as a new stamp; rename/delete from the palette; **export/import** the
+  library as JSON (import merges) so a crew shares one standard set. Two new markup
+  primitives ship with it — **arrows** (leader + arrowhead) and **bubbles** (circle
+  + centered text) — both selectable, movable, recolorable, and burned into the
+  Marked Set PDF like every other markup.
+- **SVG symbol import.** The stamp palette's **Import** also accepts an `.svg`
+  file, baking its vector shapes (path, rect, circle/ellipse, line, polyline,
+  polygon — with group transforms flattened and colors normalized to hex) into a
+  high-fidelity, still-vector `svg` stamp element that renders crisp on canvas and
+  in the Marked Set PDF at any zoom. Unsafe content (scripts, external refs,
+  DOCTYPE entities) is rejected; the input is size- and shape-capped. Bring real
+  shop-drawing symbols — transition strips, detail bubbles, north arrows — into the
+  library instead of hand-drawing them.
+- **Unified left dock.** The **Markups**, **Stamps**, and **RFIs** panels — which
+  previously floated at the same spot and overlapped — are now one docked panel on
+  the left with a tab strip. One tab at a time; it reflows the canvas instead of
+  overlapping, mirroring the docked Takeoffs panel on the right.
+
 ## 2026-07-08
 
 ### Added
-- **Stamp system — reusable annotation stamps.** Define an annotation once, save
-  it to a **browser-wide library** (the first cross-project asset), and drop it
-  onto any sheet with a click — the Bluebeam tool-chest pattern for shop-drawing
-  markup. Open the **Stamps** palette on the right rail: **Place** arms a stamp,
-  then each canvas click instantiates it as **normal, editable markups** (a
-  number bubble prompts for its value on placement). A fresh library seeds a
-  **Flooring shop drawings** set — north arrow, plank/tile & seam-direction
-  arrows, detail bubble, keyed note, pattern-origin marker, and **FOR
-  CONSTRUCTION / AS-BUILT / APPROVED** approval stamps. Save any selected markup
-  as a new stamp; rename/delete from the palette; **export/import** the library
-  as JSON (import merges) so a crew shares one standard set. Two new markup
-  primitives ship with it — **arrows** (leader + arrowhead) and **bubbles**
-  (circle + centered text) — both selectable, movable, recolorable, and burned
-  into the Marked Set PDF like every other markup.
 - **Per-markup color.** Any revision cloud, callout, text note, or highlight can
   be recolored from a palette swatch on its markup-panel row (or reset to
   **auto** — cobalt when linked to an RFI, amber otherwise). The color drives the
