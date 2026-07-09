@@ -111,9 +111,9 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
           pick the PDFs to open — specs &amp; as-builts stay unopened
         </span>
         <div style={{ flex: 1 }} />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name…"
+        <input name="drive-filter" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name…"
           style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 12.5, minWidth: 160 }} />
-        <select value={sort} onChange={(e) => setSort(e.target.value)} title="Sort files"
+        <select name="drive-sort" value={sort} onChange={(e) => setSort(e.target.value)} title="Sort files"
           style={{ padding: "6px 8px", border: "1px solid var(--ink-faint)", background: "transparent", fontSize: 12 }}>
           <option value="name">Name</option>
           <option value="size">Size</option>
@@ -131,7 +131,7 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "8px 18px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontFamily: "var(--f-mono)", fontSize: 12 }}>
         {path.map((c, i) => (
           <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            {i > 0 && <span style={{ color: "var(--ink-faint)" }}>/</span>}
+            {i > 0 && <span style={{ color: "var(--text-faint)" }}>/</span>}
             <button onClick={() => jumpTo(i)} disabled={i === path.length - 1}
               style={{ border: "none", background: "transparent", cursor: i === path.length - 1 ? "default" : "pointer", color: i === path.length - 1 ? "var(--ink)" : "var(--cobalt)", fontFamily: "var(--f-mono)", fontSize: 12, padding: "2px 2px", fontWeight: i === path.length - 1 ? 700 : 400 }}>
               {c.name}
@@ -168,7 +168,7 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
               return (
                 <label key={f.id} style={{ ...rowBase, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}
                   title={conflict ? "Another selected PDF already uses this name — a project can't have two sheets with the same name" : undefined}>
-                  <input type="checkbox" checked={sel || inSet} disabled={disabled} onChange={() => togglePick(f)}
+                  <input name="drive-file-pick" type="checkbox" checked={sel || inSet} disabled={disabled} onChange={() => togglePick(f)}
                     style={{ width: 16, height: 16, cursor: disabled ? "default" : "pointer" }} />
                   <span style={{ fontFamily: "var(--f-mono)", fontSize: 13, color: "var(--ink)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</span>
                   <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-muted)", minWidth: 64, textAlign: "right" }}>{fmtSize(f.size)}</span>
@@ -193,7 +193,7 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
           <button onClick={() => setPicked([])} style={{ padding: "7px 12px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>Clear</button>
         )}
         <button onClick={add} disabled={!picked.length || adding}
-          style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 16px", border: "1px solid var(--ink)", background: picked.length ? "var(--cobalt)" : "var(--ink-faint)", color: "var(--paper-bright)", cursor: picked.length && !adding ? "pointer" : "default", fontWeight: 700, fontSize: 13 }}>
+          style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "8px 16px", border: "1px solid var(--ink)", background: picked.length ? "var(--cobalt)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: picked.length && !adding ? "pointer" : "default", fontWeight: 700, fontSize: 13 }}>
           <Icon name="plus" size={13} />{adding ? "Adding…" : `Add ${picked.length || ""} sheet${picked.length === 1 ? "" : "s"}`}
         </button>
       </div>

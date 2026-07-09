@@ -29,7 +29,7 @@ export default function RfiPanel({ docked = false, rfis = [], markups = [], onUp
     const on = filter === id;
     return (
       <button key={id} onClick={() => setFilter(id)}
-        style={{ padding: "2px 8px", border: `1px solid ${on ? "#1f3fc7" : "var(--ink-faint)"}`, background: on ? "#1f3fc7" : "transparent", color: on ? "#fff" : "var(--ink)", cursor: "pointer", fontSize: 11 }}>
+        style={{ padding: "2px 8px", border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`, background: on ? "var(--cobalt)" : "transparent", color: on ? "var(--accent-contrast)" : "var(--ink)", cursor: "pointer", fontSize: 11 }}>
         {label}
       </button>
     );
@@ -37,14 +37,14 @@ export default function RfiPanel({ docked = false, rfis = [], markups = [], onUp
 
   const outer = docked
     ? { display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "auto", background: "var(--paper-bright)", fontSize: 12.5 }
-    : { position: "absolute", left: 14, top: 14, width: 372, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 9, fontSize: 12.5 };
+    : { position: "absolute", left: 14, top: 14, width: 372, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid var(--cobalt)", boxShadow: "var(--shadow-pop)", zIndex: 9, fontSize: 12.5 };
 
   return (
     <div style={outer}>
       {!docked && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "var(--cobalt)", color: "var(--accent-contrast)" }}>
           <strong style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Icon name="rfi" size={15} />RFIs · {rfis.length}</strong>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--accent-contrast)", fontSize: 16, cursor: "pointer" }}>×</button>
         </div>
       )}
 
@@ -68,30 +68,30 @@ export default function RfiPanel({ docked = false, rfis = [], markups = [], onUp
         return (
           <div key={r.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
-              <span style={{ fontFamily: "var(--f-mono)", fontWeight: 700, color: "#1f3fc7" }}>{String(r.number ?? "")}</span>
+              <span style={{ fontFamily: "var(--f-mono)", fontWeight: 700, color: "var(--cobalt)" }}>{String(r.number ?? "")}</span>
               <span style={{ padding: "1px 7px", background: st.color, color: "#fff", fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>{st.label}</span>
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 10.5, color: "var(--ink-muted)" }}>{linked.length} linked</span>
               <button onClick={() => { if (window.confirm(`Delete ${r.number}? Linked markups keep their annotation but lose the RFI link.`)) onDeleteRfi && onDeleteRfi(r.id); }}
-                title="Delete this RFI (hard remove; clears links)" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
+                title="Delete this RFI (hard remove; clears links)" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--c-danger)" }}>🗑</button>
             </div>
 
             <label style={lbl}>Subject</label>
-            <input value={r.subject || ""} onChange={(e) => up(r, { subject: e.target.value })} placeholder="Short subject" style={{ ...field, marginBottom: 6 }} />
+            <input name="rfi-subject" value={r.subject || ""} onChange={(e) => up(r, { subject: e.target.value })} placeholder="Short subject" style={{ ...field, marginBottom: 6 }} />
 
             <label style={lbl}>Question</label>
-            <textarea value={r.question || ""} onChange={(e) => up(r, { question: e.target.value })} rows={2} placeholder="What are you asking?" style={{ ...field, marginBottom: 6, resize: "vertical" }} />
+            <textarea name="rfi-question" value={r.question || ""} onChange={(e) => up(r, { question: e.target.value })} rows={2} placeholder="What are you asking?" style={{ ...field, marginBottom: 6, resize: "vertical" }} />
 
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>Status</label>
-                <select value={st.id} onChange={(e) => up(r, { status: e.target.value })} style={field}>
+                <select name="rfi-status" value={st.id} onChange={(e) => up(r, { status: e.target.value })} style={field}>
                   {RFI_STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                 </select>
               </div>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>Priority</label>
-                <select value={r.priority || "normal"} onChange={(e) => up(r, { priority: e.target.value })} style={field}>
+                <select name="rfi-priority" value={r.priority || "normal"} onChange={(e) => up(r, { priority: e.target.value })} style={field}>
                   {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
@@ -100,39 +100,39 @@ export default function RfiPanel({ docked = false, rfis = [], markups = [], onUp
             <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>Ball in court</label>
-                <input value={r.to || ""} onChange={(e) => up(r, { to: e.target.value })} placeholder="Architect / GC…" style={field} />
+                <input name="rfi-to" value={r.to || ""} onChange={(e) => up(r, { to: e.target.value })} placeholder="Architect / GC…" style={field} />
               </div>
               <div style={{ flex: 1 }}>
                 <label style={lbl}>Opened</label>
-                <input value={r.date || ""} onChange={(e) => up(r, { date: e.target.value })} placeholder="YYYY-MM-DD" style={field} />
+                <input name="rfi-date" value={r.date || ""} onChange={(e) => up(r, { date: e.target.value })} placeholder="YYYY-MM-DD" style={field} />
               </div>
             </div>
 
             <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 6 }}>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11.5 }}>
-                <input type="checkbox" checked={!!r.cost_impact} onChange={(e) => up(r, { cost_impact: e.target.checked })} />cost impact
+                <input name="rfi-cost-impact" type="checkbox" checked={!!r.cost_impact} onChange={(e) => up(r, { cost_impact: e.target.checked })} />cost impact
               </label>
               <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 11.5 }}>
-                <input type="checkbox" checked={!!r.schedule_impact} onChange={(e) => up(r, { schedule_impact: e.target.checked })} />schedule impact
+                <input name="rfi-schedule-impact" type="checkbox" checked={!!r.schedule_impact} onChange={(e) => up(r, { schedule_impact: e.target.checked })} />schedule impact
               </label>
             </div>
 
             <label style={lbl}>Response</label>
-            <textarea value={r.response || ""} onChange={(e) => up(r, { response: e.target.value })} rows={2} placeholder="The answer, once received" style={{ ...field, marginBottom: 6, resize: "vertical" }} />
+            <textarea name="rfi-response" value={r.response || ""} onChange={(e) => up(r, { response: e.target.value })} rows={2} placeholder="The answer, once received" style={{ ...field, marginBottom: 6, resize: "vertical" }} />
             <label style={lbl}>Response date</label>
-            <input value={r.response_date || ""} onChange={(e) => up(r, { response_date: e.target.value })} placeholder="auto-stamps when set to Answered" style={{ ...field, marginBottom: 6 }} />
+            <input name="rfi-response-date" value={r.response_date || ""} onChange={(e) => up(r, { response_date: e.target.value })} placeholder="auto-stamps when set to Answered" style={{ ...field, marginBottom: 6 }} />
 
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               <button onClick={() => up(r, { status: "closed" })} disabled={st.id === "closed"}
                 style={{ padding: "3px 9px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: st.id === "closed" ? "default" : "pointer", fontSize: 11, opacity: st.id === "closed" ? 0.5 : 1 }}>Close</button>
               <button onClick={() => up(r, { status: "void" })} disabled={st.id === "void"}
-                style={{ padding: "3px 9px", border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: st.id === "void" ? "default" : "pointer", fontSize: 11, opacity: st.id === "void" ? 0.5 : 1 }}>Void</button>
+                style={{ padding: "3px 9px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--c-danger)", cursor: st.id === "void" ? "default" : "pointer", fontSize: 11, opacity: st.id === "void" ? 0.5 : 1 }}>Void</button>
               <span style={{ flex: 1 }} />
               {linked.length === 0
                 ? <span style={{ fontSize: 10.5, color: "var(--ink-muted)" }}>no linked markups</span>
                 : linked.map((m) => (
                   <button key={m.id} onClick={() => onFlyTo && onFlyTo(m)} title={`Fly to this ${m.type} on ${sheetLabel ? sheetLabel(m.sheet_id) : m.sheet_id}`}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", border: "1px solid #1f3fc7", background: "transparent", color: "#1f3fc7", cursor: "pointer", fontSize: 11 }}>
+                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", border: "1px solid var(--cobalt)", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontSize: 11 }}>
                     <Icon name="target" size={11} />{sheetLabel ? sheetLabel(m.sheet_id) : m.sheet_id}
                   </button>
                 ))}

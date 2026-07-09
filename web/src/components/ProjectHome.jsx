@@ -45,8 +45,9 @@ export default function ProjectHome() {
   }, [here.id, attempt]);
 
   const open = ({ id, name }) => {
-    // Remember under the name Drive reports RIGHT NOW, so a renamed folder
-    // self-heals in the recents list the next time it's opened.
+    // Browse rows pass the name Drive reports RIGHT NOW, so a renamed folder
+    // self-heals in recents when opened from Browse; a recents-row open
+    // re-remembers its stored name and only bumps the ordering.
     createRecents(browserStorage()).remember({ id, name });
     navigate(`/?project=${encodeURIComponent(id)}`);
   };
