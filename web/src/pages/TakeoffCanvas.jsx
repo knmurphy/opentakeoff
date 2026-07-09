@@ -25,7 +25,7 @@ import TakeoffsPanel, { clampPanelW } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale } from "../lib/sheets";
-import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_BALANCED } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
@@ -2632,17 +2632,19 @@ export default function TakeoffCanvas() {
           // Fill sensitivity — how eagerly One-Click crosses a room's hatch. Detents
           // at Strict / Balanced / Aggressive; the slider still tunes 0–100% freely,
           // snapping to a notch when released near one.
-          const NOTCHES = [0, 0.5, 1];
-          const label = fillSens === 0 ? "Strict" : fillSens === 0.5 ? "Balanced" : fillSens === 1 ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
+          // detents come from oneclick's canonical presets so UI and flood math
+          // can't drift if a preset is ever retuned.
+          const NOTCHES = [SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE];
+          const label = fillSens === SENS_STRICT ? "Strict" : fillSens === SENS_BALANCED ? "Balanced" : fillSens === SENS_AGGRESSIVE ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
           const snap = (v) => { for (const n of NOTCHES) if (Math.abs(v - n) <= 0.06) return n; return v; };
           return (
             <span title={"One-Click fill sensitivity — how far a fill reaches past a room's hatch pattern.\nStrict: stop at the linework (original behavior).\nBalanced: recover hatch-lined rooms to the walls (default).\nAggressive: cross more pattern and tolerate more growth.\nLower it if fills spill; raise it if hatched rooms come up short."}
               style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "4px 10px", border: "1px solid var(--ink-faint)", lineHeight: 1 }}>
               <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-soft)" }}>Fill</span>
-              <input type="range" min={0} max={1} step={0.01} value={fillSens} list="fill-sens-notches"
+              <input type="range" min={SENS_STRICT} max={SENS_AGGRESSIVE} step={0.01} value={fillSens} list="fill-sens-notches"
                 onChange={(e) => setFillSens(snap(parseFloat(e.target.value)))}
                 style={{ width: 108, accentColor: "var(--cobalt)", cursor: "pointer" }} />
-              <datalist id="fill-sens-notches"><option value="0" /><option value="0.5" /><option value="1" /></datalist>
+              <datalist id="fill-sens-notches"><option value={SENS_STRICT} /><option value={SENS_BALANCED} /><option value={SENS_AGGRESSIVE} /></datalist>
               <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--cobalt)", minWidth: 62 }}>{label}</span>
             </span>
           );

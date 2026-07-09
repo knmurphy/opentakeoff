@@ -230,7 +230,7 @@ test("escalation: a runaway escalation (balloons past the cap) is discarded — 
   const { mo, seed } = twoRoomMask(8, 40, 48);
   const strict = floodRegion({ ...mo, softCount: 0 }, seed[0], seed[1]);
   const f = floodRegion(mo, seed[0], seed[1]);
-  assert.equal(f.status, "ok");
+  assert.equal(f.status, "ok"); assert.equal(strict.status, "ok"); // both must land, else the guard below would skip the real checks
   if (f.status !== "ok" || strict.status !== "ok") return;
   assert.ok(!f.hatchFiltered, "a ballooning walls-only escalation must be rejected");
   assert.equal(f.count, strict.count, "the strict fill is preserved unchanged");
