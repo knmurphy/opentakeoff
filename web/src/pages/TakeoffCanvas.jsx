@@ -190,7 +190,10 @@ export default function TakeoffCanvas() {
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
-  const [showMarkupPanel, setShowMarkupPanel] = useState(false);
+  // Docked LEFT panel — one at a time, never overlapping: null | "markup" | "stamp" | "rfi".
+  // The right-rail buttons switch tabs; the dock reflows the canvas (mirrors the
+  // docked Takeoffs panel on the right).
+  const [leftTab, setLeftTab] = useState(null);
   const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
   const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
   const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
@@ -200,7 +203,6 @@ export default function TakeoffCanvas() {
   // editable markups. Persist mirrors the template/material library pattern.
   const [stampLib, setStampLib] = useState({ stamps: [], sets: [] });
   const stampLibRef = useRef({ stamps: [], sets: [] });       // readable outside a render (persist merges)
-  const [showStampPanel, setShowStampPanel] = useState(false);
   const [armedStamp, setArmedStamp] = useState(null);         // stamp armed for click-to-place (tool==="stamp")
   // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
   // persist per user in localStorage as diffs against PANEL_DEFAULTS.
@@ -274,7 +276,6 @@ export default function TakeoffCanvas() {
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
   const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
   const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
-  const [showRfiPanel, setShowRfiPanel] = useState(false);
   // selecting a shape clears any markup selection and vice-versa — one live
   // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
@@ -1828,7 +1829,9 @@ export default function TakeoffCanvas() {
   // belongs to the panel of its FIRST click and normalizes against that panel.
   function addMarkup(m, key) {
     setMarkups((ms) => [...ms, { id: uid("mk"), sheet_id: key, rfi_id: "", ...m }]);
-    setShowMarkupPanel(true);
+    // reveal the markup tab only if no left panel is open — never steal focus from
+    // the Stamps tab mid-placement (a stamp places several markups via addMarkup).
+    setLeftTab((t) => t ?? "markup");
   }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
@@ -2004,7 +2007,7 @@ export default function TakeoffCanvas() {
     const stamp = { id: uid("stmp"), name, elements: [el] };
     persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, stamp] });
     setCommitMsg(`Saved stamp “${name}”.`);
-    setShowStampPanel(true);
+    setLeftTab("stamp");
   }
   const deleteStamp = (id) => {
     const lib = stampLibRef.current;
@@ -2040,7 +2043,7 @@ export default function TakeoffCanvas() {
       };
       persistStampLib(merged);   // persistStampLib → store sanitizes, dropping any malformed items
       setCommitMsg(`Imported ${inStamps.length} stamp${inStamps.length === 1 ? "" : "s"}.`);
-      setShowStampPanel(true);
+      setLeftTab("stamp");
     } catch (e) {
       setCommitMsg(`Couldn't import stamps: ${e.message || e}`);
     }
@@ -2058,7 +2061,7 @@ export default function TakeoffCanvas() {
       if (!stamp || !stamp.elements.length) { setCommitMsg("Couldn't read that SVG — no drawable vector shapes found."); return; }
       persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, { id: uid("stmp"), name: stamp.name, elements: stamp.elements }] });
       setCommitMsg(`Imported “${stamp.name}” as a stamp.`);
-      setShowStampPanel(true);
+      setLeftTab("stamp");
     } catch (e) {
       setCommitMsg(`Couldn't import SVG: ${e.message || e}`);
     }
@@ -2080,7 +2083,7 @@ export default function TakeoffCanvas() {
     };
     setRfis((rs) => [...rs, rec]);
     updateMarkup(markup.id, { rfi_id: id });
-    setShowRfiPanel(true);
+    setLeftTab("rfi");
     setCommitMsg(`Raised ${number}.`);
   }
   const linkRfi = (markup, rfiId) => { if (markup && rfiId) updateMarkup(markup.id, { rfi_id: rfiId }); };
@@ -2728,6 +2731,137 @@ export default function TakeoffCanvas() {
 
       {/* canvas + issue desk */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+       {/* docked LEFT panel — one of Markups/Stamps/RFIs at a time. Reflows the
+           canvas (a flex sibling), mirroring the docked Takeoffs panel on the right. */}
+       {leftTab && (
+         <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflow: "hidden", minHeight: 0 }}>
+           {/* tab strip */}
+           <div style={{ display: "flex", alignItems: "stretch", background: "#1f3fc7", color: "#fff" }}>
+             {[{ id: "markup", label: "Markups", n: markupCount }, { id: "stamp", label: "Stamps", n: stampLib.stamps.length }, { id: "rfi", label: "RFIs", n: rfis.length }].map((t) => (
+               <button key={t.id} onClick={() => setLeftTab(t.id)} title={t.label}
+                 style={{ flex: 1, padding: "9px 6px", border: "none", borderBottom: leftTab === t.id ? "2px solid #fff" : "2px solid transparent", background: leftTab === t.id ? "rgba(255,255,255,.18)" : "transparent", color: "#fff", cursor: "pointer", fontWeight: leftTab === t.id ? 700 : 500, fontSize: 12 }}>
+                 {t.label}{t.n ? ` · ${t.n}` : ""}
+               </button>
+             ))}
+             <button onClick={() => setLeftTab(null)} title="Close panel" style={{ padding: "0 12px", border: "none", background: "transparent", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+           </div>
+           {/* body of the active tab */}
+           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+             {leftTab === "markup" && (
+               <div>
+                 {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
+                     (can't select/delete/fly-to an invisible markup); orthogonal to the
+                     marked-set export, which still includes markups. */}
+                 <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
+                   <button
+                     onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
+                     title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
+                     style={{ background: "transparent", border: "1px solid var(--ink-faint)", color: "var(--ink)", fontSize: 11, cursor: "pointer", padding: "2px 7px" }}>
+                     {showMarkups ? "Hide layer" : "Show layer"}
+                   </button>
+                 </div>
+                 <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
+                   Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
+                 </div>
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
+                   <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
+                 )}
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
+                   <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                     <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                       <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
+                       {/* inline edit — the panel's fallback for the canvas overlay, since a
+                           markup here may be off-screen or on another sheet (no click point).
+                           Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
+                       {panelEditId === m.id ? (
+                         <input autoFocus defaultValue={m.text || ""}
+                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
+                           onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
+                           style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
+                       ) : (
+                         <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : (m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
+                       )}
+                       {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
+                       <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
+                     </div>
+                     {/* appearance — per-markup color (reuse PALETTE) + line style; both
+                         additive: unset color falls back to the cobalt(linked)/amber default,
+                         unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
+                     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
+                       <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
+                       {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+                       <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                       </select>
+                       {/* line weight — a multiplier over the element's base stroke width (default
+                           ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
+                       <select value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
+                       </select>
+                       {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
+                       {m.type === "cloud" && (
+                         <>
+                           <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
+                           <input type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
+                             onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
+                             title="Revision number for the △ delta (blank = none)"
+                             style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
+                         </>
+                       )}
+                     </div>
+                     {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
+                     {(() => {
+                       const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                       return (
+                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                           {linked ? (
+                             <>
+                               <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "#1f3fc7" }}>⬢ {String(linked.number ?? "")}</span>
+                               <button onClick={() => { setLeftTab("rfi"); }} style={{ ...ctrl, color: "#1f3fc7" }} title="Open the RFI register">Open</button>
+                               <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
+                             </>
+                           ) : (
+                             <>
+                               <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "#1f3fc7", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
+                               {rfis.length > 0 && (
+                                 <select value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
+                                   title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
+                                   <option value="">Link existing…</option>
+                                   {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
+                                 </select>
+                               )}
+                             </>
+                           )}
+                         </div>
+                       );
+                     })()}
+                   </div>
+                 ))}
+               </div>
+             )}
+             {leftTab === "stamp" && (
+               <StampPanel
+                 docked
+                 library={stampLib} armedStamp={armedStamp}
+                 selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
+                 onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
+                 onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setLeftTab(null)}
+               />
+             )}
+             {leftTab === "rfi" && (
+               <RfiPanel
+                 docked
+                 rfis={rfis} markups={markups}
+                 onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
+                 sheetLabel={(k) => tabLabel(k)} onClose={() => setLeftTab(null)}
+               />
+             )}
+           </div>
+         </div>
+       )}
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
@@ -3109,134 +3243,11 @@ export default function TakeoffCanvas() {
             takeoffs toggle mirrors the DOCKED panel's collapsed pref — the rail
             rides the canvas edge, so it stays visible either way. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
-          {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
-          {panelBtn(() => setShowStampPanel((v) => !v), "stamp", "Stamps — reusable annotations dropped click-to-place", showStampPanel, stampLib.stamps.length)}
-          {panelBtn(() => setShowRfiPanel((v) => !v), "rfi", "RFI register — raise, track, and export Requests For Information", showRfiPanel, rfis.length)}
+          {panelBtn(() => setLeftTab((t) => (t === "markup" ? null : "markup")), "markup", "Markups on these sheets (clouds, callouts, notes)", leftTab === "markup", markupCount)}
+          {panelBtn(() => setLeftTab((t) => (t === "stamp" ? null : "stamp")), "stamp", "Stamps — reusable annotations dropped click-to-place", leftTab === "stamp", stampLib.stamps.length)}
+          {panelBtn(() => setLeftTab((t) => (t === "rfi" ? null : "rfi")), "rfi", "RFI register — raise, track, and export Requests For Information", leftTab === "rfi", rfis.length)}
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
-
-        {/* markup panel — manage clouds/callouts/text + link or create RFIs (top-left, clear of HUD/FABs) */}
-        {showMarkupPanel && (
-          <div style={{ position: "absolute", left: 14, top: 14, width: 320, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff", borderRadius: 0 }}>
-              <strong>Markups · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
-                    (can't select/delete/fly-to an invisible markup); orthogonal to the
-                    marked-set export, which still includes markups. */}
-                <button
-                  onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
-                  title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
-                  style={{ background: "none", border: "1px solid rgba(255,255,255,.5)", color: "#fff", fontSize: 11, cursor: "pointer", padding: "2px 7px", borderRadius: 0 }}>
-                  {showMarkups ? "Hide layer" : "Show layer"}
-                </button>
-                <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-              </span>
-            </div>
-            <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
-              Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
-            </div>
-            {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
-              <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
-            )}
-            {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
-              <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
-                  {/* inline edit — the panel's fallback for the canvas overlay, since a
-                      markup here may be off-screen or on another sheet (no click point).
-                      Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
-                  {panelEditId === m.id ? (
-                    <input autoFocus defaultValue={m.text || ""}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
-                      onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
-                      style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
-                  ) : (
-                    <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : (m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
-                  )}
-                  {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
-                  <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
-                </div>
-                {/* appearance — per-markup color (reuse PALETTE) + line style; both
-                    additive: unset color falls back to the cobalt(linked)/amber default,
-                    unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
-                  <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
-                  {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-                  <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
-                    {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
-                  </select>
-                  {/* line weight — a multiplier over the element's base stroke width (default
-                      ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
-                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
-                  <select value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
-                    {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
-                  </select>
-                  {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
-                  {m.type === "cloud" && (
-                    <>
-                      <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
-                      <input type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
-                        onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
-                        title="Revision number for the △ delta (blank = none)"
-                        style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
-                    </>
-                  )}
-                </div>
-                {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
-                {(() => {
-                  const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
-                  const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
-                  return (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
-                      {linked ? (
-                        <>
-                          <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "#1f3fc7" }}>⬢ {String(linked.number ?? "")}</span>
-                          <button onClick={() => { setShowRfiPanel(true); }} style={{ ...ctrl, color: "#1f3fc7" }} title="Open the RFI register">Open</button>
-                          <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
-                        </>
-                      ) : (
-                        <>
-                          <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "#1f3fc7", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
-                          {rfis.length > 0 && (
-                            <select value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
-                              title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
-                              <option value="">Link existing…</option>
-                              {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
-                            </select>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Stamp palette — project-global tool-chest (#40): arm a reusable stamp
-            and click-to-place it as normal markups; save the selected markup as
-            a stamp; export/import the library as JSON. */}
-        {showStampPanel && (
-          <StampPanel
-            library={stampLib} armedStamp={armedStamp}
-            selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
-            onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
-            onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setShowStampPanel(false)}
-          />
-        )}
-
-        {/* RFI register — project-global (not sheet-scoped like the markup panel):
-            list/filter/edit/close/void/delete + fly to a linked markup. */}
-        {showRfiPanel && (
-          <RfiPanel
-            rfis={rfis} markups={markups}
-            onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
-            sheetLabel={(k) => tabLabel(k)} onClose={() => setShowRfiPanel(false)}
-          />
-        )}
 
        </div>
 

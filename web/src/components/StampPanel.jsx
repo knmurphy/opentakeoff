@@ -56,7 +56,7 @@ function StampPreview({ elements = [], w = 54, h = 34 }) {
   );
 }
 
-export default function StampPanel({ library = { stamps: [], sets: [] }, armedStamp, selectedMarkup, onArm, onSaveSelected, onDelete, onRename, onExport, onImport, onImportSvg, onClose }) {
+export default function StampPanel({ docked = false, library = { stamps: [], sets: [] }, armedStamp, selectedMarkup, onArm, onSaveSelected, onDelete, onRename, onExport, onImport, onImportSvg, onClose }) {
   const [setFilter, setSetFilter] = useState("all");   // "all" | set id
   const [editId, setEditId] = useState(null);
   const fileRef = useRef(null);
@@ -79,18 +79,35 @@ export default function StampPanel({ library = { stamps: [], sets: [] }, armedSt
     );
   };
 
+  const outer = docked
+    ? { display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "auto", background: "var(--paper-bright)", fontSize: 12.5 }
+    : { position: "absolute", left: 14, top: 14, width: 340, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 9, fontSize: 12.5 };
+  // shared file input (both header modes wire the same import flow)
+  const fileInput = (
+    <input ref={fileRef} type="file" accept="application/json,.json,image/svg+xml,.svg" style={{ display: "none" }}
+      onChange={(e) => { const f = e.target.files?.[0]; if (f) { const isSvg = /\.svg$/i.test(f.name) || f.type === "image/svg+xml"; if (isSvg) onImportSvg?.(f); else onImport(f); } e.target.value = ""; }} />
+  );
+
   return (
-    <div style={{ position: "absolute", left: 14, top: 14, width: 340, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 9, fontSize: 12.5 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff" }}>
-        <strong>Stamps · palette</strong>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button onClick={onExport} title="Export the stamp library as JSON" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Export</button>
-          <button onClick={() => fileRef.current?.click()} title="Import a stamp library (.json, merges) or a vector symbol (.svg, added as a stamp)" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Import</button>
-          <input ref={fileRef} type="file" accept="application/json,.json,image/svg+xml,.svg" style={{ display: "none" }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) { const isSvg = /\.svg$/i.test(f.name) || f.type === "image/svg+xml"; if (isSvg) onImportSvg?.(f); else onImport(f); } e.target.value = ""; }} />
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-        </span>
-      </div>
+    <div style={outer}>
+      {docked ? (
+        // docked: no blue title bar / ×; Export/Import become a slim light toolbar
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
+          <button onClick={onExport} title="Export the stamp library as JSON" style={ctrl}>Export</button>
+          <button onClick={() => fileRef.current?.click()} title="Import a stamp library (.json, merges) or a vector symbol (.svg, added as a stamp)" style={ctrl}>Import</button>
+          {fileInput}
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff" }}>
+          <strong>Stamps · palette</strong>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={onExport} title="Export the stamp library as JSON" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Export</button>
+            <button onClick={() => fileRef.current?.click()} title="Import a stamp library (.json, merges) or a vector symbol (.svg, added as a stamp)" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Import</button>
+            {fileInput}
+            <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+          </span>
+        </div>
+      )}
 
       <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
         {armedStamp
