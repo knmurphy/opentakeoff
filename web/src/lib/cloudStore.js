@@ -106,18 +106,24 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
       await drive.putJson({ folderId, name: ANN_NAME, data: { ...payload, schema: ANN_SCHEMA }, existingId });
     },
 
-    // ── browser-global, local-only (delegated) ───────────────────────────────
-    // Cross-project assets and local versioning stay in localStore for now (see
-    // header). Forward args and return values untouched.
+    // ── browser-global assets (delegated untouched) ──────────────────────────
+    // Condition templates and the material/stamp libraries are cross-project by
+    // design, so they stay in localStore for now (see header).
     loadTemplates(...args) { return local.loadTemplates(...args); },
     saveTemplates(...args) { return local.saveTemplates(...args); },
     loadMaterialLibrary(...args) { return local.loadMaterialLibrary(...args); },
     saveMaterialLibrary(...args) { return local.saveMaterialLibrary(...args); },
     loadStampLibrary(...args) { return local.loadStampLibrary(...args); },
     saveStampLibrary(...args) { return local.saveStampLibrary(...args); },
-    saveSnapshot(...args) { return local.saveSnapshot(...args); },
-    listSnapshots(...args) { return local.listSnapshots(...args); },
-    getSnapshot(...args) { return local.getSnapshot(...args); },
-    deleteSnapshot(...args) { return local.deleteSnapshot(...args); },
+
+    // ── snapshots: browser-local, but SCOPED to this Drive project ────────────
+    // Storage stays in localStore (Drive-backed versioning is a later item), but
+    // we pass folderId as the scope so one browser opening several projects can't
+    // see or load another project's snapshots. deleteSnapshot is by unique id;
+    // the panel only ever surfaces this project's ids.
+    saveSnapshot(label, payload) { return local.saveSnapshot(label, payload, folderId); },
+    listSnapshots() { return local.listSnapshots(folderId); },
+    getSnapshot(id) { return local.getSnapshot(id, folderId); },
+    deleteSnapshot(id) { return local.deleteSnapshot(id); },
   };
 }

@@ -8,7 +8,8 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { store, isStaleTabError, ANN_SCHEMA, STALE_TAB_MESSAGE, friendlyStoreError } from "../src/lib/store.js";
+import { store, localStore, isStaleTabError, ANN_SCHEMA, STALE_TAB_MESSAGE, friendlyStoreError } from "../src/lib/store.js";
+import { createCloudStore } from "../src/lib/cloudStore.js";
 
 beforeEach(() => {
   (globalThis as any).indexedDB = new IDBFactory();
@@ -90,6 +91,68 @@ test("listSnapshots strips payloads, sorts ts desc; deleteSnapshot removes", asy
   assert.equal(await store.getSnapshot(a.id), null);
 });
 
+test("project scope isolates listSnapshots: A sees A, not B, not local", async () => {
+  const a = await store.saveSnapshot("in-A", { shapes: [] }, "A");
+  await sleep(3);
+  const b = await store.saveSnapshot("in-B", { shapes: [] }, "B");
+  await sleep(3);
+  const loc = await store.saveSnapshot("local", { shapes: [] }); // default null scope
+
+  assert.deepEqual((await store.listSnapshots("A")).map((r: any) => r.id), [a.id]);
+  assert.deepEqual((await store.listSnapshots("B")).map((r: any) => r.id), [b.id]);
+  assert.deepEqual((await store.listSnapshots()).map((r: any) => r.id), [loc.id]);
+  // metadata-only rows in scoped listing too
+  assert.deepEqual(await store.listSnapshots("A"), [{ id: a.id, ts: a.ts, label: "in-A" }]);
+});
+
+test("getSnapshot scope guard: right scope returns record, wrong scope returns null", async () => {
+  const { id } = await store.saveSnapshot("scoped", { shapes: [{ id: "s1" }] }, "A");
+
+  const rec = await store.getSnapshot(id, "A");
+  assert.ok(rec);
+  assert.equal(rec.label, "scoped");
+  assert.equal(rec.project, "A");
+  assert.deepEqual(rec.payload, { shapes: [{ id: "s1" }] });
+
+  // id exists, but wrong scope (other project / local) must be refused
+  assert.equal(await store.getSnapshot(id, "B"), null);
+  assert.equal(await store.getSnapshot(id), null);
+});
+
+test("null (local) scope is isolated from project scopes both ways", async () => {
+  const { id } = await store.saveSnapshot("local-only", { shapes: [] }); // default null
+
+  // visible to the local scope
+  assert.deepEqual((await store.listSnapshots()).map((r: any) => r.id), [id]);
+  assert.ok(await store.getSnapshot(id));
+  assert.ok(await store.getSnapshot(id, null));
+
+  // invisible to any project scope
+  assert.deepEqual(await store.listSnapshots("A"), []);
+  assert.equal(await store.getSnapshot(id, "A"), null);
+});
+
+test("legacy snapshot record with no `project` field reads back as null (local) scope", async () => {
+  // Seed a record the pre-scoping code would have written: no `project` field.
+  // Raw put mirrors the shipped v2 layout (SNAP_STORE keyPath "id").
+  const db = await rawOpen(2, (dbToUpgrade) => {
+    if (!dbToUpgrade.objectStoreNames.contains("pdfs")) dbToUpgrade.createObjectStore("pdfs", { keyPath: "name" });
+    if (!dbToUpgrade.objectStoreNames.contains("meta")) dbToUpgrade.createObjectStore("meta");
+    if (!dbToUpgrade.objectStoreNames.contains("snapshots")) dbToUpgrade.createObjectStore("snapshots", { keyPath: "id" });
+  });
+  await rawPut(db, "snapshots", { id: "snap_legacy", ts: 111, label: "old" }); // NO project field
+  db.close();
+
+  // no migration needed: legacy record is the null (local) scope
+  assert.deepEqual(await store.listSnapshots(), [{ id: "snap_legacy", ts: 111, label: "old" }]);
+  const rec = await store.getSnapshot("snap_legacy");
+  assert.ok(rec);
+  assert.equal(rec.label, "old");
+  // and it is NOT visible to a project scope
+  assert.deepEqual(await store.listSnapshots("A"), []);
+  assert.equal(await store.getSnapshot("snap_legacy", "A"), null);
+});
+
 test("v1->v2 upgrade preserves pdfs + annotations, and snapshots work after", async () => {
   // Seed a v1 database exactly the way the shipped v1 code laid it out.
   const v1 = await rawOpen(1, (db) => {
@@ -159,6 +222,30 @@ test("friendlyStoreError maps quota to actionable copy; other errors pass throug
   // TakeoffCanvas routes its message tint on EXACT equality with this string —
   // pin the copy so an edit there can't silently turn the warning green
   assert.equal(STALE_TAB_MESSAGE, "OpenTakeoff was updated in another tab — reload this tab to continue.");
+});
+
+test("two cloudStores over one IndexedDB scope snapshots by folderId (end-to-end)", async () => {
+  // Real localStore on fake-indexeddb — not the recording fake. The snapshot
+  // methods never touch Drive, so a stub drive is enough to build the stores.
+  const drive = {} as any;
+  const a = createCloudStore("folderA", drive, { local: localStore });
+  const b = createCloudStore("folderB", drive, { local: localStore });
+
+  const { id } = await a.saveSnapshot("from-A", { shapes: [{ id: "s1" }] });
+
+  // store A sees its own snapshot
+  assert.deepEqual((await a.listSnapshots()).map((r: any) => r.id), [id]);
+  const recA = await a.getSnapshot(id);
+  assert.ok(recA);
+  assert.equal(recA.project, "folderA");
+
+  // store B (different folder) is fully isolated — can't list or fetch it
+  assert.deepEqual(await b.listSnapshots(), []);
+  assert.equal(await b.getSnapshot(id), null);
+
+  // and the anonymous/local scope can't see it either
+  assert.deepEqual(await store.listSnapshots(), []);
+  assert.equal(await store.getSnapshot(id), null);
 });
 
 test("annotations round-trip still works against the v2 database (regression)", async () => {

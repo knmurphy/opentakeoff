@@ -70,7 +70,11 @@ function ProjectGate({ projectId }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!user) { setActiveStore(); setStoreReady(false); return; }   // signed out → back to local
+    // Signed out → show SignInScreen, but KEEP the cloud store active: the
+    // canvas is unmounting and its best-effort flush must target Drive, not get
+    // redirected into local IndexedDB. The store is reset to local only when we
+    // leave cloud mode entirely (the unmount cleanup below).
+    if (!user) { setStoreReady(false); return; }
     let live = true;
     // Rebuild for THIS project: clear the previous project's ready/error so we
     // never mount the canvas against a stale store, and a past failure can't
@@ -92,6 +96,12 @@ function ProjectGate({ projectId }) {
     })();
     return () => { live = false; };
   }, [user, projectId]);
+
+  // Restore the local store when ProjectGate leaves cloud mode (app navigates
+  // away from ?project). ProjectGate isn't remounted when projectId changes
+  // (no key on it), so this fires only on a real exit from cloud mode — not
+  // between projects, and not on sign-out.
+  useEffect(() => () => { setActiveStore(); }, []);
 
   if (!user) return <SignInScreen ready={ready} signIn={signIn} />;
   if (error) return <Centered title="Couldn't open this project" body={error} />;

@@ -215,6 +215,10 @@ test("browser-global methods delegate to localStore untouched", async () => {
     "loadStampLibrary", "saveStampLibrary", "saveSnapshot", "listSnapshots",
     "getSnapshot", "deleteSnapshot",
   ]);
-  // args forwarded verbatim
-  assert.deepEqual(local._calls[6].args, ["label", { x: 1 }]);
+  // snapshot delegates inject this store's folderId ("folder1") as the scope;
+  // deleteSnapshot is by unique id and stays unscoped.
+  assert.deepEqual(local._calls[6].args, ["label", { x: 1 }, "folder1"]); // saveSnapshot
+  assert.deepEqual(local._calls[7].args, ["folder1"]);                    // listSnapshots
+  assert.deepEqual(local._calls[8].args, ["snap_1", "folder1"]);          // getSnapshot
+  assert.deepEqual(local._calls[9].args, ["snap_1"]);                     // deleteSnapshot
 });
