@@ -185,13 +185,24 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
     const run = writeChain.then(async () => {
       await ensureManifest();
       const next = fn(manifestFiles);
-      // Write target: an update-in-place when we already hold the sidecar file's
-      // id, otherwise create it INSIDE the sidecar folder. `next` was computed
-      // from `manifestFiles`, which ensureManifest already seeded from any legacy
-      // loose file — so the create branch migrates that content forward. sheetsId
-      // is null on a legacy fallback (see ensureManifest), which routes us here.
-      const sidecarId = sheetsId ? null : await ensureSidecarId();
-      const { id } = await drive.putJson({ folderId: sidecarId ?? folderId, name: SHEETS_NAME, data: { files: next }, existingId: sheetsId });
+      // Resolve the write target. If we already hold the sidecar file's id (a
+      // sidecar-hit read cached it), update in place. Otherwise resolve the
+      // sidecar folder and RE-DISCOVER an existing sheets.json before
+      // create-branching: a legacy-tiebreak read leaves sheetsId null even when a
+      // sidecar file already exists, so a blind create would spawn a DUPLICATE
+      // sheets.json (a later findChild then picks one arbitrarily and loses
+      // picks). This mirrors the re-discovery ensureAnnId does at its create
+      // branch. `next` was computed from `manifestFiles`, which ensureManifest
+      // already seeded from any legacy loose file, so an in-place update or a
+      // fresh create both migrate that content forward.
+      let writeId = sheetsId;
+      let createIn = folderId;   // only consulted when writeId stays null (create)
+      if (!writeId) {
+        createIn = await ensureSidecarId();
+        const existing = await drive.findChild(createIn, SHEETS_NAME);
+        if (existing) writeId = existing.id;
+      }
+      const { id } = await drive.putJson({ folderId: createIn, name: SHEETS_NAME, data: { files: next }, existingId: writeId });
       sheetsId = id;
       manifestFiles = next;
       return next;
@@ -319,7 +330,12 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
 
     async saveAnnotations(payload) {
       const existingId = await ensureAnnId();
-      await drive.putJson({ folderId, name: ANN_NAME, data: { ...payload, schema: ANN_SCHEMA }, existingId });
+      // existingId is always truthy here, so putJson PATCHes by id and ignores
+      // folderId — but target the SIDECAR folder anyway (both memoized, no extra
+      // round-trip) so this never writes annotations loose into the project
+      // folder if a future refactor makes existingId nullable.
+      const sidecarId = await ensureSidecarId();
+      await drive.putJson({ folderId: sidecarId, name: ANN_NAME, data: { ...payload, schema: ANN_SCHEMA }, existingId });
     },
 
     // ── browser-global assets (delegated untouched) ──────────────────────────

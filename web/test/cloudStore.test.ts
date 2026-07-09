@@ -475,6 +475,28 @@ test("SPLIT-BRAIN tiebreak: a newer sidecar wins over an older legacy", async ()
   assert.deepEqual((await store.loadAnnotations()).conditions, [{ id: "sidecar-new" }]);
 });
 
+test("SPLIT-BRAIN write: a sidecar sheets.json already exists but a newer legacy wins the read → mutate UPDATES the sidecar file in place, never duplicates it", async () => {
+  const drive = fakeDrive();
+  // sidecar folder + an OLD sidecar sheets.json, plus a NEWER legacy loose one:
+  // the tiebreak makes the READ prefer legacy (so sheetsId is left null), but the
+  // WRITE must still target the EXISTING sidecar file rather than create a second.
+  drive._byId.set("sc", { id: "sc", name: ".opentakeoff", parent: "folder1", mimeType: "application/vnd.google-apps.folder" });
+  drive._byId.set("sc_sheets", { id: "sc_sheets", name: "sheets.json", parent: "sc", mimeType: "application/json", modifiedTime: "2020-01-01", bytes: new TextEncoder().encode(JSON.stringify({ files: [{ id: "sc-old", name: "sidecar-old.pdf" }] })) });
+  drive._byId.set("lg_sheets", { id: "lg_sheets", name: "sheets.json", parent: "folder1", mimeType: "application/json", modifiedTime: "2020-06-01", bytes: new TextEncoder().encode(JSON.stringify({ files: [{ id: "lg-new", name: "legacy-new.pdf" }] })) });
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // read prefers the newer legacy set
+  assert.deepEqual((await store.listSheets()).map((s) => s.name), ["legacy-new.pdf"]);
+  await store.addSheets([{ id: "add", name: "added.pdf" }]);
+
+  // exactly ONE sheets.json parented to the sidecar (no duplicate spawned)
+  const sidecarSheets = [...drive._byId.values()].filter((r) => r.name === "sheets.json" && r.parent === "sc");
+  assert.equal(sidecarSheets.length, 1, "must update the existing sidecar sheets.json, not create a second");
+  // and it's the SAME file id, updated in place, carrying the migrated set + new pick
+  assert.equal(sidecarSheets[0].id, "sc_sheets");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(sidecarSheets[0].bytes)).files.map((f: any) => f.name), ["legacy-new.pdf", "added.pdf"]);
+});
+
 test("listFolder hides the .opentakeoff sidecar folder from the picker", async () => {
   const drive = fakeDrive();
   drive._byId.set("sc", { id: "sc", name: ".opentakeoff", parent: "folder1", mimeType: "application/vnd.google-apps.folder", bytes: new Uint8Array() });
