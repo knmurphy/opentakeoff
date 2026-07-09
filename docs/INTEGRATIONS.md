@@ -63,6 +63,69 @@ Wrap it in a thin transport envelope (§4) and send it.
 The rest of this design centers on **your own receiver** and keeps the
 **automation-hub** path as the zero-backend quick start.
 
+## 3.1 Concrete targets under evaluation: Windmill and Glide
+
+Two specific destinations are on the table. They authenticate differently, and
+that difference — not the transport — is what decides the architecture.
+
+### Glide (no-code app builder) — direct SaaS API
+
+- Ingest is the **Glide Tables API**: `POST` to
+  `https://api.glideapp.io/api/function/mutateTables` (legacy) or the newer Big
+  Tables API at `https://api.glideapps.com`, body carries `add-row-to-table`
+  mutations, ≤ 500 mutations per call.
+- Auth: `Authorization: Bearer <token>`. **The token is team-wide** — Glide's
+  own docs state it "has access to all applications and data in your team" and
+  "should not be exposed in client environments."
+- **Consequence: a forwarder is mandatory.** There is no scoped/capability
+  token; the browser can never hold this secret. Glide is the strict case.
+- Payload shape mismatch: Glide tables are **flat rows**; `report.v1` is nested.
+  Something must flatten it — one row per condition (a *Takeoffs* table), one
+  row per material (a *Materials* table), one row per project (*Projects*).
+- Practical notes: API is a paid-plan feature (Business/Enterprise); add-row is
+  not idempotent, so re-sends need an upsert strategy (a stable
+  `project_id + condition_id` key column + `set-columns-in-row`, or
+  delete-then-add per project).
+
+### Windmill (open-source workflow engine) — self-hosted webhook + code
+
+- Ingest is a **webhook**: `POST` to the script/flow URL
+  (`/api/w/<workspace>/jobs/run[/_wait_result]/p/<path>`).
+- Auth: Bearer token, **but Windmill can mint a token pre-scoped to a single
+  script/flow** — "safe to share publicly" per their docs. Worst case if it
+  leaks: someone triggers that one flow. Blast radius is one flow, unlike
+  Glide's team-wide key.
+- **Windmill runs your code**, so it is not just a sink — it is a
+  transform-and-fan-out hub. A Windmill flow can hold *its own* secrets
+  (including the Glide team token, in Windmill's variables/secrets store), do
+  the `report.v1` → rows flatten, verify an HMAC, and deliver onward.
+- No native inbound HMAC verification (open request:
+  windmill-labs/windmill#5115), but you can verify a signature *inside* the
+  script trivially since it's your code.
+
+### The insight: Windmill can be the forwarder
+
+If Glide is the ultimate destination, you don't have to build a custom forwarder
+to hold the Glide team token — **let Windmill hold it.** Then:
+
+```
+Browser ──report.v1──▶ Windmill webhook ──▶ Windmill flow ──▶ Glide Big Tables
+                                          (holds Glide token,
+                                           flattens, upserts)
+```
+
+Every high-value secret (the Glide team key) lives in Windmill's secret store,
+never in the browser. The only thing left to protect is the **browser → Windmill
+webhook** hop, and Windmill's scoped webhook token already covers that at low
+blast radius. Add a tiny forwarder in front only if you want to keep even the
+scoped token out of the bundle or gate the hop with identity (§6).
+
+**Recommendation:** make **Windmill the ingestion point**. It fits a fork that
+wants to own its stack (open-source, self-hostable), it natively models the
+"webhook payload" you described, and it absorbs the Glide-secret problem instead
+of forcing a bespoke forwarder. Route to Glide *from* Windmill if/when you need
+the Glide app populated.
+
 ## 4. Architecture — two shapes
 
 ### Shape A — browser → third party directly (quick start, no backend)
@@ -144,6 +207,26 @@ Applied to Shape B's two hops:
   *service token*, not the page).
 - You never use the interactive Access **page** to secure the webhook traffic
   itself — that page is for gating humans, not machines.
+
+**Per target:**
+
+- **Glide** — Glide is *their* cloud; you can't put Cloudflare Access in front of
+  it. CF Access is **irrelevant** to the Glide hop. The whole security story is
+  keeping the team-wide token server-side (forwarder or Windmill). No Access
+  page needed.
+- **Windmill (self-hosted)** — this is the only place CF Access *could* apply: if
+  you self-host Windmill behind Cloudflare, you may gate the instance with an
+  Access **service token** (the caller/forwarder then sends
+  `CF-Access-Client-Id/Secret` alongside the Windmill bearer token). But this is
+  **optional and additive** — Windmill's scoped webhook token already
+  authenticates the call. The interactive Access **page** is still only for
+  humans reaching the Windmill UI or for gating the browser→forwarder hop, never
+  for the webhook itself.
+
+**So, for Windmill or Glide: you do not need a Cloudflare Access page.** For
+Windmill you might reach for Access *service tokens* (not the page) if you
+self-host and want a network gate on top of the scoped token; for Glide, Access
+plays no part at all.
 
 ## 7. Trigger & UX (proposal)
 
