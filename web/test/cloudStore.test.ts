@@ -162,6 +162,38 @@ test("saveAnnotations after loadAnnotations reuses the discovered file id", asyn
   assert.equal(jsonFiles.length, 1);
 });
 
+test("loadAnnotations throws a tagged CloudLoadError when the file exists but is unreadable", async () => {
+  const drive = fakeDrive();
+  // a present-but-corrupt annotations.json: getJson (JSON.parse) will throw
+  drive._byId.set("id_x", { id: "id_x", name: "annotations.json", mimeType: "application/json", bytes: new TextEncoder().encode("{not json") });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await assert.rejects(store.loadAnnotations(), (e: any) => {
+    assert.equal(e.name, "CloudLoadError");   // canvas routes on this to leave autosave DISARMED
+    return true;
+  });
+});
+
+test("loadAnnotations falls back to the empty default when the file parses to null", async () => {
+  const drive = fakeDrive();
+  drive._byId.set("id_n", { id: "id_n", name: "annotations.json", mimeType: "application/json", bytes: new TextEncoder().encode("null") });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  assert.deepEqual((await store.loadAnnotations()).conditions, []);
+  assert.equal((await store.loadAnnotations()).schema, ANN_SCHEMA);
+});
+
+test("concurrent saves on a fresh project create exactly one annotations.json (no dup race)", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // two autosaves fire before the first resolves — the memoized file id must
+  // funnel both to the same file instead of each taking the create branch.
+  await Promise.all([
+    store.saveAnnotations({ shapes: [{ id: "a" }] }),
+    store.saveAnnotations({ shapes: [{ id: "b" }] }),
+  ]);
+  const jsonFiles = [...drive._byId.values()].filter((r) => r.name === "annotations.json");
+  assert.equal(jsonFiles.length, 1);
+});
+
 test("browser-global methods delegate to localStore untouched", async () => {
   const drive = fakeDrive();
   const local = fakeLocal();

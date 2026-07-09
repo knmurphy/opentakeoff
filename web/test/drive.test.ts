@@ -67,6 +67,16 @@ test("listChildren builds q/fields, adds Shared-Drive flags, and maps files", as
   assert.deepEqual(out, [{ id: "a", name: "one.pdf", mimeType: "application/pdf", modifiedTime: "t1" }]);
 });
 
+test("findChild escapes both backslash and single-quote in the q grammar", async () => {
+  const { fetch, calls } = stubFetch([makeRes({ json: { files: [] } })]);
+  const drive = createDrive({ getToken, fetch });
+  await drive.findChild("folder1", "a'b\\c.pdf");   // name contains a quote AND a backslash
+  const q = new URLSearchParams(calls[0].url.split("?")[1]).get("q")!;
+  // backslash escaped first (\\), then quote (\') — a name like this must not
+  // break the query or silently miss (would cause dup uploads / not-found).
+  assert.ok(q.includes("name='a\\'b\\\\c.pdf'"), q);
+});
+
 test("listChildren follows nextPageToken pagination", async () => {
   const { fetch, calls } = stubFetch([
     makeRes({ json: { files: [{ id: "a", name: "a" }], nextPageToken: "PAGE2" } }),

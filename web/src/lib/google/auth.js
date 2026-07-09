@@ -38,6 +38,7 @@ let scriptPromise = null;       // de-dupes the <script> injection
 let token = null;               // { accessToken, expiresAt } | null
 let user = null;                // { email, name, picture, sub, hd } | null
 let pending = null;             // resolver/rejecter for the current requestAccessToken
+let pendingPromise = null;      // in-flight requestToken() promise, for coalescing
 const listeners = new Set();
 
 function clientId() {
@@ -141,6 +142,16 @@ async function ensureTokenClient() {
       };
       p.resolve(token.accessToken);
     },
+    // GIS fires error_callback (NOT callback) when the user closes/dismisses the
+    // consent popup or it fails to open (popup_closed_by_user /
+    // popup_failed_to_open). Without this, `pending` would never settle: signIn()
+    // would hang and every later token request would coalesce onto a promise that
+    // never resolves. Reject so the UI can show it and the user can retry.
+    error_callback: (err) => {
+      const p = pending;
+      pending = null;
+      if (p) p.reject(new Error(err?.message || err?.type || "Google sign-in was cancelled."));
+    },
   });
   return tokenClient;
 }
@@ -149,20 +160,20 @@ async function ensureTokenClient() {
 // forces the account chooser (first sign-in); `prompt: ''` refreshes silently.
 async function requestToken(prompt) {
   const client = await ensureTokenClient();
-  return new Promise((resolve, reject) => {
-    if (pending) {
-      // GIS serializes internally; refuse to overwrite an outstanding resolver.
-      reject(new Error("A Google token request is already in progress."));
-      return;
-    }
+  // Coalesce concurrent requests onto one in-flight token call. The canvas issues
+  // Drive calls in parallel, so at expiry several getAccessToken() callers hit the
+  // silent-refresh branch on the same tick; they must share the refresh, not have
+  // all-but-one reject. `pending` still carries the resolver GIS's callbacks fire.
+  if (pendingPromise) return pendingPromise;
+  pendingPromise = new Promise((resolve, reject) => {
     pending = { resolve, reject };
     try {
       client.requestAccessToken({ prompt });
     } catch (e) {
-      pending = null;
       reject(e);
     }
-  });
+  }).finally(() => { pending = null; pendingPromise = null; });
+  return pendingPromise;
 }
 
 async function fetchProfile(accessToken) {

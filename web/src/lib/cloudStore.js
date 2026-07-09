@@ -13,16 +13,10 @@
 // follow-up; keeping them local now matches the rollout plan and avoids
 // entangling per-project cloud state with browser-wide libraries.
 
-import { localStore, ANN_SCHEMA } from "./store.js";
+import { localStore, ANN_SCHEMA, emptyAnnotations } from "./store.js";
 
 const PDF_MIME = "application/pdf";
 const ANN_NAME = "annotations.json";
-
-// The empty-project shape localStore.loadAnnotations() returns — kept identical
-// so a fresh cloud project hydrates the canvas exactly like a fresh local one.
-function defaultAnnotations() {
-  return { schema: ANN_SCHEMA, conditions: [], shapes: [], markups: [], sheets: [], sheet_group: [], last_group: [], sheet_tabs: [] };
-}
 
 /**
  * @param {string} folderId               the project's Drive folder
@@ -30,9 +24,24 @@ function defaultAnnotations() {
  * @param {{ local?: typeof localStore }} [opts]  inject localStore for tests
  */
 export function createCloudStore(folderId, drive, { local = localStore } = {}) {
-  // Remember the annotations file id after the first read/write so subsequent
-  // saves update in place instead of creating a second annotations.json.
-  let annId = null;
+  // Memoized promise that resolves the single annotations.json file id — locate
+  // an existing file, else create one exactly once. Shared by load and save so
+  // that concurrent autosaves on a brand-new project can't each take the "create"
+  // branch and spawn duplicate annotations.json files (a later load would then
+  // pick one arbitrarily and lose the other's edits). A failed locate/create is
+  // not cached, so the next call retries.
+  let annIdP = null;
+  function ensureAnnId() {
+    if (!annIdP) {
+      annIdP = (async () => {
+        const child = await drive.findChild(folderId, ANN_NAME);
+        if (child) return child.id;
+        const { id } = await drive.putJson({ folderId, name: ANN_NAME, data: emptyAnnotations(), existingId: null });
+        return id;
+      })().catch((e) => { annIdP = null; throw e; });
+    }
+    return annIdP;
+  }
 
   return {
     async listSheets() {
@@ -69,19 +78,32 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
 
     async loadAnnotations() {
       const child = await drive.findChild(folderId, ANN_NAME);
-      if (!child) return defaultAnnotations();
-      annId = child.id;
-      return drive.getJson(child.id);
+      // No file yet = a fresh project → the empty default (same as localStore).
+      if (!child) return emptyAnnotations();
+      // Remember the id for saves (bypass the create branch in ensureAnnId).
+      annIdP = Promise.resolve(child.id);
+      let data;
+      try {
+        data = await drive.getJson(child.id);
+      } catch (e) {
+        // The file EXISTS but couldn't be read/parsed (network blip, truncated
+        // upload, hand-edited JSON). Do NOT fall back to the empty default here:
+        // the canvas would hydrate empty and autosave that over the real project.
+        // Tagged so the canvas load can leave autosave DISARMED (like a stale tab)
+        // instead of overwriting Drive. See TakeoffCanvas mount-load catch.
+        throw Object.assign(
+          new Error(`Couldn't read this project's saved takeoff from Drive — reload to retry. (${e?.message || e})`),
+          { name: "CloudLoadError" },
+        );
+      }
+      // A file that parsed to null/falsy is treated as empty (localStore's `a ||`
+      // guard) — a degenerate file, safe to replace on the next save.
+      return data || emptyAnnotations();
     },
 
     async saveAnnotations(payload) {
-      const { id } = await drive.putJson({
-        folderId,
-        name: ANN_NAME,
-        data: { ...payload, schema: ANN_SCHEMA },
-        existingId: annId,
-      });
-      annId = id;
+      const existingId = await ensureAnnId();
+      await drive.putJson({ folderId, name: ANN_NAME, data: { ...payload, schema: ANN_SCHEMA }, existingId });
     },
 
     // ── browser-global, local-only (delegated) ───────────────────────────────

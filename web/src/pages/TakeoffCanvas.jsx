@@ -641,6 +641,10 @@ export default function TakeoffCanvas() {
       // would autosave straight over the other tab's real data. The reload
       // message is the whole story for this tab.
       if (isStaleTabError(e)) { setCommitMsg(STALE_TAB_MESSAGE); return; }
+      // Cloud project whose saved takeoff couldn't be read (Drive error / unreadable
+      // annotations): same rule as a stale tab — leave autosave DISARMED so empty
+      // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
+      if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
       hydrated.current = true;
     });
     return () => { off = true; };

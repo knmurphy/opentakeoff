@@ -18,10 +18,13 @@ const UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files";
  * @param {typeof fetch} [opts.fetch]            injectable for tests
  */
 export function createDrive({ getToken, fetch = globalThis.fetch }) {
-  // Escape single quotes for the Drive `q` search grammar, where '...' delimits
-  // string literals (a name like O'Brien would otherwise break the query).
+  // Escape a value for the Drive `q` search grammar, where '...' delimits string
+  // literals. Both backslash and single quote must be backslash-escaped —
+  // backslash FIRST, or we'd double-escape the ones we add for quotes. (A name
+  // like O'Brien or one containing a literal backslash would otherwise break the
+  // query and silently miss.)
   function escapeQ(s) {
-    return String(s).replace(/'/g, "\\'");
+    return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
   }
 
   async function authHeaders(extra) {

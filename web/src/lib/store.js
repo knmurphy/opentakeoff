@@ -38,6 +38,13 @@ const MATLIB_KEY = "material_library";
 const STAMPLIB_KEY = "stamp_library";
 const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1";
 
+// The empty-project annotations shape. One definition so the local store and the
+// Drive-backed cloud store (cloudStore.js) hydrate a fresh project identically —
+// a new field added here reaches both, instead of silently drifting apart.
+export function emptyAnnotations() {
+  return { schema: ANN_SCHEMA, conditions: [], shapes: [], markups: [], sheets: [], sheet_group: [], last_group: [], sheet_tabs: [] };
+}
+
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -164,7 +171,7 @@ export const localStore = {
 
   async loadAnnotations() {
     const a = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(ANN_KEY)));
-    return a || { schema: ANN_SCHEMA, conditions: [], shapes: [], markups: [], sheets: [], sheet_group: [], last_group: [], sheet_tabs: [] };
+    return a || emptyAnnotations();
   },
 
   async saveAnnotations(payload) {
