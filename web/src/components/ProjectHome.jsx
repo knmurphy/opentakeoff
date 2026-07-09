@@ -5,9 +5,9 @@
 // below the project list here). Plus a browser-local recents list. Opening a
 // project navigates to `/?project=<folderId>` — the exact same deep link Glide
 // hands out, so ProjectGate does all the store work and lands the user in the
-// in-project PDF picker; nothing is opened here. The listing/recents logic
-// lives in lib/projectHome.js (node-testable); this file is only the screen,
-// mirroring DrivePicker's visual idiom.
+// project (empty → the PDF picker, otherwise the sheet gallery); nothing is
+// opened here. The listing/recents logic lives in lib/projectHome.js
+// (node-testable); this file is only the screen, mirroring DrivePicker's idiom.
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AuthChip from "./AuthChip.jsx";
@@ -45,7 +45,7 @@ export default function ProjectHome() {
   }, [attempt]);
 
   const open = ({ id, name }) => {
-    // A browse row passes the name Drive reports RIGHT NOW, so a renamed folder
+    // A project row passes the name Drive reports RIGHT NOW, so a renamed folder
     // self-heals in recents when opened from the list; a recents-row open
     // re-remembers its stored name and only bumps the ordering.
     createRecents(browserStorage()).remember({ id, name });
@@ -107,10 +107,11 @@ export default function ProjectHome() {
         ) : (
           folders.map((f) => (
             // row and button both open the project — a project is exactly this
-            // folder, so there's nothing to drill into; opening drops the user
-            // into the in-project PDF picker.
+            // folder, so there's nothing to drill into; opening lands the user in
+            // the project (empty → picker, otherwise the gallery). No leading
+            // glyph: a drill triangle would misread as "expand," and this matches
+            // the recents rows above.
             <div key={f.id} onClick={() => open(f)} style={{ ...rowBase, cursor: "pointer" }}>
-              <span style={{ fontSize: 15, width: 20, textAlign: "center", color: "var(--cobalt)" }}>▸</span>
               <strong style={{ fontFamily: "var(--f-body)", fontSize: 13.5, color: "var(--ink)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</strong>
               <button type="button" onClick={(e) => { e.stopPropagation(); open(f); }} style={openBtn}>Open project</button>
             </div>
