@@ -29,6 +29,21 @@
   --c-warning:  #c47a10;
   --c-danger:   #b03a26;
 
+  /* chrome theming — novel colors pulled out of inline styles */
+  --ink-secondary: #5b544a;      /* secondary readout text */
+  --text-faint:    #a39e8d;      /* faint text/fills — --ink-faint stays hairline-only */
+  --tint-select:   #e8eefc;      /* checked-row cobalt tint */
+  --tint-active:   #f3f8f4;      /* active-row green tint */
+  --surface-pop:   #ffffff;      /* active chip / lifted fills */
+  --well:          #ffffff;      /* media wells (PDF thumbs, stamp previews) — light in ALL themes */
+  --accent-contrast: #ffffff;    /* text/rules on cobalt surfaces */
+  --hairline-warm: #f0d9c0;      /* calibration-prompt border */
+  --divider-soft:  #eee6d8;      /* readout divider fill */
+  --scrim:         rgba(14, 26, 46, .45);
+  --shadow-pop:    0 6px 22px rgba(0, 0, 0, .16);
+  --grain-rgb:     0, 0, 0;      /* paper-grain channel triplet */
+  --grain-inverse-rgb: 255, 255, 255;
+
   /* type */
   --f-display: "Bricolage Grotesque", "Inter", system-ui, sans-serif;
   --f-body:    "Inter", system-ui, sans-serif;
@@ -58,20 +73,20 @@
 .paper-cream {
   background-color: var(--paper-cream);
   background-image:
-    radial-gradient(circle at 17% 23%, rgba(0,0,0,.025) 0, transparent 1.5px),
-    radial-gradient(circle at 73% 81%, rgba(0,0,0,.022) 0, transparent 1.2px),
-    radial-gradient(circle at 41% 67%, rgba(0,0,0,.018) 0, transparent 1px),
-    radial-gradient(circle at 89% 12%, rgba(0,0,0,.022) 0, transparent 1.3px),
-    radial-gradient(circle at 8% 88%, rgba(0,0,0,.02) 0, transparent 1px);
+    radial-gradient(circle at 17% 23%, rgba(var(--grain-rgb), .025) 0, transparent 1.5px),
+    radial-gradient(circle at 73% 81%, rgba(var(--grain-rgb), .022) 0, transparent 1.2px),
+    radial-gradient(circle at 41% 67%, rgba(var(--grain-rgb), .018) 0, transparent 1px),
+    radial-gradient(circle at 89% 12%, rgba(var(--grain-rgb), .022) 0, transparent 1.3px),
+    radial-gradient(circle at 8% 88%, rgba(var(--grain-rgb), .02) 0, transparent 1px);
   background-size: 7px 7px, 11px 11px, 5px 5px, 13px 13px, 9px 9px;
 }
 
 .paper-bright {
   background-color: var(--paper-bright);
   background-image:
-    radial-gradient(circle at 17% 23%, rgba(0,0,0,.022) 0, transparent 1.4px),
-    radial-gradient(circle at 73% 81%, rgba(0,0,0,.018) 0, transparent 1px),
-    radial-gradient(circle at 41% 67%, rgba(0,0,0,.014) 0, transparent .8px);
+    radial-gradient(circle at 17% 23%, rgba(var(--grain-rgb), .022) 0, transparent 1.4px),
+    radial-gradient(circle at 73% 81%, rgba(var(--grain-rgb), .018) 0, transparent 1px),
+    radial-gradient(circle at 41% 67%, rgba(var(--grain-rgb), .014) 0, transparent .8px);
   background-size: 7px 7px, 11px 11px, 5px 5px;
 }
 
@@ -98,8 +113,8 @@
   background-color: var(--ink);
   color: var(--paper-cream);
   background-image:
-    radial-gradient(circle at 17% 23%, rgba(255,255,255,.025) 0, transparent 1.2px),
-    radial-gradient(circle at 73% 81%, rgba(255,255,255,.02) 0, transparent 1px);
+    radial-gradient(circle at 17% 23%, rgba(var(--grain-inverse-rgb), .025) 0, transparent 1.2px),
+    radial-gradient(circle at 73% 81%, rgba(var(--grain-inverse-rgb), .02) 0, transparent 1px);
   background-size: 9px 9px, 13px 13px;
 }
 
