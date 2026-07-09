@@ -134,38 +134,19 @@ export function markupToStampElement(m) {
 
 // Starter flooring shop-drawing stamps, seeded on an empty library (the
 // FLOORING_DEFAULTS precedent for conditions). Offsets are fractions of sheet
-// width/height; ids are stable so re-seeding is idempotent. `prompt:true`
-// elements open a text editor on placement (bubble numbers). Approval stamps
-// are compound (a highlight box carrying the stamp text) — the model supports
-// multi-element stamps; the palette lists each as one placeable entry.
+// width/height; ids are stable so re-seeding is idempotent. Kept deliberately
+// minimal — three genuinely flooring-specific directional marks. Everything
+// else comes from SVG import or Save-as-stamp, so the library carries no
+// decorative title-block art (north arrows, approval stamps, generic bubbles).
 export const DEFAULT_STAMPS = [
-  { id: "stmp-north", name: "North arrow", elements: [
-    { type: "arrow", from: [0, 0.045], to: [0, -0.045], color: "#0e1a2e", weight: 1.5 },
-    { type: "text", at: [-0.006, -0.055], text: "N", color: "#0e1a2e" },
-  ] },
   { id: "stmp-direction", name: "Plank / tile direction", elements: [
     { type: "arrow", from: [-0.05, 0], to: [0.05, 0], color: "#1f3fc7", weight: 1.5 },
   ] },
   { id: "stmp-seam", name: "Seam direction", elements: [
     { type: "arrow", from: [-0.05, 0], to: [0.05, 0], color: "#b03a26", line_style: "dashed" },
   ] },
-  { id: "stmp-detail", name: "Detail bubble", elements: [
-    { type: "bubble", at: [0, 0], r: 0.022, text: "", prompt: true, color: "#1f3fc7" },
-  ] },
-  { id: "stmp-keynote", name: "Keyed note", elements: [
-    { type: "bubble", at: [0, 0], r: 0.02, text: "", prompt: true, color: "#c47a10" },
-  ] },
   { id: "stmp-origin", name: "Pattern origin", elements: [
     { type: "bubble", at: [0, 0], r: 0.018, text: "PO", color: "#0d9488" },
-  ] },
-  { id: "stmp-for-construction", name: "FOR CONSTRUCTION", elements: [
-    { type: "highlight", rect: [[-0.065, -0.018], [0.065, 0.018]], text: "FOR CONSTRUCTION", color: "#0d9488" },
-  ] },
-  { id: "stmp-as-built", name: "AS-BUILT", elements: [
-    { type: "highlight", rect: [[-0.045, -0.018], [0.045, 0.018]], text: "AS-BUILT", color: "#9333ea" },
-  ] },
-  { id: "stmp-approved", name: "APPROVED", elements: [
-    { type: "highlight", rect: [[-0.045, -0.018], [0.045, 0.018]], text: "APPROVED", color: "#2f7d54" },
   ] },
 ];
 export const DEFAULT_STAMP_SETS = [
