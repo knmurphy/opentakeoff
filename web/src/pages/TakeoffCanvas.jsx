@@ -981,6 +981,11 @@ export default function TakeoffCanvas() {
         })();
       }
     })().catch((e) => { if (stale() || e?.name === "RenderingCancelledException") return; setErr(String(e.message || e)); setStatus("error"); });
+    // cleanup MUST read the LIVE refs, not a mount-time copy: bumping the current
+    // renderSeqRef invalidates in-flight renders, and cancelling the current
+    // renderTasksRef set is the whole point. Copying to a variable (the rule's
+    // suggestion) would cancel the stale mount-time set and leak the live one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { renderSeqRef.current++; for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupSig, hiResKeys.join(" ")]);
@@ -1125,6 +1130,10 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
+    // buildPayload is intentionally omitted: this dep list IS the exact set of
+    // state it serializes, so listing buildPayload (a new identity each render)
+    // would fire a save on every render instead of only on a real change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shapes, conditions, conditionColumns, palette, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
@@ -1161,13 +1170,16 @@ export default function TakeoffCanvas() {
     return [(cx - r.left - t.x) / t.scale, (cy - r.top - t.y) / t.scale];
   }, []);
 
-  function zoomAround(cx, cy, factor) {
+  // memoized so the wheel-zoom effect can list it as a dep and still bind its
+  // listener once — a plain function would give a new identity each render and
+  // re-subscribe the (passive:false) wheel handler on every render.
+  const zoomAround = useCallback((cx, cy, factor) => {
     const t = tfRef.current;
     const next = clamp(t.scale * factor);
     const k = next / t.scale;
     tfRef.current = { scale: next, x: cx - (cx - t.x) * k, y: cy - (cy - t.y) * k };
     applyTf(); scheduleSync();
-  }
+  }, [applyTf, scheduleSync]);
 
   // wheel: zoom toward the cursor — plain scroll wheel and trackpad pinch alike.
   // A mouse notch is one big discrete delta; gliding it over a few frames keeps
@@ -1213,7 +1225,7 @@ export default function TakeoffCanvas() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => { el.removeEventListener("wheel", onWheel); if (raf) cancelAnimationFrame(raf); };
-  }, [applyTf, scheduleSync]);
+  }, [applyTf, scheduleSync, zoomAround]);
 
   // Space = temporary pan (any tool)
   useEffect(() => {
