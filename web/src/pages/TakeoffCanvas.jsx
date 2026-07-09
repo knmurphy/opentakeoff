@@ -1829,9 +1829,10 @@ export default function TakeoffCanvas() {
   // belongs to the panel of its FIRST click and normalizes against that panel.
   function addMarkup(m, key) {
     setMarkups((ms) => [...ms, { id: uid("mk"), sheet_id: key, rfi_id: "", ...m }]);
-    // reveal the markup tab only if no left panel is open — never steal focus from
-    // the Stamps tab mid-placement (a stamp places several markups via addMarkup).
-    setLeftTab((t) => t ?? "markup");
+    // Drawing a markup by hand surfaces the Markups tab. But a STAMP places several
+    // markups via addMarkup — don't yank the user off the Stamps tab mid-placement
+    // (keep the current tab, or open Markups only if nothing's open).
+    setLeftTab((t) => (tool === "stamp" ? (t ?? "markup") : "markup"));
   }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
