@@ -618,7 +618,7 @@ export default function TakeoffCanvas() {
   // working set changed) reads the LIVE sheet count, not the mount-time value.
   // The mount sheets effect above also sets it synchronously for the initial
   // landing decision (before this post-render effect runs).
-  useEffect(() => { hasSheetsRef.current = sheets.length > 0; }, [sheets]);   // cloudMode is constant per mount (store is fixed) — runs once
+  useEffect(() => { hasSheetsRef.current = sheets.length > 0; }, [sheets]);
 
   // ── load saved annotations once per project ───────────────────────────────
   // hydrate applies a saved payload to state — shared by the mount load and by
