@@ -9,7 +9,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AuthChip from "./AuthChip.jsx";
-import { projectHomeFolderId, listProjectFolders, createRecents } from "../lib/projectHome.js";
+import { projectHomeFolderId, listProjectFolders, createRecents, browserStorage } from "../lib/projectHome.js";
 import { getAccessToken } from "../lib/google/auth.js";
 
 const rowBase = { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" };
@@ -26,7 +26,7 @@ export default function ProjectHome() {
   const [attempt, setAttempt] = useState(0);   // Retry bumps this to re-run the load
   // Recents are read once on mount — this screen is the only writer, and every
   // write immediately navigates away, so the snapshot can't go stale under us.
-  const [recents] = useState(() => createRecents(localStorage).list());
+  const [recents] = useState(() => createRecents(browserStorage()).list());
 
   useEffect(() => {
     // live flag (copied from DrivePicker): StrictMode double-invokes effects and
@@ -47,7 +47,7 @@ export default function ProjectHome() {
   const open = ({ id, name }) => {
     // Remember under the name Drive reports RIGHT NOW, so a renamed folder
     // self-heals in the recents list the next time it's opened.
-    createRecents(localStorage).remember({ id, name });
+    createRecents(browserStorage()).remember({ id, name });
     navigate(`/?project=${encodeURIComponent(id)}`);
   };
 
