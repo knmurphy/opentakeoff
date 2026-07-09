@@ -19,6 +19,7 @@
 //       callout { type:"callout", at:[dx,dy], target:[dx,dy], text, prompt? }
 //       cloud   { type:"cloud",   rect:[[dx,dy],[dx,dy]], text }
 //       highlight { type:"highlight", rect:[[dx,dy],[dx,dy]], text }
+//       svg     { type:"svg", path:"<M/L/C/Q/Z>", vb:[vw,vh], at:[dx,dy], w, fill }
 //     plus optional color / line_style / weight on any element.
 //   Stamp        = { id, name, elements:[StampElement] }
 //   StampSet     = { id, name, stampIds:[...] }
@@ -92,6 +93,11 @@ export function instantiateStamp(stamp, [cx, cy]) {
     } else if (el.type === "cloud" || el.type === "highlight") {
       if (!Array.isArray(el.rect) || !isPair(el.rect[0]) || !isPair(el.rect[1])) continue;
       out.push({ ...base, type: el.type, rect: [off(el.rect[0]), off(el.rect[1])], text });
+    } else if (el.type === "svg") {
+      // vector path — MUST precede the text default: svg has a valid `at`, so
+      // without this branch the default would mis-instantiate it as text.
+      if (!(typeof el.path === "string" && el.path) || !isPair(el.at) || !isPair(el.vb)) continue;
+      out.push({ ...base, type: "svg", path: el.path, vb: [el.vb[0], el.vb[1]], w: Number(el.w) > 0 ? Number(el.w) : 0.08, at: off(el.at), fill: typeof el.fill === "string" ? el.fill : "none" });
     } else {
       // default/text
       if (!isPair(el.at)) continue;
@@ -125,6 +131,9 @@ export function markupToStampElement(m) {
   if ((m.type === "cloud" || m.type === "highlight") && Array.isArray(m.rect) && isPair(m.rect[0]) && isPair(m.rect[1])) {
     const a = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
     return { ...carry, type: m.type, rect: [sub(m.rect[0], a), sub(m.rect[1], a)], text };
+  }
+  if (m.type === "svg" && typeof m.path === "string" && m.path && isPair(m.at) && isPair(m.vb)) {
+    return { ...carry, type: "svg", path: m.path, vb: [m.vb[0], m.vb[1]], w: Number(m.w) > 0 ? Number(m.w) : 0.08, fill: typeof m.fill === "string" ? m.fill : "none", at: [0, 0] };
   }
   if (m.type === "text" && isPair(m.at)) {
     return { ...carry, type: "text", at: [0, 0], text };

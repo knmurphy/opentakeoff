@@ -9,10 +9,11 @@
 // is pure presentation. Contract:
 //   <StampPanel library armedStamp selectedMarkup
 //     onArm(stamp) onSaveSelected(markup) onDelete(id) onRename(id,name)
-//     onExport() onImport(file) onClose />
+//     onExport() onImport(file) onImportSvg(file) onClose />
 import React, { useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { arrowheadPath } from "../lib/geometry.js";
+import { transformPath } from "../lib/svgpath.js";
 
 // Live preview of a stamp's elements in a small box. Element coords are OFFSETS
 // (fractions of sheet w/h) from the anchor; K maps them into preview px, so a
@@ -39,13 +40,23 @@ function StampPreview({ elements = [], w = 54, h = 34 }) {
         if ((el.type === "callout" || el.type === "text") && el.at) {
           return <g key={i}>{el.type === "callout" && el.target ? <line x1={mx(el.target[0])} y1={my(el.target[1])} x2={mx(el.at[0])} y2={my(el.at[1])} stroke={col} strokeWidth={1.2} /> : null}<text x={mx(el.at[0])} y={my(el.at[1])} fill={col} fontSize={9} fontWeight="700" textAnchor="middle" dominantBaseline="central">{el.text || "T"}</text></g>;
         }
+        if (el.type === "svg" && el.path && Array.isArray(el.vb)) {
+          // vector symbol — fit the viewBox into ~80% of the thumbnail (a proper
+          // preview of imported art, not the tiny K-scaled mark the primitives use).
+          const [vw, vh] = el.vb;
+          if (!(vw > 0 && vh > 0)) return null;
+          const s = Math.min((w * 0.8) / vw, (h * 0.8) / vh);
+          const bw = vw * s, bh = vh * s, x0 = (w - bw) / 2, y0 = (h - bh) / 2;
+          const fillOn = el.fill && el.fill !== "none";
+          return <path key={i} d={transformPath(el.path, (lx, ly) => [x0 + lx * s, y0 + ly * s])} fill={fillOn ? el.fill : "none"} stroke={col} strokeWidth={1} strokeLinejoin="round" />;
+        }
         return null;
       })}
     </svg>
   );
 }
 
-export default function StampPanel({ library = { stamps: [], sets: [] }, armedStamp, selectedMarkup, onArm, onSaveSelected, onDelete, onRename, onExport, onImport, onClose }) {
+export default function StampPanel({ library = { stamps: [], sets: [] }, armedStamp, selectedMarkup, onArm, onSaveSelected, onDelete, onRename, onExport, onImport, onImportSvg, onClose }) {
   const [setFilter, setSetFilter] = useState("all");   // "all" | set id
   const [editId, setEditId] = useState(null);
   const fileRef = useRef(null);
@@ -74,9 +85,9 @@ export default function StampPanel({ library = { stamps: [], sets: [] }, armedSt
         <strong>Stamps · palette</strong>
         <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={onExport} title="Export the stamp library as JSON" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Export</button>
-          <button onClick={() => fileRef.current?.click()} title="Import stamps from a JSON file (merges)" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Import</button>
-          <input ref={fileRef} type="file" accept="application/json,.json" style={{ display: "none" }}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+          <button onClick={() => fileRef.current?.click()} title="Import a stamp library (.json, merges) or a vector symbol (.svg, added as a stamp)" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "#fff" }}>Import</button>
+          <input ref={fileRef} type="file" accept="application/json,.json,image/svg+xml,.svg" style={{ display: "none" }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) { const isSvg = /\.svg$/i.test(f.name) || f.type === "image/svg+xml"; if (isSvg) onImportSvg?.(f); else onImport(f); } e.target.value = ""; }} />
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
         </span>
       </div>

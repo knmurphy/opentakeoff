@@ -20,6 +20,7 @@
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 import { pointInPoly, starPath, arrowheadPath, cloudBezier } from "./geometry.js";
+import { transformPath } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
@@ -526,6 +527,22 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
           pg.drawSvgPath(arrowheadPath(pax, -pay, ptx, -pty, 5), { x: 0, y: 0, color: mcol, opacity: 0.9 });
         }
         text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
+      } else if (m.type === "svg" && m.at && Array.isArray(m.vb) && typeof m.path === "string") {
+        // a vector symbol — bake local→page px, NEGATING y like every sibling path
+        // (drawSvgPath internally applies scale(1,-1), so toPage output must be
+        // negated). Uniform scale off sheet WIDTH keeps it undistorted; the fn is a
+        // general affine (toPage carries rotation on rotated sheets), applied
+        // pointwise to the bezier controls by transformPath.
+        const [vw, vh] = m.vb;
+        if (vw > 0 && vh > 0) {
+          const bw = (Number(m.w) > 0 ? Number(m.w) : 0.08) * W, sx = bw / vw, bh = sx * vh;
+          const x0 = m.at[0] * W - bw / 2, y0 = m.at[1] * H - bh / 2;
+          const d = transformPath(m.path, (lx, ly) => { const [px, py] = toPage(x0 + lx * sx, y0 + ly * sx); return [px, -py]; });
+          const fillOn = m.fill && m.fill !== "none";
+          if (d) pg.drawSvgPath(d, { x: 0, y: 0, borderColor: mcol, borderWidth: 1.2 * mw, borderOpacity: 0.95, ...(fillOn ? { color: rgb(...hex(dark ? boostForDark(m.fill) : m.fill)), opacity: 0.9 } : {}) });
+          const t = lbl(m.text);
+          if (t) text(t, m.at[0] * W - bw / 2, y0 - 6 / ptScale, 8, mcol, bold);
+        }
       } else if (m.type === "text" && m.at) {
         text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
       }

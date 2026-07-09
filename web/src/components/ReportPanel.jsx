@@ -474,8 +474,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </p>
           </div>
         )}
-        {markups.length > 0 && (
+        {markups.some((m) => m.type !== "svg") && (
           <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
+            {/* svg symbols are decorative vector stamps, not revision notes — excluded */}
             <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>Revisions noted</h3>
             <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
               <thead>
@@ -486,7 +487,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                 </tr>
               </thead>
               <tbody>
-                {markups.map((m) => (
+                {markups.filter((m) => m.type !== "svg").map((m) => (
                   <tr key={m.id}>
                     <td style={{ ...td, textAlign: "left" }}>
                       <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, fontWeight: 700, letterSpacing: "0.08em", border: "1px solid var(--ink-faint)", padding: "1px 6px", color: "var(--ink-soft)" }}>

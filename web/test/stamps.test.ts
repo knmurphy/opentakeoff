@@ -130,7 +130,7 @@ test("instantiateStamp drops malformed elements but keeps the good ones", () => 
   };
   const out = instantiateStamp(stamp, [0, 0]);
   assert.equal(out.length, 1);
-  assert.equal(out[0].text, "ok");
+  assert.equal((out[0] as any).text, "ok");
 });
 
 // ── markupToStampElement (the per-element inverse) ───────────────────────────
@@ -159,6 +159,72 @@ test("place → save → place is position independent (round-trip through the o
 test("markupToStampElement returns null for a markup with no usable geometry", () => {
   assert.equal(markupToStampElement({ type: "arrow" } as any), null);
   assert.equal(markupToStampElement(null as any), null);
+});
+
+// ── svg element (a vector path) ──────────────────────────────────────────────
+
+const svgEl = () => ({ type: "svg", path: "M0 0 L10 0 L10 10 Z", vb: [10, 10], at: [0.02, -0.03], w: 0.12, color: "#0d9488", fill: "#eee" });
+
+test("instantiateStamp translates an svg element's at and carries path/vb/w/fill", () => {
+  const stamp = { id: "v", name: "V", elements: [svgEl()] };
+  const [s] = instantiateStamp(stamp, [0.5, 0.5]) as any[];
+  assert.equal(s.type, "svg");
+  assert.equal(s.path, "M0 0 L10 0 L10 10 Z");
+  assert.deepEqual(s.vb, [10, 10]);
+  assert.equal(s.w, 0.12);
+  assert.equal(s.fill, "#eee");
+  assert.equal(s.color, "#0d9488");
+  assert.deepEqual(s.at, [0.52, 0.47]);
+});
+
+test("instantiateStamp defaults svg fill to none and w to 0.08 when omitted/invalid", () => {
+  const stamp = { id: "v", name: "V", elements: [{ type: "svg", path: "M0 0 L1 1", vb: [1, 1], at: [0, 0], w: 0 }] };
+  const [s] = instantiateStamp(stamp, [0.2, 0.3]) as any[];
+  assert.equal(s.fill, "none");
+  assert.equal(s.w, 0.08);
+});
+
+test("instantiateStamp drops an svg element with no path (or missing vb/at)", () => {
+  const stamp = {
+    id: "v", name: "V", elements: [
+      { type: "svg", vb: [1, 1], at: [0, 0] },              // missing path
+      { type: "svg", path: "M0 0", at: [0, 0] },            // missing vb
+      { type: "svg", path: "M0 0", vb: [1, 1] },            // missing at
+    ],
+  };
+  assert.equal(instantiateStamp(stamp, [0.5, 0.5]).length, 0);
+});
+
+test("REGRESSION: an svg element instantiates as type 'svg', NOT mis-routed to text", () => {
+  // svg has a valid `at`; without its own branch the text default would claim it.
+  const stamp = { id: "v", name: "V", elements: [svgEl()] };
+  const [s] = instantiateStamp(stamp, [0.5, 0.5]) as any[];
+  assert.equal(s.type, "svg");
+  assert.notEqual(s.type, "text");
+});
+
+test("svg place → markupToStampElement → place preserves path/vb/w and re-centers at", () => {
+  const stamp = { id: "v", name: "V", elements: [svgEl()] };
+  const placed: any = instantiateStamp(stamp, [0.7, 0.3])[0];   // dropped somewhere
+  const el: any = markupToStampElement(placed);                 // saved back to a stamp
+  assert.equal(el.type, "svg");
+  assert.equal(el.path, "M0 0 L10 0 L10 10 Z");
+  assert.deepEqual(el.vb, [10, 10]);
+  assert.equal(el.w, 0.12);
+  assert.equal(el.fill, "#eee");
+  assert.deepEqual(el.at, [0, 0]);   // re-centered (position independent)
+  const replaced: any = instantiateStamp({ id: "b", name: "B", elements: [el] }, [0.1, 0.9])[0];
+  assert.deepEqual(replaced.at, [0.1, 0.9]);   // back to the click point
+});
+
+test("markupToStampElement returns null for an svg markup with no path", () => {
+  assert.equal(markupToStampElement({ type: "svg" } as any), null);
+  assert.equal(markupToStampElement({ type: "svg", vb: [1, 1], at: [0, 0] } as any), null);
+});
+
+test("sanitizeStampLibrary passes an svg element through unchanged (unknown fields ride)", () => {
+  const raw = { stamps: [{ id: "v", name: "V", elements: [svgEl()] }], sets: [] };
+  assert.deepEqual(sanitizeStampLibrary(JSON.parse(JSON.stringify(raw))).stamps[0].elements, [svgEl()]);
 });
 
 // ── seedStampLibrary ─────────────────────────────────────────────────────────

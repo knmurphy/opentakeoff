@@ -14,6 +14,8 @@ import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
 import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
+import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
+import { transformPath } from "../lib/svgpath.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
@@ -1261,6 +1263,15 @@ export default function TakeoffCanvas() {
       const cx = m.at[0] * W + ox, cy = m.at[1] * H, rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * W;
       return Math.hypot(X - cx, Y - cy) < rad + thr;
     }
+    if (m.type === "svg" && m.at && Array.isArray(m.vb)) {
+      // a vector symbol — hit its placed bbox. Width is normalized to sheet WIDTH
+      // (uniform scale off W, undistorted); height follows the viewBox aspect.
+      const [vw, vh] = m.vb;
+      const wpx = (Number(m.w) > 0 ? Number(m.w) : 0.08) * W;
+      const hpx = vw > 0 ? (wpx * vh) / vw : wpx;
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H;
+      return X >= cx - wpx / 2 - thr && X <= cx + wpx / 2 + thr && Y >= cy - hpx / 2 - thr && Y <= cy + hpx / 2 + thr;
+    }
     return false;
   }
   // Select tool: pick a shape (or a vertex of the selected one) and start dragging
@@ -1902,6 +1913,8 @@ export default function TakeoffCanvas() {
     const m = rev.find((mm) => mm.type !== "highlight" && hitMarkup(mm, p, thr))
       || rev.find((mm) => mm.type === "highlight" && hitMarkup(mm, p, thr));
     if (!m) return;
+    // an svg symbol carries no text — select it, but don't open a dead-end editor
+    if (m.type === "svg") { selectMarkup(m.id); return; }
     const anchor = markupAnchorStage(m);
     if (!anchor) return;
     selectMarkup(m.id);
@@ -2030,6 +2043,24 @@ export default function TakeoffCanvas() {
       setShowStampPanel(true);
     } catch (e) {
       setCommitMsg(`Couldn't import stamps: ${e.message || e}`);
+    }
+  }
+  // Import a real .svg FILE as a stamp: the browser's DOMParser extracts the
+  // drawable primitives (extractSvgPrimitives, with the security gate), then the
+  // pure svgToStamp bakes them into vector-path elements. A new stamp is minted
+  // and added to the library — mirroring saveMarkupAsStamp.
+  async function importSvgStamp(file) {
+    try {
+      const text = await file.text();
+      const base = (file.name || "Imported SVG").replace(/\.svg$/i, "");
+      const extracted = extractSvgPrimitives(text, { name: base });
+      const stamp = extracted && svgToStamp(extracted);
+      if (!stamp || !stamp.elements.length) { setCommitMsg("Couldn't read that SVG — no drawable vector shapes found."); return; }
+      persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, { id: uid("stmp"), name: stamp.name, elements: stamp.elements }] });
+      setCommitMsg(`Imported “${stamp.name}” as a stamp.`);
+      setShowStampPanel(true);
+    } catch (e) {
+      setCommitMsg(`Couldn't import SVG: ${e.message || e}`);
     }
   }
 
@@ -2912,6 +2943,27 @@ export default function TakeoffCanvas() {
                           </g>
                         );
                       }
+                      if (m.type === "svg" && m.path && Array.isArray(m.vb)) {
+                        // a vector symbol (imported .svg or saved-as-stamp art). The
+                        // path is baked local→image px through a uniform scale off
+                        // sheet WIDTH so it never distorts; stroke/fill are the
+                        // symbol's OWN color (dark-boosted), not the linkage tint.
+                        const [vw, vh] = m.vb;
+                        if (!(vw > 0 && vh > 0)) return null;
+                        const W = p.img.w;
+                        const bw = (Number(m.w) > 0 ? Number(m.w) : 0.08) * W, sx = bw / vw, bh = sx * vh;
+                        const x0 = m.at[0] * W - bw / 2, y0 = m.at[1] * p.img.h - bh / 2;
+                        const d = transformPath(m.path, (lx, ly) => [x0 + lx * sx, y0 + ly * sx]);
+                        const fillOn = m.fill && m.fill !== "none";
+                        const fcol = fillOn ? (darkMode ? boostForDark(m.fill) : m.fill) : "none";
+                        return (
+                          <g key={m.id}>
+                            {halo(x0, y0, x0 + bw, y0 + bh)}
+                            <path d={d} fill={fcol} fillOpacity={fillOn ? 0.9 : undefined} stroke={mk} strokeWidth={(1.6 * w) / z} strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+                            {badge(x0, y0 - 9 / z)}
+                          </g>
+                        );
+                      }
                       const [x, y] = m.at;
                       const lw = ((m.text?.length || 1) * 7 + 10) / z;
                       return (
@@ -3100,9 +3152,9 @@ export default function TakeoffCanvas() {
                       onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
                       style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
                   ) : (
-                    <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
+                    <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : (m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
                   )}
-                  <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
+                  {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
                   <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
                 </div>
                 {/* appearance — per-markup color (reuse PALETTE) + line style; both
@@ -3172,7 +3224,7 @@ export default function TakeoffCanvas() {
             library={stampLib} armedStamp={armedStamp}
             selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
             onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
-            onExport={exportStamps} onImport={importStamps} onClose={() => setShowStampPanel(false)}
+            onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setShowStampPanel(false)}
           />
         )}
 
