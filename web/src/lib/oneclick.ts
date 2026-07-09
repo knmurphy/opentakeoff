@@ -66,8 +66,33 @@ export const ROW_EPS = 1.5;            // mask px — collinear/dashed pieces me
 export const WIDE_PROTECT_RATIO = 2;   // heavier-pen member of a hairline family stays hard (wall overprint)
 export const SPAN_PROTECT_RATIO = 3;   // a row spanning ≫ the run's median row is a wall riding the rhythm, not hatch
 export const HATCH_BOUND_FRAC = 0.7;   // ≥ this soft-bounded fraction ⇒ PREDOMINANTLY hatch (tile-grid cell): escalate unbounded
-export const HATCH_ESCALATE_FRAC = 0.35; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation (issue #32 — real hatch-lined rooms top out ~0.63, so 0.70 alone never fired)
-export const HATCH_GROWTH_MAX = 2.5;     // grow-but-verify cap: reject a walls-only escalation that balloons past this × the strict area (a misclassified wall would leak or overgrow)
+export const HATCH_ESCALATE_FRAC = 0.35; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation (issue #32 — real hatch-lined rooms top out ~0.63, so 0.70 alone never fired). This is the Balanced-preset value; see escalationParams.
+export const HATCH_GROWTH_MAX = 2.5;     // grow-but-verify cap: reject a walls-only escalation that balloons past this × the strict area (a misclassified wall would leak or overgrow). Balanced-preset value.
+
+// Fill sensitivity — a single 0..1 knob the estimator can dial per drawing to
+// trade spill-resistance against reach (the constants above are calibrated on one
+// sheet/one CAD style; other plans hatch differently). It tunes ONLY the moderate
+// escalation tier: how eagerly a hatch-bounded fill escalates (escalateFrac) and
+// how much area growth that escalation may add (growthMax). The trapped and
+// predominantly-soft tiers stay unbounded at every setting, so lowering
+// sensitivity never regresses tile-grid recovery — it only narrows the moderate
+// band, and at Strict it empties (reproducing pre-#32 behavior).
+export const SENS_STRICT = 0;
+export const SENS_BALANCED = 0.5;      // default: the calibrated (0.35, 2.5) pair
+export const SENS_AGGRESSIVE = 1;
+// Notch detents interpolated piecewise-linearly: [sensitivity, escalateFrac, growthMax].
+const SENS_ANCHORS: Array<[number, number, number]> = [
+  [SENS_STRICT, HATCH_BOUND_FRAC, 1.5],                     // moderate band empties (escalateFrac == HATCH_BOUND_FRAC) ⇒ pre-#32
+  [SENS_BALANCED, HATCH_ESCALATE_FRAC, HATCH_GROWTH_MAX],   // calibrated on the sample plan (issue #32)
+  [SENS_AGGRESSIVE, 0.20, 4.0],                            // cross more hatch, tolerate more growth
+];
+export function escalationParams(sensitivity: number): { escalateFrac: number; growthMax: number } {
+  const s = Math.max(0, Math.min(1, Number.isFinite(sensitivity) ? sensitivity : SENS_BALANCED));
+  let a = SENS_ANCHORS[0], b = SENS_ANCHORS[SENS_ANCHORS.length - 1];
+  for (let i = 1; i < SENS_ANCHORS.length; i++) { if (s <= SENS_ANCHORS[i][0]) { a = SENS_ANCHORS[i - 1]; b = SENS_ANCHORS[i]; break; } }
+  const t = b[0] === a[0] ? 0 : (s - a[0]) / (b[0] - a[0]);
+  return { escalateFrac: a[1] + (b[1] - a[1]) * t, growthMax: a[2] + (b[2] - a[2]) * t };
+}
 
 // ── 1. op-list walk ────────────────────────────────────────────────────────
 // Same transform composition as the original snap extractor (save/restore/
@@ -365,18 +390,21 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
 //     AND grows the area ≤ HATCH_GROWTH_MAX×. A misclassified wall then either
 //     leaks or balloons and is discarded — the escalation can never do worse
 //     than the strict pass.
-//   • lightly soft (< HATCH_ESCALATE_FRAC) or a leak: strict result stands
+//   • lightly soft (< escalateFrac) or a leak: strict result stands
 //     (removing linework only leaks more).
-export function floodRegion(maskObj: MaskObj, ix: number, iy: number): FloodResult {
+// `sensitivity` (0..1) dials the moderate tier's escalateFrac/growthMax via
+// escalationParams; the default is the calibrated Balanced preset.
+export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED): FloodResult {
   const r1 = floodPass(maskObj, ix, iy, 3);
   if (!maskObj.softCount) return r1;
   if (r1.status === "leak") return r1;
+  const { escalateFrac, growthMax } = escalationParams(sensitivity);
   let growthCap = Infinity;                            // unbounded unless we're in the moderate band
   if (r1.status === "ok") {
     const blocks = (r1.hardHits || 0) + (r1.softHits || 0);
     const softFrac = blocks ? (r1.softHits || 0) / blocks : 0;
-    if (softFrac < HATCH_ESCALATE_FRAC) return r1;     // lightly hatch-bounded ⇒ strict is right
-    if (softFrac < HATCH_BOUND_FRAC) growthCap = HATCH_GROWTH_MAX; // moderate ⇒ grow-but-verify
+    if (softFrac < escalateFrac) return r1;            // lightly hatch-bounded ⇒ strict is right
+    if (softFrac < HATCH_BOUND_FRAC) growthCap = growthMax; // moderate ⇒ grow-but-verify
   }
   const r2 = floodPass(maskObj, ix, iy, 1);
   if (r2.status === "ok" && (r1.status !== "ok" || r2.count <= r1.count * growthCap)) {

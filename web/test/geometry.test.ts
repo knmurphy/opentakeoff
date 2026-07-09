@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
+  SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier, cloudPath, arrowheadPath } from "../src/lib/geometry.js";
@@ -231,6 +232,31 @@ test("escalation: a runaway escalation (balloons past the cap) is discarded — 
   if (f.status !== "ok" || strict.status !== "ok") return;
   assert.ok(!f.hatchFiltered, "a ballooning walls-only escalation must be rejected");
   assert.equal(f.count, strict.count, "the strict fill is preserved unchanged");
+});
+
+test("escalation: Strict sensitivity empties the moderate band — the room that Balanced recovers stays strict", () => {
+  // The recover fixture (softFrac ≈ 0.43) escalates at Balanced; at SENS_STRICT the
+  // moderate band collapses (escalateFrac == HATCH_BOUND_FRAC) so it must NOT.
+  const { mo, seed } = twoRoomMask(8, 6, 48);
+  const balanced = floodRegion(mo, seed[0], seed[1], SENS_BALANCED);
+  const strict = floodRegion(mo, seed[0], seed[1], SENS_STRICT);
+  assert.equal(balanced.status, "ok"); assert.equal(strict.status, "ok");
+  if (balanced.status !== "ok" || strict.status !== "ok") return;
+  assert.equal(balanced.hatchFiltered, true, "Balanced escalates the moderate-band room");
+  assert.ok(!strict.hatchFiltered, "Strict leaves it as the strict fill");
+  assert.ok(strict.count < balanced.count, "Strict is the smaller (pre-escalation) region");
+});
+
+test("escalation: Aggressive sensitivity accepts a larger growth that Balanced rejects", () => {
+  // Growth ≈ 3.0× — over the Balanced cap (2.5), under the Aggressive cap (4.0).
+  const { mo, seed } = twoRoomMask(6, 10, 48);
+  const balanced = floodRegion(mo, seed[0], seed[1], SENS_BALANCED);
+  const aggressive = floodRegion(mo, seed[0], seed[1], SENS_AGGRESSIVE);
+  assert.equal(balanced.status, "ok"); assert.equal(aggressive.status, "ok");
+  if (balanced.status !== "ok" || aggressive.status !== "ok") return;
+  assert.ok(!balanced.hatchFiltered, "Balanced rejects the ~3× growth");
+  assert.equal(aggressive.hatchFiltered, true, "Aggressive accepts it");
+  assert.ok(aggressive.count > balanced.count, "Aggressive recovers the larger region");
 });
 
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
