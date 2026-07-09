@@ -16,6 +16,13 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   plan; wall-bounded rooms are unchanged.
 
 ### Added
+- **One-Click fill sensitivity (#32).** A slider on the toolbar (shown while
+  One-Click Area is active) dials how far a fill reaches past a room's hatch
+  pattern, with detents at **Strict** (stop at the linework — original behavior),
+  **Balanced** (recover hatch-lined rooms to the walls — default), and
+  **Aggressive** (cross more pattern, tolerate more growth). It still tunes
+  0–100% freely and snaps to a notch when released near one. Lower it if fills
+  spill; raise it if hatched rooms come up short. Remembered per browser.
 - **Stamp system — reusable annotation stamps (#40).** Define an annotation once,
   save it to a **browser-wide library** (the first cross-project asset), and drop
   it onto any sheet with a click — the Bluebeam tool-chest pattern for shop-drawing
