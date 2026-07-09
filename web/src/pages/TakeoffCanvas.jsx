@@ -2999,7 +2999,7 @@ export default function TakeoffCanvas() {
                            markup here may be off-screen or on another sheet (no click point).
                            Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
                        {panelEditId === m.id ? (
-                         <input name="markup-text" autoFocus defaultValue={m.text || ""}
+                         <input name="markup-text" autoComplete="off" autoFocus defaultValue={m.text || ""}
                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
                            onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
                            style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
@@ -3116,7 +3116,7 @@ export default function TakeoffCanvas() {
               all on the input's OWN handlers so the global keydown (which returns early
               for INPUT) never interferes. cursor:text overrides the stage's cursor:none. */}
           {editor && (
-            <input name="inline-editor" ref={editorInputRef} autoFocus defaultValue={editor.value}
+            <input name="inline-editor" autoComplete="off" ref={editorInputRef} autoFocus defaultValue={editor.value}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); finishEditor(true); } else if (e.key === "Escape") { e.preventDefault(); finishEditor(false); } }}
               onBlur={() => finishEditor(true)}
               placeholder="Type, Enter to place · Esc cancels"

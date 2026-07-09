@@ -140,7 +140,7 @@ export default function StampPanel({ docked = false, library = { stamps: [], set
             <StampPreview elements={s.elements} />
             <div style={{ flex: 1, minWidth: 0 }}>
               {editId === s.id ? (
-                <input name="stamp-rename" autoFocus defaultValue={s.name}
+                <input name="stamp-rename" autoComplete="off" autoFocus defaultValue={s.name}
                   onKeyDown={(e) => { if (e.key === "Enter") { onRename(s.id, e.currentTarget.value); setEditId(null); } else if (e.key === "Escape") setEditId(null); }}
                   onBlur={(e) => { onRename(s.id, e.currentTarget.value); setEditId(null); }}
                   style={{ width: "100%", fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", outline: "none" }} />

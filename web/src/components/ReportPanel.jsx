@@ -621,12 +621,12 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
           <div style={section}>Company — yours, saved on this device</div>
           <label style={row}>
             <span className="field-label">Name</span>
-            <input name="company-name" value={company.name || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, name: e.target.value }))}
+            <input name="company-name" autoComplete="organization" value={company.name || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, name: e.target.value }))}
               placeholder="Your company" className="field-input" style={{ marginTop: 4 }} />
           </label>
           <label style={row}>
             <span className="field-label">Address</span>
-            <textarea name="company-address" value={company.address || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, address: e.target.value }))}
+            <textarea name="company-address" autoComplete="street-address" value={company.address || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, address: e.target.value }))}
               rows={2} placeholder={"Street\nCity, ST"} className="field-input" style={{ marginTop: 4, resize: "vertical" }} />
           </label>
           <div style={row}>
@@ -647,21 +647,21 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
           <div style={{ ...section, borderTop: "1px solid var(--ink-faint)", marginTop: 14, paddingTop: 12 }}>Client / job — saved with this project</div>
           <label style={row}>
             <span className="field-label">Client name</span>
-            <input name="client-name" value={clientInfo.client_name || ""} onChange={client("client_name")} className="field-input" style={{ marginTop: 4 }} />
+            <input name="client-name" autoComplete="off" value={clientInfo.client_name || ""} onChange={client("client_name")} className="field-input" style={{ marginTop: 4 }} />
           </label>
           <label style={row}>
             <span className="field-label">Client address</span>
-            <textarea name="client-address" value={clientInfo.client_address || ""} onChange={client("client_address")} rows={2}
+            <textarea name="client-address" autoComplete="off" value={clientInfo.client_address || ""} onChange={client("client_address")} rows={2}
               className="field-input" style={{ marginTop: 4, resize: "vertical" }} />
           </label>
           <div style={{ display: "flex", gap: 12 }}>
             <label style={{ ...row, flex: 1 }}>
               <span className="field-label">PO / reference</span>
-              <input name="client-reference" value={clientInfo.reference || ""} onChange={client("reference")} className="field-input" style={{ marginTop: 4 }} />
+              <input name="client-reference" autoComplete="off" value={clientInfo.reference || ""} onChange={client("reference")} className="field-input" style={{ marginTop: 4 }} />
             </label>
             <label style={{ ...row, flex: 1 }}>
               <span className="field-label">Date</span>
-              <input name="client-date" value={clientInfo.date || ""} onChange={client("date")} placeholder={'e.g. "Bid 7/12"'}
+              <input name="client-date" autoComplete="off" value={clientInfo.date || ""} onChange={client("date")} placeholder={'e.g. "Bid 7/12"'}
                 className="field-input" style={{ marginTop: 4 }} />
             </label>
           </div>
@@ -716,7 +716,7 @@ function ContributeModal({ conditions, shapes, onClose }) {
           )}
           <label style={{ display: "block", margin: "6px 0" }}>
             <span className="field-label">Credit (optional)</span>
-            <input name="contributor" value={contributor} onChange={(e) => setContributor(e.target.value)} placeholder="Name or company to credit"
+            <input name="contributor" autoComplete="name" value={contributor} onChange={(e) => setContributor(e.target.value)} placeholder="Name or company to credit"
               className="field-input" style={{ marginTop: 4 }} />
           </label>
           <label style={{ display: "flex", gap: 8, alignItems: "flex-start", margin: "12px 0", cursor: "pointer" }}>
