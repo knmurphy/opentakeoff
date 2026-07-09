@@ -176,7 +176,7 @@ test("svgToStamp: stroke:none with a fill → color falls back to the fill", () 
 });
 
 // ── multi-shape ──────────────────────────────────────────────────────────────
-test("svgToStamp: multiple shapes share one vb; union bounds are correct", () => {
+test("svgToStamp: multiple shapes share the same vb value (own arrays); union bounds correct", () => {
   const s = svgToStamp({
     primitives: [
       prim("rect", { x: "0", y: "0", width: "4", height: "4" }),
@@ -185,7 +185,8 @@ test("svgToStamp: multiple shapes share one vb; union bounds are correct", () =>
     name: "Two",
   })!;
   assert.equal(s.elements.length, 2);
-  assert.strictEqual(s.elements[0].vb, s.elements[1].vb); // shared reference
+  assert.notStrictEqual(s.elements[0].vb, s.elements[1].vb);  // own arrays (no aliasing footgun)
+  assert.deepEqual(s.elements[0].vb, s.elements[1].vb);       // same value
   // union: x∈[0,12], y∈[0,10]
   near(s.elements[0].vb[0], 12);
   near(s.elements[0].vb[1], 10);
@@ -202,8 +203,38 @@ test("svgToStamp: a single zero-size rect → null", () => {
   assert.equal(svgToStamp({ primitives: [prim("rect", { x: "3", y: "3", width: "0", height: "0" })] }), null);
 });
 
-test("svgToStamp: all-collinear (zero height) → null", () => {
-  assert.equal(svgToStamp({ primitives: [prim("polyline", { points: "0,5 4,5 9,5" })] }), null);
+test("svgToStamp: a one-axis symbol (zero height line) is allowed, vb clamped positive", () => {
+  // a horizontal cut-line / divider is legitimate — only a true point → null
+  const s = svgToStamp({ primitives: [prim("polyline", { points: "0,5 4,5 9,5" })] });
+  assert.ok(s !== null);
+  assert.ok(s!.elements[0].vb[0] > 0 && s!.elements[0].vb[1] > 0, "vb clamped positive on the degenerate axis");
+});
+
+test("svgToStamp: a true point (zero width AND height) → null", () => {
+  assert.equal(svgToStamp({ primitives: [prim("line", { x1: "3", y1: "3", x2: "3", y2: "3" })] }), null);
+});
+
+test("svgToStamp: colors normalize to #rrggbb (named / rgb / hsl / short hex)", () => {
+  const one = (attrs: any) => svgToStamp({ primitives: [prim("rect", { x: "0", y: "0", width: "10", height: "10", ...attrs })] })!.elements[0];
+  assert.equal(one({ fill: "red", stroke: "none" }).fill, "#ff0000");
+  assert.equal(one({ fill: "black" }).color, "#000000");
+  assert.equal(one({ stroke: "rgb(255, 0, 0)", fill: "none" }).color, "#ff0000");
+  assert.equal(one({ stroke: "rgb(100%, 0%, 0%)", fill: "none" }).color, "#ff0000");
+  assert.equal(one({ stroke: "hsl(120, 100%, 50%)", fill: "none" }).color, "#00ff00");
+  assert.equal(one({ fill: "#f00", stroke: "none" }).fill, "#ff0000");
+  assert.equal(one({ fill: "#ff0000ff", stroke: "none" }).fill, "#ff0000");   // alpha dropped
+  // an unrecognized color falls back to the default ink (not passed through raw)
+  assert.equal(one({ stroke: "chartreusey-nonsense", fill: "none" }).color, "#0e1a2e");
+});
+
+test("svgToStamp: vb is a fresh array per element (no shared reference)", () => {
+  const s = svgToStamp({ primitives: [
+    prim("rect", { x: "0", y: "0", width: "10", height: "10" }),
+    prim("rect", { x: "0", y: "0", width: "10", height: "10" }),
+  ] });
+  assert.ok(s!.elements.length === 2);
+  assert.notEqual(s!.elements[0].vb, s!.elements[1].vb, "each element owns its vb array");
+  assert.deepEqual(s!.elements[0].vb, s!.elements[1].vb);
 });
 
 test("svgToStamp: non-array primitives → null", () => {

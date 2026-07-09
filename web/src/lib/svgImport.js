@@ -225,13 +225,68 @@ function parseStyle(style) {
   }
   return out;
 }
-// "none" → "none"; absent/blank/currentColor/inherit → null; otherwise the color.
+// The whole downstream pipeline (markedset hex(), lineStyles boostForDark/parseHex)
+// assumes a #hex color — a named/rgb()/hsl() color would burn into the PDF and the
+// dark canvas as gray. So NORMALIZE every source color to #rrggbb here, at import.
+// Common CSS named colors (the 16 basic + the ones real icon/shop-drawing SVGs
+// actually use); anything unrecognized falls back to the default ink downstream.
+const NAMED_COLORS = {
+  black: "#000000", white: "#ffffff", red: "#ff0000", green: "#008000", blue: "#0000ff",
+  yellow: "#ffff00", cyan: "#00ffff", aqua: "#00ffff", magenta: "#ff00ff", fuchsia: "#ff00ff",
+  gray: "#808080", grey: "#808080", silver: "#c0c0c0", maroon: "#800000", olive: "#808000",
+  lime: "#00ff00", teal: "#008080", navy: "#000080", purple: "#800080", orange: "#ffa500",
+  darkgray: "#a9a9a9", darkgrey: "#a9a9a9", lightgray: "#d3d3d3", lightgrey: "#d3d3d3",
+  dimgray: "#696969", dimgrey: "#696969", pink: "#ffc0cb", brown: "#a52a2a", gold: "#ffd700",
+  indigo: "#4b0082", violet: "#ee82ee", crimson: "#dc143c", coral: "#ff7f50", salmon: "#fa8072",
+  khaki: "#f0e68c", tan: "#d2b48c", beige: "#f5f5dc", ivory: "#fffff0", darkblue: "#00008b",
+  darkgreen: "#006400", darkred: "#8b0000", lightblue: "#add8e6", steelblue: "#4682b4",
+  slategray: "#708090", slategrey: "#708090", royalblue: "#4169e1", firebrick: "#b22222",
+};
+const clamp255 = (n) => Math.max(0, Math.min(255, Math.round(n)));
+const two = (n) => clamp255(n).toString(16).padStart(2, "0");
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l));
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0]; else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x]; else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c]; else [r, g, b] = [c, 0, x];
+  return `#${two((r + m) * 255)}${two((g + m) * 255)}${two((b + m) * 255)}`;
+}
+// Normalize any supported CSS color string to #rrggbb, or null if unrecognized.
+function toHex(s) {
+  if (s[0] === "#") {
+    const h = s.slice(1);
+    if (/^[0-9a-f]{3}$/.test(h)) return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
+    if (/^[0-9a-f]{4}$/.test(h)) return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;   // drop alpha
+    if (/^[0-9a-f]{6}$/.test(h)) return `#${h}`;
+    if (/^[0-9a-f]{8}$/.test(h)) return `#${h.slice(0, 6)}`;                              // drop alpha
+    return null;
+  }
+  let m = s.match(/^rgba?\(([^)]+)\)$/);
+  if (m) {
+    const parts = m[1].split(/[,/\s]+/).filter(Boolean).slice(0, 3)
+      .map((p) => p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p));
+    if (parts.length === 3 && parts.every(Number.isFinite)) return `#${two(parts[0])}${two(parts[1])}${two(parts[2])}`;
+    return null;
+  }
+  m = s.match(/^hsla?\(([^)]+)\)$/);
+  if (m) {
+    const p = m[1].split(/[,/\s]+/).filter(Boolean);
+    const h = parseFloat(p[0]), sp = parseFloat(p[1]) / 100, lp = parseFloat(p[2]) / 100;
+    if ([h, sp, lp].every(Number.isFinite)) return hslToHex(h, sp, lp);
+    return null;
+  }
+  return NAMED_COLORS[s] || null;
+}
+// "none" → "none"; absent/blank/currentColor/inherit/transparent → null; otherwise
+// the color normalized to #rrggbb (unrecognized → null, so a default applies).
 function parseColor(v) {
   if (typeof v !== "string") return null;
-  const s = v.trim();
-  if (s === "" || s === "currentColor" || s === "inherit") return null;
+  const s = v.trim().toLowerCase();
+  if (s === "" || s === "currentcolor" || s === "inherit" || s === "transparent") return null;
   if (s === "none") return "none";
-  return s;
+  return toHex(s);
 }
 
 // Resolve { color, fill } for one shape. style= wins over presentation attrs.
@@ -304,13 +359,16 @@ export function svgToStamp({ primitives, name } = {}) {
   if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
   const vw = maxX - minX;
   const vh = maxY - minY;
-  if (!(vw >= 1e-6) || !(vh >= 1e-6)) return null;
-
-  const vb = [vw, vh];
+  // reject only a true point (both extents ~0); a one-axis symbol — a horizontal
+  // cut-line or a vertical divider — is legitimate. Clamp the degenerate axis so
+  // the viewBox stays positive (no divide-by-zero downstream); the stroke gives
+  // the line visible thickness even at ~0 box height/width.
+  if (!(vw >= 1e-6) && !(vh >= 1e-6)) return null;
+  const vbW = Math.max(vw, 1e-6), vbH = Math.max(vh, 1e-6);
   const elements = baked.map(({ path, color, fill }) => ({
     type: "svg",
     path: transformPath(path, (x, y) => [x - minX, y - minY]),
-    vb,
+    vb: [vbW, vbH],   // a fresh array per element — never share the reference (aliasing footgun)
     at: [0, 0],
     w: DEFAULT_W,
     color,
@@ -338,7 +396,8 @@ function gatherAttrs(el) {
 /**
  * Browser-only: parse SVG text into primitives for svgToStamp. Uses DOMParser.
  * Returns null on any failure or when nothing drawable is found. Rejects unsafe
- * content (script/image/foreignObject/use, any href, DOCTYPE/ENTITY).
+ * content (script/image/foreignObject/use, any href, `<!ENTITY>` or an internal-
+ * subset DOCTYPE); a bare `<!DOCTYPE svg …>` from real exports is admitted.
  *
  * @param {string} svgText
  * @param {{ name?: string }} [opts]
@@ -347,7 +406,12 @@ function gatherAttrs(el) {
 export function extractSvgPrimitives(svgText, { name } = {}) {
   try {
     if (typeof svgText !== "string" || svgText.length > 512 * 1024) return null;
-    if (/<!DOCTYPE|<!ENTITY/i.test(svgText)) return null;
+    // entity-expansion / XXE guard — reject a custom `<!ENTITY` or any DOCTYPE
+    // carrying an internal subset (`[ ... ]`). A BARE `<!DOCTYPE svg PUBLIC …>`
+    // is admitted: real Illustrator / Inkscape SVG 1.1 exports open with one and
+    // are harmless (no entities to expand), so rejecting them would sink the
+    // common case this feature exists for.
+    if (/<!ENTITY/i.test(svgText) || /<!DOCTYPE[^>]*\[/i.test(svgText)) return null;
 
     const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
     if (doc.querySelector("parsererror")) return null;
