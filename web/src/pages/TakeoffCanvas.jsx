@@ -37,7 +37,7 @@ import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
 import DrivePicker from "../components/DrivePicker.jsx";
-import AuthChip from "../components/AuthChip.jsx";
+import AccountChip from "../components/AccountChip.jsx";
 import { projectHomeFolderId } from "../lib/projectHome.js";
 import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 
@@ -393,6 +393,10 @@ export default function TakeoffCanvas() {
   const hoverIdRef = useRef("");        // shape id currently described by the tooltip
   const lastMeasureRef = useRef("area"); // last armed measure tool — shown on the Measure menu face
   const menuDepthRef = useRef(0);      // >0 while a toolbar menu is open (letter shortcuts pause)
+  // ONE stable open/close listener for every toolbar menu — ToolMenu re-fires
+  // its onOpenChange effect when the callback identity changes, so an inline
+  // arrow here would re-count an open menu on every canvas render
+  const onMenuDepth = useCallback((o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }, []);
   const thumbCacheRef = useRef(new Map()); // sheetKey → thumbnail dataURL — survives gallery close
   const legacyPinnedRef = useRef(null);    // old `pinned` page numbers awaiting their one-shot tab migration
   const tabInitRef = useRef(false);        // snap to the first restored tab exactly once
@@ -802,6 +806,11 @@ export default function TakeoffCanvas() {
   // leaving the stamp tool disarms the pending stamp — a stray click under a
   // measure/select tool must never drop a stamp
   useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
+  // A One-Click proposal is only actionable while One-Click is armed (Enter
+  // already requires it) — discard it on tool switch, like the stamp above.
+  // Also keeps Create out of the ACTION slot while Finish occupies it, so the
+  // slot's reserved width always fits its content (issue #61).
+  useEffect(() => { if (tool !== "oneclick") setProposal(null); }, [tool]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -2460,13 +2469,6 @@ export default function TakeoffCanvas() {
   const faceTool = MEASURE_TOOLS.find((t) => t.id === (measureActive ? tool : lastMeasureRef.current)) || MEASURE_TOOLS[0];
   const finishOk = ((tool === "area" || tool === "deduct") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
 
-  // compact icon button — chrome on the brand tokens; active = cobalt
-  const iconBtn = (key, iconName, label, hint, showLabel = true) => (
-    <button key={key} onClick={() => { setTool(key); if (MARKUP_IDS.includes(key)) setMarkupDraft(null); }} title={hint || label}
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === key ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === key ? "var(--cobalt)" : "transparent", color: tool === key ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-      <Icon name={iconName} size={15} />{showLabel ? label : null}
-    </button>
-  );
   // panel-toggle for the right-edge rail — square like the zoom cluster, count as a
   // tiny mono line under the icon. Lives on the canvas, costs the toolbar zero rows.
   const panelBtn = (onClick, iconName, label, isOn, count) => (
@@ -2709,6 +2711,97 @@ export default function TakeoffCanvas() {
     return stable;
   });
 
+  // ── two-deck toolbar (issue #61) ───────────────────────────────────────────
+  // drafting-style group caption floated above a deck-2 cluster
+  const cluster = (cap, children, style) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 7, position: "relative", paddingTop: 2, ...style }}>
+      <span style={{ position: "absolute", top: -13, left: 1, fontFamily: "var(--f-mono)", fontSize: 8, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-muted)", whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{cap}</span>
+      {children}
+    </span>
+  );
+  // MODE segmented control — shared border, ink-filled active (cobalt stays
+  // reserved for the armed DRAW face so only one control ever claims it)
+  const segBtn = (key, iconName, hint, last = false) => (
+    <button key={key} type="button" onClick={() => setTool(key)} title={hint}
+      style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: "none", borderRight: last ? "none" : "1px solid var(--ink-faint)", background: tool === key ? "var(--ink)" : "transparent", color: tool === key ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", lineHeight: 1 }}>
+      <Icon name={iconName} size={15} />
+    </button>
+  );
+
+  // deck-1 sheet-nav chip — ONE home for "which sheet am I on": pages, files,
+  // group/ungroup and the gallery all live in its dropdown. Ungroup/Regroup
+  // are sheet-set operations, so they move in here instead of appearing
+  // mid-row and shifting everything after them.
+  const sheetChipLabel = sheetGroup.length
+    ? `${sheetGroup.length} sheets side-by-side`
+    : `${pageLabels[page] || (pageCount > 1 ? `Sheet ${page}` : active)}${pageCount > 1 ? ` · ${page}/${pageCount}` : ""}`;
+  const sheetMenuItems = [];
+  if (!sheetGroup.length && pageCount > 1) {
+    sheetMenuItems.push({ section: "Sheets in this set" });
+    for (let n = 1; n <= pageCount; n++) sheetMenuItems.push({ id: `pg-${n}`, label: pageLabels[n] || `Sheet ${n}`, shortcut: `${n}/${pageCount}`, active: n === page, onSelect: () => setPage(n) });
+  }
+  if (!sheetGroup.length && sheets.length > 1) {
+    sheetMenuItems.push({ section: "Files" });
+    for (const s of sheets) sheetMenuItems.push({ id: `f-${s.name}`, label: s.name, active: s.name === active, onSelect: () => { setActive(s.name); setPage(1); } });
+  }
+  if (sheetMenuItems.length && (sheetGroup.length || lastGroup.length >= 2)) sheetMenuItems.push("divider");
+  if (sheetGroup.length) sheetMenuItems.push({ id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
+  if (!sheetGroup.length && lastGroup.length >= 2) sheetMenuItems.push({ id: "regroup", label: `Regroup (${lastGroup.length})`, title: `Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`, onSelect: regroup });
+  if (sheetMenuItems.length) sheetMenuItems.push("divider");
+  sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
+
+  // deck-2 scale chip — the four scale controls collapsed to one status face:
+  // red dashed = unset ("you can't trace yet"), green = set, warning = the
+  // plan notes a different scale than the one you picked
+  const scaleDet = detectedScales[focusPanel.key];
+  const scaleMismatch = !!(unitsPerPx && stdValue && scaleDet && Math.abs(scaleDet.upp - unitsPerPx) > 1e-9);
+  const scaleFace = !unitsPerPx ? "Set scale…" : `${scaleMismatch ? "≠" : "✓"} ${stdValue || "custom"}`;
+  const scaleFaceStyle = !unitsPerPx
+    ? { border: "1px dashed var(--c-danger)", color: "var(--c-danger)" }
+    : scaleMismatch
+      ? { border: "1px solid var(--c-warning)", color: "var(--c-warning)" }
+      : { border: "1px solid var(--c-positive)", color: "var(--c-positive)" };
+  const scaleTitle = scaleMismatch
+    ? `You set ${stdValue}, but the plan notes ${scaleDet.label} on ${labelFor(focusPanel)} — double-check before tracing.`
+    : `Set the scale for ${labelFor(focusPanel)} — remembered per sheet${groupKeys.length > 1 ? " (targets the sheet you last clicked)" : ""}`;
+  const scaleItems = [];
+  if (scaleDet) {
+    scaleItems.push({ section: "From the plan" });
+    scaleItems.push({
+      id: "use-detected", icon: "target", tint: "var(--c-positive)",
+      label: `Plan says ${scaleDet.label}${scaleDet.multi ? " ±" : ""} — use it`,
+      title: `The plan notes ${scaleDet.label} on ${labelFor(focusPanel)}${scaleDet.multi ? " — this sheet shows several scales (details are often larger); confirm against a known dimension" : ""}.`,
+      onSelect: () => { setScales((s) => ({ ...s, [focusPanel.key]: scaleDet.upp })); setScaleSources((s) => ({ ...s, [focusPanel.key]: "detected" })); },
+    });
+  }
+  scaleItems.push({ section: "Standard" });
+  for (const s of STANDARD_SCALES) scaleItems.push({ id: s.label, label: s.label, active: stdValue === s.label, onSelect: () => { setScales((sc) => ({ ...sc, [focusPanel.key]: s.upp })); setScaleSources((sc) => ({ ...sc, [focusPanel.key]: "standard" })); } });
+  scaleItems.push("divider");
+  scaleItems.push({ id: "calibrate", icon: "calibrate", label: "Calibrate two points…", title: "Calibrate — click two points of a known dimension", active: tool === "calibrate", onSelect: () => setTool("calibrate") });
+  scaleItems.push({ note: "Remembered per sheet." });
+
+  // One-Click fill sensitivity — lives in the render menu now, so arming
+  // One-Click never reshapes the toolbar. Detents at Strict / Balanced /
+  // Aggressive; the slider still tunes 0–100% freely, snapping to a notch when
+  // released near one. Detents come from oneclick's canonical presets so UI
+  // and flood math can't drift if a preset is ever retuned.
+  const fillRow = (() => {
+    const NOTCHES = [SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE];
+    const label = fillSens === SENS_STRICT ? "Strict" : fillSens === SENS_BALANCED ? "Balanced" : fillSens === SENS_AGGRESSIVE ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
+    const snap = (v) => { for (const n of NOTCHES) if (Math.abs(v - n) <= 0.06) return n; return v; };
+    return (
+      <div title={"One-Click fill sensitivity — how far a fill reaches past a room's hatch pattern.\nStrict: stop at the linework (original behavior).\nBalanced: recover hatch-lined rooms to the walls (default).\nAggressive: cross more pattern and tolerate more growth.\nLower it if fills spill; raise it if hatched rooms come up short."}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-soft)" }}>Fill</span>
+        <input name="fill-sensitivity" type="range" min={SENS_STRICT} max={SENS_AGGRESSIVE} step={0.01} value={fillSens} list="fill-sens-notches"
+          onChange={(e) => setFillSens(snap(parseFloat(e.target.value)))}
+          style={{ flex: 1, accentColor: "var(--cobalt)", cursor: "pointer" }} />
+        <datalist id="fill-sens-notches"><option value={SENS_STRICT} /><option value={SENS_BALANCED} /><option value={SENS_AGGRESSIVE} /></datalist>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: "var(--cobalt)", minWidth: 58 }}>{label}</span>
+      </div>
+    );
+  })();
+
   return (
     // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
     <div
@@ -2716,10 +2809,16 @@ export default function TakeoffCanvas() {
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer?.files); }}
       style={{ position: "relative", display: "flex", flexDirection: "column", height: "100vh" }}>
-      {/* toolbar — open/sheets | modes | tool menus | scale | actions | panels */}
-      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "8px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+      {/* toolbar — two fixed decks (issue #61). Deck 1 = things you do to the
+          PROJECT (open, navigate, export, account); deck 2 = things you do to
+          the SHEET (arm tools, toggle aids, set scale). Neither row wraps, and
+          conditional UI renders only into deck 2's reserved ACTION slot, so no
+          control ever changes position. */}
+      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "6px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-shadow)", whiteSpace: "nowrap" }}>
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
-        <AuthChip />
+        {/* team cloud mode: back to the project browser — fixed presence for
+            the whole session (cloudMode and the home folder are set before the
+            canvas mounts), so it never shifts deck-1 mid-work */}
         {cloudMode && projectHomeFolderId() && (
           <button type="button" onClick={() => navigate("/")}
             title="Back to your team's projects"
@@ -2733,139 +2832,27 @@ export default function TakeoffCanvas() {
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
           <Icon name="plus" size={14} />Open</button>
         <button type="button" onClick={() => setView("gallery")}
-          title="Plan set — the visual gallery; open one or several sheets (G)"
+          title={`Plan set — the visual gallery; open one or several sheets (G)${sheetGroup.length ? ` · ${sheetGroup.length} side-by-side now` : ""}`}
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${sheetGroup.length ? "var(--cobalt)" : "var(--ink-faint)"}`, background: sheetGroup.length ? "var(--cobalt)" : "transparent", color: sheetGroup.length ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="sheets" size={15} />Sheets{sheetGroup.length ? ` (${sheetGroup.length})` : ""}
+          <Icon name="sheets" size={15} />Sheets
         </button>
-        {sheetGroup.length > 0 && (
-          <button type="button" onClick={ungroup} title="Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups"
-            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5 }}>Ungroup</button>
-        )}
-        {!sheetGroup.length && lastGroup.length >= 2 && (
-          <button type="button" onClick={regroup} title={`Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`}
-            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5 }}>Regroup ({lastGroup.length})</button>
-        )}
-        {sheets.length > 1 && !sheetGroup.length && (
-          <select name="active-sheet" value={active} onChange={(e) => { setActive(e.target.value); setPage(1); }} style={{ padding: 6, border: "1px solid var(--ink-faint)", background: "transparent", maxWidth: 220, fontSize: 12 }}>
-            {sheets.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-          </select>
-        )}
-        {!sheetGroup.length && pageCount > 1 && (
+        {sheets.length > 0 && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer" }}><Icon name="chevronLeft" size={12} /></button>
-            <select name="sheet-page" value={page} onChange={(e) => setPage(parseInt(e.target.value, 10))} style={{ padding: "5px 6px", border: "1px solid var(--ink-faint)", background: "transparent", fontFamily: "var(--f-mono,monospace)", fontSize: 12 }}>
-              {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{pageLabels[n] ? `${pageLabels[n]}  ·  ${n}/${pageCount}` : `Sheet ${n} / ${pageCount}`}</option>)}
-            </select>
-            <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount} style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer" }}><Icon name="chevronRight" size={12} /></button>
+            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!!sheetGroup.length || page <= 1} title="Previous sheet"
+              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page <= 1) ? 0.4 : 1 }}><Icon name="chevronLeft" size={12} /></button>
+            <ToolMenu
+              title="Sheet — the sheets in this set, files, grouping, and the gallery"
+              onOpenChange={onMenuDepth}
+              face={<span style={{ display: "inline-block", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sheetChipLabel}</span>}
+              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 400, padding: "6px 8px" }}
+              menuStyle={{ minWidth: 260, maxHeight: "min(480px, 60vh)", overflowY: "auto" }}
+              items={sheetMenuItems}
+            />
+            <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={!!sheetGroup.length || page >= pageCount} title="Next sheet"
+              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page >= pageCount) ? 0.4 : 1 }}><Icon name="chevronRight" size={12} /></button>
           </span>
         )}
-        {vRule}
-        {iconBtn("pan", "pan", "", "Pan (P) — or hold right-click / Space mid-measure", false)}
-        {iconBtn("select", "select", "", "Select (V) — pick a takeoff, drag points", false)}
-        <ToolMenu
-          title="Measure — the face shows the armed tool"
-          active={measureActive}
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<><Icon name={faceTool.icon} size={15} /><span style={{ opacity: measureActive ? 1 : 0.6 }}>{faceTool.label}</span></>}
-          items={MEASURE_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => setTool(t.id) }))}
-        />
-        <ToolMenu
-          title="Cut Out — subtract voids/columns (counts negative)"
-          active={tool === "deduct"} accent="danger"
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<><Icon name="deduct" size={15} /><span>Cut Out</span></>}
-          items={CUT_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, tint: "var(--c-danger)", onSelect: () => setTool(t.id) }))}
-        />
-        <ToolMenu
-          title="Markup — annotations, not measurements"
-          active={MARKUP_IDS.includes(tool)}
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<><Icon name="markup" size={15} /><span>Markup</span></>}
-          items={MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } }))}
-        />
-        <ToolMenu
-          title="Edit takeoffs"
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<span>Edit</span>}
-          items={[
-            { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
-            { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
-            { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
-            "divider",
-            { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
-            { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: () => setPoly((q) => q.slice(0, -1)) },
-            { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
-            "divider",
-            { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
-          ]}
-        />
-        <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="snap" size={15} />{snapOn ? "Snap ✓" : "Snap"}
-        </button>
-        <button onClick={() => setAngleOn((v) => !v)} title="45°/90° angle guides — the next segment locks to the 45° family as you draw (hold ⇧ to force the lock at any angle)"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${angleOn ? "var(--cobalt)" : "var(--ink-faint)"}`, background: angleOn ? "var(--cobalt)" : "transparent", color: angleOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="angle" size={15} />{angleOn ? "45° ✓" : "45°"}
-        </button>
-        {tool === "oneclick" && (() => {
-          // Fill sensitivity — how eagerly One-Click crosses a room's hatch. Detents
-          // at Strict / Balanced / Aggressive; the slider still tunes 0–100% freely,
-          // snapping to a notch when released near one.
-          // detents come from oneclick's canonical presets so UI and flood math
-          // can't drift if a preset is ever retuned.
-          const NOTCHES = [SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE];
-          const label = fillSens === SENS_STRICT ? "Strict" : fillSens === SENS_BALANCED ? "Balanced" : fillSens === SENS_AGGRESSIVE ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
-          const snap = (v) => { for (const n of NOTCHES) if (Math.abs(v - n) <= 0.06) return n; return v; };
-          return (
-            <span title={"One-Click fill sensitivity — how far a fill reaches past a room's hatch pattern.\nStrict: stop at the linework (original behavior).\nBalanced: recover hatch-lined rooms to the walls (default).\nAggressive: cross more pattern and tolerate more growth.\nLower it if fills spill; raise it if hatched rooms come up short."}
-              style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "4px 10px", border: "1px solid var(--ink-faint)", lineHeight: 1 }}>
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-soft)" }}>Fill</span>
-              <input name="fill-sensitivity" type="range" min={SENS_STRICT} max={SENS_AGGRESSIVE} step={0.01} value={fillSens} list="fill-sens-notches"
-                onChange={(e) => setFillSens(snap(parseFloat(e.target.value)))}
-                style={{ width: 108, accentColor: "var(--cobalt)", cursor: "pointer" }} />
-              <datalist id="fill-sens-notches"><option value={SENS_STRICT} /><option value={SENS_BALANCED} /><option value={SENS_AGGRESSIVE} /></datalist>
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--cobalt)", minWidth: 62 }}>{label}</span>
-            </span>
-          );
-        })()}
-        {vRule}
-        {/* scale group: standard dropdown + plan-note chip + calibrate */}
-        <select name="standard-scale" value={stdValue} onChange={(e) => { const f = STANDARD_SCALES.find((s) => s.label === e.target.value); if (f) { setScales((s) => ({ ...s, [focusPanel.key]: f.upp })); setScaleSources((s) => ({ ...s, [focusPanel.key]: "standard" })); } }}
-          title={`Set the scale for ${labelFor(focusPanel)} — remembered per sheet${groupKeys.length > 1 ? " (targets the sheet you last clicked)" : ""}`}
-          style={{ padding: 6, border: unitsPerPx ? "1px solid var(--c-positive)" : "1px solid var(--ink-faint)", background: "transparent", color: unitsPerPx ? "var(--c-positive)" : "var(--c-danger)", fontSize: 12 }}>
-          <option value="">{unitsPerPx ? `scale set${stdValue ? "" : " · custom"} ✓` : `Set scale for ${labelFor(focusPanel)}…`}</option>
-          {STANDARD_SCALES.map((s) => <option key={s.label} value={s.label}>{s.label}</option>)}
-        </select>
-        {(() => {
-          const det = detectedScales[focusPanel.key];
-          if (!det) return null;
-          if (!unitsPerPx) return (
-            <button type="button" onClick={() => { setScales((s) => ({ ...s, [focusPanel.key]: det.upp })); setScaleSources((s) => ({ ...s, [focusPanel.key]: "detected" })); }}
-              title={`The plan notes ${det.label} on ${labelFor(focusPanel)}${det.multi ? " — this sheet shows several scales (details are often larger); confirm against a known dimension" : ""}. Click to use it.`}
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", border: "1px dashed var(--c-positive)", background: "transparent", color: "var(--c-positive)", cursor: "pointer", fontSize: 11.5, fontWeight: 600, lineHeight: 1 }}>
-              <Icon name="target" size={13} />plan says {det.label}{det.multi ? " ±" : ""} — use
-            </button>
-          );
-          if (stdValue && Math.abs(det.upp - unitsPerPx) > 1e-9) return (
-            <span title={`You set ${stdValue}, but the plan notes ${det.label} on ${labelFor(focusPanel)} — double-check before tracing.`}
-              style={{ fontSize: 11, color: "var(--c-danger)", fontWeight: 700 }}>≠ plan says {det.label}</span>
-          );
-          return null;
-        })()}
-        {iconBtn("calibrate", "calibrate", "", "Calibrate — click two points of a known dimension", false)}
-        <button type="button" onClick={toggleHiRes}
-          title={`Hi-Res rendering for ${labelFor(focusPanel)} — the sheet re-rasters at an auto quality budget (~28MP), so memory stays bounded even side-by-side; crisper when zoomed in. Saved per sheet, per user. Quantities are unaffected.`}
-          style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: `1px solid ${hiResOn(focusPanel.key) ? "var(--cobalt)" : "var(--ink-faint)"}`, background: hiResOn(focusPanel.key) ? "var(--cobalt)" : "transparent", color: hiResOn(focusPanel.key) ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", lineHeight: 1 }}>
-          <Icon name="hiRes" size={15} />
-        </button>
         <div style={{ flex: 1 }} />
-        {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : "opposite corner"}…</span>}
-        {finishOk && (
-          <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
-        )}
-        {proposal?.regions.length > 0 && (
-          <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
-        )}
         <span style={{ fontSize: 11, color: "var(--ink-muted)", minWidth: 44, fontFamily: "var(--f-mono)" }}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
         <button onClick={toggleTheme} title="App theme — light / dark chrome (sheets unaffected; use ☾ on the canvas to invert the print)"
           aria-label="App theme — light / dark chrome" aria-pressed={theme === "dark"}
@@ -2878,6 +2865,104 @@ export default function TakeoffCanvas() {
         </button>
         <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
           style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
+        <AccountChip note={cloudMode ? "Synced to Google Drive" : "Local workspace"} onOpenChange={onMenuDepth} />
+      </div>
+
+      {/* deck 2 — the work bar: drafting-style captions above each cluster */}
+      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "20px 14px 8px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", whiteSpace: "nowrap" }}>
+        {cluster("Mode",
+          <span style={{ display: "inline-flex", border: "1px solid var(--ink-faint)" }}>
+            {segBtn("pan", "pan", "Pan (P) — or hold right-click / Space mid-measure")}
+            {segBtn("select", "select", "Select (V) — pick a takeoff, drag points", true)}
+          </span>
+        )}
+        {vRule}
+        {cluster("Draw", <>
+          <ToolMenu
+            title="Measure — the face shows the armed tool"
+            active={measureActive}
+            onOpenChange={onMenuDepth}
+            face={<><Icon name={faceTool.icon} size={15} /><span style={{ opacity: measureActive ? 1 : 0.6 }}>{faceTool.label}</span></>}
+            items={MEASURE_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => setTool(t.id) }))}
+          />
+          <ToolMenu
+            title="Cut Out — subtract voids/columns (counts negative)"
+            active={tool === "deduct"} accent="danger"
+            onOpenChange={onMenuDepth}
+            face={<><Icon name="deduct" size={15} /><span>Cut Out</span></>}
+            items={CUT_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, tint: "var(--c-danger)", onSelect: () => setTool(t.id) }))}
+          />
+          <ToolMenu
+            title="Markup — annotations, not measurements"
+            active={MARKUP_IDS.includes(tool)}
+            onOpenChange={onMenuDepth}
+            face={<><Icon name="markup" size={15} /><span>Markup</span></>}
+            items={MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } }))}
+          />
+          <ToolMenu
+            title="Edit takeoffs"
+            onOpenChange={onMenuDepth}
+            face={<span>Edit</span>}
+            items={[
+              { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
+              { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
+              { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
+              "divider",
+              { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
+              { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: () => setPoly((q) => q.slice(0, -1)) },
+              { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
+              "divider",
+              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
+            ]}
+          />
+        </>)}
+        {vRule}
+        {cluster("Aids", <>
+          <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="snap" size={15} />Snap
+          </button>
+          <button onClick={() => setAngleOn((v) => !v)} title="45°/90° angle guides — the next segment locks to the 45° family as you draw (hold ⇧ to force the lock at any angle)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${angleOn ? "var(--cobalt)" : "var(--ink-faint)"}`, background: angleOn ? "var(--cobalt)" : "transparent", color: angleOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="angle" size={15} />45°
+          </button>
+          <ToolMenu
+            title="Render & fill settings — Hi-Res and One-Click fill sensitivity"
+            onOpenChange={onMenuDepth}
+            face={<Icon name="sliders" size={15} />}
+            menuStyle={{ minWidth: 252 }}
+            items={[
+              {
+                id: "hires", icon: "hiRes", label: "Hi-Res render (this sheet)", checked: hiResOn(focusPanel.key), stayOpen: true, onSelect: toggleHiRes,
+                title: `Hi-Res rendering for ${labelFor(focusPanel)} — the sheet re-rasters at an auto quality budget (~28MP), so memory stays bounded even side-by-side; crisper when zoomed in. Saved per sheet, per user. Quantities are unaffected.`,
+              },
+              "divider",
+              { id: "fill", custom: fillRow },
+            ]}
+          />
+        </>)}
+        <div style={{ flex: 1 }} />
+        {cluster(`Scale — ${labelFor(focusPanel)}`,
+          <ToolMenu
+            title={scaleTitle}
+            onOpenChange={onMenuDepth}
+            face={<span>{scaleFace}</span>}
+            faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 11.5, ...scaleFaceStyle }}
+            menuStyle={{ minWidth: 250 }}
+            items={scaleItems}
+          />
+        )}
+        {cluster("Action",
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 150 }}>
+            {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : "opposite corner"}…</span>}
+            {finishOk && (
+              <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
+            )}
+            {proposal?.regions.length > 0 && (
+              <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
+            )}
+          </span>
+        )}
       </div>
 
       {/* quick-access condition palette — its own slim band under the toolbar
@@ -2964,7 +3049,7 @@ export default function TakeoffCanvas() {
           {openTabs.length > 1 && (
             <ToolMenu
               title="Jump to an open sheet"
-              onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
+              onOpenChange={onMenuDepth}
               face={<span style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>{openTabs.length} open</span>}
               items={openTabs.map((k) => ({ id: k, icon: "document", label: tabLabel(k), active: sheetGroup.length ? sheetGroup.includes(k) : k === sheetKey, onSelect: () => goToSheet(k) }))}
             />
