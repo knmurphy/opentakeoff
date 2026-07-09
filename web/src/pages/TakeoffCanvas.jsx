@@ -2411,7 +2411,9 @@ export default function TakeoffCanvas() {
     activateCondition(id);   // highlight the row (reassigns a selected shape iff Select is armed, like every activation surface)
     // scroll the docked row into view AFTER the uncollapse paints — two rAFs so
     // the panel has mounted its list (the row carries data-cond-id)
-    requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector(`[data-cond-id="${id}"]`)?.scrollIntoView({ block: "nearest" })));
+    // CSS.escape the id — hydrate accepts hand-edited/older payloads, so an id
+    // with quotes/brackets must not break the attribute selector
+    requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector(`[data-cond-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" })));
   };
 
   // Bulk mutations — the multi-selection is TakeoffsPanel view state; every
@@ -2746,7 +2748,7 @@ export default function TakeoffCanvas() {
       {conditions.length > 0 && (
         <div
           onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; } }}
-          onDrop={(e) => { const id = e.dataTransfer.getData(CONDITION_DND_MIME); if (id) { e.preventDefault(); e.stopPropagation(); pinToPalette(id); } }}
+          onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(CONDITION_DND_MIME); if (id) pinToPalette(id); }}
           style={{ padding: "5px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             <span title="Quick-access conditions — drag a condition here (or use a row's pushpin) to pin it, up to 9. Press 1–9 to activate by this order; click a chip to activate; double-click to open the panel."
@@ -2760,7 +2762,7 @@ export default function TakeoffCanvas() {
               return (
                 <span key={c.id} style={{ display: "inline-flex", alignItems: "center" }}
                   onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"; } }}
-                  onDrop={(e) => { const dragId = e.dataTransfer.getData(CONDITION_DND_MIME); if (dragId) { e.preventDefault(); e.stopPropagation(); if (palette.includes(dragId)) movePalette(dragId, idx); else pinToPalette(dragId); } }}>
+                  onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const dragId = e.dataTransfer.getData(CONDITION_DND_MIME); if (dragId) { if (palette.includes(dragId)) movePalette(dragId, idx); else pinToPalette(dragId); } }}>
                   <button type="button" draggable
                     onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copyMove"; }}
                     onClick={() => activateCondition(c.id)}
