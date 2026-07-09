@@ -37,11 +37,14 @@ export function onThemeChange(fn) {
 // changes; an explicit choice made in another tab syncs here via `storage`
 // (which never fires in the tab that set it, so no double-apply).
 export function initTheme() {
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+  const mq = matchMedia("(prefers-color-scheme: dark)");
+  const onOsChange = (e) => {
     let stored = null;
     try { stored = localStorage.getItem(KEY); } catch { /* private mode */ }
     if (stored !== "light" && stored !== "dark") apply(e.matches ? "dark" : "light");
-  });
+  };
+  if (mq.addEventListener) mq.addEventListener("change", onOsChange);
+  else mq.addListener(onOsChange);   // Safari < 14
   window.addEventListener("storage", (e) => {
     if (e.key === KEY && (e.newValue === "light" || e.newValue === "dark")) apply(e.newValue);
   });

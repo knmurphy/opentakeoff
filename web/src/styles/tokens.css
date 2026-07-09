@@ -105,7 +105,7 @@
     --c-danger:   #e0705c;
 
     --ink-secondary:   #aba490;
-    --tint-select:     #1e2c4f;
+    --tint-select:     #19243f;   /* dark enough that 11px cobalt/danger text clears 4.5:1 */
     --tint-active:     #1b2f2a;
     --surface-pop:     #253352;
     /* --well stays white: PDF thumbnails and stamp previews are light media */
@@ -117,7 +117,7 @@
     --shadow-1: 0 1px 2px rgba(0, 0, 0, .35), 0 2px 8px rgba(0, 0, 0, .35);
     --shadow-2: 0 12px 36px rgba(0, 0, 0, .6);
     --shadow-pop: 0 6px 22px rgba(0, 0, 0, .5);
-    --ring: 0 0 0 3px rgba(109, 135, 242, .3);
+    --ring: 0 0 0 3px rgba(109, 135, 242, .7);   /* .3 blends to 1.6:1 on the dark page — the ring is the only focus indicator */
 
     --grain-rgb: 255, 255, 255;
     --grain-inverse-rgb: 0, 0, 0;

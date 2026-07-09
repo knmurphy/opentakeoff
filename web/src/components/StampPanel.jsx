@@ -101,8 +101,8 @@ export default function StampPanel({ docked = false, library = { stamps: [], set
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "var(--cobalt)", color: "var(--accent-contrast)" }}>
           <strong>Stamps · palette</strong>
           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={onExport} title="Export the stamp library as JSON" style={{ ...ctrl, border: "1px solid color-mix(in srgb, var(--accent-contrast) 50%, transparent)", color: "var(--accent-contrast)" }}>Export</button>
-            <button onClick={() => fileRef.current?.click()} title="Import a stamp library (.json, merges) or a vector symbol (.svg, added as a stamp)" style={{ ...ctrl, border: "1px solid color-mix(in srgb, var(--accent-contrast) 50%, transparent)", color: "var(--accent-contrast)" }}>Import</button>
+            <button onClick={onExport} title="Export the stamp library as JSON" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "var(--accent-contrast)" }}>Export</button>
+            <button onClick={() => fileRef.current?.click()} title="Import a stamp library (.json, merges) or a vector symbol (.svg, added as a stamp)" style={{ ...ctrl, border: "1px solid rgba(255,255,255,.5)", color: "var(--accent-contrast)" }}>Import</button>
             {fileInput}
             <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--accent-contrast)", fontSize: 16, cursor: "pointer" }}>×</button>
           </span>
