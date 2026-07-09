@@ -37,6 +37,7 @@ import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
 import DrivePicker from "../components/DrivePicker.jsx";
 import AuthChip from "../components/AuthChip.jsx";
+import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -256,6 +257,10 @@ export default function TakeoffCanvas() {
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
+  // App chrome theme (light/dark tokens) — independent of the canvas ☾ invert
+  // above. lib/theme.js owns the DOM; this state just keeps the glyph current.
+  const [theme, setTheme] = useState(getTheme);
+  useEffect(() => onThemeChange(setTheme), []);
   // diff-only prefs (cf. reportColumns): only keys that differ from the
   // defaults persist, so a future default change reaches existing users
   useEffect(() => {
@@ -2815,6 +2820,10 @@ export default function TakeoffCanvas() {
           <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
         )}
         <span style={{ fontSize: 11, color: "var(--ink-muted)", minWidth: 44, fontFamily: "var(--f-mono)" }}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
+        <button onClick={() => setTheme(toggleTheme())} title="App theme — light / dark chrome (sheets unaffected; use ☾ on the canvas to invert the print)"
+          style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontSize: 14, lineHeight: 1 }}>
+          {theme === "dark" ? "◐" : "◑"}
+        </button>
         <button onClick={() => setShowSnapshots((v) => !v)} title="Snapshots — save the takeoff as-is, then compare or restore it after an addendum"
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${showSnapshots ? "var(--cobalt)" : "var(--ink-faint)"}`, background: showSnapshots ? "var(--cobalt)" : "transparent", color: showSnapshots ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
           <Icon name="document" size={15} />Snapshots
@@ -3390,7 +3399,7 @@ export default function TakeoffCanvas() {
                 style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 18, fontWeight: 700 }}>{lbl}</button>
             ))}
             <button onClick={() => stage.w && fitToView(stage.w, stage.h)} title="Fit" style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 12 }}>fit</button>
-            <button onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Light view" : "Dark view (negative print)"}
+            <button onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Sheet back to positive print" : "Invert sheet — negative print (affects marked-set export)"}
               style={{ width: 34, height: 34, borderRadius: 0, border: `1px solid ${darkMode ? "var(--cobalt)" : "var(--ink-faint)"}`, background: darkMode ? "var(--cobalt)" : "var(--paper-bright)", color: darkMode ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 13 }}>
               {darkMode ? "☀" : "☾"}</button>
           </div>
