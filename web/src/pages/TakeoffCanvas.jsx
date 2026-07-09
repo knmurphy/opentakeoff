@@ -588,12 +588,14 @@ export default function TakeoffCanvas() {
     }
     setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
   }
-  // Whether the working set has any sheets. The sheets effect and the annotations
-  // (hydrate) effect both decide the empty-project landing view and race on mount;
-  // this ref lets hydrate route an empty CLOUD project to the Drive picker (not the
-  // local gallery) regardless of which resolves first. Paired with the
-  // picker→gallery correction below, the decision is order-independent.
+  // The empty-project landing view (the Drive picker for an empty cloud project,
+  // else the gallery) depends on BOTH the sheet list and the annotations (open
+  // tabs), which load in two racing mount effects. These flags let whichever
+  // finishes LAST make the call exactly once — so the picker never flashes for a
+  // project that actually has sheets, and no redundant Drive listing fires.
   const hasSheetsRef = useRef(false);
+  const sheetsLoadedRef = useRef(false);
+  const noTabsRef = useRef(false);
   useEffect(() => {
     let off = false;
     setStatus("loading");
@@ -601,11 +603,13 @@ export default function TakeoffCanvas() {
       .then((list) => {
         if (off) return;
         hasSheetsRef.current = list.length > 0;
+        sheetsLoadedRef.current = true;
         setSheets(list);
-        // has sheets → keep the chosen sheet; if hydrate already raced to the
-        // picker (thinking the set was empty), correct back to the gallery.
-        if (list.length) { setActive(list[0].name); setView((v) => (v === "picker" ? "gallery" : v)); }
-        else { setStatus("empty"); setView(cloudMode ? "picker" : "gallery"); }
+        if (list.length) setActive(list[0].name);
+        else setStatus("empty");
+        // decide the landing only once the annotations effect has also reported
+        // no open tabs (see hydrate) — avoids a picker→gallery flash + wasted list
+        if (noTabsRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
       })
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
@@ -655,9 +659,14 @@ export default function TakeoffCanvas() {
     const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
     if (tabs.length) setOpenTabs(tabs);
     else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
-    // no tabs → the sheet chooser: the Drive picker for an empty cloud project
-    // (nothing picked yet), otherwise the gallery.
-    else { setOpenTabs([]); setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery"); }
+    // no tabs → the sheet chooser. Defer the picker-vs-gallery choice until the
+    // sheets effect has loaded the working set (coordinated via the refs) so an
+    // empty cloud project lands on the Drive picker without flashing the gallery.
+    else {
+      setOpenTabs([]);
+      noTabsRef.current = true;
+      if (sheetsLoadedRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
+    }
     const sc = {};
     const src = {};
     for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
