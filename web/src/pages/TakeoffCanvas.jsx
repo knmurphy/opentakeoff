@@ -105,6 +105,11 @@ function invertCanvasPixels(cv) {
 let _idn = 0;
 const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
 const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+// Placed-stamp/markup types that carry a real size and so take a corner resize
+// handle (drag to scale uniformly about the markup's center). `text` and
+// `callout` are omitted — their box is sized from the text, not a scale field.
+const MARKUP_RESIZABLE = new Set(["svg", "bubble", "arrow", "cloud", "highlight"]);
 // shared by the status-bar tone AND the auto-dismiss skip (below) — one
 // definition of "this message is bad news" for both readers
 const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
@@ -279,7 +284,12 @@ export default function TakeoffCanvas() {
   // selecting a shape clears any markup selection and vice-versa — one live
   // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
-  const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
+  // Selecting a markup (e.g. clicking a just-placed stamp) advances an OPEN left
+  // dock to the Markups tab so the item is findable — but never yanks a closed
+  // dock open (t ? "markup" : t keeps null null). The Markups list then highlights
+  // and scrolls to the row (selectedRowRef effect below).
+  const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); setLeftTab((t) => (t ? "markup" : t)); };
+  const selectedRowRef = useRef(null);   // the selected markup's sidebar row — scrolled into view on selection
   const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
@@ -700,6 +710,12 @@ export default function TakeoffCanvas() {
   // leaving the stamp tool disarms the pending stamp — a stray click under a
   // measure/select tool must never drop a stamp
   useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
+  // Selecting a markup while the Markups tab is open scrolls its row into view,
+  // so a stamp placed off-screen (or on a long list) is findable, not just
+  // highlighted. block:"nearest" never scrolls when the row is already visible.
+  useEffect(() => {
+    if (leftTab === "markup" && selectedMarkupId && selectedRowRef.current) selectedRowRef.current.scrollIntoView({ block: "nearest" });
+  }, [selectedMarkupId, leftTab]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -1212,6 +1228,36 @@ export default function TakeoffCanvas() {
     else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
     else if (tool === "stamp") placeStamp(p);
   }
+  // Bottom-right resize handle for a markup, in STAGE px (center + corner), or
+  // null for a type with no size field. The corner matches the on-canvas handle
+  // exactly (same un-padded geometry) so a grab lands where the square is drawn.
+  // A placed stamp is just markups, so this is how you scale one after dropping it.
+  function markupResizeHandle(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return null;
+    const W = sp.img.w, H = sp.img.h, ox = sp.xOffset;
+    if (m.type === "svg" && m.at && Array.isArray(m.vb)) {
+      const { bw, bh } = svgPlacedBox(m.vb, m.w, W);
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H;
+      return { cx, cy, hx: cx + bw / 2, hy: cy + bh / 2 };
+    }
+    if (m.type === "bubble" && m.at) {
+      const rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * W;
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H;
+      return { cx, cy, hx: cx + rad, hy: cy + rad };
+    }
+    if (m.type === "arrow" && m.from && m.to) {
+      const fx = m.from[0] * W + ox, fy = m.from[1] * H, tx = m.to[0] * W + ox, ty = m.to[1] * H;
+      return { cx: (fx + tx) / 2, cy: (fy + ty) / 2, hx: Math.max(fx, tx), hy: Math.max(fy, ty) };
+    }
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) {
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, hx: x1, hy: y1 };
+    }
+    return null;
+  }
   // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
   // hitShape can't test them — this is a purpose-built bbox/point test in the
   // markup's OWN panel frame. p is stage px. Labels are screen-constant, so their
@@ -1321,6 +1367,24 @@ export default function TakeoffCanvas() {
           dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i + 1 };
           e.currentTarget.setPointerCapture(e.pointerId); return;
         }
+      }
+    }
+    // 1c. Resize handle of the ALREADY-selected markup wins next (mirrors the
+    //     selected-shape vertex handles above): grab the corner square to scale
+    //     the markup — a placed stamp — about its center instead of moving it.
+    if (showMarkups && selectedMarkupId) {
+      const selMk = visibleMarkups.find((m) => m.id === selectedMarkupId);
+      const rh = selMk && MARKUP_RESIZABLE.has(selMk.type) ? markupResizeHandle(selMk) : null;
+      if (rh && Math.hypot(rh.hx - p[0], rh.hy - p[1]) < thr * 1.6) {
+        const sp = panelByKey(selMk.sheet_id);
+        const cxn = (rh.cx - sp.xOffset) / sp.img.w, cyn = rh.cy / sp.img.h;
+        const orig = selMk.type === "svg" ? { w: Number(selMk.w) > 0 ? Number(selMk.w) : 0.08 }
+          : selMk.type === "bubble" ? { r: Number(selMk.r) > 0 ? Number(selMk.r) : 0.02 }
+            : selMk.type === "arrow" ? { from: selMk.from, to: selMk.to }
+              : { rect: selMk.rect };   // cloud + highlight
+        dragRef.current = { kind: "markupResize", markupId: selMk.id, sheetId: selMk.sheet_id, cxn, cyn, distPx: Math.max(1e-6, Math.hypot(rh.hx - rh.cx, rh.hy - rh.cy)), orig };
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
       }
     }
     // 2. markups render ON TOP of shapes (:2137 > :2093), so a markup hit wins over a
@@ -1604,6 +1668,25 @@ export default function TakeoffCanvas() {
           if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
           if (o.from) return { ...m, from: [o.from[0] + dx, o.from[1] + dy], to: [o.to[0] + dx, o.to[1] + dy] };
           return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };   // text + bubble
+        }));
+      } else if (d.kind === "markupResize") {
+        // Uniform scale about the markup's frozen center: factor = current
+        // corner distance / the distance at grab. svg/bubble scale their size
+        // scalar (w/r); arrow/cloud/highlight scale their points about the center
+        // (in normalized coords). Raw cursor point — markups don't snap.
+        const mp = toImage(e.clientX, e.clientY);
+        const sp = panelByKey(d.sheetId);
+        if (!sp || !sp.img.w) return;
+        const cpx = d.cxn * sp.img.w + sp.xOffset, cpy = d.cyn * sp.img.h;
+        const f = clampTo(Math.hypot(mp[0] - cpx, mp[1] - cpy) / d.distPx, 0.1, 25);
+        const o = d.orig;
+        const sc = (pt) => [d.cxn + (pt[0] - d.cxn) * f, d.cyn + (pt[1] - d.cyn) * f];
+        setMarkups((ms) => ms.map((m) => {
+          if (m.id !== d.markupId) return m;
+          if (o.w != null) return { ...m, w: clampTo(o.w * f, 0.005, 2) };          // svg symbol
+          if (o.r != null) return { ...m, r: clampTo(o.r * f, 0.003, 0.5) };        // bubble
+          if (o.from) return { ...m, from: sc(o.from), to: sc(o.to) };              // arrow
+          return { ...m, rect: [sc(o.rect[0]), sc(o.rect[1])] };                    // cloud + highlight
         }));
       }
       return;
@@ -2769,7 +2852,11 @@ export default function TakeoffCanvas() {
                    <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
                  )}
                  {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
-                   <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                   // the row highlights + scrolls into view when its markup is the live
+                   // selection (selectMarkup, e.g. clicking a just-placed stamp on the
+                   // canvas), and clicking the row selects it back — bidirectional sync.
+                   <div key={m.id} ref={m.id === selectedMarkupId ? selectedRowRef : null} onClick={() => selectMarkup(m.id)}
+                     style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)", cursor: "pointer", background: m.id === selectedMarkupId ? "rgba(31,63,199,.10)" : "transparent" }}>
                      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                        <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
                        {/* inline edit — the panel's fallback for the canvas overlay, since a
@@ -2784,7 +2871,7 @@ export default function TakeoffCanvas() {
                          <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : (m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
                        )}
                        {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
-                       <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
+                       <button onClick={(e) => { e.stopPropagation(); deleteMarkup(m.id); if (m.id === selectedMarkupId) setSelectedMarkupId(null); }} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
                      </div>
                      {/* appearance — per-markup color (reuse PALETTE) + line style; both
                          additive: unset color falls back to the cobalt(linked)/amber default,
@@ -3005,6 +3092,13 @@ export default function TakeoffCanvas() {
                           <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={(2 * w) / z} />
                         </>
                       ) : null);
+                      // bottom-right corner square — drag to resize (see selectAt 1c /
+                      // markupResize). Screen-constant (÷z) like the shape handles; drawn
+                      // only for the selected, sizeable types; passthrough so the grab is
+                      // hit-tested in selectAt (matching markupResizeHandle's un-padded corner).
+                      const rHandle = (hx, hy) => (selM && MARKUP_RESIZABLE.has(m.type) ? (
+                        <rect x={hx - 4.5 / z} y={hy - 4.5 / z} width={9 / z} height={9 / z} fill="#fff" stroke="#1f3fc7" strokeWidth={2 / z} style={{ pointerEvents: "none" }} />
+                      ) : null);
                       if (m.type === "highlight") {
                         const [c0, c1] = m.rect;
                         const hx0 = Math.min(c0[0], c1[0]) * p.img.w, hy0 = Math.min(c0[1], c1[1]) * p.img.h;
@@ -3016,6 +3110,7 @@ export default function TakeoffCanvas() {
                             <rect x={hx0} y={hy0} width={hx1 - hx0} height={hy1 - hy0} fill={mk} fillOpacity={0.18} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
                             {m.text && <text x={(hx0 + hx1) / 2} y={(hy0 + hy1) / 2} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
                             {badge(hx0, hy0 - pad - 9 / z)}
+                            {rHandle(hx1, hy1)}
                           </g>
                         );
                       }
@@ -3031,6 +3126,7 @@ export default function TakeoffCanvas() {
                             {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
                             {badge(bx0, by0 - 9 / z)}
                             {revTri(bx1, by0 - 9 / z)}
+                            {rHandle(Math.max(c0[0], c1[0]) * p.img.w, Math.max(c0[1], c1[1]) * p.img.h)}
                           </g>
                         );
                       }
@@ -3063,6 +3159,7 @@ export default function TakeoffCanvas() {
                             <path d={arrowheadPath(fx, fy, tx, ty, 11 / z)} fill={mk} />
                             {m.text && <text x={midx} y={midy - 6 / z} fill={mk} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
                             {badge(hx0, hy0 - pad - 9 / z)}
+                            {rHandle(hx1, hy1)}
                           </g>
                         );
                       }
@@ -3076,6 +3173,7 @@ export default function TakeoffCanvas() {
                             <circle cx={cx} cy={cy} r={rad} fill={darkMode ? "rgba(12,15,20,.85)" : "rgba(255,255,255,.85)"} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
                             {m.text && <text x={cx} y={cy} fill={mk} fontSize={Math.min(13, rad * z * 0.9) / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
                             {badge(cx + rad, cy - rad - 4 / z)}
+                            {rHandle(cx + rad, cy + rad)}
                           </g>
                         );
                       }
@@ -3096,6 +3194,7 @@ export default function TakeoffCanvas() {
                             {halo(x0, y0, x0 + bw, y0 + bh)}
                             <path d={d} fill={fcol} fillOpacity={fillOn ? 0.9 : undefined} stroke={mk} strokeWidth={(1.6 * w) / z} strokeLinejoin="round" style={{ pointerEvents: "none" }} />
                             {badge(x0, y0 - 9 / z)}
+                            {rHandle(x0 + bw, y0 + bh)}
                           </g>
                         );
                       }
