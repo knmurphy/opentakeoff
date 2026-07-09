@@ -40,6 +40,7 @@ function Centered({ title, body }) {
 }
 
 function SignInScreen({ ready, signIn }) {
+  const [err, setErr] = useState("");
   return (
     <div style={centered}>
       {brand}
@@ -48,12 +49,14 @@ function SignInScreen({ ready, signIn }) {
         Sign in with your team Google account to open it. Only accounts on the team
         domain can sign in.
       </div>
-      <button type="button" disabled={!ready} onClick={() => { signIn().catch(() => {}); }}
+      <button type="button" disabled={!ready}
+        onClick={() => { setErr(""); signIn().catch((e) => setErr(String(e?.message || e))); }}
         style={{ padding: "9px 16px", border: "1px solid var(--ink)", background: "var(--ink)",
           color: "var(--paper-bright)", cursor: ready ? "pointer" : "default", fontWeight: 600,
           fontSize: 13.5, opacity: ready ? 1 : 0.5 }}>
         Sign in with Google
       </button>
+      {err ? <div style={{ fontSize: 12.5, color: "var(--c-danger)", maxWidth: 460 }}>Sign-in failed: {err}</div> : null}
     </div>
   );
 }
@@ -69,6 +72,11 @@ function ProjectGate({ projectId }) {
   useEffect(() => {
     if (!user) { setActiveStore(); setStoreReady(false); return; }   // signed out → back to local
     let live = true;
+    // Rebuild for THIS project: clear the previous project's ready/error so we
+    // never mount the canvas against a stale store, and a past failure can't
+    // keep blocking a later successful init (projectId changed while signed in).
+    setStoreReady(false);
+    setError("");
     (async () => {
       try {
         const [{ createDrive }, { createCloudStore }] = await Promise.all([

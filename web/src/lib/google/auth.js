@@ -80,15 +80,19 @@ function loadGsi() {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
   if (scriptPromise) return scriptPromise;
   scriptPromise = new Promise((resolve, reject) => {
+    // Null the cached promise on any failure so a later preload/sign-in retries
+    // the load — otherwise one offline/errored attempt would wedge sign-in until
+    // a full page refresh.
+    const fail = (msg) => { scriptPromise = null; reject(new Error(msg)); };
     const done = () => {
       if (window.google?.accounts?.oauth2) resolve();
-      else reject(new Error("Google Identity Services loaded but oauth2 API is unavailable."));
+      else fail("Google Identity Services loaded but oauth2 API is unavailable.");
     };
     const existing = document.querySelector(`script[src="${GSI_SRC}"]`);
     if (existing) {
       if (window.google?.accounts?.oauth2) return resolve();
       existing.addEventListener("load", done, { once: true });
-      existing.addEventListener("error", () => reject(new Error("Failed to load Google Identity Services.")), { once: true });
+      existing.addEventListener("error", () => fail("Failed to load Google Identity Services."), { once: true });
       return;
     }
     const s = document.createElement("script");
@@ -96,7 +100,7 @@ function loadGsi() {
     s.async = true;
     s.defer = true;
     s.onload = done;
-    s.onerror = () => reject(new Error("Failed to load Google Identity Services."));
+    s.onerror = () => fail("Failed to load Google Identity Services.");
     document.head.appendChild(s);
   });
   return scriptPromise;
