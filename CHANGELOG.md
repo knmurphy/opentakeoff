@@ -25,7 +25,7 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   spill; raise it if hatched rooms come up short. Remembered per browser.
 - **Stamp system — reusable annotation stamps (#40).** Define an annotation once,
   save it to a **browser-wide library** (the first cross-project asset), and drop
-  it onto any sheet with a click — the Bluebeam tool-chest pattern for shop-drawing
+  it onto any sheet with a click — a reusable tool-chest for shop-drawing
   markup. In the **Stamps** tab of the left dock, **Place** arms a stamp, then each
   canvas click instantiates it as **normal, editable markups** (a number bubble
   prompts for its value on placement). A fresh library seeds three flooring
@@ -259,7 +259,7 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 - User guide: new "Angle lock (45°/90°)" section + ⇧ shortcut row.
 
 ## 2026-06-28
-- **Crisp detail-view canvas** — past ~1.15× zoom the visible region re-renders straight from the PDF vectors at the current zoom (Bluebeam/AutoCAD-style), so deep zoom never pixelates.
+- **Crisp detail-view canvas** — past ~1.15× zoom the visible region re-renders straight from the PDF vectors at the current zoom (AutoCAD-style), so deep zoom never pixelates.
 
 ## 2026-06-23
 - **Bundled sample plan** — a real (public, architect-sealed) medical-center floor finish plan with one-click **Load sample plan**; social card + README hero.
