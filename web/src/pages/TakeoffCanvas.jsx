@@ -35,6 +35,7 @@ import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
+import DrivePicker from "../components/DrivePicker.jsx";
 import AuthChip from "../components/AuthChip.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -197,7 +198,13 @@ export default function TakeoffCanvas() {
   const [active, setActive] = useState("");      // active source PDF file name
   const [page, setPage] = useState(1);           // 1-based page within the active PDF
   const [pageCount, setPageCount] = useState(1); // pages in the active PDF
-  const [view, setView] = useState("canvas");    // "gallery" overlays the canvas (gallery-first on empty projects)
+  const [view, setView] = useState("canvas");    // "gallery"/"picker" overlay the canvas (gallery-first on empty projects)
+  // Cloud mode = the active store is a Drive-backed cloudStore (it has listFolder;
+  // localStore does not). In cloud mode an empty project shows the Drive file
+  // PICKER instead of the local drag-in prompt, so we don't auto-download every
+  // PDF in the folder (spec books, as-builts). Stable per mount (store is swapped
+  // in before the canvas mounts).
+  const cloudMode = typeof store.listFolder === "function";
   const [openTabs, setOpenTabs] = useState([]);   // sheetKeys open as tabs across the top
   const [galleryLabels, setGalleryLabels] = useState({}); // sheetKey → title-block number, all files
   const [pageLabels, setPageLabels] = useState({}); // { pageNum: "A003" } from the title block
@@ -547,6 +554,12 @@ export default function TakeoffCanvas() {
     setSheets(list);
     return list;
   }, []);
+  // Stable props for the Drive picker so its folder-load effect doesn't re-fire
+  // (and re-hit Drive) on every canvas re-render. `store` is a module binding
+  // read at call time, so [] deps are correct.
+  const pickerListFolder = useCallback((id) => store.listFolder(id), []);
+  const pickerAddSheets = useCallback((items) => store.addSheets(items), []);
+  const pickerExistingNames = useMemo(() => new Set(sheets.map((s) => s.name)), [sheets]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -575,14 +588,37 @@ export default function TakeoffCanvas() {
     }
     setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
   }
+  // The empty-project landing view (the Drive picker for an empty cloud project,
+  // else the gallery) depends on BOTH the sheet list and the annotations (open
+  // tabs), which load in two racing mount effects. These flags let whichever
+  // finishes LAST make the call exactly once — so the picker never flashes for a
+  // project that actually has sheets, and no redundant Drive listing fires.
+  const hasSheetsRef = useRef(false);
+  const sheetsLoadedRef = useRef(false);
+  const noTabsRef = useRef(false);
   useEffect(() => {
     let off = false;
     setStatus("loading");
     store.listSheets()
-      .then((list) => { if (off) return; setSheets(list); if (list.length) setActive(list[0].name); else { setStatus("empty"); setView("gallery"); } })
+      .then((list) => {
+        if (off) return;
+        hasSheetsRef.current = list.length > 0;
+        sheetsLoadedRef.current = true;
+        setSheets(list);
+        if (list.length) setActive(list[0].name);
+        else setStatus("empty");
+        // decide the landing only once the annotations effect has also reported
+        // no open tabs (see hydrate) — avoids a picker→gallery flash + wasted list
+        if (noTabsRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
+      })
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
-  }, []);
+  }, [cloudMode]);
+  // Keep hasSheetsRef current so a later re-hydration (a Snapshot Load after the
+  // working set changed) reads the LIVE sheet count, not the mount-time value.
+  // The mount sheets effect above also sets it synchronously for the initial
+  // landing decision (before this post-render effect runs).
+  useEffect(() => { hasSheetsRef.current = sheets.length > 0; }, [sheets]);
 
   // ── load saved annotations once per project ───────────────────────────────
   // hydrate applies a saved payload to state — shared by the mount load and by
@@ -626,9 +662,17 @@ export default function TakeoffCanvas() {
     // gallery-first: tabs restore directly; legacy pinned pages migrate once
     // (over in the sheets effect, where file names are known); nothing open → gallery
     const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
+    noTabsRef.current = false;   // accurate on every (re)hydrate; the no-tabs branch flips it true
     if (tabs.length) setOpenTabs(tabs);
     else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
-    else { setOpenTabs([]); setView("gallery"); }
+    // no tabs → the sheet chooser. Defer the picker-vs-gallery choice until the
+    // sheets effect has loaded the working set (coordinated via the refs) so an
+    // empty cloud project lands on the Drive picker without flashing the gallery.
+    else {
+      setOpenTabs([]);
+      noTabsRef.current = true;
+      if (sheetsLoadedRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
+    }
     const sc = {};
     const src = {};
     for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
@@ -669,6 +713,9 @@ export default function TakeoffCanvas() {
       hydrated.current = true;
     });
     return () => { off = true; };
+    // run-once mount load — hydrate is intentionally not a dep (re-running would
+    // re-hydrate over live edits); the cloudMode/ref it now reads are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Stamp library — independent of hydrate (it seeds no project state), so it
@@ -3467,6 +3514,20 @@ export default function TakeoffCanvas() {
           thumbCacheRef={thumbCacheRef} busyRef={statusRef}
           openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
           onAddFiles={handleFiles}
+          onAddFromDrive={cloudMode ? () => setView("picker") : undefined}
+        />
+      )}
+
+      {/* cloud file picker — browse the project's Drive folder (metadata only) and
+          choose which PDFs to open, instead of auto-downloading the whole folder */}
+      {view === "picker" && cloudMode && (
+        <DrivePicker
+          listFolder={pickerListFolder}
+          addSheets={pickerAddSheets}
+          existingNames={pickerExistingNames}
+          onAdded={async () => { await refreshSheets(); setStatus("ready"); setView("gallery"); }}
+          onClose={() => setView("gallery")}
+          canClose
         />
       )}
 

@@ -49,7 +49,7 @@ export function createDrive({ getToken, fetch = globalThis.fetch }) {
     do {
       const params = new URLSearchParams({
         q: clauses.join(" and "),
-        fields: "nextPageToken,files(id,name,mimeType,modifiedTime)",
+        fields: "nextPageToken,files(id,name,mimeType,modifiedTime,size)",
         supportsAllDrives: "true",
         includeItemsFromAllDrives: "true",
       });
@@ -58,7 +58,7 @@ export function createDrive({ getToken, fetch = globalThis.fetch }) {
       await assertOk(res, "list");
       const data = await res.json();
       for (const f of data.files || []) {
-        out.push({ id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime });
+        out.push({ id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime, size: f.size });
       }
       pageToken = data.nextPageToken || "";
     } while (pageToken);
