@@ -15,7 +15,7 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
 import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
 import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
-import { transformPath } from "../lib/svgpath.js";
+import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
@@ -1268,13 +1268,11 @@ export default function TakeoffCanvas() {
       return Math.hypot(X - cx, Y - cy) < rad + thr;
     }
     if (m.type === "svg" && m.at && Array.isArray(m.vb)) {
-      // a vector symbol — hit its placed bbox. Width is normalized to sheet WIDTH
-      // (uniform scale off W, undistorted); height follows the viewBox aspect.
-      const [vw, vh] = m.vb;
-      const wpx = (Number(m.w) > 0 ? Number(m.w) : 0.08) * W;
-      const hpx = vw > 0 ? (wpx * vh) / vw : wpx;
+      // a vector symbol — hit its placed bbox (same uniform scale off the LONGER
+      // viewBox extent the renderer uses, so hit size == render size).
+      const { bw, bh } = svgPlacedBox(m.vb, m.w, W);
       const cx = m.at[0] * W + ox, cy = m.at[1] * H;
-      return X >= cx - wpx / 2 - thr && X <= cx + wpx / 2 + thr && Y >= cy - hpx / 2 - thr && Y <= cy + hpx / 2 + thr;
+      return X >= cx - bw / 2 - thr && X <= cx + bw / 2 + thr && Y >= cy - bh / 2 - thr && Y <= cy + bh / 2 + thr;
     }
     return false;
   }
@@ -3083,14 +3081,13 @@ export default function TakeoffCanvas() {
                       }
                       if (m.type === "svg" && m.path && Array.isArray(m.vb)) {
                         // a vector symbol (imported .svg or saved-as-stamp art). The
-                        // path is baked local→image px through a uniform scale off
-                        // sheet WIDTH so it never distorts; stroke/fill are the
-                        // symbol's OWN color (dark-boosted), not the linkage tint.
-                        const [vw, vh] = m.vb;
-                        if (!(vw > 0 && vh > 0)) return null;
-                        const W = p.img.w;
-                        const bw = (Number(m.w) > 0 ? Number(m.w) : 0.08) * W, sx = bw / vw, bh = sx * vh;
-                        const x0 = m.at[0] * W - bw / 2, y0 = m.at[1] * p.img.h - bh / 2;
+                        // path is baked local→image px through a uniform scale off the
+                        // LONGER viewBox extent so it never distorts and a one-axis
+                        // symbol can't blow up; stroke/fill are the symbol's OWN color
+                        // (dark-boosted), not the linkage tint.
+                        const { s: sx, bw, bh } = svgPlacedBox(m.vb, m.w, p.img.w);
+                        if (!(sx > 0)) return null;
+                        const x0 = m.at[0] * p.img.w - bw / 2, y0 = m.at[1] * p.img.h - bh / 2;
                         const d = transformPath(m.path, (lx, ly) => [x0 + lx * sx, y0 + ly * sx]);
                         const fillOn = m.fill && m.fill !== "none";
                         const fcol = fillOn ? (darkMode ? boostForDark(m.fill) : m.fill) : "none";

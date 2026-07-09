@@ -20,7 +20,7 @@
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 import { pointInPoly, starPath, arrowheadPath, cloudBezier } from "./geometry.js";
-import { transformPath } from "./svgpath.js";
+import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
@@ -533,9 +533,8 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         // negated). Uniform scale off sheet WIDTH keeps it undistorted; the fn is a
         // general affine (toPage carries rotation on rotated sheets), applied
         // pointwise to the bezier controls by transformPath.
-        const [vw, vh] = m.vb;
-        if (vw > 0 && vh > 0) {
-          const bw = (Number(m.w) > 0 ? Number(m.w) : 0.08) * W, sx = bw / vw, bh = sx * vh;
+        const { s: sx, bw, bh } = svgPlacedBox(m.vb, m.w, W);
+        if (sx > 0) {
           const x0 = m.at[0] * W - bw / 2, y0 = m.at[1] * H - bh / 2;
           const d = transformPath(m.path, (lx, ly) => { const [px, py] = toPage(x0 + lx * sx, y0 + ly * sx); return [px, -py]; });
           const fillOn = m.fill && m.fill !== "none";

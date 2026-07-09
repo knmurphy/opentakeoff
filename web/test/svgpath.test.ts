@@ -2,7 +2,39 @@
 // Run with: node --import tsx --test test/svgpath.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { transformPath, arcToBeziers, pathBounds } from "../src/lib/svgpath.js";
+import { transformPath, arcToBeziers, pathBounds, svgPlacedBox } from "../src/lib/svgpath.js";
+
+// ── svgPlacedBox ─────────────────────────────────────────────────────────────
+// Regression: a one-axis symbol (vertical/horizontal divider) whose degenerate
+// viewBox axis is clamped to ~epsilon must NOT explode. Scale is uniform off the
+// LONGER extent, so the longest side == wFrac*sheetW and the thin side stays tiny.
+test("svgPlacedBox: a wide symbol sizes off width", () => {
+  const { s, bw, bh } = svgPlacedBox([100, 40], 0.08, 1000);
+  assert.equal(s, (0.08 * 1000) / 100);   // longest extent is width (100)
+  assert.equal(bw, 80);
+  assert.equal(bh, 32);
+});
+test("svgPlacedBox: a tall symbol sizes off height (no distortion)", () => {
+  const { s, bw, bh } = svgPlacedBox([40, 100], 0.08, 1000);
+  assert.equal(s, (0.08 * 1000) / 100);   // longest extent is height (100)
+  assert.equal(bh, 80);
+  assert.equal(bw, 32);
+});
+test("svgPlacedBox: a vertical divider (near-zero width) does NOT explode", () => {
+  // this is the bug the width-derived scale caused: vw≈1e-6 → sx≈8e7 → ~1e9 px
+  const { s, bw, bh } = svgPlacedBox([1e-6, 9], 0.08, 1224);
+  assert.ok(s > 0 && Number.isFinite(s));
+  assert.ok(bh <= 0.08 * 1224 + 1e-6, "height is the placed longest side (~98px), not 1e9");
+  assert.ok(bw < 1e-3, "the near-zero width stays near-zero");
+});
+test("svgPlacedBox: guards — bad vb / zero width / non-finite → s=0", () => {
+  assert.equal(svgPlacedBox(null as any, 0.08, 1000).s, 0);
+  assert.equal(svgPlacedBox([0, 0], 0.08, 1000).s, 0);
+  assert.equal(svgPlacedBox([10, 10], 0.08, Infinity).s, 0);
+});
+test("svgPlacedBox: wFrac defaults to 0.08 when missing/invalid", () => {
+  assert.equal(svgPlacedBox([100, 50], 0 as any, 1000).s, (0.08 * 1000) / 100);
+});
 
 // Pull every number out of a path string, in order.
 function nums(d: string): number[] {
