@@ -613,7 +613,12 @@ export default function TakeoffCanvas() {
       })
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
-  }, [cloudMode]);   // cloudMode is constant per mount (store is fixed) — runs once
+  }, [cloudMode]);
+  // Keep hasSheetsRef current so a later re-hydration (a Snapshot Load after the
+  // working set changed) reads the LIVE sheet count, not the mount-time value.
+  // The mount sheets effect above also sets it synchronously for the initial
+  // landing decision (before this post-render effect runs).
+  useEffect(() => { hasSheetsRef.current = sheets.length > 0; }, [sheets]);   // cloudMode is constant per mount (store is fixed) — runs once
 
   // ── load saved annotations once per project ───────────────────────────────
   // hydrate applies a saved payload to state — shared by the mount load and by
@@ -657,6 +662,7 @@ export default function TakeoffCanvas() {
     // gallery-first: tabs restore directly; legacy pinned pages migrate once
     // (over in the sheets effect, where file names are known); nothing open → gallery
     const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
+    noTabsRef.current = false;   // accurate on every (re)hydrate; the no-tabs branch flips it true
     if (tabs.length) setOpenTabs(tabs);
     else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
     // no tabs → the sheet chooser. Defer the picker-vs-gallery choice until the
