@@ -399,6 +399,16 @@ export default function TakeoffCanvas() {
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
   const viewRef = useRef("canvas");        // mirror for the keyboard handlers
   const hydrated = useRef(false);
+  // Autosave stays holstered until a user-originated edit. hydrate() flips every
+  // autosave dep to a fresh identity, so the effect fires once on the post-load
+  // render with no edit behind it; that lone run arms this and returns instead of
+  // writing — otherwise merely opening a shared ?project= link would CREATE
+  // annotations.json in the folder (see #68). Error paths that skip hydrate arm
+  // it directly (no echo to swallow). A snapshot Load reuses hydrate() too, but
+  // mid-session it runs with this already armed, so a restore saves — unchanged
+  // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
+  // and is not persisted; that pre-existing gap is tracked in #73.)
+  const savesArmed = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -720,7 +730,10 @@ export default function TakeoffCanvas() {
       // annotations): same rule as a stale tab — leave autosave DISARMED so empty
       // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
       if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
+      // hydrate never ran here, so there is no echo render to swallow — arm
+      // directly so the user's first edit saves without being eaten.
       hydrated.current = true;
+      savesArmed.current = true;
     });
     return () => { off = true; };
     // run-once mount load — hydrate is intentionally not a dep (re-running would
@@ -968,6 +981,11 @@ export default function TakeoffCanvas() {
         })();
       }
     })().catch((e) => { if (stale() || e?.name === "RenderingCancelledException") return; setErr(String(e.message || e)); setStatus("error"); });
+    // cleanup MUST read the LIVE refs, not a mount-time copy: bumping the current
+    // renderSeqRef invalidates in-flight renders, and cancelling the current
+    // renderTasksRef set is the whole point. Copying to a variable (the rule's
+    // suggestion) would cancel the stale mount-time set and leak the live one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { renderSeqRef.current++; for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupSig, hiResKeys.join(" ")]);
@@ -1098,6 +1116,10 @@ export default function TakeoffCanvas() {
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
+    // Swallow the hydration echo: the first run after hydrate() carries no user
+    // edit (only the fresh-identity setState from loading). Arm and skip it so a
+    // link-open reads without writing; every later run is a real edit and saves.
+    if (!savesArmed.current) { savesArmed.current = true; return; }
     const payload = buildPayload();
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
@@ -1108,6 +1130,10 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
+    // buildPayload is intentionally omitted: this dep list IS the exact set of
+    // state it serializes, so listing buildPayload (a new identity each render)
+    // would fire a save on every render instead of only on a real change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shapes, conditions, conditionColumns, palette, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
@@ -1144,13 +1170,16 @@ export default function TakeoffCanvas() {
     return [(cx - r.left - t.x) / t.scale, (cy - r.top - t.y) / t.scale];
   }, []);
 
-  function zoomAround(cx, cy, factor) {
+  // memoized so the wheel-zoom effect can list it as a dep and still bind its
+  // listener once — a plain function would give a new identity each render and
+  // re-subscribe the (passive:false) wheel handler on every render.
+  const zoomAround = useCallback((cx, cy, factor) => {
     const t = tfRef.current;
     const next = clamp(t.scale * factor);
     const k = next / t.scale;
     tfRef.current = { scale: next, x: cx - (cx - t.x) * k, y: cy - (cy - t.y) * k };
     applyTf(); scheduleSync();
-  }
+  }, [applyTf, scheduleSync]);
 
   // wheel: zoom toward the cursor — plain scroll wheel and trackpad pinch alike.
   // A mouse notch is one big discrete delta; gliding it over a few frames keeps
@@ -1196,7 +1225,7 @@ export default function TakeoffCanvas() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => { el.removeEventListener("wheel", onWheel); if (raf) cancelAnimationFrame(raf); };
-  }, [applyTf, scheduleSync]);
+  }, [applyTf, scheduleSync, zoomAround]);
 
   // Space = temporary pan (any tool)
   useEffect(() => {
