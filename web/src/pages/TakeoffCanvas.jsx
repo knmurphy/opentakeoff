@@ -86,8 +86,12 @@ const PANEL_PREFS_KEY = "opentakeoff_panel";
 // + the restored active-condition appearance editor) is the primary condition
 // surface, so the sidebar stays out of the way until you ask for it — via the
 // canvas rail toggle or by double-clicking a palette chip (openConditionInPanel).
-// Prefs persist diff-only against these defaults, so anyone who explicitly opens
-// the panel keeps it open; only the untouched default changed.
+// Prefs persist diff-only against these defaults. Because the OLD default was
+// open (collapsed:false), a previously-open panel stored no diff and is
+// indistinguishable from "never touched", so this flip DOES start those users
+// collapsed on first load after the change (a one-time migration, not a per-user
+// choice being honored). An explicit COLLAPSE made under the old default is
+// preserved; any later toggle re-persists normally.
 const PANEL_DEFAULTS = { w: 320, collapsed: true, strip: false, az: false, group: false };
 // Top-bar quick-access condition palette: a curated handful (≤9) of pinned
 // conditions for one-click activation without leaving the canvas. Palette holds
@@ -588,10 +592,11 @@ export default function TakeoffCanvas() {
     const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
-    // palette holds condition ids — drop any that don't resolve in the loaded
-    // set (a hand-edited or older payload) and cap defensively; a seeded fresh
-    // workspace starts with an empty palette
-    setPalette(Array.isArray(a.palette) && conds.length ? a.palette.filter((id) => conds.some((c) => c.id === id)).slice(0, PALETTE_MAX) : []);
+    // palette holds condition ids — de-dupe (a hand-edited/older payload could
+    // repeat one, which would collide React keys and double-map a hotkey), drop
+    // any that don't resolve in the loaded set, and cap defensively; a seeded
+    // fresh workspace starts with an empty palette
+    setPalette(Array.isArray(a.palette) && conds.length ? [...new Set(a.palette)].filter((id) => conds.some((c) => c.id === id)).slice(0, PALETTE_MAX) : []);
     // panel transients reset with the conditions they described — a snapshot
     // Load must not keep a checked set / range anchor / filter / collapsed
     // groups aimed at the PRE-load list (bulk edits would misfire on ids that
@@ -1168,6 +1173,8 @@ export default function TakeoffCanvas() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;   // let ⌘/Ctrl+1..9 (native tab switch) through — mirror the letter handler
+      if (menuDepthRef.current > 0) return;              // a toolbar menu is open; digits are paused like the letter shortcuts
       const n = parseInt(e.key, 10);
       if (n < 1 || n > 9) return;
       const id = palette.length ? palette[n - 1] : conditions[n - 1]?.id;
@@ -1722,7 +1729,7 @@ export default function TakeoffCanvas() {
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
     if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
     const h = Number(aCond?.height_ft) || 0;
-    if (!(h > 0)) { setCommitMsg(`Set a height for ${aCond?.finish_tag || "this condition"} (H in the Takeoffs panel) — Surface Area = traced LF × height.`); return; }
+    if (!(h > 0)) { setCommitMsg(`Set a height for ${aCond?.finish_tag || "this condition"} (H in the condition editor) — Surface Area = traced LF × height.`); return; }
     const LF = openLen(points) * upp;
     setShapes((s) => [...s, {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "surface_area", height_ft: h,
@@ -2391,7 +2398,11 @@ export default function TakeoffCanvas() {
   // through activateCondition (same reassign/clear-selection semantics as the
   // strip and panel row); double-click opens the docked Takeoffs panel on that
   // condition — the "don't open the sidebar unless double-clicked" contract.
-  const pinToPalette = (id) => setPalette((p) => (p.includes(id) || p.length >= PALETTE_MAX ? p : [...p, id]));
+  const pinToPalette = (id) => {
+    if (palette.includes(id)) return;   // already pinned — silent no-op (dropping a chip back on the band)
+    if (palette.length >= PALETTE_MAX) { setCommitMsg(`Palette is full (${PALETTE_MAX}) — unpin one first.`); return; }
+    setPalette((p) => (p.includes(id) || p.length >= PALETTE_MAX ? p : [...p, id]));
+  };
   const unpinFromPalette = (id) => setPalette((p) => p.filter((x) => x !== id));
   // togglePin: the panel row's pushpin — pin if absent (respecting the cap),
   // unpin if already pinned. movePalette: drag one chip onto another to reorder
@@ -2782,6 +2793,9 @@ export default function TakeoffCanvas() {
             {paletteConds.length >= PALETTE_MAX && (
               <span style={{ fontSize: 10.5, color: "var(--ink-muted)", fontStyle: "italic" }}>full ({PALETTE_MAX})</span>
             )}
+            {/* add a condition without opening the (now-collapsed) sidebar */}
+            <button type="button" onClick={addCondition} title="Add a new condition"
+              style={{ padding: "3px 9px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--ink-muted)" }}>+ condition</button>
           </div>
           {/* the active condition's appearance editor, restored to the top bar —
               same component the docked panel row renders (one source of truth) */}
@@ -3332,7 +3346,7 @@ export default function TakeoffCanvas() {
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#0e1a2e" }}>{num(liveLF * condH)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF wall</span></div>
                   <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{num(liveLF)} LF × {num(condH, 2)} ft</div>
                 </>
-              ) : <div style={{ fontSize: 12.5, color: "#b03a26" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the Takeoffs panel</div>;
+              ) : <div style={{ fontSize: 12.5, color: "#b03a26" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition editor</div>;
             })()
           ) : liveArea != null && poly.length >= 3 ? (
             <>

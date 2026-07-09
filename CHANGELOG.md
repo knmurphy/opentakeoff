@@ -23,8 +23,9 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ### Changed
 - The docked **Takeoffs sidebar now starts collapsed** — the top-bar palette band
   is the primary condition surface. Open the sidebar via the canvas rail toggle or
-  by double-clicking a palette chip (your explicit open/close choice still
-  persists).
+  by double-clicking a palette chip; toggling it re-persists your choice. (One-time
+  migration: because the panel used to default open, workspaces that were left open
+  now start collapsed on the first load after this change.)
 
 ## 2026-07-09
 

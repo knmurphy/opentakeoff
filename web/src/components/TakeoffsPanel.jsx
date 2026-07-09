@@ -430,6 +430,11 @@ function TakeoffsPanel({
     const checked = checkedConds.has(c.id);
     const pinIdx = palette.indexOf(c.id);        // position in the top-bar palette (−1 = not pinned)
     const pinned = pinIdx >= 0;
+    // 1–9 hotkey badge follows the same rule as the keys (and the strip): palette
+    // order when the palette is curated, condition-array order as the fallback
+    // when nothing is pinned so the badge never under-advertises a working key
+    const hIdx = palette.length ? pinIdx : conditions.findIndex((x) => x.id === c.id);
+    const hot = hIdx >= 0 && hIdx < 9;
     return (
       <div key={c.id} data-cond-id={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: checked ? "#e8eefc" : on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : checked ? "3px solid #1f3fc7" : "3px solid transparent" }}>
         <div draggable
@@ -442,7 +447,7 @@ function TakeoffsPanel({
           onDoubleClick={() => onLocate(c.id)}
           title={reassigning ? "Reassign selected shape to this condition" : "Make this the active condition (double-click zooms to its takeoffs · ⌘-click / ⇧-click selects for bulk edit · drag to the top-bar palette for one-click access)"}
           style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", outline: reassigning ? "1px dashed #1f3fc7" : "none", outlineOffset: -3, userSelect: "none" }}>
-          {pinned && pinIdx < 9 && <span title={`Palette shortcut — press ${pinIdx + 1} to activate`} style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px", flexShrink: 0 }}>{pinIdx + 1}</span>}
+          {hot && <span title={pinned ? `Palette shortcut — press ${hIdx + 1} to activate` : `Press ${hIdx + 1} to activate (pin to lock this number)`} style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinned ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinned ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px", flexShrink: 0 }}>{hIdx + 1}</span>}
           <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
