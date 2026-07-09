@@ -10,6 +10,7 @@
 // Geometry math reads tfRef (always current), so drawing stays accurate.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
@@ -37,6 +38,7 @@ import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
 import DrivePicker from "../components/DrivePicker.jsx";
 import AccountChip from "../components/AccountChip.jsx";
+import { projectHomeFolderId } from "../lib/projectHome.js";
 import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -206,6 +208,9 @@ export default function TakeoffCanvas() {
   // PDF in the folder (spec books, as-builts). Stable per mount (store is swapped
   // in before the canvas mounts).
   const cloudMode = typeof store.listFolder === "function";
+  // Client-side exit back to the project home (`/`) — main.jsx's gate cleanup
+  // restores the local store on the way out, so this navigation is safe.
+  const navigate = useNavigate();
   const [openTabs, setOpenTabs] = useState([]);   // sheetKeys open as tabs across the top
   const [galleryLabels, setGalleryLabels] = useState({}); // sheetKey → title-block number, all files
   const [pageLabels, setPageLabels] = useState({}); // { pageNum: "A003" } from the title block
@@ -398,6 +403,16 @@ export default function TakeoffCanvas() {
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
   const viewRef = useRef("canvas");        // mirror for the keyboard handlers
   const hydrated = useRef(false);
+  // Autosave stays holstered until a user-originated edit. hydrate() flips every
+  // autosave dep to a fresh identity, so the effect fires once on the post-load
+  // render with no edit behind it; that lone run arms this and returns instead of
+  // writing — otherwise merely opening a shared ?project= link would CREATE
+  // annotations.json in the folder (see #68). Error paths that skip hydrate arm
+  // it directly (no echo to swallow). A snapshot Load reuses hydrate() too, but
+  // mid-session it runs with this already armed, so a restore saves — unchanged
+  // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
+  // and is not persisted; that pre-existing gap is tracked in #73.)
+  const savesArmed = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -719,7 +734,10 @@ export default function TakeoffCanvas() {
       // annotations): same rule as a stale tab — leave autosave DISARMED so empty
       // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
       if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
+      // hydrate never ran here, so there is no echo render to swallow — arm
+      // directly so the user's first edit saves without being eaten.
       hydrated.current = true;
+      savesArmed.current = true;
     });
     return () => { off = true; };
     // run-once mount load — hydrate is intentionally not a dep (re-running would
@@ -972,6 +990,11 @@ export default function TakeoffCanvas() {
         })();
       }
     })().catch((e) => { if (stale() || e?.name === "RenderingCancelledException") return; setErr(String(e.message || e)); setStatus("error"); });
+    // cleanup MUST read the LIVE refs, not a mount-time copy: bumping the current
+    // renderSeqRef invalidates in-flight renders, and cancelling the current
+    // renderTasksRef set is the whole point. Copying to a variable (the rule's
+    // suggestion) would cancel the stale mount-time set and leak the live one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { renderSeqRef.current++; for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupSig, hiResKeys.join(" ")]);
@@ -1102,6 +1125,10 @@ export default function TakeoffCanvas() {
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
+    // Swallow the hydration echo: the first run after hydrate() carries no user
+    // edit (only the fresh-identity setState from loading). Arm and skip it so a
+    // link-open reads without writing; every later run is a real edit and saves.
+    if (!savesArmed.current) { savesArmed.current = true; return; }
     const payload = buildPayload();
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
@@ -1112,18 +1139,28 @@ export default function TakeoffCanvas() {
       });
     }, 700);
     return () => clearTimeout(t);
+    // buildPayload is intentionally omitted: this dep list IS the exact set of
+    // state it serializes, so listing buildPayload (a new identity each render)
+    // would fire a save on every render instead of only on a real change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shapes, conditions, conditionColumns, palette, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
   // tab close while a save is in flight — so the tail of a tracing session is never lost.
   useEffect(() => {
+    // Pin the store this canvas mounted against: on a client-side exit from a
+    // cloud project, React runs the PARENT (ProjectGate) cleanup first, which
+    // resets the live `store` binding to localStore — flushing through the live
+    // binding here would write the cloud project's annotations into the local
+    // store. In-life saves keep the live binding (it never swaps mid-mount).
+    const mountStore = store;
     const onBeforeUnload = (e) => { if (saveStateRef.current === "saving") { e.preventDefault(); e.returnValue = ""; } };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
       if (hydrated.current && saveStateRef.current === "saving" && saveDataRef.current) {
-        store.saveAnnotations(saveDataRef.current).catch(() => {});   // best-effort flush
+        mountStore.saveAnnotations(saveDataRef.current).catch(() => {});   // best-effort flush
       }
     };
   }, []);
@@ -1142,13 +1179,16 @@ export default function TakeoffCanvas() {
     return [(cx - r.left - t.x) / t.scale, (cy - r.top - t.y) / t.scale];
   }, []);
 
-  function zoomAround(cx, cy, factor) {
+  // memoized so the wheel-zoom effect can list it as a dep and still bind its
+  // listener once — a plain function would give a new identity each render and
+  // re-subscribe the (passive:false) wheel handler on every render.
+  const zoomAround = useCallback((cx, cy, factor) => {
     const t = tfRef.current;
     const next = clamp(t.scale * factor);
     const k = next / t.scale;
     tfRef.current = { scale: next, x: cx - (cx - t.x) * k, y: cy - (cy - t.y) * k };
     applyTf(); scheduleSync();
-  }
+  }, [applyTf, scheduleSync]);
 
   // wheel: zoom toward the cursor — plain scroll wheel and trackpad pinch alike.
   // A mouse notch is one big discrete delta; gliding it over a few frames keeps
@@ -1194,7 +1234,7 @@ export default function TakeoffCanvas() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => { el.removeEventListener("wheel", onWheel); if (raf) cancelAnimationFrame(raf); };
-  }, [applyTf, scheduleSync]);
+  }, [applyTf, scheduleSync, zoomAround]);
 
   // Space = temporary pan (any tool)
   useEffect(() => {
@@ -2776,6 +2816,16 @@ export default function TakeoffCanvas() {
           control ever changes position. */}
       <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "6px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-shadow)", whiteSpace: "nowrap" }}>
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
+        {/* team cloud mode: back to the project browser — fixed presence for
+            the whole session (cloudMode and the home folder are set before the
+            canvas mounts), so it never shifts deck-1 mid-work */}
+        {cloudMode && projectHomeFolderId() && (
+          <button type="button" onClick={() => navigate("/")}
+            title="Back to your team's projects"
+            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5, lineHeight: 1 }}>
+            Projects
+          </button>
+        )}
         <input name="sheet-file" ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
           onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
         <button type="button" onClick={() => fileInputRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set (or just drag them onto the canvas)"
@@ -3607,6 +3657,7 @@ export default function TakeoffCanvas() {
           openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
           onAddFiles={handleFiles}
           onAddFromDrive={cloudMode ? () => setView("picker") : undefined}
+          onBackToProjects={cloudMode && projectHomeFolderId() ? () => navigate("/") : undefined}
         />
       )}
 
