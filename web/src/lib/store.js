@@ -38,6 +38,13 @@ const MATLIB_KEY = "material_library";
 const STAMPLIB_KEY = "stamp_library";
 const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1";
 
+// The empty-project annotations shape. One definition so the local store and the
+// Drive-backed cloud store (cloudStore.js) hydrate a fresh project identically —
+// a new field added here reaches both, instead of silently drifting apart.
+export function emptyAnnotations() {
+  return { schema: ANN_SCHEMA, conditions: [], shapes: [], markups: [], sheets: [], sheet_group: [], last_group: [], sheet_tabs: [] };
+}
+
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -164,7 +171,7 @@ export const localStore = {
 
   async loadAnnotations() {
     const a = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(ANN_KEY)));
-    return a || { schema: ANN_SCHEMA, conditions: [], shapes: [], markups: [], sheets: [], sheet_group: [], last_group: [], sheet_tabs: [] };
+    return a || emptyAnnotations();
   },
 
   async saveAnnotations(payload) {
@@ -206,14 +213,25 @@ export const localStore = {
     await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put(sanitizeStampLibrary(lib), STAMPLIB_KEY)));
   },
 
-  async saveSnapshot(label, payload) {
+  // `project` scopes a snapshot to a cloud project folder (cloudStore passes the
+  // Drive folderId). Anonymous/local snapshots use the default null scope. The
+  // field is additive: records saved before it read back as null (the local
+  // scope), so no DB version bump or migration is needed. `?? null` everywhere
+  // so a project can never see another project's — or the local — snapshots.
+  // JSDoc widens `project` past the `= null` default's inferred `null` type so
+  // cloud callers can pass a string folderId under strict tsc (which checks the
+  // .ts tests even though checkJs is off for this source).
+  /** @param {string|null} [project] cloud project scope (Drive folderId); null = local */
+  async saveSnapshot(label, payload, project = null) {
     const id = "snap_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const ts = Date.now();
-    await withDb((db) => tx(db, SNAP_STORE, "readwrite", (os) => os.put({ id, ts, label: String(label || "").trim() || null, payload })));
+    await withDb((db) => tx(db, SNAP_STORE, "readwrite", (os) => os.put({ id, ts, label: String(label || "").trim() || null, project: project ?? null, payload })));
     return { id, ts };
   },
 
-  async listSnapshots() {
+  /** @param {string|null} [project] cloud project scope (Drive folderId); null = local */
+  async listSnapshots(project = null) {
+    const scope = project ?? null;
     // cursor walk, collecting metadata only — the list UI never needs the
     // payloads (they can be MBs of shapes), and getAll() would materialize
     // every one of them at once; this bounds peak memory to a single record
@@ -223,8 +241,11 @@ export const localStore = {
       req.onsuccess = () => {
         const cur = req.result;
         if (!cur) return;
-        const { id, ts, label } = cur.value;
-        out.push({ id, ts, label });
+        // only this scope's snapshots — legacy records (no `project`) are null-scope
+        if ((cur.value.project ?? null) === scope) {
+          const { id, ts, label } = cur.value;
+          out.push({ id, ts, label });
+        }
         cur.continue();
       };
       return out;
@@ -233,9 +254,14 @@ export const localStore = {
     return metas.sort((a, b) => b.ts - a.ts);
   },
 
-  async getSnapshot(id) {
+  /** @param {string} id @param {string|null} [project] cloud project scope (Drive folderId); null = local */
+  async getSnapshot(id, project = null) {
     const rec = await withDb((db) => tx(db, SNAP_STORE, "readonly", (os) => os.get(id)));
-    return rec || null;
+    if (!rec) return null;
+    // scope guard: never hand back a snapshot that belongs to a different project
+    // (or a local one to a cloud project, and vice versa), even if the id is known
+    if ((rec.project ?? null) !== (project ?? null)) return null;
+    return rec;
   },
 
   async deleteSnapshot(id) {
@@ -243,10 +269,37 @@ export const localStore = {
   },
 };
 
-// Optional backend adapter — implement the same four methods against the
-// `../server` AI sandbox (or any host) to enable shared/multi-device storage.
-// Left intentionally unimplemented; the default build never touches it.
-export const apiStore = null;
+// ── the mode-aware store seam ──────────────────────────────────────────────
+// The default build is byte-for-byte the old client-only app: `store` is
+// `localStore` and nothing here touches the network. The optional, team-only
+// cloud mode (Google sign-in + Drive, see lib/google/ and lib/cloudStore.js)
+// swaps in a Drive-backed adapter that implements this SAME interface, so the
+// canvas — which reads the live `store` binding at call time — needs no changes.
+//
+// `store` is a live ESM binding: importers (`import { store } from …`) see the
+// reassignment `setActiveStore` makes, so switching to cloud mode BEFORE the
+// canvas mounts is enough. The switch is driven from the app shell (main.jsx),
+// which alone pulls in the Google/Drive modules — the anonymous bundle never
+// loads them.
+export let store = localStore;
 
-export const store = localStore;
+// Point the shared `store` at a cloud (or any drop-in) adapter; pass nothing to
+// fall back to the local, browser-only store. Called from the app shell once a
+// deep-linked project is signed in and its Drive-backed store is built.
+export function setActiveStore(next) {
+  store = next || localStore;
+}
+
+// The deep-link contract with Glide: `…/?project=<driveFolderId>` selects which
+// shared-Drive project folder to open. A folder id is not a credential — Google
+// still gates who can read it — so it's safe in the URL. Empty string = the
+// default anonymous, local-only mode.
+export function projectIdFromUrl() {
+  try {
+    return new URLSearchParams(window.location.search).get("project") || "";
+  } catch {
+    return "";   // no window (SSR/tests) or a malformed query — stay local
+  }
+}
+
 export { ANN_SCHEMA };

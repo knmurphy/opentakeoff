@@ -41,6 +41,16 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   plan; wall-bounded rooms are unchanged.
 
 ### Added
+- **Optional team cloud mode — Google sign-in + Drive storage.** Off by default:
+  with no configuration OpenTakeoff stays the anonymous, local-only tool ("No
+  account. No upload."). When a deployment sets `VITE_GOOGLE_CLIENT_ID` (see
+  `docs/GOOGLE_SETUP.md`), a Workspace team can sign in with Google and open a
+  project stored in a shared Google Drive folder, deep-linked from Glide as
+  `/?project=<driveFolderId>`. Security stays clean: the OAuth app is **Internal**
+  (Google enforces the team domain), the bundle holds **no secrets** (public
+  `client_id`, no `client_secret`), access tokens are in memory only, and data
+  lives in the team's own Drive. The app remains a static site. See also
+  `docs/GLIDE_INTEGRATION.md`.
 - **One-Click fill sensitivity (#32).** A slider on the toolbar (shown while
   One-Click Area is active) dials how far a fill reaches past a room's hatch
   pattern, with detents at **Strict** (stop at the linework — original behavior),

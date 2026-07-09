@@ -35,6 +35,7 @@ import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
+import AuthChip from "../components/AuthChip.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -661,6 +662,10 @@ export default function TakeoffCanvas() {
       // would autosave straight over the other tab's real data. The reload
       // message is the whole story for this tab.
       if (isStaleTabError(e)) { setCommitMsg(STALE_TAB_MESSAGE); return; }
+      // Cloud project whose saved takeoff couldn't be read (Drive error / unreadable
+      // annotations): same rule as a stale tab — leave autosave DISARMED so empty
+      // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
+      if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
       hydrated.current = true;
     });
     return () => { off = true; };
@@ -2622,6 +2627,7 @@ export default function TakeoffCanvas() {
       {/* toolbar — open/sheets | modes | tool menus | scale | actions | panels */}
       <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "8px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
+        <AuthChip />
         <input ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
           onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
         <button type="button" onClick={() => fileInputRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set (or just drag them onto the canvas)"
