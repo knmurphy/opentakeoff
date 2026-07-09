@@ -3533,6 +3533,7 @@ export default function TakeoffCanvas() {
           openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
           onAddFiles={handleFiles}
           onAddFromDrive={cloudMode ? () => setView("picker") : undefined}
+          onBackToProjects={cloudMode && projectHomeFolderId() ? () => navigate("/") : undefined}
         />
       )}
 
