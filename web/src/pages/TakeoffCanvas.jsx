@@ -588,11 +588,25 @@ export default function TakeoffCanvas() {
     }
     setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
   }
+  // Whether the working set has any sheets. The sheets effect and the annotations
+  // (hydrate) effect both decide the empty-project landing view and race on mount;
+  // this ref lets hydrate route an empty CLOUD project to the Drive picker (not the
+  // local gallery) regardless of which resolves first. Paired with the
+  // picker→gallery correction below, the decision is order-independent.
+  const hasSheetsRef = useRef(false);
   useEffect(() => {
     let off = false;
     setStatus("loading");
     store.listSheets()
-      .then((list) => { if (off) return; setSheets(list); if (list.length) setActive(list[0].name); else { setStatus("empty"); setView(cloudMode ? "picker" : "gallery"); } })
+      .then((list) => {
+        if (off) return;
+        hasSheetsRef.current = list.length > 0;
+        setSheets(list);
+        // has sheets → keep the chosen sheet; if hydrate already raced to the
+        // picker (thinking the set was empty), correct back to the gallery.
+        if (list.length) { setActive(list[0].name); setView((v) => (v === "picker" ? "gallery" : v)); }
+        else { setStatus("empty"); setView(cloudMode ? "picker" : "gallery"); }
+      })
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
   }, [cloudMode]);   // cloudMode is constant per mount (store is fixed) — runs once
@@ -641,7 +655,9 @@ export default function TakeoffCanvas() {
     const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
     if (tabs.length) setOpenTabs(tabs);
     else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
-    else { setOpenTabs([]); setView("gallery"); }
+    // no tabs → the sheet chooser: the Drive picker for an empty cloud project
+    // (nothing picked yet), otherwise the gallery.
+    else { setOpenTabs([]); setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery"); }
     const sc = {};
     const src = {};
     for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
@@ -682,6 +698,9 @@ export default function TakeoffCanvas() {
       hydrated.current = true;
     });
     return () => { off = true; };
+    // run-once mount load — hydrate is intentionally not a dep (re-running would
+    // re-hydrate over live edits); the cloudMode/ref it now reads are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Stamp library — independent of hydrate (it seeds no project state), so it
