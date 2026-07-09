@@ -11,7 +11,7 @@ const THUMB_W = 380;
 
 export default function SheetGallery({
   sheets, getDoc, scales, detectedScales, shapes, labels, onLabel, onDetect,
-  thumbCacheRef, busyRef, openTabs, onOpen, onClose, canClose, onAddFiles,
+  thumbCacheRef, busyRef, openTabs, onOpen, onClose, canClose, onAddFiles, onAddFromDrive,
 }) {
   const fileRef = useRef(null);
   const [pages, setPages] = useState({});   // file -> numPages (as discovered)
@@ -145,6 +145,12 @@ export default function SheetGallery({
           {allKeys.length || "…"} sheets · pick one or several — the order you pick is the left-to-right order
         </span>
         <div style={{ flex: 1 }} />
+        {onAddFromDrive && (
+          <button onClick={onAddFromDrive} title="Choose more PDFs from this project's Drive folder"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid var(--cobalt)", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontWeight: 600, fontSize: 12.5 }}>
+            <Icon name="plus" size={13} />Add from Drive
+          </button>
+        )}
         {onAddFiles && (
           <>
             <input ref={fileRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
