@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
-  type Point,
+  type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier, cloudPath, arrowheadPath } from "../src/lib/geometry.js";
 
@@ -183,6 +183,54 @@ test("hatch: a hatched room with a real door gap still refuses (no faked region)
   const all = [...border, ...gapped, ...hatch];
   const f = floodRegion(buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all)), 400, 300);
   assert.notEqual(f.status, "ok");
+});
+
+// ── grow-but-verify escalation (issue #32) ─────────────────────────────────
+// The moderate band — a strict "ok" fill bounded ~40% by hatch — is where real
+// hatch-lined rooms sit (measured max soft-bounded fraction ~0.63). The old gate
+// only escalated at ≥0.70, so it never fired there. These masks are hand-built
+// so softFrac and the walls-only growth are exact, pinning the DECISION gate:
+// two rooms split by a SOFT (hatch) divider, differing only in the neighbor's
+// size, so removing the divider grows the fill modestly vs. balloons it.
+//   cell bits: 1 = hard (wall), 2 = soft (hatch); ws = 1 so seed px == mask px.
+function twoRoomMask(lw: number, rw: number, H: number): { mo: MaskObj; seed: [number, number] } {
+  const MW = 140, MH = 90, OX = 4, OY = 4;             // block floats in a large canvas
+  const mask = new Uint8Array(MW * MH);                //   so the 30% leak cap isn't what's under test
+  const set = (x: number, y: number, v: number) => { mask[y * MW + x] |= v; };
+  const bw = lw + rw + 3;                              // inner width incl. divider column
+  for (let x = 0; x <= bw; x++) { set(OX + x, OY, 1); set(OX + x, OY + H + 1, 1); }
+  for (let y = 0; y <= H + 1; y++) { set(OX, OY + y, 1); set(OX + bw, OY + y, 1); }
+  const divX = OX + 1 + lw;                            // SOFT vertical divider between the rooms
+  for (let y = 1; y <= H; y++) set(divX, OY + y, 2);
+  let softCount = 0; for (const c of mask) if (c & 2) softCount++;
+  return { mo: { mask, mw: MW, mh: MH, ws: 1, softCount }, seed: [OX + 1 + (lw >> 1), OY + 1 + (H >> 1)] };
+}
+
+test("escalation: a moderately hatch-bounded room recovers past the divider (growth within cap)", () => {
+  // strict fills the 8-wide left room (softFrac ≈ 0.43 — below the old 0.70 gate,
+  // so the pre-#32 code left it short); walls-only reaches the 6-wide neighbor's
+  // far wall, growth ≈ 1.9× < HATCH_GROWTH_MAX ⇒ accepted, flagged hatchFiltered.
+  const { mo, seed } = twoRoomMask(8, 6, 48);
+  const strict = floodRegion({ ...mo, softCount: 0 }, seed[0], seed[1]); // softCount 0 disables escalation
+  assert.equal(strict.status, "ok");
+  const f = floodRegion(mo, seed[0], seed[1]);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok" || strict.status !== "ok") return;
+  assert.equal(f.hatchFiltered, true, "moderate hatch band should escalate");
+  assert.ok(f.count > strict.count, `escalated fill is larger than strict (${strict.count} → ${f.count})`);
+});
+
+test("escalation: a runaway escalation (balloons past the cap) is discarded — strict stands", () => {
+  // Same left room and softFrac, but the neighbor is 40 wide: removing the divider
+  // grows the fill ≈ 6.25× ⇒ over HATCH_GROWTH_MAX, so the strict fill is kept and
+  // the result is NOT flagged hatchFiltered.
+  const { mo, seed } = twoRoomMask(8, 40, 48);
+  const strict = floodRegion({ ...mo, softCount: 0 }, seed[0], seed[1]);
+  const f = floodRegion(mo, seed[0], seed[1]);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok" || strict.status !== "ok") return;
+  assert.ok(!f.hatchFiltered, "a ballooning walls-only escalation must be rejected");
+  assert.equal(f.count, strict.count, "the strict fill is preserved unchanged");
 });
 
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────

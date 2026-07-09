@@ -18,10 +18,13 @@
 // walls plot bit 1, segments classified as hatch (regular runs of overlapping
 // parallel rows — classifyHatchSegs) plot bit 2 — plus an escalating flood:
 // the primary pass treats both as barrier (bit-identical to the original), and
-// only when it comes back tiny/boundary, or "ok" but predominantly hatch-bounded
-// (a tile-grid cell), does a second pass re-flood with hatch transparent. If the
-// escalated pass leaks or stays tiny the primary result stands — a misclassified
-// wall can never make the tool worse than the strict mask.
+// when it comes back trapped (tiny/boundary), predominantly hatch-bounded (a
+// tile-grid cell), or MODERATELY hatch-bounded (a hatch-lined room — issue #32),
+// a second pass re-floods with hatch transparent. The moderate tier is the only
+// one bounded: it accepts the re-flood only if the area growth stays within a cap
+// (grow-but-verify). If the escalated pass leaks, stays tiny, or balloons, the
+// primary result stands — a misclassified wall can never make the tool worse
+// than the strict mask.
 
 export type Point = [number, number];
 export interface OpList { fnArray: number[]; argsArray: any[]; }  // per-op args array, or null for arg-less ops
@@ -62,7 +65,9 @@ export const HATCH_OVERLAP_FRAC = 0.5; // successive rows must overlap tangentia
 export const ROW_EPS = 1.5;            // mask px — collinear/dashed pieces merge into one row
 export const WIDE_PROTECT_RATIO = 2;   // heavier-pen member of a hairline family stays hard (wall overprint)
 export const SPAN_PROTECT_RATIO = 3;   // a row spanning ≫ the run's median row is a wall riding the rhythm, not hatch
-export const HATCH_BOUND_FRAC = 0.7;   // escalate an "ok" region blocked ≥ this fraction by hatch
+export const HATCH_BOUND_FRAC = 0.7;   // ≥ this soft-bounded fraction ⇒ PREDOMINANTLY hatch (tile-grid cell): escalate unbounded
+export const HATCH_ESCALATE_FRAC = 0.35; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation (issue #32 — real hatch-lined rooms top out ~0.63, so 0.70 alone never fired)
+export const HATCH_GROWTH_MAX = 2.5;     // grow-but-verify cap: reject a walls-only escalation that balloons past this × the strict area (a misclassified wall would leak or overgrow)
 
 // ── 1. op-list walk ────────────────────────────────────────────────────────
 // Same transform composition as the original snap extractor (save/restore/
@@ -347,22 +352,37 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
 }
 
 // The escalating fill. Pass 1 is the strict mask (walls + hatch — exactly the
-// original behavior; masks with no soft cells never go further). Escalate —
-// re-flood with hatch transparent — when the strict pass came back trapped
-// (tiny/boundary) or "ok" but predominantly hatch-bounded (a tile-grid cell,
-// which the strict fill silently mistakes for a room). Never escalate a leak:
-// removing linework only leaks more. If the escalated pass isn't a clean "ok",
-// the strict result stands.
+// original behavior; masks with no soft cells never go further). When the strict
+// pass is bounded by hatch, re-flood with hatch transparent (pass 2). Three tiers
+// keyed off how much of the strict fill's boundary is soft (hatch) vs hard (wall):
+//   • trapped (tiny/boundary): strict found no room — escalate UNBOUNDED (any
+//     clean re-flood beats nothing).
+//   • predominantly soft (≥ HATCH_BOUND_FRAC, e.g. a lone tile-grid cell): the
+//     strict fill is a sliver of the real room — escalate UNBOUNDED.
+//   • moderate ([HATCH_ESCALATE_FRAC, HATCH_BOUND_FRAC)): where real hatch-lined
+//     rooms sit (issue #32 measured max ~0.63, so the 0.70 gate never fired).
+//     Escalate GROW-BUT-VERIFY: accept walls-only only if it stays a clean "ok"
+//     AND grows the area ≤ HATCH_GROWTH_MAX×. A misclassified wall then either
+//     leaks or balloons and is discarded — the escalation can never do worse
+//     than the strict pass.
+//   • lightly soft (< HATCH_ESCALATE_FRAC) or a leak: strict result stands
+//     (removing linework only leaks more).
 export function floodRegion(maskObj: MaskObj, ix: number, iy: number): FloodResult {
   const r1 = floodPass(maskObj, ix, iy, 3);
   if (!maskObj.softCount) return r1;
   if (r1.status === "leak") return r1;
+  let growthCap = Infinity;                            // unbounded unless we're in the moderate band
   if (r1.status === "ok") {
     const blocks = (r1.hardHits || 0) + (r1.softHits || 0);
-    if (!blocks || (r1.softHits || 0) / blocks < HATCH_BOUND_FRAC) return r1;
+    const softFrac = blocks ? (r1.softHits || 0) / blocks : 0;
+    if (softFrac < HATCH_ESCALATE_FRAC) return r1;     // lightly hatch-bounded ⇒ strict is right
+    if (softFrac < HATCH_BOUND_FRAC) growthCap = HATCH_GROWTH_MAX; // moderate ⇒ grow-but-verify
   }
   const r2 = floodPass(maskObj, ix, iy, 1);
-  if (r2.status === "ok") { r2.hatchFiltered = true; return r2; }
+  if (r2.status === "ok" && (r1.status !== "ok" || r2.count <= r1.count * growthCap)) {
+    r2.hatchFiltered = true;
+    return r2;
+  }
   return r1;
 }
 
