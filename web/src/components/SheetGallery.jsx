@@ -5,6 +5,7 @@
 // at a time, and yield while the canvas is rastering a full sheet.
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
+import AuthChip from "./AuthChip.jsx";
 import { parseSheetKey, extractSheetNumber, detectScale, RENDER_SCALE, MAX_GROUP } from "../lib/sheets";
 
 const THUMB_W = 380;
@@ -145,6 +146,10 @@ export default function SheetGallery({
           {allKeys.length || "…"} sheets · pick one or several — the order you pick is the left-to-right order
         </span>
         <div style={{ flex: 1 }} />
+        {/* Sign-in for the optional team cloud mode — visible on the gallery/
+            landing view (the main toolbar's chip is hidden behind this overlay).
+            Renders nothing when cloud mode isn't configured. */}
+        <AuthChip />
         {onAddFiles && (
           <>
             <input ref={fileRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
