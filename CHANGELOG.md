@@ -4,6 +4,17 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
 ## 2026-07-09
 
+### Fixed
+- **One-Click Area now traces hatch-lined rooms to the walls (#32).** Rooms whose
+  floor is filled with a CAD hatch/finish pattern were undercounting — the fill
+  stopped at the first ring of pattern linework instead of reaching the walls
+  (measured ~31.5% sheet-wide undercount on a real finish plan). One-Click now
+  escalates past a room's hatch when the strict fill is meaningfully bounded by
+  it, but only accepts the larger result if it stays enclosed and the area grows
+  within a bounded factor — so a stray line misread as hatch can never balloon or
+  spill the measurement. Recovers 18 undercounting rooms on the bundled sample
+  plan; wall-bounded rooms are unchanged.
+
 ### Added
 - **Stamp system — reusable annotation stamps (#40).** Define an annotation once,
   save it to a **browser-wide library** (the first cross-project asset), and drop
