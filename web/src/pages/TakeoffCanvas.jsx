@@ -554,6 +554,12 @@ export default function TakeoffCanvas() {
     setSheets(list);
     return list;
   }, []);
+  // Stable props for the Drive picker so its folder-load effect doesn't re-fire
+  // (and re-hit Drive) on every canvas re-render. `store` is a module binding
+  // read at call time, so [] deps are correct.
+  const pickerListFolder = useCallback((id) => store.listFolder(id), []);
+  const pickerAddSheets = useCallback((items) => store.addSheets(items), []);
+  const pickerExistingNames = useMemo(() => new Set(sheets.map((s) => s.name)), [sheets]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -3482,9 +3488,9 @@ export default function TakeoffCanvas() {
           choose which PDFs to open, instead of auto-downloading the whole folder */}
       {view === "picker" && cloudMode && (
         <DrivePicker
-          listFolder={(id) => store.listFolder(id)}
-          addSheets={(items) => store.addSheets(items)}
-          existingNames={new Set(sheets.map((s) => s.name))}
+          listFolder={pickerListFolder}
+          addSheets={pickerAddSheets}
+          existingNames={pickerExistingNames}
           onAdded={async () => { await refreshSheets(); setStatus("ready"); setView("gallery"); }}
           onClose={() => setView("gallery")}
           canClose

@@ -50,14 +50,23 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
   // longer enumerate (and download) every PDF in the Drive folder, which for a
   // real folder of spec books and as-builts would be ruinous.
   //
-  // Memoized exactly like ensureAnnId: locate-or-treat-absent-as-empty once, and
-  // cache the file id so writes update in place instead of spawning duplicate
-  // sheets.json files. `manifestFiles` is the live in-memory copy of the chosen
-  // set so loadPdfData can resolve name→id synchronously after the first read.
-  // A failed read is not cached, so the next call retries.
+  // READ path (ensureManifest): memoized locate-or-treat-absent-as-empty, and
+  // deliberately DOES NOT create the file (mirrors how loadAnnotations never
+  // creates on a read). It caches the located id into `sheetsId` and the chosen
+  // set into `manifestFiles`, so listSheets/loadPdfData can resolve name→id
+  // synchronously after the first read. A failed read is not cached, so the next
+  // call retries.
+  //
+  // WRITE path (mutateManifest): every mutation is serialized through one
+  // promise chain. Serialization is what makes create-once safe — the FIRST
+  // write sees existingId null, creates sheets.json, and caches its id; every
+  // later write reuses that id. Two overlapping addSheets/addPdf/removePdf can no
+  // longer both take putJson's create branch (which would spawn a duplicate
+  // sheets.json and lose one set of picks — the exact hazard ensureAnnId guards).
   let manifestP = null;
   /** @type {{ id: string, name: string }[]} */
   let manifestFiles = [];
+  /** @type {string | null} */
   let sheetsId = null;
   function ensureManifest() {
     if (!manifestP) {
@@ -73,18 +82,42 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
     return manifestP;
   }
 
+  // Serialized, persist-then-commit manifest write. Each mutation waits its turn,
+  // reads the latest committed `manifestFiles`, computes the next array via `fn`,
+  // persists it, and only ON SUCCESS caches the returned id + commits the new
+  // array. If putJson throws, in-memory state is left untouched (so a failed
+  // write can't diverge memory from disk) and the error propagates.
+  let writeChain = Promise.resolve();
+  /** @param {(files: { id: string, name: string }[]) => { id: string, name: string }[]} fn */
+  function mutateManifest(fn) {
+    const run = writeChain.then(async () => {
+      await ensureManifest();
+      const next = fn(manifestFiles);
+      const { id } = await drive.putJson({ folderId, name: SHEETS_NAME, data: { files: next }, existingId: sheetsId });
+      sheetsId = id;
+      manifestFiles = next;
+      return next;
+    });
+    // keep the chain alive even if this mutation rejects, so a failed write
+    // doesn't wedge every subsequent one.
+    writeChain = run.then(() => {}, () => {});
+    return run;
+  }
+
   return {
     async listSheets() {
-      // Metadata/JSON only — deliberately NO getFileBytes on any PDF.
-      const files = await ensureManifest();
-      return files.map((f) => ({ name: f.name }));
+      // Metadata/JSON only — deliberately NO getFileBytes on any PDF. Read the
+      // live `manifestFiles` (not the promise's array), since writes swap it for
+      // a fresh array on commit.
+      await ensureManifest();
+      return manifestFiles.map((f) => ({ name: f.name }));
     },
 
     async loadPdfData(name) {
       // Resolve by id from the manifest: picked files may live in SUBFOLDERS, so
       // a findChild-by-name in the project folder wouldn't find them.
-      const files = await ensureManifest();
-      const entry = files.find((f) => f.name === name);
+      await ensureManifest();
+      const entry = manifestFiles.find((f) => f.name === name);
       if (!entry) throw new Error(`PDF not in project sheet set: ${name}`);
       const bytes = await drive.getFileBytes(entry.id);
       // hand pdf.js a fresh view each call — getDocument({data}) may detach it
@@ -113,30 +146,26 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
      * @param {{ id: string, name: string }[]} items
      */
     async addSheets(items) {
-      // Mutate the memoized array in place so the cached ensureManifest promise
-      // (and listSheets/loadPdfData) see the update without a re-read.
-      const files = await ensureManifest();
-      for (const it of items) {
-        if (files.some((f) => f.id === it.id || f.name === it.name)) continue;
-        files.push({ id: it.id, name: it.name });
-      }
-      const { id } = await drive.putJson({ folderId, name: SHEETS_NAME, data: { files }, existingId: sheetsId });
-      sheetsId = id;
-      return files;
+      // Append, deduping by id AND name against the CURRENT committed set. Build
+      // a fresh array (persist-then-commit) — mutateManifest only commits it if
+      // the write lands.
+      return mutateManifest((files) => {
+        const next = [...files];
+        for (const it of items) {
+          if (next.some((f) => f.id === it.id || f.name === it.name)) continue;
+          next.push({ id: it.id, name: it.name });
+        }
+        return next;
+      });
     },
 
     async removePdf(name) {
       // Remove from the working set only — do NOT delete the Drive file, which
-      // may be a shared spec book owned by someone else. Splice in place to keep
-      // the memoized array reference stable (see addSheets).
-      const files = await ensureManifest();
-      const before = files.length;
-      for (let i = files.length - 1; i >= 0; i--) {
-        if (files[i].name === name) files.splice(i, 1);
-      }
-      if (files.length === before) return;
-      const { id } = await drive.putJson({ folderId, name: SHEETS_NAME, data: { files }, existingId: sheetsId });
-      sheetsId = id;
+      // may be a shared spec book owned by someone else. No-op (no write) when
+      // the name isn't in the set.
+      await ensureManifest();
+      if (!manifestFiles.some((f) => f.name === name)) return;
+      await mutateManifest((cur) => cur.filter((f) => f.name !== name));
     },
 
     async addPdf(file) {

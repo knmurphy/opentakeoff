@@ -60,7 +60,11 @@ function fakeDrive() {
       if (mimeType) rec.mimeType = mimeType;
       return { id: fileId };
     },
+    // Set _failPutJsonOnce = true to make the NEXT putJson reject (persist
+    // failure), then it auto-clears — lets a test prove memory doesn't diverge.
+    _failPutJsonOnce: false as boolean,
     async putJson({ folderId, name, data, existingId }: any) {
+      if (this._failPutJsonOnce) { this._failPutJsonOnce = false; throw new Error("putJson boom"); }
       const bytes = new TextEncoder().encode(JSON.stringify(data));
       if (existingId) return this.updateFileBytes(existingId, bytes, "application/json");
       return this.uploadFile({ name, parentId: folderId, mimeType: "application/json", bytes });
@@ -120,6 +124,45 @@ test("addSheets dedupes by id and by name, keeps pick order, persists sheets.jso
   const sheetsFiles = [...drive._byId.values()].filter((r) => r.name === "sheets.json");
   assert.equal(sheetsFiles.length, 1);
   assert.deepEqual(JSON.parse(new TextDecoder().decode(sheetsFiles[0].bytes)).files.map((f: any) => f.name), ["a.pdf", "b.pdf", "c.pdf"]);
+});
+
+test("concurrent addSheets with no sheets.json yet creates exactly ONE, keeping both sets of picks", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // two picks race before any sheets.json exists — the write chain must serialize
+  // them so the first creates the file and the second reuses its id (no dup, no
+  // lost picks).
+  await Promise.all([
+    store.addSheets([{ id: "1", name: "a.pdf" }]),
+    store.addSheets([{ id: "2", name: "b.pdf" }]),
+  ]);
+  const sheetsFiles = [...drive._byId.values()].filter((r) => r.name === "sheets.json");
+  assert.equal(sheetsFiles.length, 1);
+  assert.deepEqual((await store.listSheets()).map((s) => s.name).sort(), ["a.pdf", "b.pdf"]);
+});
+
+test("a failed putJson leaves the in-memory manifest unchanged and rethrows", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.addSheets([{ id: "1", name: "a.pdf" }]);
+
+  drive._failPutJsonOnce = true;
+  await assert.rejects(store.addSheets([{ id: "2", name: "b.pdf" }]), /putJson boom/);
+  // memory did not absorb the failed pick, and disk still holds only a.pdf
+  assert.deepEqual(await store.listSheets(), [{ name: "a.pdf" }]);
+  // the write chain recovered — a later write still lands
+  await store.addSheets([{ id: "3", name: "c.pdf" }]);
+  assert.deepEqual((await store.listSheets()).map((s) => s.name), ["a.pdf", "c.pdf"]);
+});
+
+test("addSheets name-dedupe keeps the first id when a later pick reuses the name", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.addSheets([{ id: "X", name: "plan.pdf" }]);
+  const files = await store.addSheets([{ id: "Y", name: "plan.pdf" }]);
+  // second (different id, same name) is dropped — the store pins name-dedupe even
+  // though the picker also guards this in the UI.
+  assert.deepEqual(files, [{ id: "X", name: "plan.pdf" }]);
 });
 
 test("addPdf uploads a new file, then updates on re-add (dedupe by name), and manifests it", async () => {

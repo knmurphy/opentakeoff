@@ -50,6 +50,12 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
   useEffect(() => load(here.id), [here.id, load]);
 
   const isPicked = (id) => picked.some((p) => p.id === id);
+  const pickedNames = new Set(picked.map((p) => p.name));
+  // A project keys its sheets by NAME, so two different Drive files can't share
+  // one name in the working set. Rather than let both be checked and silently
+  // drop one on Add (the store dedupes by name), block the second here and say
+  // why — a name already in the set, or already picked under a different id.
+  const nameConflict = (f) => !isPicked(f.id) && !already.has(f.name) && pickedNames.has(f.name);
   const togglePick = (f) => setPicked((p) => (p.some((x) => x.id === f.id) ? p.filter((x) => x.id !== f.id) : [...p, { id: f.id, name: f.name }]));
   const drillInto = (folder) => { setPath((p) => [...p, folder]); };
   const jumpTo = (i) => setPath((p) => p.slice(0, i + 1));
@@ -59,8 +65,12 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
     setAdding(true); setErr("");
     try {
       await addSheets(picked);
-      onAdded();   // parent refreshes the sheet list and switches to the gallery
-    } catch (e) { setErr(String(e?.message || e)); setAdding(false); }
+      await onAdded();   // parent refreshes + switches to the gallery (may unmount us)
+    } catch (e) {
+      // surface the failure and re-enable the button instead of wedging on "Adding…"
+      setErr(String(e?.message || e));
+      setAdding(false);
+    }
   };
 
   const needle = q.trim().toLowerCase();
@@ -136,15 +146,20 @@ export default function DrivePicker({ listFolder, addSheets, existingNames, onAd
             {pdfs.map((f) => {
               const inSet = already.has(f.name);
               const sel = isPicked(f.id);
+              const conflict = nameConflict(f);   // same name as another pick (different id)
+              const disabled = inSet || conflict;
+              const tagStyle = { fontFamily: "var(--f-mono)", fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.08em", minWidth: 72, textAlign: "right" };
               return (
-                <label key={f.id} style={{ ...rowBase, cursor: inSet ? "default" : "pointer", opacity: inSet ? 0.6 : 1 }}>
-                  <input type="checkbox" checked={sel || inSet} disabled={inSet} onChange={() => togglePick(f)}
-                    style={{ width: 16, height: 16, cursor: inSet ? "default" : "pointer" }} />
+                <label key={f.id} style={{ ...rowBase, cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}
+                  title={conflict ? "Another selected PDF already uses this name — a project can't have two sheets with the same name" : undefined}>
+                  <input type="checkbox" checked={sel || inSet} disabled={disabled} onChange={() => togglePick(f)}
+                    style={{ width: 16, height: 16, cursor: disabled ? "default" : "pointer" }} />
                   <span style={{ fontFamily: "var(--f-mono)", fontSize: 13, color: "var(--ink)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={f.name}>{f.name}</span>
                   <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-muted)", minWidth: 64, textAlign: "right" }}>{fmtSize(f.size)}</span>
                   <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-muted)", minWidth: 84, textAlign: "right" }}>{fmtDate(f.modifiedTime)}</span>
-                  {inSet && <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--c-positive)", textTransform: "uppercase", letterSpacing: "0.08em", minWidth: 44, textAlign: "right" }}>added</span>}
-                  {!inSet && <span style={{ minWidth: 44 }} />}
+                  {inSet ? <span style={{ ...tagStyle, color: "var(--c-positive)" }}>added</span>
+                    : conflict ? <span style={{ ...tagStyle, color: "var(--c-warning)" }}>name in use</span>
+                    : <span style={{ minWidth: 72 }} />}
                 </label>
               );
             })}
