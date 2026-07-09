@@ -68,24 +68,42 @@ The rest of this design centers on **your own receiver** and keeps the
 Two specific destinations are on the table. They authenticate differently, and
 that difference — not the transport — is what decides the architecture.
 
-### Glide (no-code app builder) — direct SaaS API
+### Glide (no-code app builder) — two ingest paths, very different auth
 
-- Ingest is the **Glide Tables API**: `POST` to
-  `https://api.glideapp.io/api/function/mutateTables` (legacy) or the newer Big
-  Tables API at `https://api.glideapps.com`, body carries `add-row-to-table`
-  mutations, ≤ 500 mutations per call.
-- Auth: `Authorization: Bearer <token>`. **The token is team-wide** — Glide's
-  own docs state it "has access to all applications and data in your team" and
+Glide can be fed **two** ways, and the auth model differs sharply:
+
+**(a) Glide Tables API** (`mutateTables`)
+- `POST` to `https://api.glideapp.io/api/function/mutateTables` (legacy) or the
+  newer Big Tables API at `https://api.glideapps.com`; body carries
+  `add-row-to-table` mutations, ≤ 500 per call.
+- Auth: `Authorization: Bearer <token>` where the token is **team-wide** —
+  Glide's docs say it "has access to all applications and data in your team" and
   "should not be exposed in client environments."
-- **Consequence: a forwarder is mandatory.** There is no scoped/capability
-  token; the browser can never hold this secret. Glide is the strict case.
-- Payload shape mismatch: Glide tables are **flat rows**; `report.v1` is nested.
-  Something must flatten it — one row per condition (a *Takeoffs* table), one
-  row per material (a *Materials* table), one row per project (*Projects*).
-- Practical notes: API is a paid-plan feature (Business/Enterprise); add-row is
-  not idempotent, so re-sends need an upsert strategy (a stable
-  `project_id + condition_id` key column + `set-columns-in-row`, or
-  delete-then-add per project).
+- Consequence for this path: the browser can **never** hold this secret; a
+  server-side holder (forwarder or a Windmill flow) is mandatory. This is the
+  strict case.
+
+**(b) Glide webhook trigger** (starts a Glide *workflow*)
+- A per-workflow **capability URL**; you `POST` a JSON payload and it runs a
+  Glide workflow with the body available.
+- Auth: an **optional, per-workflow bearer token** you set on that trigger —
+  **not** the team-wide key. Blast radius if it leaks is that one workflow
+  (worst case: junk rows), the same low-risk profile as Windmill's scoped token.
+- The workflow runs Glide's own logic, so the `report.v1` → rows **flatten can
+  live inside Glide** instead of in a forwarder.
+
+**Takeaway:** via the *webhook-trigger* path, Glide and Windmill are essentially
+**symmetric** — POST `report.v1` to a per-workflow URL guarded by a per-workflow
+token, and their side runs the transform. The "team-wide token ⇒ forwarder
+mandatory" rule applies only to Glide's *Tables API*, not its webhook trigger.
+
+Payload shape either way: Glide tables are **flat rows**; `report.v1` is nested,
+so something flattens it — one row per condition (*Takeoffs*), per material
+(*Materials*), per project (*Projects*). With path (b) that's a Glide workflow;
+with path (a) it's the forwarder. Practical notes: the Tables API is a paid-plan
+feature (Business/Enterprise); add-row is not idempotent, so re-sends need an
+upsert strategy (stable `project_id + condition_id` key + `set-columns-in-row`,
+or delete-then-add per project).
 
 ### Windmill (open-source workflow engine) — self-hosted webhook + code
 
@@ -103,28 +121,29 @@ that difference — not the transport — is what decides the architecture.
   windmill-labs/windmill#5115), but you can verify a signature *inside* the
   script trivially since it's your code.
 
-### The insight: Windmill can be the forwarder
+### Consequence: the two targets converge on one pattern
 
-If Glide is the ultimate destination, you don't have to build a custom forwarder
-to hold the Glide team token — **let Windmill hold it.** Then:
+Because Glide's webhook trigger and Windmill's webhook both take a *per-workflow*
+token and both run logic on their side, the target choice stops driving the
+architecture. Either way the app does the same thing: **POST `report.v1` to a
+per-workflow URL guarded by a per-workflow token, and let the destination
+transform it.** You can point at Glide, at Windmill, or at both.
 
-```
-Browser ──report.v1──▶ Windmill webhook ──▶ Windmill flow ──▶ Glide Big Tables
-                                          (holds Glide token,
-                                           flattens, upserts)
-```
+Two composition options:
 
-Every high-value secret (the Glide team key) lives in Windmill's secret store,
-never in the browser. The only thing left to protect is the **browser → Windmill
-webhook** hop, and Windmill's scoped webhook token already covers that at low
-blast radius. Add a tiny forwarder in front only if you want to keep even the
-scoped token out of the bundle or gate the hop with identity (§6).
+- **Direct to each** — the forwarder (§4 Shape B) fans out to the Glide trigger
+  URL and/or the Windmill webhook, holding each per-workflow token in its env.
+- **Windmill as a hub** — POST once to Windmill, and a Windmill flow fans out to
+  Glide (and anything else), holding the downstream tokens in Windmill's secret
+  store. Attractive if you want one ingestion point, richer transform logic, or
+  to use Glide's *Tables API* (team-wide token) without a bespoke forwarder —
+  Windmill becomes the safe holder for that team token.
 
-**Recommendation:** make **Windmill the ingestion point**. It fits a fork that
-wants to own its stack (open-source, self-hostable), it natively models the
-"webhook payload" you described, and it absorbs the Glide-secret problem instead
-of forcing a bespoke forwarder. Route to Glide *from* Windmill if/when you need
-the Glide app populated.
+Only the Glide **Tables API** path *forces* a server-side token holder; the
+webhook-trigger paths do not. What actually decides whether you need a forwarder
+is no longer the target — it's whether you want to keep even the per-workflow
+token out of the static bundle and tie writes to your app's identity gate (§6),
+which for a data-writing deployment you do.
 
 ## 4. Architecture — two shapes
 
@@ -228,6 +247,72 @@ Windmill you might reach for Access *service tokens* (not the page) if you
 self-host and want a network gate on top of the scoped token; for Glide, Access
 plays no part at all.
 
+> The subsection above answers "does the *webhook hop* need Access?" (no). But
+> that was not the real question — see §6.1.
+
+## 6.1 The real question: gating the app deployment itself
+
+The moment `takeoff.345flooring.com` can write into Glide/Windmill, it stops
+being a harmless read-only canvas and becomes a **lever that pushes data into
+company systems**. So the access-control question is not about the webhook hop —
+it's *who is allowed to load the app and pull that lever*. This is exactly what a
+Cloudflare Access **page** is for: gate the deployment, restrict to your
+`@345flooring.com` Google Workspace domain (or GitHub org / OTP), and only your
+crew can open it.
+
+**Critical: gating the page is necessary but not sufficient.** An Access page in
+front of the UI does nothing to stop a direct `POST` to the write endpoint that
+skips the UI. So the write endpoint must **independently verify identity** — it
+cannot assume "this request came from our gated app."
+
+The two compose cleanly if you keep the forwarder **same-origin** and put the app
+*and* the forwarder under **one Access application**:
+
+```
+User ─▶ Access page (login: @345flooring.com only)
+     ─▶ takeoff.345flooring.com            (app loads)
+     ─▶ POST /api/push  (same origin → Access identity JWT rides along)
+              │
+        forwarder verifies the Access JWT   ← rejects anything without a valid crew identity
+              │  (Cf-Access-Jwt-Assertion / CF_Authorization, checked vs your team's public keys, aud + email/domain)
+              │
+        uses the server-side per-workflow token(s)   ← secret lives here, never in the browser
+              │
+        ─▶ Glide trigger / Windmill webhook
+```
+
+Result: only your crew can open the app, only a valid crew identity can trigger a
+write, and the Glide/Windmill tokens never leave the server. That is the property
+being asked for.
+
+Constraints and gotchas:
+
+- **Hosting.** Production is on Netlify; Cloudflare Access lives at the DNS/proxy
+  layer, so the domain must be **proxied through Cloudflare** (Cloudflare in
+  front of Netlify) and `/api/*` must route through Cloudflare too for the gate
+  to apply. Cleanest if committing to Access: front with Cloudflare and make the
+  forwarder a **Cloudflare Worker / Pages Function** on the same proxied domain,
+  so Access + JWT validation is native. A same-origin Netlify Function behind the
+  proxy also works if the function validates the JWT itself.
+- **Cross-origin kills the free identity.** If the browser posts *directly* to a
+  Windmill/Glide URL (different origin), it can't carry the app's Access JWT and
+  would need a token in the bundle. Keeping a **same-origin forwarder** is what
+  lets one Access app cover the whole write path — another reason to prefer it
+  over browser-direct.
+- **Confused-deputy / CSRF.** If the forwarder trusts the Access cookie, also
+  require a custom header (e.g. `X-Requested-By: opentakeoff`) or check `Origin`,
+  so a malicious page in a logged-in user's browser can't ride the ambient cookie
+  to trigger a write.
+- **Non-CF alternatives** to gate the app exist (Netlify password / Identity, an
+  auth provider), but CF Access is the lowest-effort "restrict to my Workspace
+  domain" and integrates with the same-origin-forwarder JWT check above.
+
+**Bottom line on the deployment question: yes — put a Cloudflare Access page in
+front of `takeoff.345flooring.com`, and make the same-origin write endpoint
+validate the Access JWT.** That is the correct, intended use of the Access page
+(gating humans), and it is separate from — and more important than — anything
+about the webhook hop itself.
+
 ## 7. Trigger & UX (proposal)
 
 - Add a **"Send / Push"** action to the report toolbar (`ReportPanel.jsx`,
@@ -241,13 +326,25 @@ plays no part at all.
 
 ## 8. Open questions to resolve before building
 
-1. **Which target** — automation hub, a specific SaaS, or your own receiver?
-   (Decides whether Shape A suffices or Shape B is required.)
-2. **Host** — Netlify Function vs Cloudflare Worker vs extend `server/`.
-3. **Does the browser→forwarder hop need an identity gate** (→ interactive CF
-   Access page in front of the app), or is a rate-limited open forwarder + HMAC
-   at the receiver enough?
-4. **Manual send only, or auto-push** on change?
+Resolved so far: direction is **push out**; targets are **Glide and/or Windmill**
+via their per-workflow **webhook triggers** (symmetric — §3.1); the deployment
+**will be gated with a Cloudflare Access page** and the write endpoint will
+validate the Access JWT (§6.1).
+
+Still open:
+
+1. **Host / topology** — same-origin **Cloudflare Worker** in front of a
+   Cloudflare-proxied domain (cleanest with Access), a same-origin **Netlify
+   Function** behind Cloudflare, or extend `server/`? (§6.1 argues Worker.)
+2. **Fan-out shape** — forwarder posts to each target directly, or POST once to
+   **Windmill as a hub** that fans out to Glide? (§3.1)
+3. **Glide path** — webhook **trigger** (per-workflow token, transform in Glide)
+   vs **Tables API** (team-wide token, transform in forwarder)? Trigger is the
+   lower-blast-radius default.
+4. **Manual send only, or auto-push** on report change (debounced + idempotency
+   key)?
+5. **Access rollout** — which identity provider / allowed domain, and does the
+   public demo stay open while the company deployment is gated?
 
 ## 9. What a prototype would add (not in this design pass)
 
