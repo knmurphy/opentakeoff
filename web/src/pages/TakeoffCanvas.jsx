@@ -788,6 +788,11 @@ export default function TakeoffCanvas() {
   // leaving the stamp tool disarms the pending stamp — a stray click under a
   // measure/select tool must never drop a stamp
   useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
+  // A One-Click proposal is only actionable while One-Click is armed (Enter
+  // already requires it) — discard it on tool switch, like the stamp above.
+  // Also keeps Create out of the ACTION slot while Finish occupies it, so the
+  // slot's reserved width always fits its content (issue #61).
+  useEffect(() => { if (tool !== "oneclick") setProposal(null); }, [tool]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -2699,10 +2704,11 @@ export default function TakeoffCanvas() {
     sheetMenuItems.push({ section: "Files" });
     for (const s of sheets) sheetMenuItems.push({ id: `f-${s.name}`, label: s.name, active: s.name === active, onSelect: () => { setActive(s.name); setPage(1); } });
   }
-  if (sheetGroup.length || lastGroup.length >= 2) sheetMenuItems.push("divider");
+  if (sheetMenuItems.length && (sheetGroup.length || lastGroup.length >= 2)) sheetMenuItems.push("divider");
   if (sheetGroup.length) sheetMenuItems.push({ id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
   if (!sheetGroup.length && lastGroup.length >= 2) sheetMenuItems.push({ id: "regroup", label: `Regroup (${lastGroup.length})`, title: `Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`, onSelect: regroup });
-  sheetMenuItems.push("divider", { id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
+  if (sheetMenuItems.length) sheetMenuItems.push("divider");
+  sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
 
   // deck-2 scale chip — the four scale controls collapsed to one status face:
   // red dashed = unset ("you can't trace yet"), green = set, warning = the
@@ -2787,8 +2793,8 @@ export default function TakeoffCanvas() {
             <ToolMenu
               title="Sheet — the sheets in this set, files, grouping, and the gallery"
               onOpenChange={onMenuDepth}
-              face={<span>{sheetChipLabel}</span>}
-              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 400, padding: "6px 8px", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" }}
+              face={<span style={{ display: "inline-block", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sheetChipLabel}</span>}
+              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 400, padding: "6px 8px" }}
               menuStyle={{ minWidth: 260, maxHeight: "min(480px, 60vh)", overflowY: "auto" }}
               items={sheetMenuItems}
             />

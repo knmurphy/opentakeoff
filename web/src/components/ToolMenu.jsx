@@ -27,7 +27,16 @@ export default function ToolMenu({ face, active = false, accent = "cobalt", titl
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
-  useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
+  // Notify strictly in open/close PAIRS: fire true only when opening, and repay
+  // it in the cleanup — which also runs if the menu unmounts while open (e.g.
+  // sign-out unmounts the account menu mid-click). Calling onOpenChange(open)
+  // unconditionally would fire a stray `false` on every closed-menu mount and
+  // never fire the closing `false` on unmount, leaking menuDepthRef either way.
+  useEffect(() => {
+    if (!open) return;
+    onOpenChange?.(true);
+    return () => onOpenChange?.(false);
+  }, [open, onOpenChange]);
 
   const accentColor = accent === "danger" ? "var(--c-danger)" : "var(--cobalt)";
   const menuW = (menuStyle && parseInt(menuStyle.minWidth, 10)) || MENU_W;
