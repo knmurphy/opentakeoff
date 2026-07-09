@@ -162,6 +162,24 @@ test("uploadFile posts multipart to the upload endpoint", async () => {
   assert.match(bodyText, /"name":"f\.json"/);
 });
 
+test("createFolder posts folder metadata (no bytes) to the files endpoint", async () => {
+  const { fetch, calls } = stubFetch([makeRes({ json: { id: "fld1", name: ".opentakeoff" } })]);
+  const drive = createDrive({ getToken, fetch });
+  const out = await drive.createFolder("folder1", ".opentakeoff");
+  assert.deepEqual(out, { id: "fld1", name: ".opentakeoff" });
+  // plain JSON POST to the FILES endpoint (not the multipart upload endpoint) —
+  // a folder has no media part.
+  assert.equal(calls[0].method, "POST");
+  assert.match(calls[0].url, /\/drive\/v3\/files/);
+  assert.doesNotMatch(calls[0].url, /\/upload\//);
+  assert.equal(new URLSearchParams(calls[0].url.split("?")[1]).get("supportsAllDrives"), "true");
+  assert.match(calls[0].headers["Content-Type"], /^application\/json/);
+  const meta = JSON.parse(calls[0].body as string);
+  assert.equal(meta.name, ".opentakeoff");
+  assert.equal(meta.mimeType, "application/vnd.google-apps.folder");
+  assert.deepEqual(meta.parents, ["folder1"]);
+});
+
 test("putJson creates when no existingId, updates when given one", async () => {
   const { fetch, calls } = stubFetch([
     makeRes({ json: { id: "created1", name: "annotations.json" } }),

@@ -19,6 +19,9 @@ const PDF_MIME = "application/pdf";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
 const ANN_NAME = "annotations.json";
 const SHEETS_NAME = "sheets.json";
+// Our JSON sidecars live in a dedicated per-project subfolder, not loose next to
+// the client's plan PDFs. PDFs themselves stay in the project folder.
+const SIDECAR_NAME = ".opentakeoff";
 
 /**
  * @param {string} folderId               the project's Drive folder
@@ -26,19 +29,95 @@ const SHEETS_NAME = "sheets.json";
  * @param {{ local?: typeof localStore }} [opts]  inject localStore for tests
  */
 export function createCloudStore(folderId, drive, { local = localStore } = {}) {
+  // ── sidecar folder resolution ────────────────────────────────────────────
+  // annotations.json / sheets.json live inside <project>/.opentakeoff/. Two
+  // resolvers, split by intent so a read-only viewer never litters empty
+  // sidecar folders:
+  //
+  //   findSidecarFolder() — NON-creating, used by every READ path. Deliberately
+  //     NOT memoized (and never caches a null): a read that misses the folder
+  //     now must still see it once a later write in the same session creates it.
+  //   ensureSidecarId()   — memoized create-once, used ONLY by write/create
+  //     branches. Mirrors ensureAnnId: locate else create, cache the promise,
+  //     clear on failure to retry. Serialization stops two concurrent
+  //     first-writes from each spawning a duplicate .opentakeoff.
+  async function findSidecarFolder() {
+    const child = await drive.findChild(folderId, SIDECAR_NAME);
+    return child ? child.id : null;
+  }
+  let sidecarIdP = null;
+  function ensureSidecarId() {
+    if (!sidecarIdP) {
+      sidecarIdP = (async () => {
+        const existing = await findSidecarFolder();
+        if (existing) return existing;
+        const { id } = await drive.createFolder(folderId, SIDECAR_NAME);
+        return id;
+      })().catch((e) => { sidecarIdP = null; throw e; });
+    }
+    return sidecarIdP;
+  }
+
+  // Locate a sidecar JSON file (annotations.json / sheets.json), preferring the
+  // canonical copy in .opentakeoff/ but falling back to a LEGACY loose file in
+  // the project folder for migration. Returns { child, legacy } where `child`
+  // is the record to read content from (or null if neither exists) and `legacy`
+  // is true when the winner is the loose file — the caller MUST NOT cache a
+  // legacy id (see loadAnnotations / ensureManifest), so the first save
+  // create-branches into the sidecar and migrates the content forward.
+  //
+  // Split-brain tiebreak: if BOTH exist, prefer the newer modifiedTime, so a
+  // mid-rollout window where an old tab still writes the loose file and a new
+  // client writes the sidecar resolves to whichever was written last.
+  async function findSidecarJson(name) {
+    const sidecarId = await findSidecarFolder();
+    const inSidecar = sidecarId ? await drive.findChild(sidecarId, name) : null;
+    const legacy = await drive.findChild(folderId, name);
+    if (inSidecar && legacy) {
+      // both present → newer modifiedTime wins the tiebreak
+      const useLegacy = String(legacy.modifiedTime) > String(inSidecar.modifiedTime);
+      return useLegacy ? { child: legacy, legacy: true } : { child: inSidecar, legacy: false };
+    }
+    if (inSidecar) return { child: inSidecar, legacy: false };
+    if (legacy) return { child: legacy, legacy: true };
+    return { child: null, legacy: false };
+  }
+
+  // Seed content for a sidecar file we're about to create: if a legacy loose
+  // file exists, migrate its content forward instead of writing an empty default
+  // (an empty sidecar could otherwise shadow real legacy data for a concurrent
+  // reader). A corrupt legacy file must NOT wedge the save — unlike a corrupt
+  // READ (loadAnnotations throws CloudLoadError to keep autosave disarmed), the
+  // seed-on-write branch is best-effort: fall back to `fallback` if getJson
+  // throws.
+  async function seedFromLegacy(name, fallback) {
+    const legacy = await drive.findChild(folderId, name);
+    if (!legacy) return fallback;
+    try {
+      const data = await drive.getJson(legacy.id);
+      return data || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
   // Memoized promise that resolves the single annotations.json file id — locate
-  // an existing file, else create one exactly once. Shared by load and save so
-  // that concurrent autosaves on a brand-new project can't each take the "create"
-  // branch and spawn duplicate annotations.json files (a later load would then
-  // pick one arbitrarily and lose the other's edits). A failed locate/create is
-  // not cached, so the next call retries.
+  // an existing file (in the sidecar folder), else create one exactly once
+  // inside the sidecar. Shared by load and save so that concurrent autosaves on
+  // a brand-new project can't each take the "create" branch and spawn duplicate
+  // annotations.json files (a later load would then pick one arbitrarily and
+  // lose the other's edits). A failed locate/create is not cached, so the next
+  // call retries.
   let annIdP = null;
   function ensureAnnId() {
     if (!annIdP) {
       annIdP = (async () => {
-        const child = await drive.findChild(folderId, ANN_NAME);
+        const sidecarId = await ensureSidecarId();
+        const child = await drive.findChild(sidecarId, ANN_NAME);
         if (child) return child.id;
-        const { id } = await drive.putJson({ folderId, name: ANN_NAME, data: emptyAnnotations(), existingId: null });
+        // create branch: migrate legacy loose content forward if present
+        const data = await seedFromLegacy(ANN_NAME, emptyAnnotations());
+        const { id } = await drive.putJson({ folderId: sidecarId, name: ANN_NAME, data, existingId: null });
         return id;
       })().catch((e) => { annIdP = null; throw e; });
     }
@@ -71,10 +150,23 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
   function ensureManifest() {
     if (!manifestP) {
       manifestP = (async () => {
-        const child = await drive.findChild(folderId, SHEETS_NAME);
+        const { child, legacy } = await findSidecarJson(SHEETS_NAME);
         if (!child) { manifestFiles = []; sheetsId = null; return manifestFiles; }
-        sheetsId = child.id;
-        const data = await drive.getJson(child.id);
+        // Cache the id ONLY on a sidecar hit. On a legacy hit we read content but
+        // leave sheetsId null, so the first mutateManifest create-branches into
+        // the sidecar and migrates the content forward (see loadAnnotations for
+        // the same linchpin). Corrupt legacy content must not wedge the first
+        // save: mutateManifest awaits ensureManifest, so unlike the annotations
+        // READ path we swallow a parse error here and treat it as an empty
+        // manifest rather than throwing.
+        let data;
+        try {
+          data = await drive.getJson(child.id);
+        } catch (e) {
+          if (legacy) { manifestFiles = []; sheetsId = null; return manifestFiles; }
+          throw e;
+        }
+        sheetsId = legacy ? null : child.id;
         manifestFiles = (data && Array.isArray(data.files)) ? data.files : [];
         return manifestFiles;
       })().catch((e) => { manifestP = null; throw e; });
@@ -93,7 +185,13 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
     const run = writeChain.then(async () => {
       await ensureManifest();
       const next = fn(manifestFiles);
-      const { id } = await drive.putJson({ folderId, name: SHEETS_NAME, data: { files: next }, existingId: sheetsId });
+      // Write target: an update-in-place when we already hold the sidecar file's
+      // id, otherwise create it INSIDE the sidecar folder. `next` was computed
+      // from `manifestFiles`, which ensureManifest already seeded from any legacy
+      // loose file — so the create branch migrates that content forward. sheetsId
+      // is null on a legacy fallback (see ensureManifest), which routes us here.
+      const sidecarId = sheetsId ? null : await ensureSidecarId();
+      const { id } = await drive.putJson({ folderId: sidecarId ?? folderId, name: SHEETS_NAME, data: { files: next }, existingId: sheetsId });
       sheetsId = id;
       manifestFiles = next;
       return next;
@@ -134,6 +232,10 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
       const folders = [];
       const pdfs = [];
       for (const c of children) {
+        // Hide our own sidecar folder from the picker — it's config, not a
+        // browsable project subfolder. Match the EXACT name (not any leading-dot
+        // folder) so a legit dot-prefixed user folder still shows.
+        if (c.mimeType === FOLDER_MIME && c.name === SIDECAR_NAME) continue;
         if (c.mimeType === FOLDER_MIME) folders.push({ id: c.id, name: c.name });
         else if (c.mimeType === PDF_MIME) pdfs.push({ id: c.id, name: c.name, size: c.size, modifiedTime: c.modifiedTime });
       }
@@ -186,11 +288,16 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
     },
 
     async loadAnnotations() {
-      const child = await drive.findChild(folderId, ANN_NAME);
+      const { child, legacy } = await findSidecarJson(ANN_NAME);
       // No file yet = a fresh project → the empty default (same as localStore).
       if (!child) return emptyAnnotations();
-      // Remember the id for saves (bypass the create branch in ensureAnnId).
-      annIdP = Promise.resolve(child.id);
+      // Cache the id for saves ONLY on a sidecar hit (bypass ensureAnnId's create
+      // branch). On a legacy hit we read content but leave annIdP null — the
+      // linchpin of migration: caching the legacy id would make the first
+      // saveAnnotations rewrite the loose file in place, and the sidecar would
+      // never be created. Instead ensureAnnId create-branches into the sidecar,
+      // seeding from this same legacy content.
+      if (!legacy) annIdP = Promise.resolve(child.id);
       let data;
       try {
         data = await drive.getJson(child.id);
