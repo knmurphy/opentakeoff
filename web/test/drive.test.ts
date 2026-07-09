@@ -53,7 +53,7 @@ test("every request carries the Bearer token", async () => {
 
 test("listChildren builds q/fields, adds Shared-Drive flags, and maps files", async () => {
   const { fetch, calls } = stubFetch([
-    makeRes({ json: { files: [{ id: "a", name: "one.pdf", mimeType: "application/pdf", modifiedTime: "t1" }] } }),
+    makeRes({ json: { files: [{ id: "a", name: "one.pdf", mimeType: "application/pdf", modifiedTime: "t1", size: "1234" }] } }),
   ]);
   const drive = createDrive({ getToken, fetch });
   const out = await drive.listChildren("folder1", { mimeType: "application/pdf" });
@@ -61,10 +61,11 @@ test("listChildren builds q/fields, adds Shared-Drive flags, and maps files", as
   const url = calls[0].url;
   const params = new URLSearchParams(url.split("?")[1]);
   assert.equal(params.get("q"), "'folder1' in parents and trashed=false and mimeType='application/pdf'");
-  assert.match(params.get("fields")!, /files\(id,name,mimeType,modifiedTime\)/);
+  // size is requested so the picker can show file sizes without downloading
+  assert.match(params.get("fields")!, /files\(id,name,mimeType,modifiedTime,size\)/);
   assert.equal(params.get("supportsAllDrives"), "true");
   assert.equal(params.get("includeItemsFromAllDrives"), "true");
-  assert.deepEqual(out, [{ id: "a", name: "one.pdf", mimeType: "application/pdf", modifiedTime: "t1" }]);
+  assert.deepEqual(out, [{ id: "a", name: "one.pdf", mimeType: "application/pdf", modifiedTime: "t1", size: "1234" }]);
 });
 
 test("findChild escapes both backslash and single-quote in the q grammar", async () => {

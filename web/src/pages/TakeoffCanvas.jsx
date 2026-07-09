@@ -35,6 +35,7 @@ import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
+import DrivePicker from "../components/DrivePicker.jsx";
 import AuthChip from "../components/AuthChip.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -197,7 +198,13 @@ export default function TakeoffCanvas() {
   const [active, setActive] = useState("");      // active source PDF file name
   const [page, setPage] = useState(1);           // 1-based page within the active PDF
   const [pageCount, setPageCount] = useState(1); // pages in the active PDF
-  const [view, setView] = useState("canvas");    // "gallery" overlays the canvas (gallery-first on empty projects)
+  const [view, setView] = useState("canvas");    // "gallery"/"picker" overlay the canvas (gallery-first on empty projects)
+  // Cloud mode = the active store is a Drive-backed cloudStore (it has listFolder;
+  // localStore does not). In cloud mode an empty project shows the Drive file
+  // PICKER instead of the local drag-in prompt, so we don't auto-download every
+  // PDF in the folder (spec books, as-builts). Stable per mount (store is swapped
+  // in before the canvas mounts).
+  const cloudMode = typeof store.listFolder === "function";
   const [openTabs, setOpenTabs] = useState([]);   // sheetKeys open as tabs across the top
   const [galleryLabels, setGalleryLabels] = useState({}); // sheetKey → title-block number, all files
   const [pageLabels, setPageLabels] = useState({}); // { pageNum: "A003" } from the title block
@@ -579,10 +586,10 @@ export default function TakeoffCanvas() {
     let off = false;
     setStatus("loading");
     store.listSheets()
-      .then((list) => { if (off) return; setSheets(list); if (list.length) setActive(list[0].name); else { setStatus("empty"); setView("gallery"); } })
+      .then((list) => { if (off) return; setSheets(list); if (list.length) setActive(list[0].name); else { setStatus("empty"); setView(cloudMode ? "picker" : "gallery"); } })
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
-  }, []);
+  }, [cloudMode]);   // cloudMode is constant per mount (store is fixed) — runs once
 
   // ── load saved annotations once per project ───────────────────────────────
   // hydrate applies a saved payload to state — shared by the mount load and by
@@ -3467,6 +3474,20 @@ export default function TakeoffCanvas() {
           thumbCacheRef={thumbCacheRef} busyRef={statusRef}
           openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
           onAddFiles={handleFiles}
+          onAddFromDrive={cloudMode ? () => setView("picker") : undefined}
+        />
+      )}
+
+      {/* cloud file picker — browse the project's Drive folder (metadata only) and
+          choose which PDFs to open, instead of auto-downloading the whole folder */}
+      {view === "picker" && cloudMode && (
+        <DrivePicker
+          listFolder={(id) => store.listFolder(id)}
+          addSheets={(items) => store.addSheets(items)}
+          existingNames={new Set(sheets.map((s) => s.name))}
+          onAdded={async () => { await refreshSheets(); setStatus("ready"); setView("gallery"); }}
+          onClose={() => setView("gallery")}
+          canClose
         />
       )}
 

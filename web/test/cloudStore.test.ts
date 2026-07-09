@@ -10,24 +10,32 @@ import { ANN_SCHEMA } from "../src/lib/store.js";
 
 const PDF_MIME = "application/pdf";
 
-// Fake Drive over a Map<id, record>. Records are { id, name, mimeType, bytes }.
-// Enough of the createDrive surface for cloudStore to run.
+// Fake Drive over a Map<id, record>. Records are
+// { id, name, mimeType, bytes, parent?, modifiedTime?, size? }.
+// Enough of the createDrive surface for cloudStore to run. `parent` lets a test
+// place a file in a SUBFOLDER: listChildren(folderId) returns only that folder's
+// children, and findChild(folderId, name) matches only same-folder files —
+// records seeded WITHOUT a parent stay findable in any folder (back-compat).
 function fakeDrive() {
   const byId = new Map<string, any>();
   let seq = 0;
   const newId = () => `id_${++seq}`;
   const find = (folderId: string, name: string) => {
-    for (const rec of byId.values()) if (rec.name === name) return rec;
+    for (const rec of byId.values()) {
+      if (rec.name !== name) continue;
+      if (rec.parent !== undefined && rec.parent !== folderId) continue;
+      return rec;
+    }
     return null;
   };
   return {
     _byId: byId,
-    async listChildren(_folderId: string, { mimeType }: any = {}) {
+    async listChildren(folderId: string, { mimeType }: any = {}) {
       const out = [];
       for (const rec of byId.values()) {
-        if (!mimeType || rec.mimeType === mimeType) {
-          out.push({ id: rec.id, name: rec.name, mimeType: rec.mimeType, modifiedTime: "t" });
-        }
+        if (rec.parent !== folderId) continue;
+        if (mimeType && rec.mimeType !== mimeType) continue;
+        out.push({ id: rec.id, name: rec.name, mimeType: rec.mimeType, modifiedTime: rec.modifiedTime ?? "t", size: rec.size });
       }
       return out;
     },
@@ -41,9 +49,9 @@ function fakeDrive() {
     async getJson(fileId: string) {
       return JSON.parse(new TextDecoder().decode(byId.get(fileId).bytes));
     },
-    async uploadFile({ name, mimeType, bytes }: any) {
+    async uploadFile({ name, parentId, mimeType, bytes }: any) {
       const id = newId();
-      byId.set(id, { id, name, mimeType, bytes: new Uint8Array(bytes) });
+      byId.set(id, { id, name, parent: parentId, mimeType, bytes: new Uint8Array(bytes) });
       return { id, name };
     },
     async updateFileBytes(fileId: string, bytes: Uint8Array, mimeType?: string) {
@@ -88,42 +96,119 @@ function fakeFile(name: string, bytes: Uint8Array) {
   return { name, async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); } };
 }
 
-test("listSheets returns only PDFs as [{ name }]", async () => {
+test("listSheets returns the manifest's chosen PDFs, not everything in the folder", async () => {
   const drive = fakeDrive();
-  drive._byId.set("id_a", { id: "id_a", name: "plan-a.pdf", mimeType: PDF_MIME, bytes: new Uint8Array() });
-  drive._byId.set("id_b", { id: "id_b", name: "annotations.json", mimeType: "application/json", bytes: new Uint8Array() });
+  // an un-manifested PDF sitting in the project folder must NOT surface
+  drive._byId.set("id_a", { id: "id_a", name: "spec-book.pdf", parent: "folder1", mimeType: PDF_MIME, bytes: new Uint8Array() });
   const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  assert.deepEqual(await store.listSheets(), []); // empty manifest → []
+
+  await store.addSheets([{ id: "id_pick", name: "plan-a.pdf" }]);
   assert.deepEqual(await store.listSheets(), [{ name: "plan-a.pdf" }]);
 });
 
-test("addPdf uploads a new file, then updates on re-add (dedupe by name)", async () => {
+test("addSheets dedupes by id and by name, keeps pick order, persists sheets.json", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+
+  await store.addSheets([{ id: "1", name: "a.pdf" }, { id: "2", name: "b.pdf" }]);
+  // same id (different name) and same name (different id) are both skipped
+  const files = await store.addSheets([{ id: "1", name: "renamed.pdf" }, { id: "9", name: "b.pdf" }, { id: "3", name: "c.pdf" }]);
+  assert.deepEqual(files, [{ id: "1", name: "a.pdf" }, { id: "2", name: "b.pdf" }, { id: "3", name: "c.pdf" }]);
+
+  // exactly one sheets.json, holding the deduped set
+  const sheetsFiles = [...drive._byId.values()].filter((r) => r.name === "sheets.json");
+  assert.equal(sheetsFiles.length, 1);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(sheetsFiles[0].bytes)).files.map((f: any) => f.name), ["a.pdf", "b.pdf", "c.pdf"]);
+});
+
+test("addPdf uploads a new file, then updates on re-add (dedupe by name), and manifests it", async () => {
   const drive = fakeDrive();
   const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
 
   await store.addPdf(fakeFile("plan.pdf", new Uint8Array([1, 2, 3])) as any);
-  assert.equal(drive._byId.size, 1);
-  assert.deepEqual([...drive._byId.values()][0].bytes, new Uint8Array([1, 2, 3]));
+  const pdfs = () => [...drive._byId.values()].filter((r) => r.mimeType === PDF_MIME);
+  assert.equal(pdfs().length, 1);
+  assert.deepEqual(pdfs()[0].bytes, new Uint8Array([1, 2, 3]));
+  // the dropped PDF joined the working set
+  assert.deepEqual(await store.listSheets(), [{ name: "plan.pdf" }]);
 
   const ret = await store.addPdf(fakeFile("plan.pdf", new Uint8Array([9, 9])) as any);
   assert.deepEqual(ret, { name: "plan.pdf" });
-  assert.equal(drive._byId.size, 1); // replaced, not duplicated
-  assert.deepEqual([...drive._byId.values()][0].bytes, new Uint8Array([9, 9]));
+  assert.equal(pdfs().length, 1); // replaced, not duplicated
+  assert.deepEqual(pdfs()[0].bytes, new Uint8Array([9, 9]));
+  assert.deepEqual(await store.listSheets(), [{ name: "plan.pdf" }]); // re-add didn't dup the manifest entry
 });
 
-test("loadPdfData returns fresh bytes; throws when missing", async () => {
+test("loadPdfData resolves by manifest id; throws when not in the working set", async () => {
   const drive = fakeDrive();
   const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
   await store.addPdf(fakeFile("plan.pdf", new Uint8Array([37, 80, 68, 70])) as any);
   assert.deepEqual(await store.loadPdfData("plan.pdf"), new Uint8Array([37, 80, 68, 70]));
-  await assert.rejects(store.loadPdfData("missing.pdf"), /PDF not found in project folder: missing\.pdf/);
+  await assert.rejects(store.loadPdfData("missing.pdf"), /PDF not in project sheet set: missing\.pdf/);
 });
 
-test("removePdf deletes the matching file", async () => {
+test("loadPdfData resolves a file living in a SUBFOLDER purely via the manifest id", async () => {
+  const drive = fakeDrive();
+  // the picked PDF lives in a subfolder, NOT the project folder — a
+  // findChild-by-name in the project folder would never find it.
+  drive._byId.set("sub_pdf", { id: "sub_pdf", name: "wing-b.pdf", parent: "subfolder1", mimeType: PDF_MIME, bytes: new Uint8Array([5, 6, 7]) });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.addSheets([{ id: "sub_pdf", name: "wing-b.pdf" }]);
+  assert.deepEqual(await store.loadPdfData("wing-b.pdf"), new Uint8Array([5, 6, 7]));
+  // prove the project-folder name lookup is not the path: there is no such file
+  // in folder1, yet the load succeeds.
+  assert.equal(await drive.findChild("folder1", "wing-b.pdf"), null);
+});
+
+test("listFolder splits folders vs pdfs, carries size+modifiedTime, defaults to the project folder", async () => {
+  const drive = fakeDrive();
+  drive._byId.set("d1", { id: "d1", name: "Wing B", parent: "folder1", mimeType: "application/vnd.google-apps.folder", bytes: new Uint8Array() });
+  drive._byId.set("p1", { id: "p1", name: "plan.pdf", parent: "folder1", mimeType: PDF_MIME, size: "2048", modifiedTime: "m1", bytes: new Uint8Array() });
+  drive._byId.set("j1", { id: "j1", name: "annotations.json", parent: "folder1", mimeType: "application/json", bytes: new Uint8Array() });
+  drive._byId.set("p2", { id: "p2", name: "wing.pdf", parent: "subfolder1", mimeType: PDF_MIME, size: "99", modifiedTime: "m2", bytes: new Uint8Array() });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+
+  const root = await store.listFolder(); // defaults to folder1
+  assert.deepEqual(root.folders, [{ id: "d1", name: "Wing B" }]);
+  assert.deepEqual(root.pdfs, [{ id: "p1", name: "plan.pdf", size: "2048", modifiedTime: "m1" }]); // json ignored
+
+  // drilling into a subfolder returns THAT folder's children
+  const sub = await store.listFolder("subfolder1");
+  assert.deepEqual(sub.folders, []);
+  assert.deepEqual(sub.pdfs, [{ id: "p2", name: "wing.pdf", size: "99", modifiedTime: "m2" }]);
+});
+
+test("constructing the store and listing sheets triggers ZERO PDF downloads", async () => {
+  const drive = fakeDrive();
+  // a folder full of PDFs, none picked into the working set
+  for (let i = 0; i < 5; i++) {
+    drive._byId.set(`big_${i}`, { id: `big_${i}`, name: `spec-${i}.pdf`, parent: "folder1", mimeType: PDF_MIME, bytes: new Uint8Array([i]) });
+  }
+  let downloads = 0;
+  const orig = drive.getFileBytes.bind(drive);
+  (drive as any).getFileBytes = async (id: string) => { downloads++; return orig(id); };
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.listSheets();
+  assert.equal(downloads, 0); // the core fix: no auto-download of the whole folder
+
+  // a download happens ONLY when a picked sheet is actually loaded
+  await store.addSheets([{ id: "big_2", name: "spec-2.pdf" }]);
+  await store.loadPdfData("spec-2.pdf");
+  assert.equal(downloads, 1);
+});
+
+test("removePdf drops the entry from the manifest but LEAVES the Drive file", async () => {
   const drive = fakeDrive();
   const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
   await store.addPdf(fakeFile("plan.pdf", new Uint8Array([1])) as any);
+  const pdfId = [...drive._byId.values()].find((r) => r.mimeType === PDF_MIME)!.id;
+
   await store.removePdf("plan.pdf");
-  assert.equal(drive._byId.size, 0);
+  assert.deepEqual(await store.listSheets(), []); // out of the working set
+  assert.ok(drive._byId.has(pdfId)); // but the shared Drive file survives
+
   await store.removePdf("nope.pdf"); // no-op, no throw
 });
 
