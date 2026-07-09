@@ -14,7 +14,7 @@ import { RFI_STATUSES, rfiStatus, linkedMarkups } from "../lib/rfi.js";
 
 const PRIORITIES = ["low", "normal", "high"];
 
-export default function RfiPanel({ rfis = [], markups = [], onUpdateRfi, onDeleteRfi, onFlyTo, sheetLabel, onClose }) {
+export default function RfiPanel({ docked = false, rfis = [], markups = [], onUpdateRfi, onDeleteRfi, onFlyTo, sheetLabel, onClose }) {
   const [filter, setFilter] = useState("all"); // "all" | status id
   const shown = useMemo(
     () => (filter === "all" ? rfis : rfis.filter((r) => rfiStatus(r.status).id === filter)),
@@ -35,12 +35,18 @@ export default function RfiPanel({ rfis = [], markups = [], onUpdateRfi, onDelet
     );
   };
 
+  const outer = docked
+    ? { display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "auto", background: "var(--paper-bright)", fontSize: 12.5 }
+    : { position: "absolute", left: 14, top: 14, width: 372, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 9, fontSize: 12.5 };
+
   return (
-    <div style={{ position: "absolute", left: 14, top: 14, width: 372, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 9, fontSize: 12.5 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff" }}>
-        <strong style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Icon name="rfi" size={15} />RFIs · {rfis.length}</strong>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-      </div>
+    <div style={outer}>
+      {!docked && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff" }}>
+          <strong style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><Icon name="rfi" size={15} />RFIs · {rfis.length}</strong>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap", padding: "8px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
         {chip("all", `All ${rfis.length}`)}

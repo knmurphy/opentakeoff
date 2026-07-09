@@ -20,6 +20,7 @@
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 import { pointInPoly, starPath, arrowheadPath, cloudBezier } from "./geometry.js";
+import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
@@ -492,6 +493,30 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
           pg.drawSvgPath(tri.map((p, i) => `${i ? "L" : "M"}${P(p)}`).join(" ") + " Z", { x: 0, y: 0, color: rgb(1, 1, 1), opacity: 0.9, borderColor: rcol, borderWidth: 1 });
           text(String(m.rev), cxImg - 3 / ptScale, cyImg + s - 3 / ptScale, 7, rcol, bold);
         }
+      } else if (m.type === "arrow" && m.from && m.to) {
+        // a directed leader with a filled arrowhead at the `to` end — seam /
+        // plank-direction arrows and the north arrow (a stamp of arrow + "N").
+        // arrowheadPath negates y like svgPath; the shaft goes through line().
+        line(m.from[0] * W, m.from[1] * H, m.to[0] * W, m.to[1] * H, mcol, 1.3 * mw, 0.95, mdash);
+        const [pfx, pfy] = toPage(m.from[0] * W, m.from[1] * H);
+        const [ptx, pty] = toPage(m.to[0] * W, m.to[1] * H);
+        pg.drawSvgPath(arrowheadPath(pfx, -pfy, ptx, -pty, 6 * mw), { x: 0, y: 0, color: mcol, opacity: 0.95 });
+        const t = lbl(m.text);
+        if (t) text(t, (m.from[0] + m.to[0]) / 2 * W, (m.from[1] + m.to[1]) / 2 * H - 6 / ptScale, 8, mcol, bold);
+      } else if (m.type === "bubble" && m.at) {
+        // a circle carrying centered text — detail/section/keynote bubbles and
+        // pattern-origin markers. Radius is normalized to sheet WIDTH, so it maps
+        // through the page scale like every other length (ptScale: px→pt).
+        const cxImg = m.at[0] * W, cyImg = m.at[1] * H;
+        const [pcx, pcy] = toPage(cxImg, cyImg);
+        const rPt = (Number(m.r) > 0 ? Number(m.r) : 0.02) * W * ptScale;
+        pg.drawEllipse({ x: pcx, y: pcy, xScale: rPt, yScale: rPt, borderColor: mcol, borderWidth: 1.2 * mw, borderOpacity: 0.95, color: dark ? rgb(0.08, 0.1, 0.12) : rgb(1, 1, 1), opacity: 0.85 });
+        const t = lbl(m.text);
+        if (t) {
+          const size = 8;
+          const tw = bold.widthOfTextAtSize(winAnsiSafe(t), size);
+          pg.drawText(winAnsiSafe(t), { x: pcx - tw / 2, y: pcy - size / 2.7, size, font: bold, color: mcol, rotate: chipRot });
+        }
       } else if (m.type === "callout" && m.at) {
         if (m.target) {
           line(m.target[0] * W, m.target[1] * H, m.at[0] * W, m.at[1] * H, mcol, 0.9 * mw, 0.9, mdash);
@@ -502,6 +527,21 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
           pg.drawSvgPath(arrowheadPath(pax, -pay, ptx, -pty, 5), { x: 0, y: 0, color: mcol, opacity: 0.9 });
         }
         text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
+      } else if (m.type === "svg" && m.at && Array.isArray(m.vb) && typeof m.path === "string") {
+        // a vector symbol — bake local→page px, NEGATING y like every sibling path
+        // (drawSvgPath internally applies scale(1,-1), so toPage output must be
+        // negated). Uniform scale off sheet WIDTH keeps it undistorted; the fn is a
+        // general affine (toPage carries rotation on rotated sheets), applied
+        // pointwise to the bezier controls by transformPath.
+        const { s: sx, bw, bh } = svgPlacedBox(m.vb, m.w, W);
+        if (sx > 0) {
+          const x0 = m.at[0] * W - bw / 2, y0 = m.at[1] * H - bh / 2;
+          const d = transformPath(m.path, (lx, ly) => { const [px, py] = toPage(x0 + lx * sx, y0 + ly * sx); return [px, -py]; });
+          const fillOn = m.fill && m.fill !== "none";
+          if (d) pg.drawSvgPath(d, { x: 0, y: 0, borderColor: mcol, borderWidth: 1.2 * mw, borderOpacity: 0.95, ...(fillOn ? { color: rgb(...hex(dark ? boostForDark(m.fill) : m.fill)), opacity: 0.9 } : {}) });
+          const t = lbl(m.text);
+          if (t) text(t, m.at[0] * W - bw / 2, y0 - 6 / ptScale, 8, mcol, bold);
+        }
       } else if (m.type === "text" && m.at) {
         text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
       }

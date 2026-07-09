@@ -13,6 +13,9 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
+import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
+import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
+import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import SheetGallery from "../components/SheetGallery.jsx";
@@ -31,6 +34,7 @@ import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, 
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
 import RfiPanel from "../components/RfiPanel.jsx";
+import StampPanel from "../components/StampPanel.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -186,10 +190,20 @@ export default function TakeoffCanvas() {
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
-  const [showMarkupPanel, setShowMarkupPanel] = useState(false);
+  // Docked LEFT panel — one at a time, never overlapping: null | "markup" | "stamp" | "rfi".
+  // The right-rail buttons switch tabs; the dock reflows the canvas (mirrors the
+  // docked Takeoffs panel on the right).
+  const [leftTab, setLeftTab] = useState(null);
   const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
   const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
   const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
+  // Stamp library (browser-global, meta store) — reusable annotation stamps
+  // dropped click-to-place (#40). armedStamp holds the stamp picked from the
+  // palette; while tool==="stamp" each canvas click instantiates it as normal,
+  // editable markups. Persist mirrors the template/material library pattern.
+  const [stampLib, setStampLib] = useState({ stamps: [], sets: [] });
+  const stampLibRef = useRef({ stamps: [], sets: [] });       // readable outside a render (persist merges)
+  const [armedStamp, setArmedStamp] = useState(null);         // stamp armed for click-to-place (tool==="stamp")
   // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
   // persist per user in localStorage as diffs against PANEL_DEFAULTS.
   const [panelPrefs, setPanelPrefs] = useState(() => {
@@ -262,7 +276,6 @@ export default function TakeoffCanvas() {
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
   const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
   const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
-  const [showRfiPanel, setShowRfiPanel] = useState(false);
   // selecting a shape clears any markup selection and vice-versa — one live
   // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
@@ -626,6 +639,38 @@ export default function TakeoffCanvas() {
     return () => { off = true; };
   }, []);
 
+  // Stamp library — independent of hydrate (it seeds no project state), so it
+  // loads on its own. A truly empty library gets the flooring defaults, then
+  // persists them once so the seeded set is exportable and survives reloads
+  // (the seedConditions precedent, but written back because the library is the
+  // asset itself, not a per-project derivation). Re-read on tab focus like the
+  // other browser-global records.
+  useEffect(() => {
+    let off = false;
+    store.loadStampLibrary().catch(() => ({ stamps: [], sets: [] })).then((raw) => {
+      if (off) return;
+      const seeded = seedStampLibrary(raw);
+      const wasEmpty = !(raw?.stamps || []).length;
+      stampLibRef.current = seeded; setStampLib(seeded);
+      if (wasEmpty && seeded.stamps.length) store.saveStampLibrary(seeded).catch(() => { /* seed persists on next edit */ });
+    });
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      store.loadStampLibrary().then((lib) => {
+        if (JSON.stringify(lib) === JSON.stringify(stampLibRef.current)) return;
+        // another tab edited the library — adopt it, INCLUDING an intentional
+        // delete-all (an empty library must propagate, not leave stale stamps).
+        // The store is shared per-origin, so a persisted empty is a real edit; the
+        // first-mount seed self-heals any transient pre-save empty on next focus.
+        stampLibRef.current = lib; setStampLib(lib);
+        // a cross-tab edit may have removed the armed stamp — don't keep a dangling ref
+        setArmedStamp((a) => (a && lib.stamps.some((s) => s.id === a.id) ? a : null));
+      }).catch(() => { /* keep what we have */ });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { off = true; document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+
   // library freshness: BOTH browser-global records — the condition template
   // library AND the material library (each sanitized at load, same as the
   // mount effect above) — may have been edited by another tab since our mount
@@ -651,6 +696,10 @@ export default function TakeoffCanvas() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
+
+  // leaving the stamp tool disarms the pending stamp — a stray click under a
+  // measure/select tool must never drop a stamp
+  useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -1115,7 +1164,7 @@ export default function TakeoffCanvas() {
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
         else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
         else setCalib((c) => c.slice(0, -1));
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); }
+      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1161,6 +1210,7 @@ export default function TakeoffCanvas() {
       else { const a = poly[0]; commitPoly([[a[0], a[1]], [p[0], a[1]], [p[0], p[1]], [a[0], p[1]]], tool === "deduct-rect"); setPoly([]); }
     }
     else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
+    else if (tool === "stamp") placeStamp(p);
   }
   // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
   // hitShape can't test them — this is a purpose-built bbox/point test in the
@@ -1206,6 +1256,23 @@ export default function TakeoffCanvas() {
       const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
       const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
       return X >= x0 - thr && X <= x1 + thr && Y >= y0 - thr && Y <= y1 + thr;
+    }
+    if (m.type === "arrow" && m.from && m.to) {
+      // a stamp-placed leader — hit its shaft (endpoint tolerance folds into the band)
+      const fx = m.from[0] * W + ox, fy = m.from[1] * H, tx = m.to[0] * W + ox, ty = m.to[1] * H;
+      return distToSeg(X, Y, fx, fy, tx, ty) < thr * 1.5;
+    }
+    if (m.type === "bubble" && m.at) {
+      // a filled circle — hit its disc; r is normalized to sheet WIDTH
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H, rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * W;
+      return Math.hypot(X - cx, Y - cy) < rad + thr;
+    }
+    if (m.type === "svg" && m.at && Array.isArray(m.vb)) {
+      // a vector symbol — hit its placed bbox (same uniform scale off the LONGER
+      // viewBox extent the renderer uses, so hit size == render size).
+      const { bw, bh } = svgPlacedBox(m.vb, m.w, W);
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H;
+      return X >= cx - bw / 2 - thr && X <= cx + bw / 2 + thr && Y >= cy - bh / 2 - thr && Y <= cy + bh / 2 + thr;
     }
     return false;
   }
@@ -1275,7 +1342,8 @@ export default function TakeoffCanvas() {
         // first click of a double-click re-edit) never nudges the markup.
         const orig = (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
           : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
-            : { at: mHit.at };
+            : mHit.type === "arrow" ? { from: mHit.from, to: mHit.to }
+              : { at: mHit.at };   // text + bubble
         // raw start (markups don't snap/angle-lock; matches the raw tracking point in
         // onPointerMove so the delta can't be contaminated by a stale snap/angle ref)
         dragRef.current = { kind: "markupMove", markupId: mHit.id, sheetId: mHit.sheet_id, start: toImage(e.clientX, e.clientY), orig, moved: false };
@@ -1534,7 +1602,8 @@ export default function TakeoffCanvas() {
           if (m.id !== d.markupId) return m;
           if (o.rect) return { ...m, rect: [[o.rect[0][0] + dx, o.rect[0][1] + dy], [o.rect[1][0] + dx, o.rect[1][1] + dy]] };
           if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
-          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };
+          if (o.from) return { ...m, from: [o.from[0] + dx, o.from[1] + dy], to: [o.to[0] + dx, o.to[1] + dy] };
+          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };   // text + bubble
         }));
       }
       return;
@@ -1761,7 +1830,10 @@ export default function TakeoffCanvas() {
   // belongs to the panel of its FIRST click and normalizes against that panel.
   function addMarkup(m, key) {
     setMarkups((ms) => [...ms, { id: uid("mk"), sheet_id: key, rfi_id: "", ...m }]);
-    setShowMarkupPanel(true);
+    // Drawing a markup by hand surfaces the Markups tab. But a STAMP places several
+    // markups via addMarkup — don't yank the user off the Stamps tab mid-placement
+    // (keep the current tab, or open Markups only if nothing's open).
+    setLeftTab((t) => (tool === "stamp" ? (t ?? "markup") : "markup"));
   }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
@@ -1804,7 +1876,8 @@ export default function TakeoffCanvas() {
     if (!sp || !sp.img.w) return null;
     let nx, ny;
     if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
-    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }
+    else if (m.type === "arrow" && m.from && m.to) { nx = (m.from[0] + m.to[0]) / 2; ny = (m.from[1] + m.to[1]) / 2; }
+    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }   // text + bubble + callout
     else return null;
     return [nx * sp.img.w + sp.xOffset, ny * sp.img.h];
   }
@@ -1845,6 +1918,8 @@ export default function TakeoffCanvas() {
     const m = rev.find((mm) => mm.type !== "highlight" && hitMarkup(mm, p, thr))
       || rev.find((mm) => mm.type === "highlight" && hitMarkup(mm, p, thr));
     if (!m) return;
+    // an svg symbol carries no text — select it, but don't open a dead-end editor
+    if (m.type === "svg") { selectMarkup(m.id); return; }
     const anchor = markupAnchorStage(m);
     if (!anchor) return;
     selectMarkup(m.id);
@@ -1892,6 +1967,108 @@ export default function TakeoffCanvas() {
   function updateMarkup(mid, patch) { setMarkups((ms) => ms.map((m) => (m.id === mid ? { ...m, ...patch } : m))); }
   function deleteMarkup(mid) { setMarkups((ms) => ms.filter((m) => m.id !== mid)); }
 
+  // ── stamps — reusable annotations dropped click-to-place (#40). The library
+  // is browser-global (persists across projects); placed instances are NORMAL
+  // markups. Persist mirrors persistTemplates: ref + state + fire-and-forget
+  // save, sanitized at the store boundary.
+  const persistStampLib = (next) => {
+    stampLibRef.current = next; setStampLib(next);
+    store.saveStampLibrary(next).catch((e) => setCommitMsg(`Couldn't save the stamp library: ${e.message || e}`));
+  };
+  // Arm a stamp for placement: switch to the stamp tool and hold it in
+  // armedStamp. Repeated clicks place multiple copies until you pick another
+  // tool or press Escape.
+  const armStamp = (stamp) => { setArmedStamp(stamp); setTool("stamp"); setMarkupDraft(null); };
+  // Instantiate the armed stamp at the click point — every element becomes a
+  // normal markup on the clicked panel's sheet. A `_prompt` element (a bubble
+  // whose number you fill in) opens the text editor on the placed instance.
+  function placeStamp(p) {
+    if (!armedStamp) return;
+    const tp = panelAt(p[0]);
+    const cx = (p[0] - tp.xOffset) / tp.img.w, cy = p[1] / tp.img.h;
+    const instances = instantiateStamp(armedStamp, [cx, cy]);
+    if (!instances.length) { setCommitMsg("This stamp has no placeable elements."); return; }
+    let promptId = null;
+    for (const inst of instances) {
+      const { _prompt, ...m } = inst;
+      const id = uid("mk");
+      addMarkup({ ...m, id }, tp.key);
+      if (_prompt && !promptId) promptId = id;
+    }
+    setCommitMsg(`Placed “${armedStamp.name}”.`);
+    if (promptId) openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(promptId, { text: (t || "").trim() }) });
+  }
+  // Save the selected markup as a single-element stamp (the palette's define
+  // flow). markupToStampElement re-expresses its coords as anchor-relative
+  // offsets so the stamp is position independent.
+  function saveMarkupAsStamp(m) {
+    const el = markupToStampElement(m);
+    if (!el) { setCommitMsg("This markup can't be saved as a stamp."); return; }
+    const name = (window.prompt("Name this stamp:", (m.text || el.type).trim() || "Stamp") || "").trim();
+    if (!name) return;
+    const stamp = { id: uid("stmp"), name, elements: [el] };
+    persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, stamp] });
+    setCommitMsg(`Saved stamp “${name}”.`);
+    setLeftTab("stamp");
+  }
+  const deleteStamp = (id) => {
+    const lib = stampLibRef.current;
+    persistStampLib({
+      stamps: lib.stamps.filter((s) => s.id !== id),
+      sets: lib.sets.map((set) => ({ ...set, stampIds: set.stampIds.filter((sid) => sid !== id) })),
+    });
+    if (armedStamp?.id === id) setArmedStamp(null);
+  };
+  const renameStamp = (id, name) => {
+    const nm = (name || "").trim();
+    if (!nm) return;
+    persistStampLib({ ...stampLibRef.current, stamps: stampLibRef.current.stamps.map((s) => (s.id === id ? { ...s, name: nm } : s)) });
+  };
+  // Export the whole library as JSON (a crew shares one standard set); import
+  // MERGES a file's stamps/sets in, replacing same-id entries so a re-import is
+  // idempotent. The store sanitizes on save, so a malformed file can't wedge us.
+  function exportStamps() {
+    const data = JSON.stringify({ schema: "opentakeoff.stamp_library.v1", ...stampLibRef.current }, null, 2);
+    downloadBytes("opentakeoff-stamps.json", new TextEncoder().encode(data), "application/json");
+  }
+  async function importStamps(file) {
+    try {
+      const parsed = JSON.parse(await file.text());
+      const cur = stampLibRef.current;
+      const inStamps = Array.isArray(parsed?.stamps) ? parsed.stamps : [];
+      const inSets = Array.isArray(parsed?.sets) ? parsed.sets : [];
+      const inIds = new Set(inStamps.map((s) => s?.id));
+      const inSetIds = new Set(inSets.map((s) => s?.id));
+      const merged = {
+        stamps: [...cur.stamps.filter((s) => !inIds.has(s.id)), ...inStamps],
+        sets: [...cur.sets.filter((s) => !inSetIds.has(s.id)), ...inSets],
+      };
+      persistStampLib(merged);   // persistStampLib → store sanitizes, dropping any malformed items
+      setCommitMsg(`Imported ${inStamps.length} stamp${inStamps.length === 1 ? "" : "s"}.`);
+      setLeftTab("stamp");
+    } catch (e) {
+      setCommitMsg(`Couldn't import stamps: ${e.message || e}`);
+    }
+  }
+  // Import a real .svg FILE as a stamp: the browser's DOMParser extracts the
+  // drawable primitives (extractSvgPrimitives, with the security gate), then the
+  // pure svgToStamp bakes them into vector-path elements. A new stamp is minted
+  // and added to the library — mirroring saveMarkupAsStamp.
+  async function importSvgStamp(file) {
+    try {
+      const text = await file.text();
+      const base = (file.name || "Imported SVG").replace(/\.svg$/i, "");
+      const extracted = extractSvgPrimitives(text, { name: base });
+      const stamp = extracted && svgToStamp(extracted);
+      if (!stamp || !stamp.elements.length) { setCommitMsg("Couldn't read that SVG — no drawable vector shapes found."); return; }
+      persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, { id: uid("stmp"), name: stamp.name, elements: stamp.elements }] });
+      setCommitMsg(`Imported “${stamp.name}” as a stamp.`);
+      setLeftTab("stamp");
+    } catch (e) {
+      setCommitMsg(`Couldn't import SVG: ${e.message || e}`);
+    }
+  }
+
   // ── RFI register — the dormant markup.rfi_id hook made real. One RFI ↔ many
   // markups (markup.rfi_id === rfi.id); linked markups are DERIVED, never stored
   // twice. rfi.js stays PURE — every date is stamped HERE, at the event, so no
@@ -1908,7 +2085,7 @@ export default function TakeoffCanvas() {
     };
     setRfis((rs) => [...rs, rec]);
     updateMarkup(markup.id, { rfi_id: id });
-    setShowRfiPanel(true);
+    setLeftTab("rfi");
     setCommitMsg(`Raised ${number}.`);
   }
   const linkRfi = (markup, rfiId) => { if (markup && rfiId) updateMarkup(markup.id, { rfi_id: rfiId }); };
@@ -1942,7 +2119,8 @@ export default function TakeoffCanvas() {
     let anchor;
     if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
     else if (m.type === "callout") anchor = m.at || m.target;
-    else anchor = m.at;
+    else if (m.type === "arrow" && m.from && m.to) anchor = [(m.from[0] + m.to[0]) / 2, (m.from[1] + m.to[1]) / 2];
+    else anchor = m.at;   // text + bubble
     if (!anchor) return false;
     const el = containerRef.current;
     if (!el) return false;
@@ -2555,6 +2733,137 @@ export default function TakeoffCanvas() {
 
       {/* canvas + issue desk */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+       {/* docked LEFT panel — one of Markups/Stamps/RFIs at a time. Reflows the
+           canvas (a flex sibling), mirroring the docked Takeoffs panel on the right. */}
+       {leftTab && (
+         <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflow: "hidden", minHeight: 0 }}>
+           {/* tab strip */}
+           <div style={{ display: "flex", alignItems: "stretch", background: "#1f3fc7", color: "#fff" }}>
+             {[{ id: "markup", label: "Markups", n: markupCount }, { id: "stamp", label: "Stamps", n: stampLib.stamps.length }, { id: "rfi", label: "RFIs", n: rfis.length }].map((t) => (
+               <button key={t.id} onClick={() => setLeftTab(t.id)} title={t.label}
+                 style={{ flex: 1, padding: "9px 6px", border: "none", borderBottom: leftTab === t.id ? "2px solid #fff" : "2px solid transparent", background: leftTab === t.id ? "rgba(255,255,255,.18)" : "transparent", color: "#fff", cursor: "pointer", fontWeight: leftTab === t.id ? 700 : 500, fontSize: 12 }}>
+                 {t.label}{t.n ? ` · ${t.n}` : ""}
+               </button>
+             ))}
+             <button onClick={() => setLeftTab(null)} title="Close panel" style={{ padding: "0 12px", border: "none", background: "transparent", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
+           </div>
+           {/* body of the active tab */}
+           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+             {leftTab === "markup" && (
+               <div>
+                 {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
+                     (can't select/delete/fly-to an invisible markup); orthogonal to the
+                     marked-set export, which still includes markups. */}
+                 <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
+                   <button
+                     onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
+                     title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
+                     style={{ background: "transparent", border: "1px solid var(--ink-faint)", color: "var(--ink)", fontSize: 11, cursor: "pointer", padding: "2px 7px" }}>
+                     {showMarkups ? "Hide layer" : "Show layer"}
+                   </button>
+                 </div>
+                 <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
+                   Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
+                 </div>
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
+                   <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
+                 )}
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
+                   <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                     <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                       <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
+                       {/* inline edit — the panel's fallback for the canvas overlay, since a
+                           markup here may be off-screen or on another sheet (no click point).
+                           Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
+                       {panelEditId === m.id ? (
+                         <input autoFocus defaultValue={m.text || ""}
+                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
+                           onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
+                           style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
+                       ) : (
+                         <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : (m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
+                       )}
+                       {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
+                       <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
+                     </div>
+                     {/* appearance — per-markup color (reuse PALETTE) + line style; both
+                         additive: unset color falls back to the cobalt(linked)/amber default,
+                         unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
+                     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
+                       <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
+                       {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+                       <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                       </select>
+                       {/* line weight — a multiplier over the element's base stroke width (default
+                           ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
+                       <select value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
+                       </select>
+                       {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
+                       {m.type === "cloud" && (
+                         <>
+                           <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
+                           <input type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
+                             onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
+                             title="Revision number for the △ delta (blank = none)"
+                             style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
+                         </>
+                       )}
+                     </div>
+                     {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
+                     {(() => {
+                       const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                       return (
+                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                           {linked ? (
+                             <>
+                               <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "#1f3fc7" }}>⬢ {String(linked.number ?? "")}</span>
+                               <button onClick={() => { setLeftTab("rfi"); }} style={{ ...ctrl, color: "#1f3fc7" }} title="Open the RFI register">Open</button>
+                               <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
+                             </>
+                           ) : (
+                             <>
+                               <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "#1f3fc7", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
+                               {rfis.length > 0 && (
+                                 <select value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
+                                   title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
+                                   <option value="">Link existing…</option>
+                                   {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
+                                 </select>
+                               )}
+                             </>
+                           )}
+                         </div>
+                       );
+                     })()}
+                   </div>
+                 ))}
+               </div>
+             )}
+             {leftTab === "stamp" && (
+               <StampPanel
+                 docked
+                 library={stampLib} armedStamp={armedStamp}
+                 selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
+                 onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
+                 onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setLeftTab(null)}
+               />
+             )}
+             {leftTab === "rfi" && (
+               <RfiPanel
+                 docked
+                 rfis={rfis} markups={markups}
+                 onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
+                 sheetLabel={(k) => tabLabel(k)} onClose={() => setLeftTab(null)}
+               />
+             )}
+           </div>
+         </div>
+       )}
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
@@ -2740,6 +3049,56 @@ export default function TakeoffCanvas() {
                           </g>
                         );
                       }
+                      if (m.type === "arrow") {
+                        const [fx, fy] = [m.from[0] * p.img.w, m.from[1] * p.img.h];
+                        const [tx, ty] = [m.to[0] * p.img.w, m.to[1] * p.img.h];
+                        const midx = (fx + tx) / 2, midy = (fy + ty) / 2;
+                        const hx0 = Math.min(fx, tx), hy0 = Math.min(fy, ty), hx1 = Math.max(fx, tx), hy1 = Math.max(fy, ty);
+                        const pad = (6 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <line x1={fx} y1={fy} x2={tx} y2={ty} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} strokeLinecap="round" />
+                            {/* filled arrowhead at the `to` end */}
+                            <path d={arrowheadPath(fx, fy, tx, ty, 11 / z)} fill={mk} />
+                            {m.text && <text x={midx} y={midy - 6 / z} fill={mk} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(hx0, hy0 - pad - 9 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "bubble") {
+                        const cx = m.at[0] * p.img.w, cy = m.at[1] * p.img.h;
+                        const rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * p.img.w;
+                        const pad = (5 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(cx - rad - pad, cy - rad - pad, cx + rad + pad, cy + rad + pad)}
+                            <circle cx={cx} cy={cy} r={rad} fill={darkMode ? "rgba(12,15,20,.85)" : "rgba(255,255,255,.85)"} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={cx} y={cy} fill={mk} fontSize={Math.min(13, rad * z * 0.9) / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(cx + rad, cy - rad - 4 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "svg" && m.path && Array.isArray(m.vb)) {
+                        // a vector symbol (imported .svg or saved-as-stamp art). The
+                        // path is baked local→image px through a uniform scale off the
+                        // LONGER viewBox extent so it never distorts and a one-axis
+                        // symbol can't blow up; stroke/fill are the symbol's OWN color
+                        // (dark-boosted), not the linkage tint.
+                        const { s: sx, bw, bh } = svgPlacedBox(m.vb, m.w, p.img.w);
+                        if (!(sx > 0)) return null;
+                        const x0 = m.at[0] * p.img.w - bw / 2, y0 = m.at[1] * p.img.h - bh / 2;
+                        const d = transformPath(m.path, (lx, ly) => [x0 + lx * sx, y0 + ly * sx]);
+                        const fillOn = m.fill && m.fill !== "none";
+                        const fcol = fillOn ? (darkMode ? boostForDark(m.fill) : m.fill) : "none";
+                        return (
+                          <g key={m.id}>
+                            {halo(x0, y0, x0 + bw, y0 + bh)}
+                            <path d={d} fill={fcol} fillOpacity={fillOn ? 0.9 : undefined} stroke={mk} strokeWidth={(1.6 * w) / z} strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+                            {badge(x0, y0 - 9 / z)}
+                          </g>
+                        );
+                      }
                       const [x, y] = m.at;
                       const lw = ((m.text?.length || 1) * 7 + 10) / z;
                       return (
@@ -2885,121 +3244,11 @@ export default function TakeoffCanvas() {
             takeoffs toggle mirrors the DOCKED panel's collapsed pref — the rail
             rides the canvas edge, so it stays visible either way. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
-          {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
-          {panelBtn(() => setShowRfiPanel((v) => !v), "rfi", "RFI register — raise, track, and export Requests For Information", showRfiPanel, rfis.length)}
+          {panelBtn(() => setLeftTab((t) => (t === "markup" ? null : "markup")), "markup", "Markups on these sheets (clouds, callouts, notes)", leftTab === "markup", markupCount)}
+          {panelBtn(() => setLeftTab((t) => (t === "stamp" ? null : "stamp")), "stamp", "Stamps — reusable annotations dropped click-to-place", leftTab === "stamp", stampLib.stamps.length)}
+          {panelBtn(() => setLeftTab((t) => (t === "rfi" ? null : "rfi")), "rfi", "RFI register — raise, track, and export Requests For Information", leftTab === "rfi", rfis.length)}
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
-
-        {/* markup panel — manage clouds/callouts/text + link or create RFIs (top-left, clear of HUD/FABs) */}
-        {showMarkupPanel && (
-          <div style={{ position: "absolute", left: 14, top: 14, width: 320, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff", borderRadius: 0 }}>
-              <strong>Markups · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
-                    (can't select/delete/fly-to an invisible markup); orthogonal to the
-                    marked-set export, which still includes markups. */}
-                <button
-                  onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
-                  title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
-                  style={{ background: "none", border: "1px solid rgba(255,255,255,.5)", color: "#fff", fontSize: 11, cursor: "pointer", padding: "2px 7px", borderRadius: 0 }}>
-                  {showMarkups ? "Hide layer" : "Show layer"}
-                </button>
-                <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-              </span>
-            </div>
-            <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
-              Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
-            </div>
-            {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
-              <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
-            )}
-            {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
-              <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
-                  {/* inline edit — the panel's fallback for the canvas overlay, since a
-                      markup here may be off-screen or on another sheet (no click point).
-                      Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
-                  {panelEditId === m.id ? (
-                    <input autoFocus defaultValue={m.text || ""}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
-                      onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
-                      style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid #1f3fc7", borderRadius: 0, outline: "none" }} />
-                  ) : (
-                    <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
-                  )}
-                  <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
-                  <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
-                </div>
-                {/* appearance — per-markup color (reuse PALETTE) + line style; both
-                    additive: unset color falls back to the cobalt(linked)/amber default,
-                    unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
-                  <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
-                  {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-                  <select value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
-                    {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
-                  </select>
-                  {/* line weight — a multiplier over the element's base stroke width (default
-                      ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
-                  <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
-                  <select value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
-                    {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
-                  </select>
-                  {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
-                  {m.type === "cloud" && (
-                    <>
-                      <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
-                      <input type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
-                        onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
-                        title="Revision number for the △ delta (blank = none)"
-                        style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
-                    </>
-                  )}
-                </div>
-                {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
-                {(() => {
-                  const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
-                  const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
-                  return (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
-                      {linked ? (
-                        <>
-                          <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "#1f3fc7" }}>⬢ {String(linked.number ?? "")}</span>
-                          <button onClick={() => { setShowRfiPanel(true); }} style={{ ...ctrl, color: "#1f3fc7" }} title="Open the RFI register">Open</button>
-                          <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
-                        </>
-                      ) : (
-                        <>
-                          <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "#1f3fc7", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
-                          {rfis.length > 0 && (
-                            <select value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
-                              title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
-                              <option value="">Link existing…</option>
-                              {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
-                            </select>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* RFI register — project-global (not sheet-scoped like the markup panel):
-            list/filter/edit/close/void/delete + fly to a linked markup. */}
-        {showRfiPanel && (
-          <RfiPanel
-            rfis={rfis} markups={markups}
-            onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
-            sheetLabel={(k) => tabLabel(k)} onClose={() => setShowRfiPanel(false)}
-          />
-        )}
 
        </div>
 

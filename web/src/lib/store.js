@@ -17,6 +17,7 @@
 
 import { sanitizeTemplates } from "./templates.js";
 import { sanitizeMaterialLibrary } from "./materials.js";
+import { sanitizeStampLibrary } from "./stamps.js";
 
 const DB_NAME = "opentakeoff";
 const DB_VERSION = 2;
@@ -31,6 +32,10 @@ const TPL_KEY = "condition_templates";
 // COPY a library material on attach (plus an additive lib_id link), so the
 // library is never load-bearing for totals, exports, or old snapshots.
 const MATLIB_KEY = "material_library";
+// stamp library — the FIRST cross-project asset (#40): same browser-global
+// pattern as templates/materials, its own key in the keyPath-less meta store
+// (no DB version bump). Persists across projects; export/import as JSON.
+const STAMPLIB_KEY = "stamp_library";
 const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1";
 
 function openDB() {
@@ -187,6 +192,18 @@ export const localStore = {
 
   async saveMaterialLibrary(list) {
     await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put(Array.isArray(list) ? list : [], MATLIB_KEY)));
+  },
+
+  async loadStampLibrary() {
+    // sanitize on load for the same reason as templates/materials: the record
+    // is browser-global, and one corrupt stamp would otherwise wedge the
+    // palette (and its seeding) for every project at once
+    const s = await withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(STAMPLIB_KEY)));
+    return sanitizeStampLibrary(s);
+  },
+
+  async saveStampLibrary(lib) {
+    await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put(sanitizeStampLibrary(lib), STAMPLIB_KEY)));
   },
 
   async saveSnapshot(label, payload) {
