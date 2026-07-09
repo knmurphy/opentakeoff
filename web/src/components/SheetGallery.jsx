@@ -53,6 +53,10 @@ export default function SheetGallery({
         } catch { if (seq === seqRef.current) setPages((m) => (m[s.name] !== undefined ? m : { ...m, [s.name]: 0 })); }
       }
     })();
+    // read the LIVE seqRef, not a mount-time copy: bumping it is what the async
+    // loop's `seq !== seqRef.current` guard checks to abandon a stale run. A
+    // copied variable (the rule's suggestion) would never invalidate anything.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { seqRef.current++; };
   }, [sheets, getDoc]);
 
