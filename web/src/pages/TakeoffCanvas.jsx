@@ -3411,8 +3411,10 @@ export default function TakeoffCanvas() {
             </div>
           )}
 
-          {/* zoom buttons */}
-          <div style={{ position: "absolute", left: 14, bottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* zoom buttons — stop pointerdown here: the container's onPointerDown
+              setPointerCapture()s every left press, which retargets the pointerup
+              and the composed click never reaches these buttons */}
+          <div onPointerDown={(e) => e.stopPropagation()} style={{ position: "absolute", left: 14, bottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
             {[["+", 1.25], ["−", 0.8]].map(([lbl, f]) => (
               <button key={lbl} onClick={() => { const r = containerRef.current.getBoundingClientRect(); zoomAround(r.width / 2, r.height / 2, f); }}
                 style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 18, fontWeight: 700 }}>{lbl}</button>
