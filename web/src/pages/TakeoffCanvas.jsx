@@ -658,10 +658,13 @@ export default function TakeoffCanvas() {
       if (document.visibilityState !== "visible") return;
       store.loadStampLibrary().then((lib) => {
         if (JSON.stringify(lib) === JSON.stringify(stampLibRef.current)) return;
-        // another tab edited the library — swap in only if it still has stamps
-        // (never clobber our seeded defaults with a bare {stamps:[],sets:[]})
-        if (!lib.stamps.length) return;
+        // another tab edited the library — adopt it, INCLUDING an intentional
+        // delete-all (an empty library must propagate, not leave stale stamps).
+        // The store is shared per-origin, so a persisted empty is a real edit; the
+        // first-mount seed self-heals any transient pre-save empty on next focus.
         stampLibRef.current = lib; setStampLib(lib);
+        // a cross-tab edit may have removed the armed stamp — don't keep a dangling ref
+        setArmedStamp((a) => (a && lib.stamps.some((s) => s.id === a.id) ? a : null));
       }).catch(() => { /* keep what we have */ });
     };
     document.addEventListener("visibilitychange", onVis);

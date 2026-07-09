@@ -63,7 +63,9 @@ export function sanitizeStampLibrary(raw) {
       return true;
     })
     .map((set) => ({ ...set, name: typeof set.name === "string" ? set.name : "", stampIds: (Array.isArray(set.stampIds) ? set.stampIds : []).filter((id) => typeof id === "string" && id) }));
-  return { stamps, sets };
+  // preserve top-level fields (the documented round-trip contract — e.g. the
+  // `schema` key export writes); `stamps`/`sets` override the raw ones.
+  return { ...lib, stamps, sets };
 }
 
 // Instantiate a stamp at a click point (normalized sheet coords [cx,cy]).

@@ -92,9 +92,11 @@ test("sets need a string id (dedup) and coerce stampIds to a string array", () =
 });
 
 test("unknown fields pass through (a future field survives save → load)", () => {
-  const raw = { stamps: [{ id: "a", name: "A", elements: [], future: { x: 1 } }], sets: [], meta: 9 } as any;
+  const raw = { stamps: [{ id: "a", name: "A", elements: [], future: { x: 1 } }], sets: [], meta: 9, schema: "opentakeoff.stamp_library.v1" } as any;
   const out = sanitizeStampLibrary(raw) as any;
-  assert.deepEqual(out.stamps[0].future, { x: 1 });
+  assert.deepEqual(out.stamps[0].future, { x: 1 });   // element-level passthrough
+  assert.equal(out.meta, 9);                           // top-level passthrough (the round-trip contract)
+  assert.equal(out.schema, "opentakeoff.stamp_library.v1");
 });
 
 // ── instantiateStamp ─────────────────────────────────────────────────────────
