@@ -23,6 +23,7 @@ import { areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, fmtCheckLen, parseL
 import { shapesInZone } from "../lib/zone.js";
 import { playFromCondition, conditionFromPlay, upsertPlay, loadPlays, savePlays } from "../lib/plays.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
+import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { starPath, cloudPath, thinStroke, strokePathD, chiselRibbon, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, distToSeg, hitShape } from "../lib/geometry.js";
@@ -423,6 +424,8 @@ export default function TakeoffCanvas() {
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
   const segMetaRef = useRef(new Map());    // sheetKey → per-segment meta bytes (hatch classification input)
   const maskCacheRef = useRef(new Map());  // sheetKey → built boundary mask (lazy, dropped on re-render)
+  const sheetStatsRef = useRef(new Map()); // sheetKey → {segCount, imageFrac} — raster-fallback trigger signals
+  const rasterMaskCacheRef = useRef(new Map()); // sheetKey → Promise<MaskObj|null> — scan-pixel mask (lazy, shared across clicks)
   const snapMarkRef = useRef(null);    // SVG snap indicator
   const angleRef = useRef(null);       // current angle-locked image point (or null) — the click commits it
   const aimMarkRef = useRef(null);     // four floating liquid-glass pickets thickening the crosshair crossing
@@ -747,6 +750,8 @@ export default function TakeoffCanvas() {
     vectorSegsRef.current.clear();
     segMetaRef.current.clear();
     maskCacheRef.current.clear();
+    sheetStatsRef.current.clear();
+    rasterMaskCacheRef.current.clear();
     canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
     renderScalesRef.current.clear();
@@ -794,10 +799,13 @@ export default function TakeoffCanvas() {
         // snap-to-vector index per panel (best-effort; off until the user enables it)
         m.pageObj.getOperatorList().then((ol) => {
           if (stale()) return;
-          const { points, segs, meta } = extractVectorGeometry(ol, m.viewport.transform, pdfjsLib.OPS);
+          const { points, segs, meta, imageArea } = extractVectorGeometry(ol, m.viewport.transform, pdfjsLib.OPS);
           snapGridsRef.current.set(m.key, buildSnapGrid(points, SNAP_CELL));
           vectorSegsRef.current.set(m.key, segs);
           segMetaRef.current.set(m.key, meta);
+          // raster-fallback trigger signals: how much of the sheet is placed
+          // image, and whether the vector linework is dense enough to bound rooms
+          sheetStatsRef.current.set(m.key, { segCount: segs.length >> 2, imageFrac: Math.min(1, imageArea / (m.w * m.h)) });
         }).catch(() => {});
         // read the drawn scale note off this panel's page text (best-effort)
         m.pageObj.getTextContent().then((tc) => {
@@ -1639,36 +1647,105 @@ export default function TakeoffCanvas() {
     }
     return mo;
   }
-  function oneClickAt(p, negative) {
+  // Scan-pixel mask for sheets with no usable linework: a fresh dedicated pdf.js
+  // render at mask scale — NEVER the panel canvas (dark mode bakes an inversion
+  // into those pixels, and a hi-res panel is a 100MB+ readback) — thresholded by
+  // rastermask.ts. Cached as a promise so concurrent clicks share one render.
+  function ensureRasterMask(key) {
+    let pr = rasterMaskCacheRef.current.get(key);
+    if (!pr) {
+      const pageObj = pageObjsRef.current.get(key), dims = panelImgs[key];
+      if (!pageObj || !dims?.w) return Promise.resolve(null);
+      const rs = renderScalesRef.current.get(key) || RENDER_SCALE;
+      const ws = Math.min(1, MASK_MAX_DIM / Math.max(dims.w, dims.h, 1));
+      const mw = Math.max(2, Math.ceil(dims.w * ws)), mh = Math.max(2, Math.ceil(dims.h * ws));
+      pr = (async () => {
+        const cv = document.createElement("canvas");
+        cv.width = mw; cv.height = mh;
+        const ctx = cv.getContext("2d", { willReadFrequently: true });
+        await pageObj.render({ canvasContext: ctx, viewport: pageObj.getViewport({ scale: rs * ws }), background: "#ffffff" }).promise;
+        const px = ctx.getImageData(0, 0, mw, mh);
+        cv.width = cv.height = 0;   // drop the backing store
+        return buildRasterMask(px.data, mw, mh, ws);
+      })().catch(() => null);
+      rasterMaskCacheRef.current.set(key, pr);
+    }
+    return pr;
+  }
+  // The propose tail, shared by the vector and raster paths. Raster differences:
+  // a looser RDP eps (scan contours wobble) and NO vertex snapping — there are
+  // no true endpoints on a scan, and pulling room corners onto the title-block's
+  // vector corners would corrupt the ring. Duplicate/carve checks run inside a
+  // FUNCTIONAL setProposal so a click racing the first raster render can't
+  // clobber state.
+  function proposeRegion(f, tp, local, negative, raster) {
+    const upp = uppFor(tp.key);
+    if (!upp) return;
+    let ring;
+    if (raster) ring = traceRegion(f, RASTER_RDP_EPS);
+    else {
+      const grid = snapGridsRef.current.get(tp.key);
+      ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
+    }
+    if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
+    const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
+    const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    setProposal((prev) => {
+      const regions = prev && prev.key === tp.key ? prev.regions : [];
+      if (regions.some((r) => r.kind === (negative ? "neg" : "pos") && pointInPoly(local[0], local[1], r.poly))) {
+        setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
+        return prev;
+      }
+      if (negative && !regions.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) {
+        setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
+        return prev;
+      }
+      setCommitMsg("");
+      return { key: tp.key, regions: [...regions, { kind: negative ? "neg" : "pos", seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+    });
+  }
+  async function oneClickAt(p, negative) {
     const tp = panelAt(p[0]);
     const upp = uppFor(tp.key);
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
     if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
     if (proposal && proposal.key !== tp.key) { setCommitMsg(`Finish the selection on ${labelFor(panelByKey(proposal.key))} first — ⏎ creates it, Esc discards.`); return; }
-    const mo = ensureMask(tp.key);
-    if (!mo) { setCommitMsg("Still reading this sheet's linework — try again in a second."); return; }
     const local = [p[0] - tp.xOffset, p[1]];
-    const f = floodRegion(mo, local[0], local[1]);
+    // Trigger policy: vector is exact and always wins where it works. The raster
+    // path engages only where vectors can't bound the room — a scan wrapper
+    // (big placed image, near-zero linework) runs raster PRIMARY; a mixed sheet
+    // (big image UNDER real linework) retries on pixels only after the vector
+    // flood fails. A pure-vector sheet never touches pixels.
+    const stats = sheetStatsRef.current.get(tp.key);
+    const rasterEligible = !!stats && stats.imageFrac >= RASTER_MIN_IMG_FRAC;
+    const vectorViable = !!stats && stats.segCount >= RASTER_MIN_SEGS;
+    if (!rasterEligible || vectorViable) {
+      const mo = ensureMask(tp.key);
+      if (!mo && !rasterEligible) { setCommitMsg("Still reading this sheet's linework — try again in a second."); return; }
+      if (mo) {
+        const f = floodRegion(mo, local[0], local[1]);
+        if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
+        if (!rasterEligible) {
+          setCommitMsg(f.status === "leak"
+            ? "That space isn't enclosed on the plan linework — the fill spilled. Click a more enclosed spot, or trace it with Area (A)."
+            : "Landed in dense linework (hatching/text). Zoom in and click an open spot, or trace it with Area (A).");
+          return;
+        }
+      }
+    }
+    setCommitMsg("Reading the scan…");
+    const seq = renderSeqRef.current;
+    const rmo = await ensureRasterMask(tp.key);
+    if (seq !== renderSeqRef.current) return;   // sheet group changed mid-render
+    if (!rmo) { setCommitMsg("Couldn't read this scan — trace it with Area (A)."); return; }
+    const f = floodRegion(rmo, local[0], local[1]);
     if (f.status !== "ok") {
       setCommitMsg(f.status === "leak"
-        ? "That space isn't enclosed on the plan linework — the fill spilled. Click a more enclosed spot, or trace it with Area (A)."
-        : "Landed in dense linework (hatching/text). Zoom in and click an open spot, or trace it with Area (A).");
+        ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Click a more enclosed spot, or trace it with Area (A)."
+        : "Landed on dense scan ink (text or hatching). Zoom in and click an open spot, or trace it with Area (A).");
       return;
     }
-    const grid = snapGridsRef.current.get(tp.key);
-    const ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
-    if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
-    const regions = proposal?.regions || [];
-    if (regions.some((r) => r.kind === (negative ? "neg" : "pos") && pointInPoly(local[0], local[1], r.poly))) {
-      setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates."); return;
-    }
-    if (negative && !regions.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) {
-      setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first."); return;
-    }
-    const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
-    const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
-    setProposal({ key: tp.key, regions: [...regions, { kind: negative ? "neg" : "pos", seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered }] });
-    setCommitMsg("");
+    proposeRegion(f, tp, local, negative, true);
   }
   function createProposal() {
     if (!proposal || !proposal.regions.length) return;
@@ -1679,7 +1756,7 @@ export default function TakeoffCanvas() {
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
       computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
       // the provenance receipt: machine-proposed, human-reviewed at the Create gate
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}) },
     }));
     setShapes((s) => [...s, ...made]);
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
@@ -2623,6 +2700,9 @@ export default function TakeoffCanvas() {
                 <div style={{ fontSize: 22, fontWeight: 700, color: "#1f3fc7" }}>{num(areaVal(sf, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} selected</span></div>
                 <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""}{units === "metric" ? "" : ` · ${num(sf / 9)} SY`}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
+                {proposal.regions.some((r) => r.rt) && (
+                  <div style={{ fontSize: 11.5, color: "var(--c-warning)", marginTop: 4 }}>Traced from scan pixels — verify edges before Create.</div>
+                )}
               </>
             );
           })() : tool === "surface" && poly.length >= 2 && liveUpp ? (
