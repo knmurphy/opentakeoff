@@ -32,13 +32,25 @@ const SCOPE = [
 // the token going stale.
 const EXPIRY_SKEW_MS = 60_000;
 
+// How long we'll wait on a SILENT (prompt: "") token request before giving up.
+// GIS's popup-close detection polls `window.closed`, which the browser blocks
+// once Google's own popup response sets Cross-Origin-Opener-Policy: same-origin
+// (a documented GIS/COOP interaction bug, not something our own headers can
+// fix — the restriction is imposed by accounts.google.com's response, not
+// ours). When that happens the silent attempt can open a blank popup that
+// never reports back, hanging the caller indefinitely. This timeout is ONLY
+// for the silent path — the interactive consent popup below is never
+// time-boxed, since a human is expected to take their time on it.
+const SILENT_TIMEOUT_MS = 4000;
+
 // ── in-memory state (never persisted) ───────────────────────────────────────
 let tokenClient = null;         // the GIS token client, created once
 let scriptPromise = null;       // de-dupes the <script> injection
 let token = null;               // { accessToken, expiresAt } | null
 let user = null;                // { email, name, picture, sub, hd } | null
-let pending = null;             // resolver/rejecter for the current requestAccessToken
+let pending = null;             // { resolve, reject, id } for the current requestAccessToken, or null
 let pendingPromise = null;      // in-flight requestToken() promise, for coalescing
+let requestSeq = 0;             // monotonic id — correlates a GIS callback back to ITS request
 const listeners = new Set();
 
 function clientId() {
@@ -127,10 +139,16 @@ async function ensureTokenClient() {
     ...(hd ? { hd } : {}),
     // GIS calls back event-style; we route each response to the resolver that
     // requestToken() parked in `pending` before calling requestAccessToken().
+    // `state` round-trips the request id we passed in (see requestToken) — a
+    // SILENT request abandoned on timeout (requestTokenSilentWithTimeout) is
+    // no longer the current `pending` by the time its popup eventually (if
+    // ever) calls back, so without this check a late, stale response could
+    // resolve/reject whatever NEWER request has since taken its place.
     callback: (resp) => {
       const p = pending;
-      pending = null;
       if (!p) return;
+      if (resp?.state !== undefined && String(p.id) !== resp.state) return;
+      pending = null;
       if (resp?.error) {
         p.reject(new Error(resp.error_description || resp.error));
         return;
@@ -147,10 +165,20 @@ async function ensureTokenClient() {
     // popup_failed_to_open). Without this, `pending` would never settle: signIn()
     // would hang and every later token request would coalesce onto a promise that
     // never resolves. Reject so the UI can show it and the user can retry.
+    // Same stale-response guard as `callback` above, best-effort: GIS's public
+    // reference doesn't document `state` being echoed on the error path (only
+    // `type` is guaranteed), so when it's absent we fall back to the prior
+    // behavior of trusting whatever is in `pending`. In practice this residual
+    // gap is narrow — the failure mode we're guarding against (the COOP bug
+    // blocking window.closed) is what stops GIS from detecting a popup closing
+    // in the first place, so an abandoned request's error_callback firing late
+    // with a mismatched-but-absent state is an edge case, not the common path.
     error_callback: (err) => {
       const p = pending;
+      if (!p) return;
+      if (err?.state !== undefined && String(p.id) !== err.state) return;
       pending = null;
-      if (p) p.reject(new Error(err?.message || err?.type || "Google sign-in was cancelled."));
+      p.reject(new Error(err?.message || err?.type || "Google sign-in was cancelled."));
     },
   });
   return tokenClient;
@@ -165,15 +193,47 @@ async function requestToken(prompt) {
   // silent-refresh branch on the same tick; they must share the refresh, not have
   // all-but-one reject. `pending` still carries the resolver GIS's callbacks fire.
   if (pendingPromise) return pendingPromise;
-  pendingPromise = new Promise((resolve, reject) => {
-    pending = { resolve, reject };
+  const id = ++requestSeq;
+  const attempt = new Promise((resolve, reject) => {
+    pending = { resolve, reject, id };
     try {
-      client.requestAccessToken({ prompt });
+      client.requestAccessToken({ prompt, state: String(id) });
     } catch (e) {
       reject(e);
     }
-  }).finally(() => { pending = null; pendingPromise = null; });
-  return pendingPromise;
+  });
+  pendingPromise = attempt;
+  attempt.finally(() => {
+    // Only clear the shared slot if it's still THIS request's — a timeout
+    // elsewhere (requestTokenSilentWithTimeout) may already have abandoned us
+    // and installed a newer one; clearing unconditionally here would corrupt
+    // that newer request's state.
+    if (pending && pending.id === id) pending = null;
+    if (pendingPromise === attempt) pendingPromise = null;
+  });
+  return attempt;
+}
+
+// Race a SILENT token request against a timeout. On timeout we abandon it —
+// null out `pending`/`pendingPromise` — so a subsequent requestToken() call
+// (e.g. signIn()'s fallback to "consent") issues a genuinely new request
+// instead of coalescing onto the stuck one. If the abandoned request's popup
+// eventually DOES call back, requestToken()'s per-request `id` (round-tripped
+// via GIS's `state`) keeps it from resolving/rejecting whatever newer request
+// has since taken its place — see the callback/error_callback comments above.
+function requestTokenSilentWithTimeout() {
+  const attempt = requestToken("");
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending = null;
+      pendingPromise = null;
+      reject(new Error("Silent Google sign-in timed out"));
+    }, SILENT_TIMEOUT_MS);
+    attempt.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
 }
 
 async function fetchProfile(accessToken) {
@@ -192,7 +252,7 @@ async function fetchProfile(accessToken) {
 export async function trySilentSignIn() {
   if (!isGoogleConfigured()) return null;
   try {
-    const accessToken = await requestToken("");
+    const accessToken = await requestTokenSilentWithTimeout();
     user = await fetchProfile(accessToken);
     notify();
     return user;
@@ -213,7 +273,7 @@ export async function signIn() {
   }
   let accessToken;
   try {
-    accessToken = await requestToken("");
+    accessToken = await requestTokenSilentWithTimeout();
   } catch {
     accessToken = await requestToken("consent");
   }
@@ -229,7 +289,7 @@ export async function getAccessToken() {
   if (token && Date.now() < token.expiresAt - EXPIRY_SKEW_MS) {
     return token.accessToken;
   }
-  return requestToken("");
+  return requestTokenSilentWithTimeout();
 }
 
 // Sign out: forget the token + user and best-effort revoke at Google. Revoke
