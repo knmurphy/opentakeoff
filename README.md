@@ -13,7 +13,7 @@ No account. No upload. No install. It runs in your browser.
 
 [**▶ Try the live demo**](https://opentakeoff.netlify.app) · [Quick start](#quick-start) · [Features](#features) · [Deploy it](#run-it--deploy-it) · [Own your data](#own-your-data--the-capture-layer) · [Build on top](#build-on-top-of-it) · [Contributing](CONTRIBUTING.md)
 
-**New — July 2026:** One-Click Area now traces **hatched rooms** · **Dark view** (negative print) · **Marked Set PDF export** — [full changelog](CHANGELOG.md)
+**New — July 2026:** One-Click Area now traces **hatched rooms** and **scanned plans** · **Dark view** (negative print) · **Marked Set PDF export** — [full changelog](CHANGELOG.md)
 
 <br/>
 
@@ -51,7 +51,7 @@ Drag **`demo/sample-plan.pdf`** onto the canvas. The scale auto-detects; pick a 
 Drag in a plan **PDF**, an **image** (a scan or a screenshot), or a whole **`.zip` plan set** straight off a bid platform. Zips are unpacked and images wrapped to PDF *in your browser* — multi-page and multi-sheet, with up to **4 sheets side-by-side**. No upload step, no conversion service, no account.
 
 ### 2. A real measuring engine — not a counter with a ruler
-**One-Click Area** is the headline: click inside a room and the linework bounds it, the polygon traces itself, and the vertices snap to true corners. It reads the drawing the way an estimator does — **hatching and poché don't fool it**: tile grids, plank lines, and section fills are classified as pattern, not wall, so a click inside a fully hatched room still traces the room (and a misread can never make the result worse than the strict fill — it escalates only when the strict pass comes back trapped). Plus the full manual kit — **Area, Rectangle, Linear, Surface-Area (walls), Count,** and **Deduct** (for columns, voids, and openings). This is the same engine pulled out of a commercial estimating app, not a toy reimplementation.
+**One-Click Area** is the headline: click inside a room and the linework bounds it, the polygon traces itself, and the vertices snap to true corners. It reads the drawing the way an estimator does — **hatching and poché don't fool it**: tile grids, plank lines, and section fills are classified as pattern, not wall, so a click inside a fully hatched room still traces the room (and a misread can never make the result worse than the strict fill — it escalates only when the strict pass comes back trapped). **Scanned plans work too**: when a sheet is a scan (no vector linework), the engine reads the rendered pixels instead — adaptive thresholding with a gap-bridging pass — and the same flood/trace machinery runs on the scan ink; the result is badged so you verify the edges before Create. Plus the full manual kit — **Area, Rectangle, Linear, Surface-Area (walls), Count,** and **Deduct** (for columns, voids, and openings). This is the same engine pulled out of a commercial estimating app, not a toy reimplementation.
 
 <div align="center">
 <img src="docs/img/one-click-area.gif" alt="One-Click Area on a real finish plan: one click inside a patient room and the room traces itself — 154.6 SF, committed on Enter" width="820"/>
