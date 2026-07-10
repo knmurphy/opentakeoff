@@ -109,8 +109,12 @@ Classify conditions along your own dimension — **CSI Division**, bid package, 
 | `multiplier` | × N on every quantity |
 | `waste %` | Added on top in the Report (SF + LF; never EA) |
 
+### Zone check
+Arm **Zone** in the toolbar (Aids cluster) and trace a region — an apartment, a wing, a phase — the way you'd trace a deduct; **⏎, double‑click, or Finish** closes it. A panel lists every condition whose shapes sit inside (counted by their **center point**, same sheet only — counted shapes glow cobalt), with quantities and each condition's **materials scaled to the zone**, computed by the same rules as the Report. It's a reading, not a takeoff: nothing is saved — redraw replaces the zone; `Esc` or switching tools clears it.
+
 ### Plan set & sheets
 - **Gallery** (`G`) — the visual sheet picker; open one or several sheets side‑by‑side.
+- **Sheet levels (multi‑floor sets)** — in the gallery, select sheets and hit **Assign level…** ("L1", "Level 2", "Garage" — empty clears). The gallery groups by level with unassigned sheets last, each card wears its level chip, and open tabs plus the sheet‑nav chip carry the label. Levels save with the project; the report's by‑sheet ordering and the Marked Set keep their file/page order.
 - **Per‑sheet scale** — plan sets are never one uniform scale; set it per sheet.
 - **Regroup** — restore the last side‑by‑side composition in one click after scaling sheets individually.
 - **Hi‑Res** — crisper rendering when zoomed in (per sheet, per browser). Does **not** change quantities.

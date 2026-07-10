@@ -32,6 +32,7 @@ import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, getAccessToken } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { shapesInZone } from "../lib/zone.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
@@ -134,8 +135,11 @@ export default function TakeoffCanvas() {
   const [galleryLabels, setGalleryLabels] = useState({}); // sheetKey → title-block number, all files
   const [pageLabels, setPageLabels] = useState({}); // { pageNum: "A003" } from the title block
   const [sheetGroup, setSheetGroup] = useState([]);   // sheetKeys shown side-by-side; [] = single-sheet mode
+  const [sheetLevels, setSheetLevels] = useState({}); // sheetKey → level label ("L1") — persisted (additive `sheet_levels` key); groups the gallery for multi-floor sets
   const [lastGroup, setLastGroup] = useState([]);     // most recent side-by-side composition — "Regroup" restores it
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
+  const [zoneCheck, setZoneCheck] = useState(null);   // ephemeral zone-check region {key, pts (norm)} — never persisted (buildPayload doesn't read it)
+  const [zoneExpand, setZoneExpand] = useState(null); // zone panel: condition id with materials expanded
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
   // Docked LEFT panel — one at a time, never overlapping: null | "markup" | "stamp" | "rfi".
@@ -410,11 +414,12 @@ export default function TakeoffCanvas() {
     if (!sheetGroup.length && key === sheetKey) { const nb = next[Math.min(Math.max(i, 0), next.length - 1)]; if (nb) goToSheet(nb); }
   }
   const tabLabel = (k) => {
-    if (galleryLabels[k]) return galleryLabels[k];
+    const lvl = sheetLevels[k] ? `${sheetLevels[k]} · ` : "";   // assigned floor/level rides every tab label
+    if (galleryLabels[k]) return lvl + galleryLabels[k];
     const t = parseSheetKey(k);
-    if (t.file === active && pageLabels[t.page]) return pageLabels[t.page];
+    if (t.file === active && pageLabels[t.page]) return lvl + pageLabels[t.page];
     const base = t.file.replace(/\.pdf$/i, "");
-    return t.page > 1 ? `${base} · ${t.page}` : base;
+    return lvl + (t.page > 1 ? `${base} · ${t.page}` : base);
   };
 
   // ── panels: the ONE rendering model — single-sheet mode is a group of one ──
@@ -599,6 +604,13 @@ export default function TakeoffCanvas() {
     // select / edit / delete / move / RFI-link flows (all keyed on m.id) work on them.
     setMarkups(Array.isArray(a.markups) ? a.markups.map((m) => ({ ...m, id: m.id || uid("mk"), rfi_id: m.rfi_id || "" })) : []);
     setRfis(Array.isArray(a.rfis) ? a.rfis : []);   // additive — old saves without rfis load as []
+    // additive `sheet_levels` key (multi-floor gallery grouping) — old payloads
+    // lack it and must clear any pre-load levels (the sheet_group else-clear
+    // rule: a snapshot load must not inherit the replaced project's levels).
+    // String labels only, mirroring the client_info string-fields gate.
+    setSheetLevels(Object.fromEntries(Object.entries(
+      a.sheet_levels && typeof a.sheet_levels === "object" && !Array.isArray(a.sheet_levels) ? a.sheet_levels : {}
+    ).filter(([, v]) => typeof v === "string" && v)));
     const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
     setSheetGroup(grp);
     const lg = Array.isArray(a.last_group) ? a.last_group.slice(0, MAX_GROUP) : grp;
@@ -1045,7 +1057,7 @@ export default function TakeoffCanvas() {
     // delete already prunes) and omit the key entirely when nothing survives,
     // mirroring the condition_columns omit-when-empty convention.
     const pinned = palette.filter((id) => conditions.some((c) => c.id === id));
-    return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs };
+    return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
   };
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
@@ -1069,7 +1081,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, palette, scales, scaleSources, markups, rfis, sheetGroup, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, palette, scales, scaleSources, markups, rfis, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1180,7 +1192,7 @@ export default function TakeoffCanvas() {
       if (menuDepthRef.current > 0) return;
       if (e.key === "Enter") {
         if (tool === "oneclick" && proposal?.regions.length) { e.preventDefault(); createProposal(); return; }
-        const ok = ((tool === "area" || tool === "deduct") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
+        const ok = ((tool === "area" || tool === "deduct" || tool === "zone") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
         if (ok) { e.preventDefault(); finishShape(); }
         return;
       }
@@ -1243,7 +1255,7 @@ export default function TakeoffCanvas() {
         // tool's points, on-screen or hidden
         else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
         else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); } }
+      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); setZoneCheck(null); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1263,6 +1275,9 @@ export default function TakeoffCanvas() {
   // tool === "check", so surviving state would sit invisible and resurface —
   // stale points AND stale stated value — whenever K is pressed again.
   useEffect(() => { if (tool !== "check" && (check.length || checkStated)) { setCheck([]); setCheckStated(""); } }, [tool]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the zone tool clears the zone the same way — the outline and its
+  // readout are a reading of the armed tool, never surviving state.
+  useEffect(() => { if (tool !== "zone") { setZoneCheck(null); setZoneExpand(null); } }, [tool]);
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
@@ -1306,7 +1321,7 @@ export default function TakeoffCanvas() {
     if (tool === "calibrate") setCalib((c) => (c.length >= 2 ? [p] : [...c, p]));
     else if (tool === "check") setCheck((c) => (c.length >= 2 ? [p] : [...c, p]));
     else if (tool === "oneclick") oneClickAt(p, !!(ev && ev.altKey));
-    else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") setPoly((q) => [...q, p]);
+    else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") setPoly((q) => [...q, p]);
     else if (tool === "count") commitCount(p);
     else if (tool === "rect" || tool === "deduct-rect") {
       if (poly.length === 0) setPoly([p]);
@@ -1541,8 +1556,8 @@ export default function TakeoffCanvas() {
       }
     }
 
-    // rubber-band preview: last point → cur (area/deduct); rect preview: corner → cur
-    const drawing = (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface");
+    // rubber-band preview: last point → cur (area/deduct/zone); rect preview: corner → cur
+    const drawing = (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone");
 
     // polar tracking: endpoint snap wins (osnap beats polar); otherwise pull the
     // rubber band onto the 45° family. ⇧ forces the lock at any angle. The click
@@ -2540,7 +2555,19 @@ export default function TakeoffCanvas() {
     if (!centerOnMarkup(m)) pendingFlyRef.current = m;
   }
 
-  function finishShape() { if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]); }
+  function finishShape() {
+    if (tool === "zone") {
+      // ephemeral: classify, show, never save. Belongs to the panel of its first point.
+      if (poly.length >= 3) {
+        const tp = panelAt(poly[0][0]);
+        setZoneCheck({ key: tp.key, pts: poly.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]) });
+        setZoneExpand(null);
+      }
+      setPoly([]);
+      return;
+    }
+    if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]);
+  }
   function deleteSelected() { if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); } }
   function reassignSelected(condId) { if (selectedId) setShapes((ss) => ss.map((s) => (s.id === selectedId ? { ...s, condition_id: condId } : s))); }
 
@@ -2814,6 +2841,14 @@ export default function TakeoffCanvas() {
   // memoized panel, so its identity must only change when the totals can.
   const visRows = useMemo(() => conditionTotals(conditions, visibleShapes), [conditions, visibleShapes]);
   const visRowById = useMemo(() => new Map(visRows.map((r) => [r.id, r])), [visRows]);
+  // Zone check: the SAME conditionTotals rules on the shapes whose center point
+  // sits inside the traced zone (lib/zone.js) — third scope of the one role math.
+  const zoneShapes = useMemo(() => (zoneCheck ? shapesInZone(shapes, zoneCheck) : null), [shapes, zoneCheck]);
+  const zoneRows = useMemo(
+    () => (zoneShapes ? conditionTotals(conditions, zoneShapes).filter((r) => r.shape_count > 0) : null),
+    [conditions, zoneShapes]
+  );
+  const zoneIds = useMemo(() => (zoneShapes ? new Set(zoneShapes.map((sh) => sh.id)) : null), [zoneShapes]);
   const condRow = visRowById.get(activeCond);
   const condTotal = condRow?.floor_sf || 0;
   const lfTotal = condRow?.lf || 0;
@@ -2853,7 +2888,7 @@ export default function TakeoffCanvas() {
   };
   const measureActive = MEASURE_TOOLS.some((t) => t.id === tool);
   const faceTool = MEASURE_TOOLS.find((t) => t.id === (measureActive ? tool : lastMeasureRef.current)) || MEASURE_TOOLS[0];
-  const finishOk = ((tool === "area" || tool === "deduct") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
+  const finishOk = ((tool === "area" || tool === "deduct" || tool === "zone") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
 
   // panel-toggle for the right-edge rail — square like the zoom cluster, count as a
   // tiny mono line under the icon. Lives on the canvas, costs the toolbar zero rows.
@@ -3111,13 +3146,15 @@ export default function TakeoffCanvas() {
   // group/ungroup and the gallery all live in its dropdown. Ungroup/Regroup
   // are sheet-set operations, so they move in here instead of appearing
   // mid-row and shifting everything after them.
+  // assigned floor/level rides the sheet chip + page entries (sheet key: page 1 is the bare file name)
+  const levelOfPage = (n) => sheetLevels[n > 1 ? `${active}#${n}` : active] || "";
   const sheetChipLabel = sheetGroup.length
     ? `${sheetGroup.length} sheets side-by-side`
-    : `${pageLabels[page] || (pageCount > 1 ? `Sheet ${page}` : active)}${pageCount > 1 ? ` · ${page}/${pageCount}` : ""}`;
+    : `${levelOfPage(page) ? `${levelOfPage(page)} · ` : ""}${pageLabels[page] || (pageCount > 1 ? `Sheet ${page}` : active)}${pageCount > 1 ? ` · ${page}/${pageCount}` : ""}`;
   const sheetMenuItems = [];
   if (!sheetGroup.length && pageCount > 1) {
     sheetMenuItems.push({ section: "Sheets in this set" });
-    for (let n = 1; n <= pageCount; n++) sheetMenuItems.push({ id: `pg-${n}`, label: pageLabels[n] || `Sheet ${n}`, shortcut: `${n}/${pageCount}`, active: n === page, onSelect: () => setPage(n) });
+    for (let n = 1; n <= pageCount; n++) sheetMenuItems.push({ id: `pg-${n}`, label: `${levelOfPage(n) ? `${levelOfPage(n)} · ` : ""}${pageLabels[n] || `Sheet ${n}`}`, shortcut: `${n}/${pageCount}`, active: n === page, onSelect: () => setPage(n) });
   }
   if (!sheetGroup.length && sheets.length > 1) {
     sheetMenuItems.push({ section: "Files" });
@@ -3338,6 +3375,11 @@ export default function TakeoffCanvas() {
         </>)}
         {vRule}
         {cluster("Aids", <>
+          <button onClick={() => setTool((t) => (t === "zone" ? "select" : "zone"))}
+            title="Zone check — trace a region (an apartment, a wing) to read every condition's quantities inside it, materials included. Nothing is saved; the outline clears when you leave the tool."
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "zone" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "zone" ? "var(--cobalt)" : "transparent", color: tool === "zone" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="zone" size={15} />Zone
+          </button>
           <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
             <Icon name="snap" size={15} />Snap
@@ -3691,7 +3733,7 @@ export default function TakeoffCanvas() {
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
-          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface") finishShape(); else if (tool === "select") editMarkupAt(e); }}
+          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
@@ -3949,6 +3991,21 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })}
+                    {/* zone check — transparent dashed region + a cobalt trace on every counted shape */}
+                    {zoneCheck && zoneCheck.key === p.key && (
+                      <g style={{ pointerEvents: "none" }}>
+                        <polygon points={zoneCheck.pts.map(([nx, ny]) => `${nx * p.img.w},${ny * p.img.h}`).join(" ")}
+                          fill="rgba(31,63,199,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale}
+                          strokeDasharray={`${7 / tf.scale} ${5 / tf.scale}`} />
+                        {zoneIds && pShapes.filter((sh) => zoneIds.has(sh.id)).map((sh) => (
+                          (sh.verts_norm || []).length >= 2
+                            ? <polyline key={"zc" + sh.id} points={sh.verts_norm.map(([nx, ny]) => `${nx * p.img.w},${ny * p.img.h}`).join(" ")}
+                                fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={3.5 / tf.scale} strokeLinejoin="round" />
+                            : <circle key={"zc" + sh.id} cx={(sh.verts_norm?.[0]?.[0] || 0) * p.img.w} cy={(sh.verts_norm?.[0]?.[1] || 0) * p.img.h}
+                                r={7 / tf.scale} fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={2.5 / tf.scale} />
+                        ))}
+                      </g>
+                    )}
                     {/* One-Click proposal preview — dashed cobalt selection, red dashed carve.
                         Handles (corner diamonds + edge grips) rise on the hovered/selected
                         region: drag a corner, drag an edge to move the whole line, Shift-click
@@ -3996,7 +4053,7 @@ export default function TakeoffCanvas() {
               <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               {poly.length >= 2 && (tool === "linear" || tool === "surface"
                 ? <polyline points={poly.map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
-                : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} />)}
+                : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : tool === "zone" ? "rgba(31,63,199,.06)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} strokeDasharray={tool === "zone" ? `${7 / tf.scale} ${5 / tf.scale}` : undefined} />)}
               {/* bold the most recent segment so you see where you just clicked */}
               {poly.length >= 2 && (
                 <line x1={poly[poly.length - 2][0]} y1={poly[poly.length - 2][1]} x2={poly[poly.length - 1][0]} y2={poly[poly.length - 1][1]}
@@ -4091,9 +4148,10 @@ export default function TakeoffCanvas() {
           </div>
         )}
 
-        {/* live readout — top-right */}
-        <div style={{ position: "absolute", right: 14, top: 14, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, padding: "12px 16px", minWidth: 200, boxShadow: "0 4px 18px rgba(0,0,0,.12)", fontVariantNumeric: "tabular-nums", zIndex: 6 }}>
-          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6 }}>{aCond?.finish_tag || "No condition"}</div>
+        {/* live readout — top-right. Height is capped short of the panel rail's centered
+            band (same right:14 column) so populated totals never cover the rail buttons. */}
+        <div style={{ position: "absolute", right: 14, top: 14, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, padding: "12px 16px", minWidth: 200, maxWidth: 260, maxHeight: "calc(50% - 110px)", overflowY: "auto", boxShadow: "0 4px 18px rgba(0,0,0,.12)", fontVariantNumeric: "tabular-nums", zIndex: 6 }}>
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool === "zone" ? "Zone check" : (aCond?.finish_tag || "No condition")}</div>
           {tool === "oneclick" && proposal?.regions.length ? (() => {
             const pos = proposal.regions.filter((r) => r.kind === "pos");
             const neg = proposal.regions.filter((r) => r.kind === "neg");
@@ -4116,6 +4174,11 @@ export default function TakeoffCanvas() {
                 </>
               ) : <div style={{ fontSize: 12.5, color: "var(--c-danger)" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition editor</div>;
             })()
+          ) : tool === "zone" && poly.length >= 1 ? (
+            <>
+              {liveArea != null && poly.length >= 3 && <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF in zone</span></div>}
+              <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>⏎, double-click, or the Finish button closes the zone and lists everything inside · Esc cancels</div>
+            </>
           ) : liveArea != null && poly.length >= 3 ? (
             <>
               <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "var(--c-danger)" : "var(--ink)" }}>{tool === "deduct" ? "−" : ""}{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF</span></div>
@@ -4123,7 +4186,7 @@ export default function TakeoffCanvas() {
               {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {num(livePerim * condH)} SF vert · {num((liveArea * condH) / 27)} CY</div>}
             </>
           ) : (
-            <div style={{ fontSize: 12.5, opacity: 0.6 }}>{!unitsPerPx ? "Set scale first" : !activeCond ? "Pick a condition" : tool === "oneclick" ? "Click inside a room — it selects itself" : tool === "surface" ? "Trace the wall run" : "Click to trace an area"}</div>
+            <div style={{ fontSize: 12.5, opacity: 0.6 }}>{!unitsPerPx ? "Set scale first" : tool === "zone" ? "Trace a region (an apartment, a wing) — ⏎ closes it and lists every condition inside" : !activeCond ? "Pick a condition" : tool === "oneclick" ? "Click inside a room — it selects itself" : tool === "surface" ? "Trace the wall run" : "Click to trace an area"}</div>
           )}
           {selShape?.measure_role === "surface_area" && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }} title="Height for THIS wall only — full-height tile here, 4-ft wainscot there, same condition. ↺ returns to the condition height.">
@@ -4149,6 +4212,52 @@ export default function TakeoffCanvas() {
           {condTotal === 0 && lfTotal === 0 && countTotal === 0 && wallTotal === 0 && borderTotal === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginTop: 2 }}>—</div>}
           <div style={{ fontSize: 10.5, opacity: 0.45, marginTop: 6 }}>{visibleShapes.length} shapes on {groupKeys.length > 1 ? `${groupKeys.length} sheets` : "sheet"} · zoom {(tf.scale * 100).toFixed(0)}%</div>
         </div>
+
+        {/* zone check results — ephemeral, clears with the tool/outline. Docked at
+            right:56 so it never covers the panel rail (right:14, 34px wide). */}
+        {zoneRows && (
+          <div style={{ position: "absolute", right: 56, top: 14, width: 300, maxHeight: "calc(100% - 28px)", overflowY: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)" }}>
+              <b style={{ fontSize: 12.5 }}>Zone check</b>
+              <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--ink-muted)" }}>nothing saved</span>
+              <button onClick={() => setZoneCheck(null)} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "var(--ink)" }}>×</button>
+            </div>
+            {zoneRows.length === 0 && (
+              <div style={{ padding: "10px 12px", color: "var(--ink-muted)", fontSize: 11.5 }}>No takeoffs inside this zone on this sheet.</div>
+            )}
+            {zoneRows.map((zr) => {
+              const parts = [];
+              if (zr.floor_sf) parts.push(`${num(zr.floor_sf)} SF`);
+              if (zr.wall_sf) parts.push(`${num(zr.wall_sf)} SF wall`);
+              if (zr.border_sf) parts.push(`${num(zr.border_sf)} SF border`);
+              if (zr.lf) parts.push(`${num(zr.lf)} LF`);
+              if (zr.ea) parts.push(`${num(zr.ea, 0)} EA`);
+              const open = zoneExpand === zr.id;
+              return (
+                <div key={zr.id} style={{ padding: "8px 12px", borderBottom: "1px solid var(--ink-faint)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={zr.hatch || "solid"} line={zr.color} fill={zr.fill} /></span>
+                    <b style={{ fontFamily: "var(--f-mono)", fontSize: 11.5 }}>{zr.finish_tag || "—"}</b>
+                    <span style={{ marginLeft: "auto", fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink)" }}>{parts.join(" · ") || "—"}</span>
+                  </div>
+                  {zr.materials.length > 0 && (
+                    <button onClick={() => setZoneExpand(open ? null : zr.id)}
+                      style={{ marginTop: 4, padding: 0, border: "none", background: "none", cursor: "pointer", fontSize: 10.5, color: "var(--ink-muted)" }}>
+                      {open ? "▾" : "▸"} materials · {zr.materials.length}
+                    </button>
+                  )}
+                  {open && zr.materials.map((m, i) => (
+                    <div key={i} style={{ display: "flex", gap: 8, marginTop: 3, marginLeft: 12, fontSize: 11, color: "var(--ink-secondary)" }}>
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+                      <span style={{ fontFamily: "var(--f-mono)" }}>{num(m.qty)} {m.unit}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            <div style={{ padding: "7px 12px", fontSize: 10, color: "var(--ink-muted)" }}>Shapes counted by their center point · same sheet only · counted shapes glow cobalt.</div>
+          </div>
+        )}
 
         {/* panel rail — markup/takeoffs toggles on the right edge (zoom-cluster
             style). Moved out of the toolbar so it never wraps a third row. The
@@ -4202,6 +4311,12 @@ export default function TakeoffCanvas() {
           thumbCacheRef={thumbCacheRef} busyRef={statusRef}
           openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
           onAddFiles={handleFiles}
+          levels={sheetLevels}
+          onAssignLevel={(keys, label) => setSheetLevels((m) => {
+            const next = { ...m };
+            for (const k of keys) { if (label) next[k] = label; else delete next[k]; }
+            return next;
+          })}
           onAddFromDrive={cloudMode ? () => setView("picker") : undefined}
           onCloseProject={cloudMode ? closeProject : undefined}
           onBrowseProjects={cloudMode ? browseProjects : undefined}
