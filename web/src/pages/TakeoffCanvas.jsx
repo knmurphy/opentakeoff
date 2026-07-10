@@ -1468,7 +1468,10 @@ export default function TakeoffCanvas() {
         const a = pts[i], b = pts[j];
         if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
           if (e.shiftKey) {
-            const nv = [(p[0] - selSp.xOffset) / selSp.img.w, p[1] / selSp.img.h];
+            // insert at the EXACT edge midpoint (like One-Click's oneClickHandleAt),
+            // not the click point — click imprecision can't kink the edge before drag
+            const va = sel.verts_norm[i], vb = sel.verts_norm[j];
+            const nv = [(va[0] + vb[0]) / 2, (va[1] + vb[1]) / 2];
             setShapes((ss) => ss.map((s) => {
               if (s.id !== sel.id) return s;
               const vn = [...s.verts_norm.slice(0, i + 1), nv, ...s.verts_norm.slice(i + 1)];
