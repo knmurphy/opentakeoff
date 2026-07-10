@@ -7,7 +7,9 @@
 // chip), items may be `{ section }`, `"divider"`, `{ note }` (muted footnote),
 // `{ custom }` (arbitrary row, e.g. the fill-sensitivity slider — interacting
 // inside it never closes the menu), and `{ checked, stayOpen }` checkable
-// items that flip in place (render menu).
+// items that flip in place (render menu). An item may carry `onHover(bool)` to
+// preview its effect while pointed at (the scale menu's plan-says item shows
+// the calibrated guide bar on the sheet behind the open menu).
 import React, { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 
@@ -91,8 +93,8 @@ export default function ToolMenu({ face, active = false, accent = "cobalt", titl
                   borderLeft: it.active ? "2px solid var(--cobalt)" : "2px solid transparent",
                   opacity: dis ? 0.38 : 1, color: fg,
                 }}
-                onMouseEnter={(e) => { if (!dis && !it.active) e.currentTarget.style.background = "var(--paper-shadow)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = it.active ? "var(--paper-cream)" : "transparent"; }}>
+                onMouseEnter={(e) => { if (!dis && !it.active) e.currentTarget.style.background = "var(--paper-shadow)"; if (!dis) it.onHover?.(true); }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = it.active ? "var(--paper-cream)" : "transparent"; if (!dis) it.onHover?.(false); }}>
                 {checkable && <span style={{ display: "inline-flex", width: 15, justifyContent: "center", color: "var(--c-positive)", visibility: it.checked ? "visible" : "hidden" }}><Icon name="check" size={14} /></span>}
                 {it.icon && <span style={{ display: "inline-flex", width: 17, justifyContent: "center", color: it.tint || fg }}><Icon name={it.icon} size={16} /></span>}
                 <span style={{ flex: 1, fontFamily: "var(--f-body)", fontSize: 13, fontWeight: it.active ? 600 : 400 }}>{it.label}</span>
