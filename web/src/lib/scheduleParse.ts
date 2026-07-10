@@ -148,7 +148,7 @@ const FALLBACK_PALETTE = ["#2f7d54", "#2563eb", "#9333ea", "#be185d", "#b8860b",
 // Category → default hatch + waste so an imported floor reads like a floor and a
 // base like a base without the estimator touching the appearance editor.
 const CAT_HATCH: Record<Category, string> = { floor: "solid", base: "horiz", wall: "grid", transition: "vert", ceiling: "solid", other: "solid" };
-const CAT_WASTE: Record<Category, number> = { floor: 5, base: 5, wall: 10, transition: 0, ceiling: 0, other: 0 };
+const CAT_WASTE: Record<Category, number> = { floor: 5, base: 10, wall: 10, transition: 0, ceiling: 0, other: 0 };
 
 export type ConditionSeed = {
   finish_tag: string;

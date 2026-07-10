@@ -24,10 +24,20 @@ const GROUPS = [
   { key: "other", label: "Other" },
 ];
 
-export default function ImportSchedulePanel({ rows = [], existing = new Set(), onCreate, onClose }) {
+export default function ImportSchedulePanel({ rows = [], existing = new Set(), palette = [], startIndex = 0, onCreate, onClose }) {
   // a row is selectable only if its code isn't already a condition
   const canPick = (r) => !existing.has(r.finish_tag);
   const [picked, setPicked] = useState(() => new Set(rows.filter((r) => r.suggested && canPick(r)).map((r) => r.finish_tag)));
+
+  // preview the line color each new condition will actually get: the parent
+  // assigns palette[startIndex + n] over the creatable rows in this order, so
+  // mirror that here (in-use rows are skipped, matching create).
+  const colorByTag = useMemo(() => {
+    const m = new Map();
+    let n = startIndex;
+    for (const r of rows) if (canPick(r) && palette.length) m.set(r.finish_tag, palette[n++ % palette.length]);
+    return m;
+  }, [rows, palette, startIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const grouped = useMemo(() => {
     const by = new Map(GROUPS.map((g) => [g.key, []]));
@@ -75,7 +85,7 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), o
                   return (
                     <label key={r.finish_tag} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 14px 5px 26px", cursor: inUse ? "default" : "pointer", opacity: inUse ? 0.5 : 1 }}>
                       <input type="checkbox" checked={on && !inUse} disabled={inUse} onChange={() => toggle(r.finish_tag)} />
-                      <span style={{ width: 12, height: 12, flex: "0 0 auto", background: "var(--cobalt)", border: "1px solid var(--ink-faint)" }} />
+                      <span style={{ width: 12, height: 12, flex: "0 0 auto", background: colorByTag.get(r.finish_tag) || "var(--ink-faint)", border: "1px solid var(--ink-faint)" }} />
                       <span style={{ fontFamily: "var(--f-mono)", fontWeight: 600, minWidth: 58 }}>{r.finish_tag}</span>
                       <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {r.description || <span style={{ color: "var(--ink-muted)" }}>—</span>}
