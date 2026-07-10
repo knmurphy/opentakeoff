@@ -89,6 +89,44 @@ async function verifyGoogleUser(authHeader) {
   return { ok: true, email };
 }
 
+// Typed failure carrier so the handler can tell WHY the read failed (Gemini HTTP
+// status vs. our own JSON-parse of the model output) and log/respond distinctly.
+// `kind` is "http" (Gemini returned !ok) or "parse" (we couldn't parse its JSON).
+class ReadError extends Error {
+  constructor(kind, { status, detail } = {}) {
+    super(`read failed (${kind}${status ? ` ${status}` : ""})`);
+    this.kind = kind;
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+// Map a Gemini HTTP status to the response we send the CLIENT and the line we log
+// for the OPERATOR. Pure (status → decision) so it's node-testable. Key rule: a
+// Gemini key rejection (401/403) is an OPERATOR problem, so it must NOT surface as
+// a 401/403 to the client — that code path shows "your sign-in doesn't have
+// access," which is wrong and misleading. Only a genuine rate limit (429) is
+// propagated as-is; everything else collapses to a 502 the way it always did, but
+// now with a distinct server log so quota exhaustion is distinguishable from an
+// outage or a bad key.
+export function mapGeminiHttpFailure(status) {
+  if (status === 429) {
+    return { statusCode: 429, clientMsg: "The schedule reader is rate limited right now — try again shortly.", logLevel: "warn", logMsg: "gemini rate-limited (429)" };
+  }
+  if (status === 401 || status === 403) {
+    return { statusCode: 502, clientMsg: "couldn't read the schedule", logLevel: "error", logMsg: `GEMINI_API_KEY rejected by Gemini (${status}) — check/rotate the key` };
+  }
+  return { statusCode: 502, clientMsg: "couldn't read the schedule", logLevel: "error", logMsg: `gemini ${status}` };
+}
+
+// Trim a Gemini error body to a bounded, single-line snippet safe to log. Gemini's
+// error JSON never contains our API key (the key rides in the URL query string,
+// which we deliberately never log), but cap length and strip newlines anyway so a
+// large/odd upstream body can't flood or fracture the log line.
+function logSnippet(text) {
+  return (text || "").replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
 async function readSchedule(imageB64) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
@@ -99,10 +137,21 @@ async function readSchedule(imageB64) {
       generationConfig: { responseMimeType: "application/json", responseSchema: RESPONSE_SCHEMA },
     }),
   });
-  if (!res.ok) throw new Error(`gemini ${res.status}`);
+  if (!res.ok) {
+    // Read the error body best-effort for the log; never surface it to the client.
+    const detail = await res.text().catch(() => "");
+    throw new ReadError("http", { status: res.status, detail: logSnippet(detail) });
+  }
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-  const parsed = JSON.parse(text);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // The model returned non-JSON despite responseMimeType — a model-output
+    // problem, distinct from an HTTP failure, so the operator can tell them apart.
+    throw new ReadError("parse", { detail: logSnippet(text) });
+  }
   return Array.isArray(parsed.rows) ? parsed.rows : [];
 }
 
@@ -126,7 +175,22 @@ export async function handler(event) {
   try {
     const rows = await readSchedule(imageB64);
     return json(200, { rows });
-  } catch {
+  } catch (err) {
+    // Distinguish the failure for the operator (log) and the client (status):
+    //   - Gemini HTTP failure → mapGeminiHttpFailure (429 propagates; key/5xx → 502)
+    //   - model output unparseable → its own 502 + distinct log
+    //   - anything else (network, our own bug) → generic 502
+    if (err instanceof ReadError && err.kind === "http") {
+      const m = mapGeminiHttpFailure(err.status);
+      const line = `parse-schedule: ${m.logMsg}${err.detail ? ` — ${err.detail}` : ""}`;
+      if (m.logLevel === "warn") console.warn(line); else console.error(line);
+      return json(m.statusCode, { error: m.clientMsg });
+    }
+    if (err instanceof ReadError && err.kind === "parse") {
+      console.error(`parse-schedule: couldn't parse Gemini JSON output${err.detail ? ` — ${err.detail}` : ""}`);
+      return json(502, { error: "couldn't read the schedule" });
+    }
+    console.error(`parse-schedule: read failed — ${err?.message || err}`);
     return json(502, { error: "couldn't read the schedule" });
   }
 }
