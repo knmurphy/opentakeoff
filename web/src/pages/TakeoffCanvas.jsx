@@ -41,24 +41,18 @@ import AccountChip from "../components/AccountChip.jsx";
 import { projectHomeFolderId } from "../lib/projectHome.js";
 import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 // Pure data constants (render/zoom budgets, snap tuning, tool descriptors,
-// flooring starter conditions) live in lib/canvasConstants.js.
+// flooring starter conditions) live in lib/canvasConstants.js; the pure
+// module-scope helpers (autoRenderScale, invertCanvasPixels, uid, clamp,
+// isDangerMsg, instantiateTemplate, seedConditions) in lib/canvasUtil.js.
 import {
-  MIN_SCALE, MAX_SCALE, PANEL_GAP,
-  QUALITY_CEILING, MAX_CANVAS_DIM, MAX_CANVAS_AREA, MAX_PANEL_AREA,
+  PANEL_GAP, MAX_CANVAS_DIM, MAX_CANVAS_AREA,
   DETAIL_ENGAGE, DETAIL_MARGIN, SYNC_MS, GESTURE_MS, SNAP_CELL,
-  MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, FLOORING_DEFAULTS,
+  MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS,
 } from "../lib/canvasConstants.js";
+import { autoRenderScale, invertCanvasPixels, uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-// Largest pdf.js render scale a wPt×hPt-point page can use within the base budget;
-// never below the baseline RENDER_SCALE, never above the ceiling.
-const autoRenderScale = (wPt, hPt) => {
-  if (!(wPt > 0 && hPt > 0)) return RENDER_SCALE;
-  const byDim  = Math.min(MAX_CANVAS_DIM / wPt, MAX_CANVAS_DIM / hPt);
-  const byArea = Math.sqrt(MAX_PANEL_AREA / (wPt * hPt));
-  return Math.max(RENDER_SCALE, Math.min(QUALITY_CEILING, byDim, byArea));
-};
 // Hatch templates, palette, NO_FILL, and the HatchPattern/HatchSwatch pieces
 // live in components/hatches.jsx — shared with the TakeoffsPanel.
 
@@ -86,47 +80,8 @@ const PANEL_DEFAULTS = { w: 320, collapsed: true, strip: false, az: false, group
 // not the per-user panel prefs. Capped at 9 so it maps 1:1 onto the 1–9 hotkeys.
 const PALETTE_MAX = 9;
 
-// Invert a canvas's pixels in place: one difference-with-white pass (an
-// involution — applying it again flips back). This is how the negative/dark
-// view works: pixel inversion costs one pass at draw time, where a CSS
-// `filter: invert(1)` would make every sheet canvas a permanently-filtered
-// compositor layer re-processed on every frame — with several panels open on
-// a hi-Hz display that chain overloads the compositor (layer eviction =
-// flicker/void glitches).
-function invertCanvasPixels(cv) {
-  if (!cv || !cv.width || !cv.height) return;
-  const ctx = cv.getContext("2d");
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);   // raw device px — ignore any render transform
-  ctx.globalCompositeOperation = "difference";
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.restore();
-}
-
-let _idn = 0;
-const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
-const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
-// shared by the status-bar tone AND the auto-dismiss skip (below) — one
-// definition of "this message is bad news" for both readers
-const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
 // Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
 // hit-testing) live in lib/geometry.js — byte-identical with Spline's copy.
-
-// A template is a condition minus ids (finish_tag, colors, hatch, waste,
-// H/T params, materials) — instantiation mints fresh condition/material ids.
-const instantiateTemplate = (t) => ({
-  id: uid("cnd"), finish_tag: t.finish_tag || "?",
-  color: t.color || PALETTE[0], fill: t.fill ?? t.color ?? PALETTE[0],
-  hatch: t.hatch || "solid", multiplier: 1, waste_pct: Number(t.waste_pct) || 0,
-  ...(t.height_ft != null ? { height_ft: t.height_ft } : {}),
-  ...(t.thickness_in != null ? { thickness_in: t.thickness_in } : {}),
-  materials: (t.materials || []).map((m) => ({ round: true, ...m, id: uid("mat") })),
-});
-// Fresh-workspace seeding reads the user's template library first; the
-// built-in flooring defaults are only the empty-library fallback. Both paths
-// run instantiateTemplate — ONE condition constructor, no drift.
-const seedConditions = (library) => (library?.length ? library : FLOORING_DEFAULTS).map(instantiateTemplate);
 
 // The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
 // live in components/TakeoffsPanel.jsx — the panel is their only surface now.
