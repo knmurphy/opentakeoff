@@ -30,6 +30,7 @@ import { attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { num } from "../lib/num.js";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
+import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutCoverageSfPerBag } from "../lib/coverage.js";
 
 export const PANEL_MIN_W = 240;
 export const PANEL_MAX_W = 560;
@@ -56,17 +57,39 @@ const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-f
 const btnAddFull = { width: "100%", padding: "6px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 };
 const btnClearX = { border: "none", background: "none", color: "var(--ink-muted)", cursor: "pointer", fontSize: 13, padding: 0 };
 
-// Adhesive coverage by trowel notch, SF per gallon. Typical wood-adhesive range is
-// ~40–70 SF/gal: a wider/coarser notch lays more glue and covers less per gallon.
-// Picking a notch fills the coverage rate + notes it. Always verify against the
-// current product data sheet for your subfloor + flooring type.
-const TROWEL_PRESETS = [
-  { label: "fine",     per: 70 },
-  { label: "medium",   per: 58 },
-  { label: "standard", per: 50 },
-  { label: "coarse",   per: 40 },
-];
-const isAdhesive = (name) => /adhes|glue|bond|mastic/i.test(name || "");
+// Per-material-kind coverage presets (adhesive trowel notches, mortar trowels)
+// and the grout-from-tile-geometry calculator live in lib/coverage.js —
+// vendor-neutral, generic rates; always verify against the product data sheet.
+
+// Inches → drawing-style fraction (0.375 → "3/8", 1.25 → "1 1/4"); falls back
+// to the decimal when the value isn't on the 1/32″ grid.
+function inFrac(v) {
+  const n32 = Math.round(v * 32);
+  if (!(n32 > 0) || Math.abs(v * 32 - n32) > 1e-6) return String(v);
+  let n = n32, d = 32;
+  while (n % 2 === 0 && d % 2 === 0) { n /= 2; d /= 2; }
+  const whole = Math.floor(n / d), rem = n - whole * d;
+  if (!rem) return String(whole);
+  return whole ? `${whole} ${rem}/${d}` : `${rem}/${d}`;
+}
+const groutNote = (g) => `${g.tileL}×${g.tileW}×${inFrac(g.tileT)}″ @ ${inFrac(g.joint)}″ · ${g.bagLbs} lb`;
+
+// Coverage preset picker — shared by the condition-line editor and the
+// Materials tab so a library "Adhesive" and an attached line offer the same
+// notch/roller list. Renders nothing when the kind has no preset table.
+function CoveragePresetSelect({ material: m, onPick }) {
+  const presets = (m.basis || "area") === "area" ? MATERIAL_PRESETS[materialKind(m)] : undefined;
+  if (!presets) return null;
+  return (
+    <select name="coverage-preset" value={presets.some((t) => t.label === m.note) ? m.note : ""}
+      onChange={(e) => { const t = presets.find((x) => x.label === e.target.value); if (t) onPick({ note: t.label, per: t.per }); }}
+      title="Coverage preset — trowel notch / spread rate. Generic industry-typical values; verify against the product data sheet."
+      style={{ ...ip, background: "var(--paper-bright)" }}>
+      <option value="">preset…</option>
+      {presets.map((t) => <option key={t.label} value={t.label}>{t.label} · {t.per} SF/{m.unit || "unit"}</option>)}
+    </select>
+  );
+}
 
 // Editable supporting-materials rows — the assembly behind a condition.
 function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libById, overridden, onRevert, onAttach, onPromote }) {
@@ -83,6 +106,19 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
       {(materials || []).map((m) => {
         const lm = libById ? libById[m.lib_id] : null;
         const ov = (f) => (lm && overridden ? overridden(m, lm, f) : false);
+        const kind = materialKind(m);
+        const g = { ...GROUT_DEFAULTS, ...(m.grout || {}) };
+        // grout coverage derives from tile geometry — every param change re-derives
+        // per + writes the derivation into the note so the Report shows its work
+        const setGrout = (patch) => {
+          const grout = { ...g, ...patch };
+          onUpdate(m.id, { grout, per: Math.round(groutCoverageSfPerBag(grout)), note: groutNote(grout) });
+        };
+        const gi = (key, title) => (
+          <input name={`grout-${key}`} type="number" min="0" step="any" value={g[key] || ""} title={title}
+            onChange={(e) => setGrout({ [key]: Math.max(0, parseFloat(e.target.value) || 0) })}
+            style={{ ...ip, width: 52 }} />
+        );
         return (
           <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
             {lm && <span title={`Linked to “${lm.name}” in the material library — amber fields differ from the library values`} style={{ color: "var(--ink-muted)", fontSize: 11, cursor: "default" }}>⛓</span>}
@@ -104,15 +140,7 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
               <input name="material-round" type="checkbox" checked={m.round !== false} onChange={(e) => onUpdate(m.id, { round: e.target.checked })} />round up
             </label>
             {ov("round") && rv(m, "round")}
-            {isAdhesive(m.name) && (m.basis || "area") === "area" && (
-              <select name="trowel-preset" value={TROWEL_PRESETS.some((t) => t.label === m.note) ? m.note : ""}
-                onChange={(e) => { const t = TROWEL_PRESETS.find((x) => x.label === e.target.value); if (t) onUpdate(m.id, { note: t.label, per: t.per }); }}
-                title="Trowel notch — sets the adhesive coverage (SF/gal). Verify against the data sheet."
-                style={{ ...ip, background: "var(--paper-bright)" }}>
-                <option value="">trowel…</option>
-                {TROWEL_PRESETS.map((t) => <option key={t.label} value={t.label}>{t.label} · {t.per} SF/gal</option>)}
-              </select>
-            )}
+            <CoveragePresetSelect material={m} onPick={(patch) => onUpdate(m.id, patch)} />
             <input name="material-note" value={m.note || ""} onChange={(e) => onUpdate(m.id, { note: e.target.value })} placeholder="note (coats, trowel…)" style={{ ...ip, width: 150, ...(ov("note") ? { border: OV } : {}) }} />
             {ov("note") && rv(m, "note")}
             {!lm && onPromote && (
@@ -121,6 +149,23 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
             )}
             <button onClick={() => onRemove(m.id)} title="Remove this material"
               style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--c-danger)", cursor: "pointer", fontSize: 12 }}>✕</button>
+            {kind === "grout" && (m.basis || "area") === "area" && (
+              <div style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", paddingLeft: 14, color: "var(--ink-muted)", fontSize: 12 }}>
+                <span>tile</span>
+                {gi("tileL", "Tile length (in)")}
+                <span>×</span>
+                {gi("tileW", "Tile width (in)")}
+                <span>× thick</span>
+                {gi("tileT", "Tile thickness (in)")}
+                <span>″ · joint</span>
+                <input name="grout-joint" type="number" min="0.03125" max="0.5" step="any" value={g.joint || ""} title="Joint width (in) — 1/32″ to 1/2″"
+                  onChange={(e) => setGrout({ joint: Math.min(0.5, Math.max(0.03125, parseFloat(e.target.value) || 0)) })}
+                  style={{ ...ip, width: 62 }} />
+                <span>″ · bag</span>
+                {gi("bagLbs", "Bag size (lbs)")}
+                <span>lb</span>
+              </div>
+            )}
           </div>
         );
       })}
@@ -640,6 +685,7 @@ function TakeoffsPanel({
                     <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units">
                       <input name="library-material-round" type="checkbox" checked={lm.round !== false} onChange={(e) => onUpdateLibMaterial(lm.id, { round: e.target.checked })} />round up
                     </label>
+                    <CoveragePresetSelect material={lm} onPick={(patch) => onUpdateLibMaterial(lm.id, patch)} />
                     <input name="library-material-note" value={lm.note || ""} onChange={(e) => onUpdateLibMaterial(lm.id, { note: e.target.value })} placeholder="note" style={{ ...ip, width: 120 }} />
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
