@@ -261,8 +261,9 @@ export default function SheetGallery({
                 {/* Deliberately subtle text link, directly below the Open area:
                     the ONLY entry into Google OAuth from the local app, and only
                     on an explicit click. Signed in → jump to the Drive project
-                    list instead. Renders nothing on builds without cloud mode. */}
-                {isGoogleConfigured() && (
+                    list instead. Guard covers both arms so no empty gap renders
+                    on a signed-in build with no Projects root to browse. */}
+                {isGoogleConfigured() && (!user || projectHomeFolderId()) && (
                   <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
                     {!user ? (
                       <>
@@ -273,11 +274,11 @@ export default function SheetGallery({
                         </button>
                         {driveErr ? <div style={{ color: "var(--c-danger)", fontSize: 11.5, marginTop: 5 }}>Sign-in failed: {driveErr}</div> : null}
                       </>
-                    ) : projectHomeFolderId() ? (
+                    ) : (
                       <Link to="/projects" style={{ color: "var(--cobalt)", fontSize: 12, textDecoration: "underline" }}>
                         browse your Google Drive projects
                       </Link>
-                    ) : null}
+                    )}
                   </div>
                 )}
                 <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "18px auto 16px", color: "var(--text-faint)", fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: "0.14em", textTransform: "uppercase" }}>

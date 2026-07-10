@@ -246,23 +246,22 @@ async function fetchProfile(accessToken) {
 }
 
 // Interactive sign-in — ALWAYS user-initiated (a click on "Sign in with Google
-// Drive"). We try silently first (`prompt: ""`): a returning user with a live
-// Google session and a prior consent grant gets a token back with no visible
-// consent screen, which is the "just log me in" experience. Only when that
-// fails do we fall back to the full consent/account picker. Both paths run
-// inside the user's click gesture, so neither is a background prompt — nothing
-// here ever fires without the user asking for it. The token stays in memory
-// only. Resolves with the user object.
+// Drive"). A single `prompt: ""` request does the right thing on its own: GIS
+// returns a token with no visible UI for a user who already granted our scopes
+// ("just log me in"), and shows the account chooser / consent screen for anyone
+// who hasn't. We deliberately do NOT use the timeout-guarded silent path here:
+// the consent screen is a human reading a dialog, which routinely takes longer
+// than SILENT_TIMEOUT_MS — timing it out would abandon the request mid-consent
+// and (via the state guard) drop the token the moment the user clicks Allow,
+// breaking first-time sign-in. The timeout is only for the non-interactive
+// getAccessToken() refresh, where a stuck popup must never hang a Drive call.
+// The token stays in memory only. Resolves with the user object; rejects (so
+// the caller can surface it) if the user closes/cancels the dialog.
 export async function signIn() {
   if (!isGoogleConfigured()) {
     throw new Error("Google sign-in is not configured for this build.");
   }
-  let accessToken;
-  try {
-    accessToken = await requestTokenSilentWithTimeout();
-  } catch {
-    accessToken = await requestToken("consent");
-  }
+  const accessToken = await requestToken("");
   user = await fetchProfile(accessToken);
   notify();
   return user;
