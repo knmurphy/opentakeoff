@@ -41,7 +41,14 @@ function fakeDrive() {
     },
     async findChild(folderId: string, name: string) {
       const rec = find(folderId, name);
-      return rec ? { id: rec.id, name: rec.name, mimeType: rec.mimeType, modifiedTime: "t" } : null;
+      // return the record's real modifiedTime (like listChildren) so the
+      // sidecar-vs-legacy tiebreak is testable
+      return rec ? { id: rec.id, name: rec.name, mimeType: rec.mimeType, modifiedTime: rec.modifiedTime ?? "t" } : null;
+    },
+    async createFolder(parentId: string, name: string) {
+      const id = newId();
+      byId.set(id, { id, name, parent: parentId, mimeType: "application/vnd.google-apps.folder" });
+      return { id, name };
     },
     async getFileBytes(fileId: string) {
       return new Uint8Array(byId.get(fileId).bytes);
@@ -320,6 +327,203 @@ test("concurrent saves on a fresh project create exactly one annotations.json (n
   ]);
   const jsonFiles = [...drive._byId.values()].filter((r) => r.name === "annotations.json");
   assert.equal(jsonFiles.length, 1);
+});
+
+// ── sidecar folder: location + migration ─────────────────────────────────────
+
+// find the id of the .opentakeoff folder created inside a given project folder
+function sidecarIdOf(drive: ReturnType<typeof fakeDrive>, parent: string) {
+  const rec = [...drive._byId.values()].find(
+    (r) => r.name === ".opentakeoff" && r.parent === parent && r.mimeType === "application/vnd.google-apps.folder",
+  );
+  return rec?.id as string | undefined;
+}
+
+test("annotations.json and sheets.json land INSIDE .opentakeoff/, not loose in the project", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.saveAnnotations({ shapes: [{ id: "s1" }] });
+  await store.addSheets([{ id: "1", name: "a.pdf" }]);
+
+  const sidecarId = sidecarIdOf(drive, "folder1");
+  assert.ok(sidecarId, "expected a .opentakeoff folder parented to the project");
+
+  // assert LOCATION (a record with parent === sidecarId), not just content — the
+  // id-cache migration bug would preserve content while never creating a sidecar
+  const ann = [...drive._byId.values()].find((r) => r.name === "annotations.json");
+  assert.equal(ann!.parent, sidecarId);
+  const sheets = [...drive._byId.values()].find((r) => r.name === "sheets.json");
+  assert.equal(sheets!.parent, sidecarId);
+  // and nothing loose in the project folder
+  assert.equal([...drive._byId.values()].some((r) => r.name === "annotations.json" && r.parent === "folder1"), false);
+  assert.equal([...drive._byId.values()].some((r) => r.name === "sheets.json" && r.parent === "folder1"), false);
+});
+
+test("concurrent first-writes create the .opentakeoff folder exactly once", async () => {
+  const drive = fakeDrive();
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // annotations + sheets first-writes race before any .opentakeoff exists — the
+  // memoized ensureSidecarId must serialize them into a single folder.
+  await Promise.all([
+    store.saveAnnotations({ shapes: [{ id: "a" }] }),
+    store.addSheets([{ id: "1", name: "a.pdf" }]),
+    store.addSheets([{ id: "2", name: "b.pdf" }]),
+  ]);
+  const folders = [...drive._byId.values()].filter(
+    (r) => r.name === ".opentakeoff" && r.mimeType === "application/vnd.google-apps.folder",
+  );
+  assert.equal(folders.length, 1);
+});
+
+test("MIGRATION: legacy loose annotations.json → first save migrates it into the sidecar, leaves legacy in place", async () => {
+  const drive = fakeDrive();
+  // a legacy project: annotations.json sits LOOSE in the project folder (parented
+  // to it, so findChild(sidecarId, ...) can't spuriously match it), no sidecar
+  const legacyBytes = new TextEncoder().encode(JSON.stringify({ conditions: [{ id: "legacy" }], shapes: [] }));
+  drive._byId.set("legacy_ann", { id: "legacy_ann", name: "annotations.json", parent: "folder1", mimeType: "application/json", bytes: legacyBytes });
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // first load reads the legacy content (no sidecar yet)
+  assert.deepEqual((await store.loadAnnotations()).conditions, [{ id: "legacy" }]);
+
+  // first save must create .opentakeoff/annotations.json seeded from legacy, then
+  // apply the new payload — NOT rewrite the loose file in place
+  await store.saveAnnotations({ conditions: [{ id: "updated" }], shapes: [] });
+  const sidecarId = sidecarIdOf(drive, "folder1");
+  assert.ok(sidecarId);
+  const migrated = [...drive._byId.values()].find((r) => r.name === "annotations.json" && r.parent === sidecarId);
+  assert.ok(migrated, "sidecar annotations.json must exist");
+  // the legacy loose file is left untouched (still parented to the project)
+  assert.ok(drive._byId.has("legacy_ann"));
+  assert.equal(drive._byId.get("legacy_ann").parent, "folder1");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(drive._byId.get("legacy_ann").bytes)).conditions, [{ id: "legacy" }]);
+
+  // a fresh store reload returns the migrated (sidecar) content, not legacy
+  const store2 = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  assert.deepEqual((await store2.loadAnnotations()).conditions, [{ id: "updated" }]);
+});
+
+test("MIGRATION: legacy loose sheets.json → first addSheets migrates it into the sidecar, leaves legacy in place", async () => {
+  const drive = fakeDrive();
+  const legacyBytes = new TextEncoder().encode(JSON.stringify({ files: [{ id: "old", name: "old.pdf" }] }));
+  drive._byId.set("legacy_sheets", { id: "legacy_sheets", name: "sheets.json", parent: "folder1", mimeType: "application/json", bytes: legacyBytes });
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // first read sees the legacy working set
+  assert.deepEqual((await store.listSheets()).map((s) => s.name), ["old.pdf"]);
+
+  // first mutation migrates the set into the sidecar and appends the new pick
+  await store.addSheets([{ id: "new", name: "new.pdf" }]);
+  const sidecarId = sidecarIdOf(drive, "folder1");
+  assert.ok(sidecarId);
+  const migrated = [...drive._byId.values()].find((r) => r.name === "sheets.json" && r.parent === sidecarId);
+  assert.ok(migrated, "sidecar sheets.json must exist");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(migrated!.bytes)).files.map((f: any) => f.name), ["old.pdf", "new.pdf"]);
+  // legacy loose file left untouched
+  assert.ok(drive._byId.has("legacy_sheets"));
+  assert.equal(drive._byId.get("legacy_sheets").parent, "folder1");
+
+  // reload returns the migrated set
+  const store2 = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  assert.deepEqual((await store2.listSheets()).map((s) => s.name), ["old.pdf", "new.pdf"]);
+});
+
+test("MIGRATION: a CORRUPT legacy annotations.json doesn't wedge the first save (empty sidecar)", async () => {
+  const drive = fakeDrive();
+  drive._byId.set("legacy_bad", { id: "legacy_bad", name: "annotations.json", parent: "folder1", mimeType: "application/json", bytes: new TextEncoder().encode("{not json") });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // the save must succeed rather than propagate the corrupt-legacy parse error
+  await store.saveAnnotations({ conditions: [{ id: "fresh" }], shapes: [] });
+  const sidecarId = sidecarIdOf(drive, "folder1");
+  assert.ok(sidecarId);
+  const created = [...drive._byId.values()].find((r) => r.name === "annotations.json" && r.parent === sidecarId);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(created!.bytes)).conditions, [{ id: "fresh" }]);
+});
+
+test("MIGRATION: a CORRUPT legacy sheets.json doesn't wedge the first addSheets (empty sidecar)", async () => {
+  const drive = fakeDrive();
+  drive._byId.set("legacy_bad_sheets", { id: "legacy_bad_sheets", name: "sheets.json", parent: "folder1", mimeType: "application/json", bytes: new TextEncoder().encode("{not json") });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // ensureManifest must swallow the corrupt legacy parse (mutateManifest awaits
+  // it) so the write lands into a fresh sidecar rather than throwing
+  await store.addSheets([{ id: "1", name: "a.pdf" }]);
+  const sidecarId = sidecarIdOf(drive, "folder1");
+  assert.ok(sidecarId);
+  const created = [...drive._byId.values()].find((r) => r.name === "sheets.json" && r.parent === sidecarId);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(created!.bytes)).files.map((f: any) => f.name), ["a.pdf"]);
+});
+
+test("SPLIT-BRAIN tiebreak: when both a sidecar and a newer legacy file exist, read returns the newer legacy", async () => {
+  const drive = fakeDrive();
+  // sidecar folder + an OLD sidecar annotations.json
+  drive._byId.set("sc", { id: "sc", name: ".opentakeoff", parent: "folder1", mimeType: "application/vnd.google-apps.folder" });
+  drive._byId.set("sc_ann", { id: "sc_ann", name: "annotations.json", parent: "sc", mimeType: "application/json", modifiedTime: "2020-01-01", bytes: new TextEncoder().encode(JSON.stringify({ conditions: [{ id: "sidecar-old" }], shapes: [] })) });
+  // a NEWER legacy loose file (an old tab wrote it after the sidecar existed)
+  drive._byId.set("lg_ann", { id: "lg_ann", name: "annotations.json", parent: "folder1", mimeType: "application/json", modifiedTime: "2020-06-01", bytes: new TextEncoder().encode(JSON.stringify({ conditions: [{ id: "legacy-new" }], shapes: [] })) });
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  assert.deepEqual((await store.loadAnnotations()).conditions, [{ id: "legacy-new" }]);
+});
+
+test("SPLIT-BRAIN tiebreak: a newer sidecar wins over an older legacy", async () => {
+  const drive = fakeDrive();
+  drive._byId.set("sc", { id: "sc", name: ".opentakeoff", parent: "folder1", mimeType: "application/vnd.google-apps.folder" });
+  drive._byId.set("sc_ann", { id: "sc_ann", name: "annotations.json", parent: "sc", mimeType: "application/json", modifiedTime: "2020-06-01", bytes: new TextEncoder().encode(JSON.stringify({ conditions: [{ id: "sidecar-new" }], shapes: [] })) });
+  drive._byId.set("lg_ann", { id: "lg_ann", name: "annotations.json", parent: "folder1", mimeType: "application/json", modifiedTime: "2020-01-01", bytes: new TextEncoder().encode(JSON.stringify({ conditions: [{ id: "legacy-old" }], shapes: [] })) });
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  assert.deepEqual((await store.loadAnnotations()).conditions, [{ id: "sidecar-new" }]);
+});
+
+test("SPLIT-BRAIN write: a sidecar sheets.json already exists but a newer legacy wins the read → mutate UPDATES the sidecar file in place, never duplicates it", async () => {
+  const drive = fakeDrive();
+  // sidecar folder + an OLD sidecar sheets.json, plus a NEWER legacy loose one:
+  // the tiebreak makes the READ prefer legacy (so sheetsId is left null), but the
+  // WRITE must still target the EXISTING sidecar file rather than create a second.
+  drive._byId.set("sc", { id: "sc", name: ".opentakeoff", parent: "folder1", mimeType: "application/vnd.google-apps.folder" });
+  drive._byId.set("sc_sheets", { id: "sc_sheets", name: "sheets.json", parent: "sc", mimeType: "application/json", modifiedTime: "2020-01-01", bytes: new TextEncoder().encode(JSON.stringify({ files: [{ id: "sc-old", name: "sidecar-old.pdf" }] })) });
+  drive._byId.set("lg_sheets", { id: "lg_sheets", name: "sheets.json", parent: "folder1", mimeType: "application/json", modifiedTime: "2020-06-01", bytes: new TextEncoder().encode(JSON.stringify({ files: [{ id: "lg-new", name: "legacy-new.pdf" }] })) });
+
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  // read prefers the newer legacy set
+  assert.deepEqual((await store.listSheets()).map((s) => s.name), ["legacy-new.pdf"]);
+  await store.addSheets([{ id: "add", name: "added.pdf" }]);
+
+  // exactly ONE sheets.json parented to the sidecar (no duplicate spawned)
+  const sidecarSheets = [...drive._byId.values()].filter((r) => r.name === "sheets.json" && r.parent === "sc");
+  assert.equal(sidecarSheets.length, 1, "must update the existing sidecar sheets.json, not create a second");
+  // and it's the SAME file id, updated in place, carrying the migrated set + new pick
+  assert.equal(sidecarSheets[0].id, "sc_sheets");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(sidecarSheets[0].bytes)).files.map((f: any) => f.name), ["legacy-new.pdf", "added.pdf"]);
+});
+
+test("listFolder hides the .opentakeoff sidecar folder from the picker", async () => {
+  const drive = fakeDrive();
+  drive._byId.set("sc", { id: "sc", name: ".opentakeoff", parent: "folder1", mimeType: "application/vnd.google-apps.folder", bytes: new Uint8Array() });
+  drive._byId.set("d1", { id: "d1", name: "Design Documents", parent: "folder1", mimeType: "application/vnd.google-apps.folder", bytes: new Uint8Array() });
+  drive._byId.set("dot", { id: "dot", name: ".config", parent: "folder1", mimeType: "application/vnd.google-apps.folder", bytes: new Uint8Array() });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  const { folders } = await store.listFolder();
+  // .opentakeoff is filtered by EXACT name; a legit dot-prefixed folder is not
+  assert.deepEqual(folders.map((f) => f.name).sort(), [".config", "Design Documents"]);
+});
+
+test("a stray NON-folder file named .opentakeoff is ignored; a real sidecar folder is created", async () => {
+  const drive = fakeDrive();
+  // a rogue FILE (not a folder) named .opentakeoff sits in the project — findChild
+  // matches by name only, so findSidecarFolder must reject it on mimeType.
+  drive._byId.set("rogue", { id: "rogue", name: ".opentakeoff", parent: "folder1", mimeType: "application/json", bytes: new TextEncoder().encode("{}") });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.saveAnnotations({ conditions: [{ id: "x" }], shapes: [] });
+
+  // the write went into a real FOLDER named .opentakeoff, not the rogue file
+  const sidecarFolder = [...drive._byId.values()].find((r) => r.name === ".opentakeoff" && r.mimeType === "application/vnd.google-apps.folder");
+  assert.ok(sidecarFolder, "a real .opentakeoff folder must be created");
+  const ann = [...drive._byId.values()].find((r) => r.name === "annotations.json");
+  assert.equal(ann!.parent, sidecarFolder!.id);
+  // the rogue file is left untouched and was never used as a parent
+  assert.ok(drive._byId.has("rogue"));
+  assert.equal([...drive._byId.values()].some((r) => r.parent === "rogue"), false);
 });
 
 test("browser-global methods delegate to localStore untouched", async () => {

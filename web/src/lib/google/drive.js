@@ -11,6 +11,7 @@
 
 const FILES_URL = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files";
+const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /**
  * @param {object} opts
@@ -115,6 +116,22 @@ export function createDrive({ getToken, fetch = globalThis.fetch }) {
     return { id: data.id, name: data.name };
   }
 
+  // Create a folder (metadata only, no bytes). Unlike uploadFile this is a plain
+  // JSON POST to the FILES endpoint — a folder has no media part, and Drive's
+  // documented "create a folder" call is exactly a files.create with the folder
+  // mimeType. supportsAllDrives so the folder can land on a Shared Drive.
+  async function createFolder(parentId, name) {
+    const params = new URLSearchParams({ supportsAllDrives: "true" });
+    const res = await fetch(`${FILES_URL}?${params}`, {
+      method: "POST",
+      headers: await authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parentId] }),
+    });
+    await assertOk(res, "create folder");
+    const data = await res.json();
+    return { id: data.id, name: data.name };
+  }
+
   async function updateFileBytes(fileId, bytes, mimeType) {
     const params = new URLSearchParams({ uploadType: "media", supportsAllDrives: "true" });
     const res = await fetch(`${UPLOAD_URL}/${encodeURIComponent(fileId)}?${params}`, {
@@ -148,5 +165,5 @@ export function createDrive({ getToken, fetch = globalThis.fetch }) {
     await assertOk(res, "delete");
   }
 
-  return { listChildren, findChild, getFileBytes, getJson, uploadFile, updateFileBytes, putJson, deleteFile };
+  return { listChildren, findChild, getFileBytes, getJson, createFolder, uploadFile, updateFileBytes, putJson, deleteFile };
 }
