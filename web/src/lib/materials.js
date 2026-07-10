@@ -17,7 +17,7 @@
 // precedent: stripping a future field on load would persist the loss on the
 // next library save).
 
-import { groutParamsEqual } from "./coverage.js";
+import { groutParamsEqual, groutNote, materialKind } from "./coverage.js";
 
 const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 
@@ -72,14 +72,50 @@ export const libRevertPatch = (m, lm, f) => {
   return { [f]: L[f] };
 };
 
+// NAME edits re-classify a geometry-less material. An explicit `kind` rides
+// through the library seam (promote/attach/push carry it), but without tile
+// geometry it's only a cached classification of the OLD name — keeping it
+// would pin an attached "Adhesive" renamed "Thinset mortar" to adhesive
+// presets forever (pre-seam behavior re-classified from the name). So when
+// the name-regex classification of the new name disagrees with the stored
+// kind, the kind is dropped and the name rules again. With geometry present,
+// kind:"grout" is load-bearing (it gates the calculator whatever the line is
+// called) and stays.
+export const renameReclassified = (m) => {
+  if (!m.kind || m.grout) return m;
+  if (materialKind({ name: m.name }) === m.kind) return m;
+  const { kind: _k, ...rest } = m;
+  return rest;
+};
+
+// Condition-line edit (MaterialsEditor → updateMaterial): a plain merge, plus
+// the rename re-classification above when the patch touches the name.
+export const matEditPatch = (m, patch) => {
+  const next = { ...m, ...patch };
+  return "name" in patch ? renameReclassified(next) : next;
+};
+
 // Library-row edit (Materials tab). The tab has no grout calculator, so a
-// hand edit of per or note on an entry that carries tile geometry DETACHES the
-// geometry — otherwise the entry would push/attach a grout object that
-// contradicts its own per/note.
+// hand edit that CHANGES per or note on an entry carrying tile geometry
+// DETACHES the geometry — otherwise the entry would push/attach a grout
+// object that contradicts its own per/note. Change-aware: committing a value
+// equal to the current one (a select-all-retype of the same rate) is not a
+// contradiction and must not detach. When per detaches the geometry and the
+// entry's note is still the geometry-derived one, the note goes too — a
+// derived note describing discarded geometry is false provenance in the
+// Report and every export. A note the user typed themselves (patch.note)
+// always wins.
 export const libEntryPatch = (lm, patch) => {
   const next = { ...lm, ...patch, ...(patch.grout ? { grout: { ...patch.grout } } : {}) };
-  if (next.grout && !("grout" in patch) && ("per" in patch || "note" in patch)) delete next.grout;
-  return next;
+  if (next.grout && !("grout" in patch)) {
+    const perChanged = "per" in patch && (Number(patch.per) || 0) !== (Number(lm.per) || 0);
+    const noteChanged = "note" in patch && String(patch.note || "") !== String(lm.note || "");
+    if (perChanged || noteChanged) {
+      if (!("note" in patch) && String(next.note || "") === groutNote(next.grout)) next.note = "";
+      delete next.grout;
+    }
+  }
+  return "name" in patch ? renameReclassified(next) : next;
 };
 
 // Template/seed material → live condition line. The seed's grout object (CT-1

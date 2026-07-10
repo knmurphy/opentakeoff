@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // coverage.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
-import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, GROUT_PARAM_KEYS, groutCoverageSfPerBag, groutDerivedFields, groutParamsEqual, groutNote, inFrac } from "../src/lib/coverage.js";
+import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, GROUT_PARAM_KEYS, groutCoverageSfPerBag, groutDerivedFields, groutParamsEqual, groutNote, inFrac, showsGroutCalc, showsGroutDeriveAffordance } from "../src/lib/coverage.js";
 
 const within = (actual: number, expected: number, tolPct: number) =>
   Math.abs(actual - expected) <= expected * (tolPct / 100);
@@ -100,6 +100,45 @@ test("groutParamsEqual: structural, never by reference; absent params compare as
   assert.ok(groutParamsEqual(undefined, undefined));
   assert.ok(!groutParamsEqual(a, { ...GROUT_DEFAULTS, joint: 0.25 }));
   assert.ok(!groutParamsEqual(undefined, { ...GROUT_DEFAULTS, tileL: 2 }));
+});
+
+test("groutParamsEqual: a present-but-junk param compares as the BLANK the editor renders, not as the default", () => {
+  // round-2 gap 5: `null ?? default` used to make a poisoned { tileL: null }
+  // entry compare equal to the defaults while the editor rendered it blank —
+  // the equality's invariant is "equal iff rendered identically", so both
+  // sides now go through the editor's own { ...GROUT_DEFAULTS, ...grout }
+  // merge, where null/0/NaN survive the spread and render blank (compare 0)
+  for (const junk of [null, 0, NaN, "" as any]) {
+    assert.ok(!groutParamsEqual({ ...GROUT_DEFAULTS, tileL: junk }, { ...GROUT_DEFAULTS }), `tileL=${junk} vs defaults`);
+    assert.ok(!groutParamsEqual({ ...GROUT_DEFAULTS, tileL: junk }, undefined), `tileL=${junk} vs absent`);
+  }
+  // two identically-poisoned objects render identically → equal
+  assert.ok(groutParamsEqual({ tileL: null }, { tileL: 0 }));
+  // numeric strings render as their number (the input coerces) → equal to it
+  assert.ok(groutParamsEqual({ ...GROUT_DEFAULTS, tileL: "12" as any }, { ...GROUT_DEFAULTS }));
+});
+
+// ── the calculator's render gate (round-2 Defect A) ─────────────────────────
+
+test("showsGroutCalc: only a grout-kind, area-basis line WITH geometry renders the calculator", () => {
+  const withG = { name: "Grout", kind: "grout", basis: "area", grout: { ...GROUT_DEFAULTS } };
+  assert.equal(showsGroutCalc(withG), true);
+  assert.equal(showsGroutCalc({ ...withG, grout: undefined }), false);       // geometry-less: never a defaults-backfilled calculator
+  assert.equal(showsGroutCalc({ ...withG, basis: "linear" }), false);
+  assert.equal(showsGroutCalc({ name: "Adhesive", basis: "area", grout: { ...GROUT_DEFAULTS } }), false);   // not grout-kind
+  assert.equal(showsGroutCalc({ name: "Grout", basis: "area", grout: { ...GROUT_DEFAULTS } }), true);       // name-classified counts too
+});
+
+test("showsGroutDeriveAffordance: the explicit opt-in appears exactly when the calculator is withheld for missing geometry", () => {
+  const bare = { name: "Grout", kind: "grout", basis: "area" };   // what libEntryPatch's detach pushes/attaches
+  assert.equal(showsGroutDeriveAffordance(bare), true);
+  assert.equal(showsGroutCalc(bare), false);
+  assert.equal(showsGroutDeriveAffordance({ ...bare, grout: { ...GROUT_DEFAULTS } }), false);
+  assert.equal(showsGroutDeriveAffordance({ ...bare, basis: "count" }), false);
+  assert.equal(showsGroutDeriveAffordance({ name: "Adhesive", basis: "area" }), false);
+  // the affordance's click seeds defaults AND derives per+note in ONE commit
+  const g = { ...GROUT_DEFAULTS, ...((bare as any).grout || {}) };
+  assert.deepEqual({ grout: g, ...(groutDerivedFields(g) || {}) }, { grout: { ...GROUT_DEFAULTS }, per: 512, note: "12×24×3/8″ @ 1/8″ · 25 lb" });
 });
 
 test("inFrac/groutNote: drawing-style fractions, decimal fallback off the 1/32″ grid", () => {

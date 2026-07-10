@@ -38,7 +38,7 @@ import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
-import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch } from "../lib/materials.js";
+import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch, matEditPatch } from "../lib/materials.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
 import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
@@ -2599,7 +2599,7 @@ export default function TakeoffCanvas() {
 
   // supporting-materials editing (operates on the active condition)
   const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
-  const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? { ...m, ...patch } : m)) });
+  const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? matEditPatch(m, patch) : m)) });   // NAME edits re-classify a geometry-less line's kind
   const removeMaterial = (mid) => updateCond({ materials: (aCond?.materials || []).filter((m) => m.id !== mid) });
   // Height/Thickness are LIVE parameters (Kreo-style): changing them re-flows
   // every dependent shape on this condition — wall SF tracks the tile height.

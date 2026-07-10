@@ -14,8 +14,8 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeMaterialLibrary, libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch, instantiateMaterial } from "../src/lib/materials.js";
-import { GROUT_DEFAULTS, groutDerivedFields } from "../src/lib/coverage.js";
+import { sanitizeMaterialLibrary, libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch, matEditPatch, renameReclassified, instantiateMaterial } from "../src/lib/materials.js";
+import { GROUT_DEFAULTS, groutDerivedFields, groutNote, materialKind, showsGroutCalc, showsGroutDeriveAffordance } from "../src/lib/coverage.js";
 import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
 import { store } from "../src/lib/store.js";
 
@@ -176,7 +176,7 @@ test("libRevertPatch: per/note/grout revert together on a grout line; plain fiel
   assert.ok("grout" in patch && patch.grout === undefined);
 });
 
-test("libEntryPatch: hand-editing per or note on a Materials-tab grout entry detaches its geometry", () => {
+test("libEntryPatch: a CHANGED per or note on a Materials-tab grout entry detaches its geometry", () => {
   const entry = { id: "lib_1", ...libFields(groutLine()) };
   assert.ok(!("grout" in libEntryPatch(entry, { per: 300 })));
   assert.ok(!("grout" in libEntryPatch(entry, { note: "custom" })));
@@ -186,6 +186,151 @@ test("libEntryPatch: hand-editing per or note on a Materials-tab grout entry det
   const next = libEntryPatch(entry, { grout: g, per: 1, note: "n" });
   assert.deepEqual(next.grout, g);
   assert.notEqual(next.grout, g);
+});
+
+// ── round-2 Defect C (data layer): no-op edits are not contradictions ───────
+
+test("libEntryPatch: committing per/note UNCHANGED does not detach (select-all-retype of the same value)", () => {
+  const entry = { id: "lib_1", ...libFields(groutLine()) };   // per 192, derived note
+  const samePer = libEntryPatch(entry, { per: entry.per });
+  assert.deepEqual(samePer, entry, "same-per commit is a pure no-op");
+  const sameNote = libEntryPatch(entry, { note: entry.note });
+  assert.deepEqual(sameNote, entry, "same-note commit is a pure no-op");
+  // numeric-shape no-ops too (the input coerces "192" → 192)
+  assert.deepEqual(libEntryPatch({ ...entry, per: 192 }, { per: 192.0 }), { ...entry, per: 192 });
+  // but a REAL change still detaches
+  assert.ok(!("grout" in libEntryPatch(entry, { per: 193 })));
+});
+
+// ── round-2 Defect B: the derived note dies with the geometry it describes ──
+
+test("libEntryPatch note coherence: a per-detach clears the geometry-derived note; a hand note survives; patch.note wins", () => {
+  const entry = { id: "lib_1", ...libFields(groutLine()) };
+  assert.equal(entry.note, groutNote(MOSAIC), "precondition: the entry carries the derivation note");
+  // per hand-edit: geometry AND its note both go — a note deriving the old
+  // rate under the new per is false provenance in the Report/exports
+  const perEdit = libEntryPatch(entry, { per: 350 });
+  assert.ok(!("grout" in perEdit));
+  assert.equal(perEdit.note, "", "stale derivation note cleared with its geometry");
+  // the user's own pre-existing note is NOT the derived one → untouched
+  const handNoted = { ...entry, note: "vendor quote" };
+  const perEdit2 = libEntryPatch(handNoted, { per: 350 });
+  assert.ok(!("grout" in perEdit2));
+  assert.equal(perEdit2.note, "vendor quote");
+  // a note typed in the same edit always wins
+  const noteEdit = libEntryPatch(entry, { note: "hand rate per bid" });
+  assert.ok(!("grout" in noteEdit));
+  assert.equal(noteEdit.note, "hand rate per bid");
+  const both = libEntryPatch(entry, { per: 350, note: "hand rate per bid" });
+  assert.equal(both.note, "hand rate per bid");
+});
+
+// ── round-2 Defect A (data layer): the state libEntryPatch's detach creates ──
+
+test("push/attach from a kind-carrying, geometry-less entry: the pushed rate survives and no calculator is offered", () => {
+  // exactly the state a Materials-tab per edit leaves behind
+  const entry = libEntryPatch({ id: "lib_1", ...libFields(groutLine()) }, { per: 350 });
+  assert.deepEqual({ per: entry.per, kind: entry.kind, note: entry.note }, { per: 350, kind: "grout", note: "" });
+  // push to a linked line that still has old geometry
+  const linked = { id: "mat_2", ...libFields(groutLine()), lib_id: "lib_1" };
+  const pushed = libPushPatch(linked, entry);
+  assert.equal(pushed.per, 350, "pushed rate survives");
+  assert.ok(!("grout" in pushed), "no geometry lands on the line");
+  assert.equal(pushed.note, "", "no stale derivation note lands either");
+  assert.equal(showsGroutCalc(pushed), false, "no defaults-backfilled calculator");
+  assert.equal(showsGroutDeriveAffordance(pushed), true, "the explicit derive opt-in shows instead");
+  // nothing ambers right after the push — the line matches its entry
+  for (const f of ["name", "unit", "per", "basis", "round", "note", "grout"]) {
+    assert.equal(matFieldOverridden(pushed, entry, f), false, f);
+  }
+  // attach the same entry elsewhere: same contract
+  const attached = { id: "mat_3", ...libFields(entry), lib_id: "lib_1" };
+  assert.equal(attached.per, 350);
+  assert.ok(!("grout" in attached));
+  assert.equal(showsGroutCalc(attached), false);
+  assert.equal(showsGroutDeriveAffordance(attached), true);
+  // the explicit derive (setGrout({}) in the editor) seeds defaults AND
+  // re-derives per+note in the SAME commit — never an ambient backfill
+  const g = { ...GROUT_DEFAULTS, ...(attached.grout || {}) };
+  const derived = { ...attached, grout: { ...g }, ...(groutDerivedFields(g) || {}) };
+  assert.deepEqual(derived.grout, GROUT_DEFAULTS);
+  assert.deepEqual({ per: derived.per, note: derived.note }, { per: 512, note: groutNote(GROUT_DEFAULTS) });
+  assert.equal(showsGroutCalc(derived), true);
+});
+
+// ── round-2 Defect D: a stale carried kind yields to the new name ───────────
+
+test("rename re-classification: a geometry-less material's stale kind drops when the new name disagrees", () => {
+  // attached adhesive renamed to a mortar → mortar presets again (pre-seam behavior)
+  const adhesive = { id: "mat_1", name: "Adhesive", kind: "adhesive", unit: "gal", per: 250, basis: "area", round: true };
+  const attached = { id: "mat_2", ...libFields({ id: "lib_1", ...libFields(adhesive) }), lib_id: "lib_1" };
+  const renamed = matEditPatch(attached, { name: "Thinset mortar" });
+  assert.ok(!("kind" in renamed));
+  assert.equal(materialKind(renamed), "mortar");
+  // renamed to something unclassified → kind-less, like a hand-typed line
+  assert.equal(materialKind(matEditPatch(attached, { name: "Sealer" })), "");
+  // renamed within the same classification → kind stays (seeded lines unchanged)
+  assert.equal(matEditPatch(attached, { name: "Adhesive (wood, SMP)" }).kind, "adhesive");
+  // geometry present: kind:"grout" is load-bearing (the calculator gate) and never drops
+  const g = matEditPatch(groutLine(), { name: "Ultracolor FA" });
+  assert.equal(g.kind, "grout");
+  assert.deepEqual(g.grout, MOSAIC);
+  // non-name edits never touch kind
+  assert.equal(matEditPatch(attached, { per: 300 }).kind, "adhesive");
+  // the library path applies the same rule through libEntryPatch
+  const libRenamed = libEntryPatch({ id: "lib_1", ...libFields(adhesive) }, { name: "Thinset mortar" });
+  assert.ok(!("kind" in libRenamed));
+  assert.equal(materialKind(libRenamed), "mortar");
+  // and a grout ENTRY with geometry keeps kind on rename, geometry intact
+  const libGrout = libEntryPatch({ id: "lib_2", ...libFields(groutLine()) }, { name: "Ultracolor FA" });
+  assert.equal(libGrout.kind, "grout");
+  assert.deepEqual(libGrout.grout, MOSAIC);
+  // renameReclassified itself: no kind → untouched
+  assert.deepEqual(renameReclassified({ name: "Whatever" }), { name: "Whatever" });
+});
+
+// ── round-2 gap 1: the PLAIN-material seam is byte-identical to pre-fix ─────
+// The headline risk of moving the library seam into libFields was regressing
+// the #47 contract for ordinary (non-grout) materials. These replicas are the
+// pre-seam (6fdc320) implementations verbatim; every promote/attach/override/
+// revert/push result must stay deep-equal to them, and no kind/grout key may
+// ever appear on a plain material's copies.
+const preFixLibFields = (lm: any) => ({ name: lm.name || "", unit: lm.unit || "", per: lm.per || 0, basis: lm.basis || "area", round: lm.round !== false, note: lm.note || "" });
+const preFixOverridden = (m: any, lm: any, f: string) => {
+  if (!lm) return false;
+  const L: any = preFixLibFields(lm);
+  if (f === "per") return (Number(m.per) || 0) !== L.per;
+  if (f === "round") return (m.round !== false) !== L.round;
+  if (f === "basis") return (m.basis || "area") !== L.basis;
+  return String(m[f] || "") !== String(L[f] || "");
+};
+
+test("plain-material parity: promote/attach/override/revert/push are byte-identical to the pre-seam contract", () => {
+  const line = { id: "mat_1", name: "Adhesive", unit: "gal", per: 250, basis: "area", round: true, note: "1/8 sq notch" };
+  // promote
+  const entry = { id: "lib_1", ...libFields(line) };
+  assert.deepEqual(entry, { id: "lib_1", ...preFixLibFields(line) });
+  assert.ok(!("kind" in entry) && !("grout" in entry), "promote grows no kind/grout");
+  // attach
+  const attached = { id: "mat_2", ...libFields(entry), lib_id: "lib_1" };
+  assert.deepEqual(attached, { id: "mat_2", ...preFixLibFields(entry), lib_id: "lib_1" });
+  // per-field override ambers exactly as pre-fix, and a clean attach never ambers
+  for (const f of ["name", "unit", "per", "basis", "round", "note"]) {
+    const drifted: any = { ...attached, [f]: f === "per" ? 300 : f === "round" ? false : f === "basis" ? "linear" : "X" };
+    assert.equal(matFieldOverridden(drifted, entry, f), preFixOverridden(drifted, entry, f), `overridden(${f})`);
+    assert.equal(matFieldOverridden(drifted, entry, f), true, `drift ambers (${f})`);
+    assert.equal(matFieldOverridden(attached, entry, f), false, `clean attach not ambered (${f})`);
+    // revert restores exactly the library value, one field at a time
+    assert.deepEqual(libRevertPatch(drifted, entry, f), { [f]: (preFixLibFields(entry) as any)[f] }, `revert(${f})`);
+  }
+  // push replaces all six fields, nothing else
+  const drifted = { ...attached, per: 999, note: "hand" };
+  const pushed = libPushPatch(drifted, entry);
+  assert.deepEqual(pushed, { ...drifted, ...preFixLibFields(entry) });
+  assert.ok(!("kind" in pushed) && !("grout" in pushed), "push grows no kind/grout");
+  // library-row edit is the plain merge it always was
+  assert.deepEqual(libEntryPatch(entry, { per: 300 }), { ...entry, per: 300 });
+  assert.deepEqual(libEntryPatch(entry, { note: "n2" }), { ...entry, note: "n2" });
 });
 
 // ── seed aliasing (finding 4): instantiation deep-copies nested grout ───────

@@ -34,13 +34,28 @@ export function groutCoverageSfPerBag({ tileL, tileW, tileT, joint, bagLbs, dens
   return bagLbs / (((tileL + tileW) / (tileL * tileW)) * tileT * joint * density);
 }
 
-// Structural equality over the five geometry params. Absent params compare as
-// the defaults, because that's exactly what the editor renders for them
-// ({ ...GROUT_DEFAULTS, ...(m.grout || {}) }) — a line without a grout object
-// and a line whose grout equals the defaults LOOK identical, so the library
-// override check must treat them identically. Never compares by reference.
-export const groutParamsEqual = (a, b) =>
-  GROUT_PARAM_KEYS.every((k) => (Number((a || {})[k] ?? GROUT_DEFAULTS[k]) || 0) === (Number((b || {})[k] ?? GROUT_DEFAULTS[k]) || 0));
+// Structural equality over the five geometry params — the invariant is
+// "equal iff the editor RENDERS them identically", so both sides go through
+// the editor's own merge ({ ...GROUT_DEFAULTS, ...grout }): an absent key
+// renders (and compares) as its default, while a present-but-junk value
+// (null, 0, NaN — a poisoned library entry) renders blank and compares as 0,
+// NOT as the default it visibly isn't. Never compares by reference.
+export const groutParamsEqual = (a, b) => {
+  const A = { ...GROUT_DEFAULTS, ...(a || {}) }, B = { ...GROUT_DEFAULTS, ...(b || {}) };
+  return GROUT_PARAM_KEYS.every((k) => (Number(A[k]) || 0) === (Number(B[k]) || 0));
+};
+
+// The grout calculator's render gate: the tile-geometry row appears ONLY when
+// the line actually HAS geometry (m.grout truthy) — a kind:"grout" line
+// without it (e.g. a library entry whose geometry was detached by a hand
+// per-edit, then pushed/attached) must show its pushed rate untouched, with an
+// explicit "derive from tile geometry" affordance instead of a calculator
+// silently backfilled with defaults, where one keystroke would commit the
+// whole default object over the pushed rate.
+export const showsGroutCalc = (m) =>
+  materialKind(m) === "grout" && (m.basis || "area") === "area" && !!m.grout;
+export const showsGroutDeriveAffordance = (m) =>
+  materialKind(m) === "grout" && (m.basis || "area") === "area" && !m.grout;
 
 // Inches → drawing-style fraction (0.375 → "3/8", 1.25 → "1 1/4"); falls back
 // to the decimal when the value isn't on the 1/32″ grid.
