@@ -1345,8 +1345,12 @@ export default function TakeoffCanvas() {
       return;
     }
     if (e.button !== 0) return;   // only left-click places points
-    const p = (snapOn && snapRef.current) ? snapRef.current
-      : (angleOn && angleRef.current) ? angleRef.current
+    // snapRef/angleRef are drawing-tool aids maintained by moveCrosshair, which
+    // bails for the Select tool (:1577) — so in Select they'd be STALE. Select
+    // does its own endpoint snap (ocSnap) on drop, so it always uses the raw
+    // cursor here; otherwise a stale ref freezes the drag or jumps it on grab.
+    const p = (tool !== "select" && snapOn && snapRef.current) ? snapRef.current
+      : (tool !== "select" && angleOn && angleRef.current) ? angleRef.current
         : toImage(e.clientX, e.clientY);
     const fp = panelAt(p[0]);
     if (fp.key !== focusKey) setFocusKey(fp.key);
@@ -1751,7 +1755,10 @@ export default function TakeoffCanvas() {
     if (tool === "oneclick" && proposal && !panRef.current && !pendingClickRef.current) ocHoverUpdate(e);
     if (dragRef.current) {
       const d = dragRef.current;
-      const p = (snapOn && snapRef.current) ? snapRef.current : toImage(e.clientX, e.clientY);
+      // dragRef is armed only by selectAt (Select tool), where snapRef is stale
+      // (moveCrosshair bails for Select) — track the RAW cursor; vertex/edge
+      // drags apply their own endpoint snap (ocSnap), and a body move is free.
+      const p = toImage(e.clientX, e.clientY);
       if (d.kind === "vertex") {
         setShapes((ss) => ss.map((s) => {
           if (s.id !== d.shapeId) return s;
