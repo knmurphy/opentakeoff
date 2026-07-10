@@ -28,7 +28,7 @@ import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, SCAN_ENDPOINT } from "../lib/scheduleScan";
-import { isGoogleConfigured, isSignedIn } from "../lib/google/auth.js";
+import { isGoogleConfigured, isSignedIn, getAccessToken } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
@@ -2598,19 +2598,28 @@ export default function TakeoffCanvas() {
     try { png = await rasterizeRegion(pageObj, rs, rect); }
     catch { setCommitMsg("Couldn't read that region."); return; }
     if (seq !== renderSeqRef.current) return;
+    // The token is what actually authorizes the paid read — the server verifies
+    // it before spending. A missing/expired token here means re-consent, not a
+    // silent public call.
+    let token;
+    try { token = await getAccessToken(); }
+    catch { setCommitMsg("Sign in again to import from scanned plans."); return; }
+    if (seq !== renderSeqRef.current) return;
     setCommitMsg("Reading the scanned schedule…");
     try {
       const res = await fetch(SCAN_ENDPOINT, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height }),
       });
       if (seq !== renderSeqRef.current) return;
+      if (res.status === 401 || res.status === 403) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
+      if (res.status === 501) { setCommitMsg("Importing from scanned plans isn't enabled on this deployment."); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const rows = normalizeScanRows(await res.json());
-      if (!rows.length) { setCommitMsg("No schedule found in that scanned region — the reader returned nothing (the default backend ships no OCR model)."); return; }
+      if (!rows.length) { setCommitMsg("No schedule found in that scanned region — the reader returned nothing."); return; }
       setImportRows(rows);
-    } catch { setCommitMsg("Couldn't reach the schedule reader — is the AI backend running?"); }
+    } catch { setCommitMsg("Couldn't reach the schedule reader — try again in a moment."); }
   }
 
   // Render just the marqueed region (rs-viewport px, the space rect lives in) to
