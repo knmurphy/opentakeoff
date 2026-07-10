@@ -122,9 +122,10 @@ export function mapGeminiHttpFailure(status) {
 // Trim a Gemini error body to a bounded, single-line snippet safe to log. Gemini's
 // error JSON never contains our API key (the key rides in the URL query string,
 // which we deliberately never log), but cap length and strip newlines anyway so a
-// large/odd upstream body can't flood or fracture the log line.
+// large/odd upstream body can't flood or fracture the log line. Slice BEFORE the
+// whitespace regex so the collapse never runs over an arbitrarily large body.
 function logSnippet(text) {
-  return (text || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  return (text || "").slice(0, 600).replace(/\s+/g, " ").trim().slice(0, 300);
 }
 
 async function readSchedule(imageB64) {
