@@ -24,7 +24,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 ### Tools
 | Key | Tool | What it does |
 |---|---|---|
-| `O` | **One‑Click Area** | Click inside a room; the enclosed space auto‑selects, traces, and snaps to corners — hatched/tiled rooms fill to the real walls (hatch linework is classified and seen through). Review, then Create. |
+| `O` | **One‑Click Area** | Click inside a room; the enclosed space auto‑selects, traces, and snaps to corners — hatched/tiled rooms fill to the real walls (hatch linework is classified and seen through). **Correct the fill before Create** without leaving the tool: hover the selection to raise its handles, then **drag a corner** to move it (snaps to linework), **drag an edge** to slide the whole line out to the wall, **Shift‑click an edge** to drop a new anchor point, and **click a corner + `Delete`** to remove just that point. Review, then Create. |
 | `A` | **Area** | Trace a polygon → floor SF. |
 | `R` | **Rectangle** | Two‑corner rectangle → floor SF. |
 | `L` | **Linear** | Trace a run → LF (＋ border SF if the condition has a thickness). |

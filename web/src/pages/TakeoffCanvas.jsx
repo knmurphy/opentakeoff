@@ -307,6 +307,8 @@ export default function TakeoffCanvas() {
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
+  const [ocSel, setOcSel] = useState(null);        // selected proposal vertex {ri, vi} — Delete removes just that point
+  const [ocHover, setOcHover] = useState(-1);      // proposal region under the cursor — handles reveal on hover
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
   const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
   const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
@@ -384,6 +386,8 @@ export default function TakeoffCanvas() {
   const aimMarkRef = useRef(null);     // four floating liquid-glass pickets thickening the crosshair crossing
   const aimChipRef = useRef(null);     // readout chip by the cursor (locked angle · live segment length)
   const dragRef = useRef(null);        // {kind:'move'|'vertex'|'markupMove', shapeId?/markupId?, vIndex?, start:[x,y], orig:verts_norm/markup coords, moved?}
+  const ocDragRef = useRef(null);      // One-Click proposal edit drag: {kind:'oc-vertex'|'oc-edge', ri, vi?/i?/j?, oa?, ob?, sx?, sy?} — poly is panel-LOCAL px
+  const ocHoverRef = useRef(-1);       // mirror of ocHover (region index under cursor) — compared per-move to avoid stale-closure churn
   const editingRef = useRef(false);    // true while the inline text editor is open — read in moveCrosshair/onPointerDown/wheel (a REF, never per-mousemove state) to suppress the crosshair and freeze pan/zoom
   const editorRef = useRef(null);      // mirror of the open editor object, so finishEditor can commit without a stale-closure race
   const editorInputRef = useRef(null); // the live <input> element (uncontrolled — value read on commit)
@@ -811,6 +815,8 @@ export default function TakeoffCanvas() {
   // Also keeps Create out of the ACTION slot while Finish occupies it, so the
   // slot's reserved width always fits its content (issue #61).
   useEffect(() => { if (tool !== "oneclick") setProposal(null); }, [tool]);
+  // Proposal gone (created, discarded, sheet changed) ⇒ drop any handle selection/hover.
+  useEffect(() => { if (!proposal) { setOcSel(null); ocHoverRef.current = -1; setOcHover(-1); } }, [proposal]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -1306,11 +1312,12 @@ export default function TakeoffCanvas() {
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (poly.length) { setPoly((q) => q.slice(0, -1)); setCalib((c) => c.slice(0, -1)); }
+        else if (ocSel && proposal) { deleteSelectedOcVertex(); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
         else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
         else setCalib((c) => c.slice(0, -1));
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); }
+      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else { setPoly([]); setCalib([]); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1318,7 +1325,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, selectedMarkupId, showMarkups, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
@@ -1340,6 +1347,10 @@ export default function TakeoffCanvas() {
     const fp = panelAt(p[0]);
     if (fp.key !== focusKey) setFocusKey(fp.key);
     if (tool === "select") { selectAt(p, e); return; }
+    // One-Click proposal handles: a press on a corner/edge grip starts an EDIT drag
+    // (select+move a vertex, move a whole edge, or Shift-click to insert a point) —
+    // it must win here, before the deferred add-a-region click below.
+    if (tool === "oneclick" && proposal && oneClickHandleAt(e)) return;
     // every point-placing tool DEFERS to pointer-up: hold-and-drag (mouse left
     // or one-finger trackpad press) pans mid-measurement instead of placing
     pendingClickRef.current = { p, cx: e.clientX, cy: e.clientY };
@@ -1709,6 +1720,10 @@ export default function TakeoffCanvas() {
       }
     }
     updateHover(e);
+    // One-Click proposal editing: dragging a corner/edge grip, else revealing
+    // handles on the region under the cursor. Both work in panel-LOCAL px.
+    if (ocDragRef.current) { ocDragMove(e); return; }
+    if (tool === "oneclick" && proposal && !panRef.current && !pendingClickRef.current) ocHoverUpdate(e);
     if (dragRef.current) {
       const d = dragRef.current;
       const p = (snapOn && snapRef.current) ? snapRef.current : toImage(e.clientX, e.clientY);
@@ -1774,6 +1789,7 @@ export default function TakeoffCanvas() {
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
       return;
     }
+    if (ocDragRef.current) { ocDragRef.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
     if (dragRef.current) { dragRef.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
     if (panRef.current) {
       panRef.current = null;
@@ -1925,6 +1941,140 @@ export default function TakeoffCanvas() {
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
     setCommitMsg(`Created ${made.length} takeoff${made.length === 1 ? "" : "s"} — ${sf.toLocaleString(undefined, { maximumFractionDigits: 1 })} SF ${condById[activeCond]?.finish_tag || ""}. Click the next room.`);
     setProposal(null);
+  }
+
+  // ── One-Click proposal geometry editing — correct a fill BEFORE Create ──────
+  // A proposal region's `poly` is panel-LOCAL px (image space of proposal.key,
+  // no xOffset — same frame the preview draws in). These reuse the existing
+  // recompute idiom (ringArea × upp², closedMetrics) and the endpoint snap grid,
+  // so a corrected corner lands on the plan's true linework just like a hand
+  // trace. Nothing here commits a takeoff — that's still the Create (⏎) gate.
+  const ocMetrics = (poly, key) => {
+    const upp = uppFor(key) || 0;
+    return { area_sf: +(ringArea(poly) * upp * upp).toFixed(2), perim_lf: +(closedMetrics(poly).perim * upp).toFixed(2) };
+  };
+  const ocSnap = (key, x, y) => {
+    const grid = snapGridsRef.current.get(key);
+    const hit = grid ? nearestSnap(grid, x, y, 8 / tfRef.current.scale) : null;
+    return hit ? [hit[0], hit[1]] : [x, y];
+  };
+  // Press on a corner (select + arm move), an edge grip (arm whole-line move),
+  // or Shift on an edge (insert a new anchor, arm its move). Returns true if the
+  // press was consumed. Hit-tests against RAW cursor px (not the snap/angle-
+  // adjusted point) so grabbing a handle is never nudged by an unrelated snap.
+  function oneClickHandleAt(e) {
+    if (tool !== "oneclick" || !proposal) return false;
+    const tp = panelByKey(proposal.key);
+    if (!tp || !tp.img.w) return false;
+    const raw = toImage(e.clientX, e.clientY);
+    const lx = raw[0] - tp.xOffset, ly = raw[1];
+    const thr = 8 / tfRef.current.scale;
+    const regions = proposal.regions;
+    for (let ri = 0; ri < regions.length; ri++) {          // corners win over edges
+      const poly = regions[ri].poly;
+      for (let i = 0; i < poly.length; i++) {
+        if (Math.hypot(poly[i][0] - lx, poly[i][1] - ly) < thr * 1.6) {
+          setOcSel({ ri, vi: i });
+          ocDragRef.current = { kind: "oc-vertex", ri, vi: i };
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return true;
+        }
+      }
+    }
+    for (let ri = 0; ri < regions.length; ri++) {          // edge midpoints
+      const poly = regions[ri].poly;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        if (Math.hypot(mx - lx, my - ly) < thr * 1.5) {
+          if (e.shiftKey) {                                  // insert a new anchor, then drag it
+            setProposal((pr) => {
+              if (!pr) return pr;
+              const rgs = pr.regions.map((r, idx) => {
+                if (idx !== ri) return r;
+                const np = [...r.poly.slice(0, i + 1), [mx, my], ...r.poly.slice(i + 1)];
+                return { ...r, poly: np, ...ocMetrics(np, pr.key) };
+              });
+              return { ...pr, regions: rgs };
+            });
+            setOcSel({ ri, vi: i + 1 });
+            ocDragRef.current = { kind: "oc-vertex", ri, vi: i + 1 };
+          } else {                                           // move BOTH endpoints of this line
+            ocDragRef.current = { kind: "oc-edge", ri, i, j: (i + 1) % poly.length, oa: a.slice(), ob: b.slice(), sx: lx, sy: ly };
+          }
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  // Live drag: a corner follows the (snapped) cursor; an edge translates both its
+  // endpoints by the drag delta, each end snapping independently to the linework.
+  function ocDragMove(e) {
+    const d = ocDragRef.current;
+    const tp = panelByKey(proposal?.key);
+    if (!proposal || !tp || !tp.img.w) { ocDragRef.current = null; return; }
+    const raw = toImage(e.clientX, e.clientY);
+    const lx = raw[0] - tp.xOffset, ly = raw[1];
+    setProposal((pr) => {
+      if (!pr) return pr;
+      const regions = pr.regions.map((r, ri) => {
+        if (ri !== d.ri) return r;
+        let poly;
+        if (d.kind === "oc-vertex") {
+          const np = ocSnap(pr.key, lx, ly);
+          poly = r.poly.map((v, i) => (i === d.vi ? np : v));
+        } else {
+          const dx = lx - d.sx, dy = ly - d.sy;
+          const na = ocSnap(pr.key, d.oa[0] + dx, d.oa[1] + dy);
+          const nb = ocSnap(pr.key, d.ob[0] + dx, d.ob[1] + dy);
+          poly = r.poly.map((v, i) => (i === d.i ? na : i === d.j ? nb : v));
+        }
+        return { ...r, poly, ...ocMetrics(poly, pr.key) };
+      });
+      return { ...pr, regions };
+    });
+  }
+  // Reveal handles on the region under the cursor (inside it, or near a corner /
+  // edge grip so you can grab a corner to pull it outward). Ref-compared so we
+  // only re-render when the hovered region actually changes.
+  function ocHoverUpdate(e) {
+    const tp = panelByKey(proposal.key);
+    let hov = -1;
+    if (tp && tp.img.w) {
+      const raw = toImage(e.clientX, e.clientY);
+      const lx = raw[0] - tp.xOffset, ly = raw[1];
+      const near = 14 / tfRef.current.scale;
+      for (let ri = 0; ri < proposal.regions.length && hov < 0; ri++) {
+        const poly = proposal.regions[ri].poly;
+        if (pointInPoly(lx, ly, poly)) { hov = ri; break; }
+        for (let i = 0; i < poly.length; i++) {
+          const a = poly[i], b = poly[(i + 1) % poly.length];
+          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+          if (Math.hypot(a[0] - lx, a[1] - ly) < near || Math.hypot(mx - lx, my - ly) < near) { hov = ri; break; }
+        }
+      }
+    }
+    if (hov !== ocHoverRef.current) { ocHoverRef.current = hov; setOcHover(hov); }
+  }
+  // Delete just the selected corner (Delete/⌫), keeping a region ≥ 3 points —
+  // never collapses the whole space (use ⌫ with nothing selected for that).
+  function deleteSelectedOcVertex() {
+    if (!ocSel || !proposal) return;
+    const r = proposal.regions[ocSel.ri];
+    if (!r) { setOcSel(null); return; }
+    if (r.poly.length <= 3) { setCommitMsg("A space needs at least 3 points — move it instead, or ⌫ again to drop the whole space."); return; }
+    setProposal((pr) => {
+      if (!pr) return pr;
+      const regions = pr.regions.map((rr, ri) => {
+        if (ri !== ocSel.ri) return rr;
+        const np = rr.poly.filter((_, i) => i !== ocSel.vi);
+        return { ...rr, poly: np, ...ocMetrics(np, pr.key) };
+      });
+      return { ...pr, regions };
+    });
+    setOcSel(null);
   }
 
   // ── copy / paste / duplicate — "draw once, drop it again", same sheet or the
@@ -3475,15 +3625,41 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })}
-                    {/* One-Click proposal preview — dashed cobalt selection, red dashed carve */}
-                    {proposal && proposal.key === p.key && proposal.regions.map((r, i) => (
+                    {/* One-Click proposal preview — dashed cobalt selection, red dashed carve.
+                        Handles (corner diamonds + edge grips) rise on the hovered/selected
+                        region: drag a corner, drag an edge to move the whole line, Shift-click
+                        an edge to add a point, select a corner + Delete to remove it. */}
+                    {proposal && proposal.key === p.key && proposal.regions.map((r, i) => {
+                      const col = r.kind === "neg" ? "#b03a26" : "#1f3fc7";
+                      const s = tf.scale;
+                      const grip = darkMode ? "#0b0e14" : "#faf6ea";
+                      const show = i === ocHover || (ocSel && ocSel.ri === i);
+                      return (
                       <g key={"oc" + i}>
                         <polygon points={r.poly.map((q) => q.join(",")).join(" ")}
                           fill={r.kind === "neg" ? "rgba(176,58,38,.18)" : "rgba(31,63,199,.10)"}
-                          stroke={r.kind === "neg" ? "#b03a26" : "#1f3fc7"} strokeWidth={2.5 / tf.scale} strokeDasharray={`${7 / tf.scale} ${4 / tf.scale}`} />
-                        <path d={starPath(r.seed[0], r.seed[1], 5 / tf.scale)} fill={r.kind === "neg" ? "#b03a26" : "#1f3fc7"} stroke="#fff" strokeWidth={1 / tf.scale} />
+                          stroke={col} strokeWidth={2.5 / s} strokeDasharray={`${7 / s} ${4 / s}`} />
+                        <path d={starPath(r.seed[0], r.seed[1], 5 / s)} fill={col} stroke="#fff" strokeWidth={1 / s} />
+                        {show && r.poly.map((a, k) => {
+                          const b = r.poly[(k + 1) % r.poly.length];
+                          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+                          const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+                          const w = 14 / s, h = 6 / s;
+                          return <rect key={"e" + k} x={mx - w / 2} y={my - h / 2} width={w} height={h} rx={h / 2}
+                            transform={`rotate(${ang} ${mx} ${my})`} fill={grip} stroke={col} strokeWidth={1.6 / s} />;
+                        })}
+                        {show && r.poly.map(([x, y], k) => {
+                          const isSel = ocSel && ocSel.ri === i && ocSel.vi === k;
+                          const sz = (isSel ? 6.5 : 5.5) / s;
+                          return <g key={"v" + k}>
+                            {isSel && <circle cx={x} cy={y} r={9 / s} fill="none" stroke={col} strokeWidth={1.2 / s} opacity={0.5} />}
+                            <path d={`M${x},${y - sz} L${x + sz},${y} L${x},${y + sz} L${x - sz},${y} Z`}
+                              fill={isSel ? grip : col} stroke={isSel ? col : "#fff"} strokeWidth={(isSel ? 2 : 1.4) / s} />
+                          </g>;
+                        })}
                       </g>
-                    ))}
+                      );
+                    })}
                   </g>
                 );
               })}
@@ -3562,7 +3738,8 @@ export default function TakeoffCanvas() {
               <>
                 <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(sf)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF selected</span></div>
                 <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""} · {num(sf / 9)} SY</div>
-                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>{ocSel ? "drag to move · Delete drops this point · Esc deselects" : "hover a fill to edit: drag a corner or edge · shift-click an edge adds a point"}</div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
               </>
             );
           })() : tool === "surface" && poly.length >= 2 && liveUpp ? (

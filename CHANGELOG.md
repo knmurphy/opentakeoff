@@ -5,6 +5,15 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ## Unreleased
 
 ### Added
+- **Editable One-Click selections — correct a fill before Create.** A One-Click
+  proposal (the dashed cobalt selection, before you press Create) now carries
+  geometry handles, so a not-quite-right fill is fixed in place without leaving
+  the tool. Hover a selected space to raise its handles, then **drag a corner**
+  to move it (snapping to the plan's linework), **drag an edge grip** to slide
+  the whole line out to the wall in one motion, **Shift-click an edge** to drop
+  a new anchor point, and **click a corner + `Delete`** to remove just that
+  point (never the whole space). Area/SF updates live as you edit; nothing
+  commits a takeoff until Create (⏎), the same review gate as before.
 - **Sign-in visible on the plan-set/landing view (cloud mode).** The Google
   sign-in chip now also appears in the plan-set gallery header, so a signed-out
   visitor on the landing page can sign in without a deep link (the main toolbar's
