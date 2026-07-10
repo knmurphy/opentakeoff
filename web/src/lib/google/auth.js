@@ -7,8 +7,10 @@
 // of this browser's IndexedDB.
 //
 // Trust model: the OAuth app is registered as "Internal", so Google itself only
-// issues tokens to accounts in the org — the domain is enforced at Google, not
-// by us (VITE_GOOGLE_HD is only a UI hint to the account chooser). The client_id
+// issues tokens to accounts in the org — Google and the server (ALLOWED_HD) are
+// the real domain enforcement. VITE_GOOGLE_HD drives the account-chooser hint
+// and a client-side defense-in-depth gate (isAllowedDomain) so a non-org account
+// can't ping the paid scan reader even if the app is ever set External. The client_id
 // is public by design (that's how browser OAuth works) and there is NO
 // client_secret — this is the Google Identity Services token-client flow.
 // Access tokens live in a module-level variable ONLY; they are never written to
@@ -84,6 +86,31 @@ export function getUser() {
 
 export function isSignedIn() {
   return !!token && !!user;
+}
+
+// Pure org-domain match — the decision behind isAllowedDomain(), split out so it
+// is unit-testable without the module's private sign-in state. Derives the domain
+// EXACTLY as the server does (netlify/functions/parse-schedule.mjs): the Workspace
+// `hd` claim, falling back to the email's domain, case-folded. An empty `allowed`
+// ⇒ any account (parity with an empty server ALLOWED_HD). No user + a set domain
+// ⇒ false (fails closed).
+export function domainAllows(allowed, user) {
+  const a = (allowed || "").trim().toLowerCase();
+  if (!a) return true;                       // no domain configured ⇒ any account (server parity)
+  if (!user) return false;
+  const dom = (user.hd || (user.email || "").split("@")[1] || "").toLowerCase();
+  return dom === a;
+}
+
+// Is the signed-in user inside the configured org domain? Client-side
+// defense-in-depth for the PAID scan reader: so a signed-in account OUTSIDE the
+// domain never even pings the paid endpoint — the server would 403 it, but we
+// don't want, e.g., a personal gmail that signed in for the free local features
+// to be able to trigger a spend. NOTE: VITE_GOOGLE_HD is inlined at BUILD time
+// and must match the server's runtime ALLOWED_HD — see the deploy workflow. If
+// the build var is unset this returns true (server stays authoritative).
+export function isAllowedDomain() {
+  return domainAllows(domainHint(), user);
 }
 
 // Inject the GIS script once and resolve when its oauth2 API is live. Guards

@@ -42,6 +42,13 @@ jobs:
         # app. Vite inlines VITE_* at build time; the deployed dist is this step.
         env:
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+          # MATCHED PAIR: VITE_GOOGLE_HD (inlined here at build time) must equal
+          # the site's runtime ALLOWED_HD in Netlify — they gate the paid schedule
+          # scan reader on client and server respectively. If this Variable is left
+          # unset while ALLOWED_HD is set, the client org-gate (isAllowedDomain)
+          # silently no-ops and any signed-in account can *reach* the endpoint
+          # (the server still 403s non-org accounts — no spend/breach — but the
+          # "don't even hit the network" guarantee is lost). Keep the two in sync.
           VITE_GOOGLE_HD: ${{ vars.VITE_GOOGLE_HD }}
           VITE_PRICING_FILE_ID: ${{ vars.VITE_PRICING_FILE_ID }}
           VITE_DRIVE_ROOT_FOLDER_ID: ${{ vars.VITE_DRIVE_ROOT_FOLDER_ID }}

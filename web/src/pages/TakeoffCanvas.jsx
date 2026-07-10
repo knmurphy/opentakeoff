@@ -29,7 +29,7 @@ import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKe
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, SCAN_ENDPOINT } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
-import { isGoogleConfigured, isSignedIn, getAccessToken } from "../lib/google/auth.js";
+import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
@@ -300,6 +300,7 @@ export default function TakeoffCanvas() {
   const renderTasksRef = useRef(new Map());  // sheetKey → pdf.js RenderTask
   const pdfDocsRef = useRef(new Map());      // file name → pdf.js loading task (doc cache)
   const renderSeqRef = useRef(0);            // monotonic token — stale render chains bail out
+  const scanBusyRef = useRef(false);         // a paid schedule OCR read is in flight — blocks re-fire from a rapid re-draw
   const panRef = useRef(null);
   const spaceRef = useRef(false);
   const crossVRef = useRef(null);
@@ -2610,54 +2611,85 @@ export default function TakeoffCanvas() {
       if (seq !== renderSeqRef.current) return;
       tokens = extractRegionText(tc, vp, rect);
     } catch { setCommitMsg("Couldn't read that region."); return; }
-    // Vector-vs-scan decision: tokens present ⇒ this is a vector page, so the
-    // text layer is the schedule (OCR wouldn't help even if it parses to nothing);
-    // NO tokens ⇒ a raster/scanned page, fall through to the AI scan path.
+    // Vector-vs-scan decision. Tokens present ⇒ TRY the text layer first (a real
+    // vector schedule parses straight from it, no OCR cost). But token presence
+    // isn't proof of a vector page: scanned plans often carry a stray text layer
+    // (embedded OCR, a title block, dimension text) that lands in the marquee yet
+    // holds no schedule. So a token-bearing box that parses to NOTHING is not a
+    // dead end — fall through to the AI scan path when it's reachable, exactly as
+    // a truly text-less raster page would.
     if (tokens.length) {
       const rows = parseSchedule(tokens);
-      if (!rows.length) { setCommitMsg("No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header)."); return; }
-      setImportRows(rows);
-      return;
+      if (rows.length) { setImportRows(rows); return; }
+      // Parsed nothing. If the scan reader isn't reachable — not configured, not
+      // signed in, or the account is outside the org domain — the only actionable
+      // advice is to re-drag around the table header. Don't fire a paid OCR call
+      // and don't claim the page is scanned.
+      if (!isGoogleConfigured() || !isSignedIn() || !isAllowedDomain()) {
+        setCommitMsg("No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header).");
+        return;
+      }
+      // else: the reader is available — let it read the pixels below.
     }
-    await importScheduleFromScan(pageObj, rs, rect, seq);
+    await importScheduleFromScan(pageObj, rs, rect, seq, tokens.length > 0);
   }
 
   // Scan/OCR fallback for a raster page: rasterize the marqueed region and POST
   // it to the optional AI backend, then feed the returned rows into the SAME
   // approval dialog. LOGIN-GATED — only a Google-configured deployment with a
   // signed-in user reaches the network (no API key ever lives in client code).
-  async function importScheduleFromScan(pageObj, rs, rect, seq) {
+  // hadTokens distinguishes the two callers: a true raster page (no text layer)
+  // vs. the fallthrough from a token-bearing box whose vector parse found nothing
+  // — only the "reader found nothing" message differs, so the advice stays right.
+  async function importScheduleFromScan(pageObj, rs, rect, seq, hadTokens) {
     if (!isGoogleConfigured()) {
       setCommitMsg("No schedule found — this looks like a scanned page (no text layer). Importing from scanned plans needs the AI backend.");
       return;
     }
     if (!isSignedIn()) { setCommitMsg("Sign in to import from scanned plans."); return; }
-    let png;
-    try { png = await rasterizeRegion(pageObj, rs, rect); }
-    catch { setCommitMsg("Couldn't read that region."); return; }
-    if (seq !== renderSeqRef.current) return;
-    // The token is what actually authorizes the paid read — the server verifies
-    // it before spending. A missing/expired token here means re-consent, not a
-    // silent public call.
-    let token;
-    try { token = await getAccessToken(); }
-    catch { setCommitMsg("Sign in again to import from scanned plans."); return; }
-    if (seq !== renderSeqRef.current) return;
-    setCommitMsg("Reading the scanned schedule…");
+    // Org-only: a signed-in account outside the configured domain must not reach
+    // the paid reader (the server 403s it too — this just avoids the round-trip).
+    if (!isAllowedDomain()) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
+    // A paid read is already in flight — a rapid re-draw of the marquee must not
+    // fire a second Gemini call. Surface it (the first call may not have printed
+    // "Reading…" yet) so the redraw doesn't look ignored. Clears in finally below.
+    if (scanBusyRef.current) { setCommitMsg("Still reading the last schedule — one moment."); return; }
+    scanBusyRef.current = true;
     try {
-      const res = await fetch(SCAN_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height }),
-      });
+      let png;
+      try { png = await rasterizeRegion(pageObj, rs, rect); }
+      catch { setCommitMsg("Couldn't read that region."); return; }
       if (seq !== renderSeqRef.current) return;
-      if (res.status === 401 || res.status === 403) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
-      if (res.status === 501) { setCommitMsg("Importing from scanned plans isn't enabled on this deployment."); return; }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const rows = normalizeScanRows(await res.json());
-      if (!rows.length) { setCommitMsg("No schedule found in that scanned region — the reader returned nothing."); return; }
-      setImportRows(rows);
-    } catch { setCommitMsg("Couldn't reach the schedule reader — try again in a moment."); }
+      // The token is what actually authorizes the paid read — the server verifies
+      // it before spending. A missing/expired token here means re-consent, not a
+      // silent public call.
+      let token;
+      try { token = await getAccessToken(); }
+      catch { setCommitMsg("Sign in again to import from scanned plans."); return; }
+      if (seq !== renderSeqRef.current) return;
+      setCommitMsg("Reading the scanned schedule…");
+      try {
+        const res = await fetch(SCAN_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height }),
+        });
+        if (seq !== renderSeqRef.current) return;
+        if (res.status === 401 || res.status === 403) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
+        if (res.status === 501) { setCommitMsg("Importing from scanned plans isn't enabled on this deployment."); return; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const rows = normalizeScanRows(await res.json());
+        if (!rows.length) {
+          setCommitMsg(hadTokens
+            ? "No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header)."
+            : "No schedule found in that scanned region — the reader returned nothing.");
+          return;
+        }
+        setImportRows(rows);
+      } catch { setCommitMsg("Couldn't reach the schedule reader — try again in a moment."); }
+    } finally {
+      scanBusyRef.current = false;
+    }
   }
 
   // Render just the marqueed region (rs-viewport px, the space rect lives in) to
