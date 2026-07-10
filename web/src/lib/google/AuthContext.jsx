@@ -26,8 +26,13 @@ export function GoogleAuthProvider({ children }) {
     if (!configured) return;
     // Keep local state in lock-step with the auth module (sign-in/out fire here).
     const unsub = onAuthChange(setUser);
-    // Warm the GIS script so the first sign-in click is instant; failure to
-    // preload isn't fatal (the click will retry the load), so still mark ready.
+    // Warm the GIS script ONLY — inject the <script> so the first sign-in click
+    // is instant. We deliberately do NOT request a token here: the GIS token
+    // model has no truly silent path (every requestAccessToken() opens a popup
+    // and expects a user gesture — see auth.js and Google's own docs), so any
+    // automatic attempt on mount would pop the OAuth window on every page load.
+    // Nothing touches Google credentials until the user explicitly clicks
+    // "Sign in with Google Drive." Preloading the script alone never prompts.
     let live = true;
     preloadGoogle().finally(() => { if (live) setReady(true); });
     return () => { live = false; unsub(); };
