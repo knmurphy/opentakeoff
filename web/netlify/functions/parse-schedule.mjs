@@ -19,6 +19,12 @@ const GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v3/userinfo";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const ALLOWED_HD = (process.env.ALLOWED_HD || "").trim().toLowerCase(); // "" = any verified Google account
 
+// A schedule marquee is a small crop of one sheet — these caps are generous for
+// that and just bound worst-case memory/time/cost against a malformed request
+// (OAuth gating stops *who* can call this, not *what* they send).
+const MAX_IMAGE_B64_LEN = 8_000_000; // ~6MB decoded PNG
+const MAX_IMAGE_DIM = 4096;
+
 const json = (statusCode, body) => ({
   statusCode,
   headers: { "Content-Type": "application/json" },
@@ -72,6 +78,9 @@ async function verifyGoogleUser(authHeader) {
     return { ok: false, status: 502, msg: "Couldn't verify your sign-in." };
   }
   const email = (profile.email || "").toLowerCase();
+  if (!email || profile.email_verified === false) {
+    return { ok: false, status: 401, msg: "Your Google sign-in doesn't have a verified email." };
+  }
   const hd = (profile.hd || email.split("@")[1] || "").toLowerCase();
   if (ALLOWED_HD && hd !== ALLOWED_HD) return { ok: false, status: 403, msg: "This deployment is limited to a single organization." };
   return { ok: true, email };
@@ -105,6 +114,11 @@ export async function handler(event) {
   try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "bad JSON" }); }
   const imageB64 = typeof body.image_b64 === "string" ? body.image_b64 : "";
   if (!imageB64) return json(400, { error: "image_b64 required" });
+  if (imageB64.length > MAX_IMAGE_B64_LEN) return json(413, { error: "image too large" });
+  const { width, height } = body;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || width > MAX_IMAGE_DIM || height > MAX_IMAGE_DIM) {
+    return json(400, { error: "invalid image dimensions" });
+  }
 
   try {
     const rows = await readSchedule(imageB64);

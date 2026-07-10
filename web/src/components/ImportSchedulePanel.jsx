@@ -45,8 +45,8 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
   // source of truth for "can this row be created": unique, non-empty, and not
   // already a condition. Re-evaluated on every keystroke so dedup stays live.
   const tagState = useMemo(
-    () => evaluateTags(keyed.map(({ key, row }) => ({ key, tag: tagOf(key, row) })), existing),
-    [keyed, tags, existing], // eslint-disable-line react-hooks/exhaustive-deps
+    () => evaluateTags(keyed.map(({ key, row }) => ({ key, tag: tags[key] !== undefined ? tags[key] : row.finish_tag })), existing),
+    [keyed, tags, existing],
   );
   const stateOf = (key) => tagState.get(key);
   const canPick = (key) => isCreatable(tagState.get(key));
