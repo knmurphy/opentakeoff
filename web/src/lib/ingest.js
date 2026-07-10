@@ -16,6 +16,15 @@ const PDF_EXT = /\.pdf$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp)$/i;
 const ZIP_EXT = /\.zip$/i;
 
+// Guardrails against hostile archives (zip bombs and self-nesting "zip quines").
+// Everything here runs in the user's browser tab, so an unbounded archive is a
+// local denial-of-service — a wedged or OOM-killed tab. Cap how deep we recurse
+// into nested zips and how many bytes we'll decompress across one whole ingest;
+// past either limit an entry is reported as skipped instead of expanded. Both
+// are overridable via ingestFiles opts so the caps are cheap to unit-test.
+const MAX_ZIP_DEPTH = 8;
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB of decompressed output
+
 const isPdf = (name, type = "") => PDF_EXT.test(name) || type === "application/pdf";
 const isImage = (name, type = "") => IMAGE_EXT.test(name) || (type || "").startsWith("image/");
 const isZip = (name, type = "") => ZIP_EXT.test(name) || /zip/i.test(type);
@@ -40,16 +49,24 @@ async function looksLikeZip(file) {
 
 // Decompress only the entries we can use (saves memory on big plan sets); report
 // anything else as skipped via onSkip rather than silently dropping it.
-async function unzipBytes(bytes, onSkip) {
+//
+// `budget` tracks the decompressed bytes still allowed for this whole ingest.
+// fflate runs the filter per entry BEFORE decompressing it, and
+// UnzipFileInfo.originalSize is the header's declared uncompressed size — so
+// rejecting oversized entries here means fflate never allocates them. That's
+// what defuses a zip bomb: a 4 GB entry is refused, not expanded into memory.
+async function unzipBytes(bytes, onSkip, budget) {
   const { unzip } = await import("fflate");
   return new Promise((resolve, reject) => {
     unzip(bytes, {
       filter: (f) => {
         if (isJunk(f.name)) return false;
         const bn = baseName(f.name);
-        const ok = isPdf(bn) || isImage(bn) || isZip(bn);
-        if (!ok) onSkip?.(bn);
-        return ok;
+        if (!(isPdf(bn) || isImage(bn) || isZip(bn))) { onSkip?.(bn, "unsupported type"); return false; }
+        const size = f.originalSize || 0;
+        if (size > budget.left) { onSkip?.(bn, "archive too large"); return false; }
+        budget.left -= size;
+        return true;
       },
     }, (err, data) => (err ? reject(err) : resolve(data)));
   });
@@ -80,11 +97,17 @@ async function imageToPdf(file) {
   return new File([await doc.save()], name, { type: "application/pdf" });
 }
 
-export async function ingestFiles(fileList, { onProgress } = {}) {
+export async function ingestFiles(
+  fileList,
+  { onProgress, maxZipDepth = MAX_ZIP_DEPTH, maxTotalBytes = MAX_TOTAL_BYTES } = {},
+) {
   const incoming = Array.from(fileList || []);
   const pdfs = [];
   const skipped = [];
   const used = new Set();
+  // Shared across every (possibly nested) archive in this ingest, so a bomb
+  // split over many entries or sibling zips still hits one combined ceiling.
+  const budget = { left: maxTotalBytes };
 
   // store keys by name; de-dupe within the batch so two "A1.pdf" from different
   // zip folders don't overwrite each other
@@ -102,22 +125,25 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
     pdfs.push(name === file.name ? file : new File([file], name, { type: "application/pdf" }));
   };
 
-  async function process(file) {
+  async function process(file, depth) {
     const name = file.name || "file";
     try {
       if (isPdf(name, file.type)) { pushPdf(file); return; }
       if (isImage(name, file.type)) { onProgress?.(`Converting ${baseName(name)}…`); pushPdf(await imageToPdf(file)); return; }
       if (isZip(name, file.type) || (await looksLikeZip(file))) {
+        // Stop runaway recursion from self-nesting archives before we even read
+        // the bytes — a zip that contains itself would otherwise loop forever.
+        if (depth >= maxZipDepth) { skipped.push({ name: baseName(name), reason: "nested too deep" }); return; }
         onProgress?.(`Unzipping ${baseName(name)}…`);
         const entries = await unzipBytes(new Uint8Array(await file.arrayBuffer()),
-          (bn) => skipped.push({ name: bn, reason: "unsupported type" }));
+          (bn, reason) => skipped.push({ name: bn, reason }), budget);
         const paths = Object.keys(entries);
         if (!paths.length) { skipped.push({ name: baseName(name), reason: "no plans found in zip" }); return; }
         for (const path of paths) {
           const bn = baseName(path);
           if (isPdf(bn)) pushPdf(new File([entries[path]], bn, { type: "application/pdf" }));
           else if (isImage(bn)) { onProgress?.(`Converting ${bn}…`); pushPdf(await imageToPdf(new File([entries[path]], bn))); }
-          else if (isZip(bn)) await process(new File([entries[path]], bn, { type: "application/zip" }));
+          else if (isZip(bn)) await process(new File([entries[path]], bn, { type: "application/zip" }), depth + 1);
         }
         return;
       }
@@ -127,6 +153,6 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
     }
   }
 
-  for (const f of incoming) await process(f);
+  for (const f of incoming) await process(f, 0);
   return { pdfs, skipped };
 }
