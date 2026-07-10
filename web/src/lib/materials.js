@@ -12,12 +12,84 @@
 // without one, or later duplicates, are dropped — first-wins, the
 // sanitizeConditionColumns precedent — since matLibById, the Materials tab's
 // row keys, and updateLibMaterial all match on `id`, and a duplicate breaks
-// all three). Field defaulting stays the canvas's job (libFields / the `||`
-// fallbacks in the tab). Unknown item fields pass through (the scale_source
+// all three). Field defaulting stays libFields' / the tab's `||` fallbacks'
+// job. Unknown item fields pass through (the scale_source
 // precedent: stripping a future field on load would persist the loss on the
 // next library save).
 
+import { groutParamsEqual } from "./coverage.js";
+
 const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+
+// ── the library-link seam (#47 copy-on-attach + the grout calculator) ───────
+// Every copy between a condition material line and a library entry flows
+// through libFields: attach, promote, per-field revert, and push-to-linked all
+// build their copies from it, and matFieldOverridden compares against it. The
+// grout tile geometry (a nested object) and the material kind ride along —
+// dropping them here is exactly the desync the adversarial review found
+// (attached mosaics rendering 12×24 defaults, pushes leaving stale geometry).
+// grout is DEEP-COPIED at every copy point: a shared reference would alias one
+// geometry object across the library and every linked line.
+export const libFields = (lm) => ({
+  name: lm.name || "", unit: lm.unit || "", per: lm.per || 0, basis: lm.basis || "area",
+  round: lm.round !== false, note: lm.note || "",
+  ...(lm.kind ? { kind: lm.kind } : {}),
+  ...(lm.grout ? { grout: { ...lm.grout } } : {}),
+});
+
+// overridden = this line's field differs from its linked library entry
+// (the amber tint + per-field ↺ in MaterialsEditor). "grout" compares the five
+// geometry params structurally — never by reference — so geometry drift on a
+// linked line ambers like any other override.
+export const matFieldOverridden = (m, lm, f) => {
+  if (!lm) return false;
+  const L = libFields(lm);
+  if (f === "per") return (Number(m.per) || 0) !== L.per;
+  if (f === "round") return (m.round !== false) !== L.round;
+  if (f === "basis") return (m.basis || "area") !== L.basis;   // absent basis means "area" everywhere else — don't flag it
+  if (f === "grout") return !groutParamsEqual(m.grout, L.grout);
+  return String(m[f] || "") !== String(L[f] || "");
+};
+
+// per + note on a grout line are DERIVED from its tile geometry, so the three
+// fields must move together or the row contradicts its own calculator:
+// · push replaces per/note/grout as a unit, and a library entry WITHOUT
+//   geometry clears the line's — stale geometry would silently overwrite the
+//   pushed rate on the next calculator keystroke;
+// · reverting per, note, or the geometry row on a grout line restores all
+//   three to the library values (a lone reverted per under an edited-geometry
+//   note would print false provenance in the Report).
+export const libPushPatch = (m, lm) => {
+  const next = { ...m, ...libFields(lm) };
+  if (!lm.grout) delete next.grout;
+  return next;
+};
+export const libRevertPatch = (m, lm, f) => {
+  const L = libFields(lm);
+  if ((f === "per" || f === "note" || f === "grout") && (m.grout || lm.grout)) {
+    return { per: L.per, note: L.note, grout: L.grout };   // L.grout is already a fresh copy (or undefined → clears the line's)
+  }
+  return { [f]: L[f] };
+};
+
+// Library-row edit (Materials tab). The tab has no grout calculator, so a
+// hand edit of per or note on an entry that carries tile geometry DETACHES the
+// geometry — otherwise the entry would push/attach a grout object that
+// contradicts its own per/note.
+export const libEntryPatch = (lm, patch) => {
+  const next = { ...lm, ...patch, ...(patch.grout ? { grout: { ...patch.grout } } : {}) };
+  if (next.grout && !("grout" in patch) && ("per" in patch || "note" in patch)) delete next.grout;
+  return next;
+};
+
+// Template/seed material → live condition line. The seed's grout object (CT-1
+// carries { ...GROUT_DEFAULTS } built once at module load) must not be shared
+// by reference into live state — deep-copy it per instantiation.
+export const instantiateMaterial = (m, id) => ({
+  round: true, ...m,
+  ...(m.grout ? { grout: { ...m.grout } } : {}),
+  id,
+});
 
 export function sanitizeMaterialLibrary(raw) {
   if (!Array.isArray(raw)) return [];

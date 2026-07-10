@@ -38,6 +38,7 @@ import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
+import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch } from "../lib/materials.js";
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
 import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
@@ -2785,7 +2786,7 @@ export default function TakeoffCanvas() {
     waste_pct: c.waste_pct || 0,
     ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
     ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
-    materials: (c.materials || []).map(({ id: _id, ...m }) => m),   // ids are minted on instantiation
+    materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
   });
   const saveActiveAsTemplate = () => {
     if (!aCond) return;
@@ -2837,16 +2838,9 @@ export default function TakeoffCanvas() {
     setMatLib(next);
     store.saveMaterialLibrary(next).catch((e) => setCommitMsg(`Couldn't save the material library: ${e.message || e}`));
   };
-  const libFields = (lm) => ({ name: lm.name || "", unit: lm.unit || "", per: lm.per || 0, basis: lm.basis || "area", round: lm.round !== false, note: lm.note || "" });
-  // overridden = this line's field differs from its linked library entry
-  const matFieldOverridden = (m, lm, f) => {
-    if (!lm) return false;
-    const L = libFields(lm);
-    if (f === "per") return (Number(m.per) || 0) !== L.per;
-    if (f === "round") return (m.round !== false) !== L.round;
-    if (f === "basis") return (m.basis || "area") !== L.basis;   // absent basis means "area" everywhere else — don't flag it
-    return String(m[f] || "") !== String(L[f] || "");
-  };
+  // libFields / matFieldOverridden / the push+revert patch builders live in
+  // lib/materials.js (pure, tested): they carry kind and the grout tile
+  // geometry through every library copy, deep-copying grout at each point.
   const attachLibMaterial = (libId) => {
     const lm = matLibById[libId];
     if (!lm || !aCond) return;
@@ -2861,9 +2855,9 @@ export default function TakeoffCanvas() {
   };
   const revertMatField = (m, f) => {
     const lm = matLibById[m.lib_id];
-    if (lm) updateMaterial(m.id, { [f]: libFields(lm)[f] });
+    if (lm) updateMaterial(m.id, libRevertPatch(m, lm, f));   // grout-derived per/note revert together with the geometry
   };
-  const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? libEntryPatch(x, patch) : x)));   // hand-editing per/note detaches a grout entry's geometry
   // one pass per conditions change, not per library row — the Materials tab reads this per row
   const linkedCountById = useMemo(() => {
     const by = {};
@@ -2877,7 +2871,7 @@ export default function TakeoffCanvas() {
     const n = linkedCount(libId);
     if (!n) { setCommitMsg("No condition lines link this material yet."); return; }
     if (!window.confirm(`Update ${n} linked line${n === 1 ? "" : "s"} across conditions to the library values? Overrides on those lines are replaced.`)) return;
-    setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => (m.lib_id === libId ? { ...m, ...libFields(lm) } : m)) })));
+    setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => (m.lib_id === libId ? libPushPatch(m, lm) : m)) })));
     setCommitMsg(`Updated ${n} linked line${n === 1 ? "" : "s"} from the library.`);
   };
   const deleteLibMaterial = (libId) => {

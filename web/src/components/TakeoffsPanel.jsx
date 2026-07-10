@@ -30,7 +30,7 @@ import { attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { num } from "../lib/num.js";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
-import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutCoverageSfPerBag } from "../lib/coverage.js";
+import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutDerivedFields } from "../lib/coverage.js";
 
 export const PANEL_MIN_W = 240;
 export const PANEL_MAX_W = 560;
@@ -61,18 +61,31 @@ const btnClearX = { border: "none", background: "none", color: "var(--ink-muted)
 // and the grout-from-tile-geometry calculator live in lib/coverage.js —
 // vendor-neutral, generic rates; always verify against the product data sheet.
 
-// Inches → drawing-style fraction (0.375 → "3/8", 1.25 → "1 1/4"); falls back
-// to the decimal when the value isn't on the 1/32″ grid.
-function inFrac(v) {
-  const n32 = Math.round(v * 32);
-  if (!(n32 > 0) || Math.abs(v * 32 - n32) > 1e-6) return String(v);
-  let n = n32, d = 32;
-  while (n % 2 === 0 && d % 2 === 0) { n /= 2; d /= 2; }
-  const whole = Math.floor(n / d), rem = n - whole * d;
-  if (!rem) return String(whole);
-  return whole ? `${whole} ${rem}/${d}` : `${rem}/${d}`;
+// The fraction formatter (inFrac) and derivation-note builder moved to
+// lib/coverage.js with the rest of the grout math so they're pure and tested.
+
+// One grout tile-geometry input. Keeps the RAW string in local state while the
+// field is being edited — clamping/coercing inside onChange made the joint
+// field untypeable (every keystroke through "0." snapped to the 0.03125 min)
+// and wiped the leading "0" of decimals in the tile fields. Commits to the
+// condition only when the typed value is valid (> 0 and inside [min, max]);
+// blur clamps an out-of-range value into range and abandons an empty/invalid
+// draft, so the last good committed value redisplays.
+function GroutParamInput({ name, value, title, min = 0, max, width = 52, override, onCommit }) {
+  const [draft, setDraft] = useState(null);   // raw text mid-edit; null = mirror the committed value
+  const valid = (v) => Number.isFinite(v) && v > 0 && v >= min && (max == null || v <= max);
+  return (
+    <input name={name} type="number" min={min || 0} max={max} step="any" title={title}
+      value={draft ?? (value > 0 ? String(value) : "")}
+      onChange={(e) => { const t = e.target.value; setDraft(t); const v = parseFloat(t); if (valid(v)) onCommit(v); }}
+      onBlur={() => {
+        const v = parseFloat(draft ?? "");
+        if (Number.isFinite(v) && v > 0) onCommit(Math.min(max ?? Infinity, Math.max(min, v)));
+        setDraft(null);
+      }}
+      style={{ ...ip, width, ...(override ? { border: "1px solid var(--c-warning)" } : {}) }} />
+  );
 }
-const groutNote = (g) => `${g.tileL}×${g.tileW}×${inFrac(g.tileT)}″ @ ${inFrac(g.joint)}″ · ${g.bagLbs} lb`;
 
 // Coverage preset picker — shared by the condition-line editor and the
 // Materials tab so a library "Adhesive" and an attached line offer the same
@@ -108,16 +121,18 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
         const ov = (f) => (lm && overridden ? overridden(m, lm, f) : false);
         const kind = materialKind(m);
         const g = { ...GROUT_DEFAULTS, ...(m.grout || {}) };
-        // grout coverage derives from tile geometry — every param change re-derives
-        // per + writes the derivation into the note so the Report shows its work
+        // grout coverage derives from tile geometry — a param change re-derives
+        // per + writes the derivation into the note so the Report shows its
+        // work, but ONLY while the whole geometry is valid: an incomplete edit
+        // (cleared field, zero) keeps the last good per + note instead of
+        // silently committing a rate of 0 into the buy list and exports
         const setGrout = (patch) => {
           const grout = { ...g, ...patch };
-          onUpdate(m.id, { grout, per: Math.round(groutCoverageSfPerBag(grout)), note: groutNote(grout) });
+          onUpdate(m.id, { grout, ...(groutDerivedFields(grout) || {}) });
         };
-        const gi = (key, title) => (
-          <input name={`grout-${key}`} type="number" min="0" step="any" value={g[key] || ""} title={title}
-            onChange={(e) => setGrout({ [key]: Math.max(0, parseFloat(e.target.value) || 0) })}
-            style={{ ...ip, width: 52 }} />
+        const gi = (key, title, extra) => (
+          <GroutParamInput name={`grout-${key}`} value={g[key]} title={title} override={ov("grout")}
+            onCommit={(v) => setGrout({ [key]: v })} {...extra} />
         );
         return (
           <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
@@ -158,12 +173,11 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
                 <span>× thick</span>
                 {gi("tileT", "Tile thickness (in)")}
                 <span>″ · joint</span>
-                <input name="grout-joint" type="number" min="0.03125" max="0.5" step="any" value={g.joint || ""} title="Joint width (in) — 1/32″ to 1/2″"
-                  onChange={(e) => setGrout({ joint: Math.min(0.5, Math.max(0.03125, parseFloat(e.target.value) || 0)) })}
-                  style={{ ...ip, width: 62 }} />
+                {gi("joint", "Joint width (in) — 1/32″ to 1/2″", { min: 0.03125, max: 0.5, width: 62 })}
                 <span>″ · bag</span>
                 {gi("bagLbs", "Bag size (lbs)")}
                 <span>lb</span>
+                {ov("grout") && rv(m, "grout")}
               </div>
             )}
           </div>

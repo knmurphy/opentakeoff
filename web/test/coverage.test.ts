@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // coverage.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
-import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutCoverageSfPerBag } from "../src/lib/coverage.js";
+import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, GROUT_PARAM_KEYS, groutCoverageSfPerBag, groutDerivedFields, groutParamsEqual, groutNote, inFrac } from "../src/lib/coverage.js";
 
 const within = (actual: number, expected: number, tolPct: number) =>
   Math.abs(actual - expected) <= expected * (tolPct / 100);
@@ -65,4 +65,47 @@ test("presets: every kind with a preset table has positive generic rates", () =>
       assert.ok(p.label && p.per > 0, `${kind}: ${p.label}`);
     }
   }
+});
+
+// ── groutDerivedFields: the derive-only-when-valid rule ─────────────────────
+// (adversarial review findings 5/8: a cleared tile dimension used to commit
+// per=0 and a "0×24×…" note, silently zeroing grout in every export)
+
+test("groutDerivedFields: valid geometry → rounded per + derivation note", () => {
+  assert.deepEqual(groutDerivedFields({ ...GROUT_DEFAULTS }), { per: 512, note: "12×24×3/8″ @ 1/8″ · 25 lb" });
+});
+
+test("groutDerivedFields: any invalid/incomplete param → null (keep the last good per + note)", () => {
+  for (const key of GROUT_PARAM_KEYS) {
+    for (const bad of [0, -1, NaN, undefined]) {
+      assert.equal(groutDerivedFields({ ...GROUT_DEFAULTS, [key]: bad }), null, `${key}=${bad}`);
+    }
+  }
+});
+
+test("groutDerivedFields: small rates keep two decimals and never floor to per=0", () => {
+  // 1 lb sample bag on the default tile → rate ≈ 20.5 … use a mosaic where Math.round used to bite
+  const mosaic = { tileL: 1, tileW: 1, tileT: 0.25, joint: 0.125, bagLbs: 1 };
+  const rate = groutCoverageSfPerBag(mosaic);
+  assert.ok(rate > 0 && rate < 10, `mosaic rate ${rate} exercises the fractional branch`);
+  const d = groutDerivedFields(mosaic);
+  assert.ok(d && d.per > 0, "per must stay positive");
+  assert.equal(d!.per, Math.round(rate * 100) / 100);   // two decimals, not floored to an integer
+});
+
+test("groutParamsEqual: structural, never by reference; absent params compare as the defaults", () => {
+  const a = { ...GROUT_DEFAULTS };
+  assert.ok(groutParamsEqual(a, { ...GROUT_DEFAULTS }));            // equal values, distinct objects
+  assert.ok(groutParamsEqual(undefined, { ...GROUT_DEFAULTS }));    // no grout renders as the defaults in the editor
+  assert.ok(groutParamsEqual(undefined, undefined));
+  assert.ok(!groutParamsEqual(a, { ...GROUT_DEFAULTS, joint: 0.25 }));
+  assert.ok(!groutParamsEqual(undefined, { ...GROUT_DEFAULTS, tileL: 2 }));
+});
+
+test("inFrac/groutNote: drawing-style fractions, decimal fallback off the 1/32″ grid", () => {
+  assert.equal(inFrac(0.375), "3/8");
+  assert.equal(inFrac(1.25), "1 1/4");
+  assert.equal(inFrac(0.03125), "1/32");
+  assert.equal(inFrac(0.33), "0.33");
+  assert.equal(groutNote({ tileL: 2, tileW: 2, tileT: 0.25, joint: 0.0625, bagLbs: 25 }), "2×2×1/4″ @ 1/16″ · 25 lb");
 });
