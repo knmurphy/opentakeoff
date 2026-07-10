@@ -117,6 +117,7 @@ Drive**. To set it up, see [`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md) and
 | **RFIs** | Raise a Request For Information from any markup — full register (status, ball-in-court, priority, cost/schedule impact), fly-to, and export |
 | **View** | Light or **dark (negative print)** — sheet pixels inverted at draw time, persists per browser |
 | **Storage** | IndexedDB + localStorage — client-only, nothing uploaded |
+| **MCP server** | The engine on stdio for your MCP client — load a plan, set the scale, one-click rooms, export the takeoff ([`mcp/`](mcp/README.md)) |
 | **Deploy** | One static build, hostable on Netlify, Vercel, GitHub Pages, S3, or any static host |
 
 ## Run it / deploy it
@@ -132,6 +133,10 @@ npm run build      # → web/dist/  (static; host it anywhere)
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/Kentucky-ai/opentakeoff)
 
 The repo ships a root `netlify.toml`, so the button above is genuinely one-click. The same `web/dist/` works on **Vercel, GitHub Pages, Cloudflare Pages, S3** — anywhere that serves static files.
+
+## Use it from an AI agent
+
+The same engine speaks [MCP](https://modelcontextprotocol.io): [`mcp/`](mcp/README.md) is a stdio server your MCP client can drive — `load_plan`, `read_sheet_text`, `set_scale`, `one_click`, `takeoff_summary`, `export_takeoff` and friends. An agent opens a plan, reads the title block, adopts the scale (never applied silently), clicks the rooms, and exports the exact payload the app autosaves — same math, same provenance receipts, same scale gate. Setup and a full example transcript: [`docs/MCP.md`](docs/MCP.md).
 
 ## Build on top of it
 

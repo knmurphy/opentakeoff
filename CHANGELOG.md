@@ -5,6 +5,7 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ## Unreleased
 
 ### Added
+- **MCP server.** [`mcp/`](mcp/README.md) puts the takeoff engine on stdio for your MCP client: ten tools — `load_plan`, `sheet_info`, `set_scale`, `one_click`, `measure_polygon`, `measure_line`, `takeoff_summary`, `export_takeoff`, `delete_shape`, `read_sheet_text` — over the same `web/src/lib` engine the canvas runs, so an agent's committed shapes are field-identical to the browser's and `export_takeoff` emits the app's own `opentakeoff.takeoff_canvas.v1` save payload. The app's rules carry over: detected scales are suggestions an agent must adopt explicitly, measures refuse without a per-sheet scale, a bare `one_click` returns px-only numbers with a warning, and every one-click shape carries its provenance receipt. Vector+text sheets only for now (scans report themselves plainly; the raster seam is marked). Full guide with an agent transcript in [`docs/MCP.md`](docs/MCP.md); CI grows an `mcp` job (typecheck + session/tool/e2e tests against the demo plan).
 - **Same geometry handles on selected shapes (Select tool).** Editing a
   committed takeoff now uses the same model as One-Click selections. Select a
   shape and: **drag a corner** to move it (snaps to the plan's linework),

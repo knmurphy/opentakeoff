@@ -25,10 +25,13 @@ The buildable map: what OpenTakeoff does and exactly where each piece lives, so 
 | **Persistence** | Autosave to IndexedDB + localStorage; survives reload; nothing uploaded | `web/src/lib/store.js` |
 | **Sample plan** | One-click demo: a real (public) medical-center floor finish plan | `web/public/demo/`, load button in the empty state |
 | **Optional AI backend** | Pluggable adapter interface for scale/room/finish suggestions; heuristic default, bring your own model | `server/app.py`, `server/adapters/base.py`, `server/adapters/heuristic.py` |
+| **MCP server** | The engine on stdio for MCP clients: load/scale/one-click/measure/summary/export as agent tools, same math and provenance as the canvas | `mcp/server.ts`, `mcp/src/{session,tools,pdf}.ts` (see `mcp/README.md`, `docs/MCP.md`) |
 
 ## Tested surface
 
 `cd web && npm test` — `node:test` over the pure math: `web/test/geometry.test.ts` (One-Click pipeline incl. the hatch-robust fill and meta emission), `web/test/canvas-geometry.test.ts` (angle lock, hit-testing, metrics, snap grid), and `web/test/totals.test.ts` (waste, SY, coverage → order quantities, vertical-wall SF).
+
+`cd mcp && npm test` — the MCP server over the bundled demo plan: session state + lazy caches (`mcp/test/session.test.ts`), the tool layer over an in-memory client/server pair (`mcp/test/tools.test.ts`), and a full load → scale → one-click ×4 → summary → export round-trip (`mcp/test/e2e.test.ts`).
 
 ## Extending it
 
