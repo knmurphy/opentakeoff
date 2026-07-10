@@ -2064,7 +2064,10 @@ export default function TakeoffCanvas() {
     if (!ocSel || !proposal) return;
     const r = proposal.regions[ocSel.ri];
     if (!r) { setOcSel(null); return; }
-    if (r.poly.length <= 3) { setCommitMsg("A space needs at least 3 points — move it instead, or ⌫ again to drop the whole space."); return; }
+    // Can't thin a triangle further. Deselect so the NEXT ⌫ falls through to the
+    // remove-last-region branch — otherwise the ocSel guard keeps re-firing this
+    // message and the space can never be dropped without an Esc first.
+    if (r.poly.length <= 3) { setOcSel(null); setCommitMsg("A space needs at least 3 points — ⌫ again drops the whole space."); return; }
     setProposal((pr) => {
       if (!pr) return pr;
       const regions = pr.regions.map((rr, ri) => {
