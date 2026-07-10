@@ -2,6 +2,10 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-09
+
+### Changed
+- **Public imagery re-captured from the live app.** The old hero card and One-Click GIF pre-dated the July 5 fill fixes and showed rooms with unfilled door-swing bites — the engine has been better than its own marketing since. The new captures show what a click actually does today: the same three patient rooms on the bundled VA plan trace **wall to wall** (163 → 154.6 SF, 162 → 184.6 SF, 161 → 240.7 SF; same 579.9 SF CPT-1 total), plus a VCT clean-linen room for contrast. New `docs/img/one-click-area.gif`, `docs/img/social-card.png`, `web/public/og-card.png`; alt text updated to match.
 ## 2026-07-08 (night)
 
 ### Added
