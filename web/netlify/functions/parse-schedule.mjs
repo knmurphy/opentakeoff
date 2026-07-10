@@ -48,8 +48,10 @@ export function hdDriftWarning(clientHd, allowedHd) {
 
 // Bound an untrusted diagnostic string before it reaches a log line: single-line
 // and length-capped so a hostile `client_hd` can't inject newlines or flood logs.
+// Slice BEFORE the regex so the whitespace-collapse never runs over an arbitrarily
+// large attacker-supplied value (bound the work, not just the output).
 function sanitizeForLog(v) {
-  return (typeof v === "string" ? v : "").replace(/\s+/g, " ").trim().slice(0, 100);
+  return (typeof v === "string" ? v : "").slice(0, 200).replace(/\s+/g, " ").trim().slice(0, 100);
 }
 
 const json = (statusCode, body) => ({
@@ -139,10 +141,17 @@ export async function handler(event) {
 
   let body;
   try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "bad JSON" }); }
+  // JSON.parse happily yields null/array/scalar; the rest of the handler indexes
+  // `body` as an object, so reject anything else with a clean 400 (not a 500).
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json(400, { error: "bad JSON" });
   // Cross-check the client's stamped org domain against ours; a drift means the
-  // client-side org-gate is silently no-op'ing (#91). Log-only, never gates.
-  const drift = hdDriftWarning(sanitizeForLog(body.client_hd), ALLOWED_HD);
-  if (drift) console.warn(`parse-schedule: ${drift}`);
+  // client-side org-gate is silently no-op'ing (#91). Log-only, never gates. Only
+  // when client_hd is actually sent (a string, incl. "") — an absent field means
+  // an old/other client that can't be compared, not drift, so don't false-alarm.
+  if (typeof body.client_hd === "string") {
+    const drift = hdDriftWarning(sanitizeForLog(body.client_hd), ALLOWED_HD);
+    if (drift) console.warn(`parse-schedule: ${drift}`);
+  }
   const imageB64 = typeof body.image_b64 === "string" ? body.image_b64 : "";
   if (!imageB64) return json(400, { error: "image_b64 required" });
   if (imageB64.length > MAX_IMAGE_B64_LEN) return json(413, { error: "image too large" });
