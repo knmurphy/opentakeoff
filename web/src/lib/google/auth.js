@@ -245,28 +245,14 @@ async function fetchProfile(accessToken) {
   return { email: p.email, name: p.name, picture: p.picture, sub: p.sub, hd: p.hd };
 }
 
-// Try to restore a session with NO visible prompt — a live Google session plus
-// a prior consent grant for our scopes lets GIS hand back a token silently.
-// Resolves to null (never rejects) when that's not possible, so callers can
-// fall back to an interactive sign-in instead of surfacing this as an error.
-export async function trySilentSignIn() {
-  if (!isGoogleConfigured()) return null;
-  try {
-    const accessToken = await requestTokenSilentWithTimeout();
-    user = await fetchProfile(accessToken);
-    notify();
-    return user;
-  } catch {
-    return null;
-  }
-}
-
-// Interactive sign-in: try silently first (covers a returning user whose
-// earlier consent grant just wasn't picked up automatically, e.g. this is the
-// first GIS call of the tab) and only fall back to the full consent/account
-// picker when that fails — `prompt: "consent"` always shows that screen even
-// for a user who already granted access, so it's a last resort, not the
-// default. Resolves with the user object. The token stays in memory only.
+// Interactive sign-in — ALWAYS user-initiated (a click on "Sign in with Google
+// Drive"). We try silently first (`prompt: ""`): a returning user with a live
+// Google session and a prior consent grant gets a token back with no visible
+// consent screen, which is the "just log me in" experience. Only when that
+// fails do we fall back to the full consent/account picker. Both paths run
+// inside the user's click gesture, so neither is a background prompt — nothing
+// here ever fires without the user asking for it. The token stays in memory
+// only. Resolves with the user object.
 export async function signIn() {
   if (!isGoogleConfigured()) {
     throw new Error("Google sign-in is not configured for this build.");
