@@ -28,6 +28,7 @@ import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, SCAN_ENDPOINT } from "../lib/scheduleScan";
+import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, getAccessToken } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
@@ -2649,19 +2650,20 @@ export default function TakeoffCanvas() {
   // NOT materials[] (those are coverage buy-list items, no coverage rate here).
   // Existing codes are skipped (shown "in use" in the dialog).
   function createFromSchedule(selected) {
-    const existing = new Set(conditions.map((c) => c.finish_tag));
+    const existing = new Set(conditions.map((c) => normalizeTag(c.finish_tag)));
     const made = [];
     let idx = conditions.length;
     for (const row of selected) {
-      if (existing.has(row.finish_tag)) continue;
-      const seed = rowToSeed(row, idx++, PALETTE);
+      const tag = normalizeTag(row.finish_tag);
+      if (existing.has(tag)) continue;
+      const seed = rowToSeed({ ...row, finish_tag: tag }, idx++, PALETTE);
       const hasSpec = Object.values(seed.spec).some(Boolean);
       made.push({
         id: uid("cnd"), finish_tag: seed.finish_tag, color: seed.color, fill: seed.color,
         hatch: seed.hatch, multiplier: 1, waste_pct: seed.waste_pct, materials: [],
         ...(hasSpec ? { spec: seed.spec } : {}),
       });
-      existing.add(row.finish_tag);
+      existing.add(tag);
     }
     setImportRows(null);
     if (!made.length) { setCommitMsg("Those finishes already exist as conditions."); return; }
@@ -4068,7 +4070,7 @@ export default function TakeoffCanvas() {
       {importRows && (
         <ImportSchedulePanel
           rows={importRows}
-          existing={new Set(conditions.map((c) => c.finish_tag))}
+          existing={new Set(conditions.map((c) => normalizeTag(c.finish_tag)))}
           palette={PALETTE} startIndex={conditions.length}
           onCreate={createFromSchedule}
           onClose={() => setImportRows(null)}
