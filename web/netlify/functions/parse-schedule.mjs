@@ -17,7 +17,10 @@
 
 const GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v3/userinfo";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-const ALLOWED_HD = (process.env.ALLOWED_HD || "").trim().toLowerCase(); // "" = any verified Google account
+// "" = any verified Google account. This is the AUTHORITATIVE org gate; the
+// client mirrors it in isAllowedDomain() (src/lib/google/auth.js) as a build-time
+// VITE_GOOGLE_HD — keep the two values in sync (see .github/workflows/deploy.yml).
+const ALLOWED_HD = (process.env.ALLOWED_HD || "").trim().toLowerCase();
 
 // A schedule marquee is a small crop of one sheet — these caps are generous for
 // that and just bound worst-case memory/time/cost against a malformed request
