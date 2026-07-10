@@ -1,7 +1,7 @@
 // Unit-system display layer + metric scale presets.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, M_PER_FT, M2_PER_SF } from "../src/lib/units.js";
+import { areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, M_PER_FT, M2_PER_SF, ftIn, fmtCheckLen, parseLenInput } from "../src/lib/units.js";
 import { STANDARD_SCALES, RENDER_SCALE } from "../src/lib/sheets.js";
 import { totalsToCsv } from "../src/lib/totals.js";
 
@@ -50,4 +50,32 @@ test("metric CSV converts measured columns and drops SY", () => {
   const imperial = totalsToCsv(rows, "P");
   assert.match(imperial, /Floor SF/);
   assert.match(imperial, /SY \(w\/ waste\)/);
+});
+
+// ── Check-a-dimension helpers (ftIn / fmtCheckLen / parseLenInput) ──────────
+
+test("ftIn renders drawing-style feet-and-inches", () => {
+  assert.equal(ftIn(12.5), "12′ 6″");
+  assert.equal(ftIn(11.999), "12′ 0″");   // 12″ rolls up
+  assert.equal(ftIn(0.49), "0′ 6″");      // rounds to nearest inch
+  assert.equal(ftIn(0), "0′ 0″");
+  assert.equal(ftIn(-3.25), "-3′ 3″");
+  assert.equal(ftIn(NaN), "");
+});
+
+test("fmtCheckLen: ft-in imperial, meters metric", () => {
+  assert.equal(fmtCheckLen(12.5, "imperial"), "12′ 6″");
+  assert.equal(fmtCheckLen(10, "metric"), "3.05 m");
+});
+
+test("parseLenInput reads decimal feet, feet-inches forms, and meters", () => {
+  assert.equal(parseLenInput("12.5", "imperial"), 12.5);
+  assert.equal(parseLenInput("12'6", "imperial"), 12.5);
+  assert.equal(parseLenInput(`12' 6"`, "imperial"), 12.5);
+  assert.equal(parseLenInput("12-6", "imperial"), 12.5);
+  assert.equal(parseLenInput("12′ 6″", "imperial"), 12.5);
+  assert.ok(Math.abs(parseLenInput("3.81", "metric") - 3.81 / M_PER_FT) < 1e-9);
+  assert.ok(Number.isNaN(parseLenInput("", "imperial")));
+  assert.ok(Number.isNaN(parseLenInput("banana", "imperial")));
+  assert.ok(Number.isNaN(parseLenInput("12'14", "imperial")));  // 14 inches is not a dimension
 });

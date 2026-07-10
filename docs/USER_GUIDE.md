@@ -9,7 +9,8 @@ no server.
 ## 1. Quick start (a demo in 6 steps)
 
 1. **Open plans** — drag a PDF, image, or `.zip` plan set onto the canvas (or use **Open plans**). The **gallery** (`G`) shows every sheet; click one (or several) to open.
-2. **Set the scale** — on each sheet, click **Scale** and either pick a standard scale (imperial architectural/engineering **or metric ratios** — 1:20 through 1:500) or **Calibrate**: click two points along a known dimension, type the real length (feet — or **meters** in metric mode), **Apply**. Scale is remembered **per sheet**.
+2. **Set the scale** — on each sheet, click **Scale** and either pick a standard scale (imperial architectural/engineering **or metric ratios** — 1:20 through 1:500) or **Calibrate**: click two points along a known dimension, type the real length (feet — or **meters** in metric mode), **Apply**. Scale is remembered **per sheet**. Accepting a scale drops a **calibrated guide bar** on the sheet for a few seconds — a labeled ruler at the new scale. A door opening is about 3′; if the bar looks wildly off, the scale is wrong.
+   - **Check it (K)** — click both ends of a printed dimension string and the bar shows what it *measures* at the current scale. Type what the drawing *says* and you get the error as a percentage — green means the scale checks out, red means recalibrate (one tap: **Recalibrate to this**). Make it a habit before tracing a new sheet.
 3. **Working in metric?** Click the **`ft`/`m`** toggle beside the scale picker. Every readout, chip, panel, the Report, CSV, and the Marked Set legend switch to **m² / m**, and Calibrate takes meters. The toggle only changes the display layer — takeoffs are stored unit-agnostically, so flipping it never changes your measurements. (Supporting-material coverage rates stay as entered, SF/LF-based.)
 3. **Pick a condition** — the **Conditions** bar holds your finishes (WD‑1, LVT‑1, …). Click one to arm it (or press its number, `1`–`9`). Edit its color / hatch / waste / height in the bar.
 4. **Draw the takeoff** — pick a Measure tool and trace. Each shape is color‑coded to its condition.
@@ -34,6 +35,7 @@ Your work autosaves to this browser continuously. Reload and it's still there.
 | `D` | **Erase shape** | Trace a void/column → subtracts SF (a deduct). |
 | `⇧D` | **Erase rectangle** | Rectangle erase. |
 | `H` | **Highlighter** | Freehand marker ink — drag to paint (see Markup layer below). |
+| `K` | **Check a dimension** | Click both ends of a printed dimension — read-only compare of measured vs stated, with one-tap recalibrate. |
 | `P` | **Pan** | Move around the sheet. |
 | `V` | **Select** | Select / move / edit / reassign / delete a shape. |
 | `G` | **Gallery** | Open the plan‑set gallery / sheet picker. |

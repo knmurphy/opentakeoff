@@ -20,3 +20,41 @@ export const lenUnit = (units: UnitSystem): string => (units === "metric" ? "m" 
 /** calibration input → internal feet (metric users type meters) */
 export const calInputToFeet = (v: number, units: UnitSystem): number =>
   units === "metric" ? v / M_PER_FT : v;
+
+/** Feet → drawing-style feet-and-inches: 12.51 → "12′ 6″". Rounds to the
+ *  nearest inch; 12″ rolls up to the next foot. */
+export function ftIn(feet: number): string {
+  if (!Number.isFinite(feet)) return "";
+  const sign = feet < 0 ? "-" : "";
+  let ft = Math.floor(Math.abs(feet) + 1e-9);
+  let inch = Math.round((Math.abs(feet) - ft) * 12);
+  if (inch === 12) { ft += 1; inch = 0; }
+  return `${sign}${ft}′ ${inch}″`;
+}
+
+/** length readout for the check tool: ft-in in imperial, meters in metric */
+export const fmtCheckLen = (feet: number, units: UnitSystem): string =>
+  units === "metric" ? `${(feet * M_PER_FT).toFixed(2)} m` : ftIn(feet);
+
+/** Parse a typed dimension into internal feet. Imperial accepts decimal feet
+ *  ("12.5") and feet-inches forms ("12'6", "12' 6\"", "12-6"); metric users
+ *  type meters. Returns NaN when it can't read the input. */
+export function parseLenInput(raw: string, units: UnitSystem): number {
+  const s = (raw || "").trim();
+  if (!s) return NaN;
+  if (units === "metric") {
+    const m = Number(s.replace(/m$/i, "").trim());
+    return m > 0 || m === 0 ? m / M_PER_FT : NaN;
+  }
+  // feet-inches: 12'6, 12' 6", 12-6, 12ft 6in
+  const fi = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|′|ft)\s*(?:-|\s)?\s*(\d+(?:\.\d+)?)?\s*(?:"|″|in)?$/i)
+    || s.match(/^(\d+)\s*-\s*(\d+(?:\.\d+)?)$/);
+  if (fi) {
+    const ft = Number(fi[1]);
+    const inch = fi[2] != null ? Number(fi[2]) : 0;
+    if (!Number.isFinite(ft) || !Number.isFinite(inch) || inch >= 12) return NaN;
+    return ft + inch / 12;
+  }
+  const v = Number(s);
+  return Number.isFinite(v) ? v : NaN;
+}
