@@ -1964,6 +1964,9 @@ export default function TakeoffCanvas() {
   // adjusted point) so grabbing a handle is never nudged by an unrelated snap.
   function oneClickHandleAt(e) {
     if (tool !== "oneclick" || !proposal) return false;
+    // ⌥ is reserved for carving a cutout (oneClickAt) — never let a handle grab
+    // swallow it, or an ⌥-click near a room's own corner/edge could never carve.
+    if (e.altKey) return false;
     const tp = panelByKey(proposal.key);
     if (!tp || !tp.img.w) return false;
     const raw = toImage(e.clientX, e.clientY);
