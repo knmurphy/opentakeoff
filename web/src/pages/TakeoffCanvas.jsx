@@ -45,43 +45,20 @@ import DrivePicker from "../components/DrivePicker.jsx";
 import AccountChip from "../components/AccountChip.jsx";
 import { projectHomeFolderId } from "../lib/projectHome.js";
 import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
+// Pure data constants (render/zoom budgets, snap tuning, tool descriptors,
+// flooring starter conditions) live in lib/canvasConstants.js; the pure
+// module-scope helpers (autoRenderScale, invertCanvasPixels, uid, clamp,
+// isDangerMsg, instantiateTemplate, seedConditions) in lib/canvasUtil.js.
+import {
+  PANEL_GAP, MAX_CANVAS_DIM, MAX_CANVAS_AREA,
+  DETAIL_ENGAGE, DETAIL_MARGIN, SYNC_MS, GESTURE_MS, SNAP_CELL,
+  MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS,
+} from "../lib/canvasConstants.js";
+import { autoRenderScale, invertCanvasPixels, uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
+import * as panelGeom from "../lib/panelGeometry.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-const MIN_SCALE = 0.03;
-const MAX_SCALE = 32;  // stage zoom is in raster px — with the 28MP base budget this keeps ≈ the old deep-zoom ceiling (detail view carries the crispness)
-const PANEL_GAP = 48;  // px between side-by-side sheets in a multi-sheet group
-// Base raster: enough density for fit-to-view + the first stretch of zoom; sharpness
-// past 1:1 comes from the DETAIL VIEW (region re-render), never from a giant full-sheet
-// bitmap. Rastering to the browser caps would put a 36×24" sheet at 179MP ≈ 716MB of
-// backing store per panel — a 4-up ≈ 2.9GB, which Chrome silently fails to keep
-// composited (blank sheet at zoom-out, evicted chrome). Quantities are scale-free
-// (verts are normalized and the render factor cancels in the area math), so the budget
-// only trades memory for base-layer sharpness. Hi-Res opts a sheet INTO the auto
-// budget per-user (the default stays the lean baseline raster).
-const QUALITY_CEILING = 8.0;                  // hard cap on render scale (≈576 px/in) — binds only on small pages now
-const MAX_CANVAS_DIM  = 16384;                // safe max side for a single canvas (Chrome/Firefox/Safari desktop)
-const MAX_CANVAS_AREA = 16384 * 16384 * 0.9;  // per-canvas pixel cap — the DETAIL view's density factor uses this
-const MAX_PANEL_AREA  = 28e6;                 // base-raster pixel budget per panel (~112MB RGBA; 4-up ≈ 450MB)
-// Largest pdf.js render scale a wPt×hPt-point page can use within the base budget;
-// never below the baseline RENDER_SCALE, never above the ceiling.
-const autoRenderScale = (wPt, hPt) => {
-  if (!(wPt > 0 && hPt > 0)) return RENDER_SCALE;
-  const byDim  = Math.min(MAX_CANVAS_DIM / wPt, MAX_CANVAS_DIM / hPt);
-  const byArea = Math.sqrt(MAX_PANEL_AREA / (wPt * hPt));
-  return Math.max(RENDER_SCALE, Math.min(QUALITY_CEILING, byDim, byArea));
-};
-// Detail view: once zoomed past the base raster's 1:1 IN DEVICE PIXELS, we overlay a
-// crop of JUST the visible region, re-rendered from the PDF vectors at the current zoom —
-// Bluebeam/AutoCAD-style. Crispness becomes unbounded (up to the per-region canvas cap)
-// without ever holding a giant full-sheet bitmap; the region is ~viewport-sized so the cap
-// effectively never binds. Engage compares t.scale × devicePixelRatio (softness starts
-// when the raster is upscaled in device px — on a 2× display that's t.scale 0.5, not 1).
-const DETAIL_ENGAGE = 1.15;  // engage once stage zoom × dpr passes ~1.15 (base raster starts to soften)
-const DETAIL_MARGIN = 0.5;   // render this much extra region beyond the viewport so small pans don't expose the soft base at the edges
-const SYNC_MS = 90;          // React tf-mirror sync cadence during gestures (~11Hz)
-const GESTURE_MS = 140;      // wheel/pinch quiet window before the detail view re-renders
-const COLORS = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#475569"];
 // Hatch templates, palette, NO_FILL, and the HatchPattern/HatchSwatch pieces
 // live in components/hatches.jsx — shared with the TakeoffsPanel.
 
@@ -109,93 +86,8 @@ const PANEL_DEFAULTS = { w: 320, collapsed: true, strip: false, az: false, group
 // not the per-user panel prefs. Capped at 9 so it maps 1:1 onto the 1–9 hotkeys.
 const PALETTE_MAX = 9;
 
-// Invert a canvas's pixels in place: one difference-with-white pass (an
-// involution — applying it again flips back). This is how the negative/dark
-// view works: pixel inversion costs one pass at draw time, where a CSS
-// `filter: invert(1)` would make every sheet canvas a permanently-filtered
-// compositor layer re-processed on every frame — with several panels open on
-// a hi-Hz display that chain overloads the compositor (layer eviction =
-// flicker/void glitches).
-function invertCanvasPixels(cv) {
-  if (!cv || !cv.width || !cv.height) return;
-  const ctx = cv.getContext("2d");
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);   // raw device px — ignore any render transform
-  ctx.globalCompositeOperation = "difference";
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.restore();
-}
-
-let _idn = 0;
-const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
-const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
-// shared by the status-bar tone AND the auto-dismiss skip (below) — one
-// definition of "this message is bad news" for both readers
-const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
 // Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
 // hit-testing) live in lib/geometry.js — byte-identical with Spline's copy.
-const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
-
-// toolbar menus — STACK-style: the menu face shows the armed tool
-const MEASURE_TOOLS = [
-  { id: "oneclick", icon: "oneClick", label: "One-Click Area", shortcut: "O" },
-  { id: "area", icon: "area", label: "Area", shortcut: "A" },
-  { id: "rect", icon: "rectTool", label: "Rectangle", shortcut: "R" },
-  { id: "linear", icon: "linear", label: "Linear", shortcut: "L" },
-  { id: "surface", icon: "surface", label: "Surface Area", shortcut: "S" },
-  { id: "count", icon: "count", label: "Count", shortcut: "C" },
-];
-const CUT_TOOLS = [
-  { id: "deduct", icon: "deduct", label: "Deduct shape", shortcut: "D" },
-  { id: "deduct-rect", icon: "deductRect", label: "Deduct rectangle", shortcut: "⇧D" },
-];
-const MARKUP_TOOLS = [
-  { id: "cloud", icon: "cloud", label: "Revision cloud" },
-  { id: "callout", icon: "callout", label: "Callout" },
-  { id: "text", icon: "textNote", label: "Text note" },
-  { id: "highlight", icon: "highlight", label: "Highlight box" },
-];
-const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
-
-// Flooring-first starter conditions seeded on a fresh workspace — line color +
-// hatch chosen to read like the real finish; waste % is a sensible default you
-// can change per condition (it's never auto-applied to the live readout, only
-// the Report). Delete any you don't need.
-// Each default also carries a couple of editable starter materials — quantities
-// derive deterministically from measured area/linear ÷ a coverage rate you set
-// (off the product data sheet). Delete/edit freely; they're just sensible seeds.
-// Expressed in TEMPLATE shape (finish_tag/waste_pct/materials, no fill — it
-// defaults from color) so seeding and the Library run the same constructor.
-const FLOORING_DEFAULTS = [
-  { finish_tag: "CPT-1", color: "#2f7d54", hatch: "speckle", waste_pct: 5,  materials: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Carpet tile
-  { finish_tag: "BRD-1", color: "#be185d", hatch: "dots",    waste_pct: 10, materials: [{ name: "Adhesive", per: 120, basis: "area", unit: "gal" }] },                                    // Broadloom carpet (roll goods)
-  { finish_tag: "LVT-1", color: "#b8860b", hatch: "plank",   waste_pct: 8,  materials: [{ name: "Adhesive", per: 250, basis: "area", unit: "gal" }] },                                    // Luxury vinyl plank/tile
-  { finish_tag: "WD-1",  color: "#9a3412", hatch: "plank",   waste_pct: 10, materials: [                                                                                                  // Unfinished 2.25″ solid red oak — glue-down + site-finished
-    { name: "Adhesive (wood, SMP)",     per: 50,  basis: "area", unit: "gal", note: "standard notch · SMP, solid wood" },
-    { name: "Sealer (primer coat)",     per: 400, basis: "area", unit: "gal", note: "1 prime coat (~10 m²/L)" },
-    { name: "Polyurethane (2K finish)", per: 136, basis: "area", unit: "gal", note: "≈3 coats @ ~408 SF/gal/coat (2K 10:1)" },
-  ] },
-  { finish_tag: "VCT-1", color: "#2563eb", hatch: "checker", waste_pct: 5,  materials: [{ name: "Adhesive", per: 350, basis: "area", unit: "gal" }] },                                    // Vinyl composition tile
-  { finish_tag: "SV-1",  color: "#0d9488", hatch: "solid",   waste_pct: 10, materials: [{ name: "Adhesive", per: 150, basis: "area", unit: "gal" }] },                                    // Sheet vinyl
-  { finish_tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste_pct: 10, materials: [{ name: "Thinset", per: 95, basis: "area", unit: "bag" }, { name: "Grout", per: 120, basis: "area", unit: "bag" }] }, // Ceramic / porcelain tile
-  { finish_tag: "RB-1",  color: "#475569", hatch: "horiz",   waste_pct: 5,  materials: [{ name: "Cove base adhesive", per: 40, basis: "linear", unit: "tube" }] },                        // Rubber / resilient wall base (linear)
-  { finish_tag: "TR-1",  color: "#c96442", hatch: "vert",    waste_pct: 0,  materials: [] },                                                                                              // Transitions / reducers (linear)
-];
-// A template is a condition minus ids (finish_tag, colors, hatch, waste,
-// H/T params, materials) — instantiation mints fresh condition/material ids.
-const instantiateTemplate = (t) => ({
-  id: uid("cnd"), finish_tag: t.finish_tag || "?",
-  color: t.color || PALETTE[0], fill: t.fill ?? t.color ?? PALETTE[0],
-  hatch: t.hatch || "solid", multiplier: 1, waste_pct: Number(t.waste_pct) || 0,
-  ...(t.height_ft != null ? { height_ft: t.height_ft } : {}),
-  ...(t.thickness_in != null ? { thickness_in: t.thickness_in } : {}),
-  materials: (t.materials || []).map((m) => ({ round: true, ...m, id: uid("mat") })),
-});
-// Fresh-workspace seeding reads the user's template library first; the
-// built-in flooring defaults are only the empty-library fallback. Both paths
-// run instantiateTemplate — ONE condition constructor, no drift.
-const seedConditions = (library) => (library?.length ? library : FLOORING_DEFAULTS).map(instantiateTemplate);
 
 // The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
 // live in components/TakeoffsPanel.jsx — the panel is their only surface now.
@@ -506,19 +398,12 @@ export default function TakeoffCanvas() {
     if (dims.w) _px += dims.w + PANEL_GAP;
     return p;
   });
-  const stage = panels.reduce((a, p) => ({ w: Math.max(a.w, p.xOffset + p.img.w), h: Math.max(a.h, p.img.h) }), { w: 0, h: 0 });
-  const panelByKey = (k) => panels.find((p) => p.key === k) || panels[0];
-  // never null: a click in a gap (or off the row) routes to the NEAREST panel,
-  // matching the old behavior of happily returning out-of-bounds image coords
-  const panelAt = (sx) => {
-    let best = panels[0], bd = Infinity;
-    for (const p of panels) {
-      if (sx >= p.xOffset && sx < p.xOffset + p.img.w) return p;
-      const d = sx < p.xOffset ? p.xOffset - sx : sx - (p.xOffset + p.img.w);
-      if (d < bd) { bd = d; best = p; }
-    }
-    return best;
-  };
+  // Pure panel-row math (stage extent, nearest-panel routing, the px→feet
+  // scale factors) lives in lib/panelGeometry.js; these thin wrappers bind the
+  // live panels/scales so every call site below reads unchanged.
+  const stage = panelGeom.stageExtent(panels);
+  const panelByKey = (k) => panelGeom.panelByKey(panels, k);
+  const panelAt = (sx) => panelGeom.panelAt(panels, sx);
   const panelKeySet = new Set(groupKeys);
   // memoized: feeds the per-condition totals map the memoized TakeoffsPanel
   // takes as a prop — identity must hold across canvas-only renders. Builds
@@ -538,19 +423,12 @@ export default function TakeoffCanvas() {
   const focusPanel = (focusKey && groupKeys.includes(focusKey) && panelByKey(focusKey)) || panels[0];
   const unitsPerPx = scales[focusPanel.key] ?? null;
   const labelFor = (p) => (p.file === active && pageLabels[p.page]) || (p.page > 1 ? `Sheet ${p.page}` : p.file);
-  // Stored scales are ALWAYS feet-per-pixel at the baseline RENDER_SCALE. A hi-res
-  // sheet is rastered at autoRenderScale, so its bitmap has factorFor× the baseline
-  // pixels — geometry must divide by that factor (uppFor) and calibration must multiply
-  // back to baseline, or a quantity would drift with the render resolution. Shape verts
-  // are normalized to the panel, so positions are scale-free; only the px→feet factor
-  // moves. factorFor reads the scale ACTUALLY rastered (renderScalesRef), so it always
-  // matches the bitmap currently on screen.
+  // Scale semantics (why geometry divides by factorFor and calibration
+  // multiplies back to baseline) are documented on the pure functions in
+  // lib/panelGeometry.js; these wrappers bind the live scales/renderScalesRef.
   const hiResOn = (key) => hiResKeys.includes(key);
-  const factorFor = (key) => (renderScalesRef.current.get(key) || RENDER_SCALE) / RENDER_SCALE;
-  const uppFor = (key) => {
-    const u = scales[key];
-    return u == null ? null : u / factorFor(key);
-  };
+  const factorFor = (key) => panelGeom.factorFor(renderScalesRef.current, key);
+  const uppFor = (key) => panelGeom.uppFor(scales, renderScalesRef.current, key);
   const toggleHiRes = () => {
     const k = focusPanel.key;
     setHiResKeys((arr) => {
