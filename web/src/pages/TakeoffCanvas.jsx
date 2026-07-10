@@ -2507,8 +2507,9 @@ export default function TakeoffCanvas() {
     // the paid reader (the server 403s it too — this just avoids the round-trip).
     if (!isAllowedDomain()) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
     // A paid read is already in flight — a rapid re-draw of the marquee must not
-    // fire a second Gemini call. The ref clears in finally on every exit path.
-    if (scanBusyRef.current) return;
+    // fire a second Gemini call. Surface it (the first call may not have printed
+    // "Reading…" yet) so the redraw doesn't look ignored. Clears in finally below.
+    if (scanBusyRef.current) { setCommitMsg("Still reading the last schedule — one moment."); return; }
     scanBusyRef.current = true;
     try {
       let png;
