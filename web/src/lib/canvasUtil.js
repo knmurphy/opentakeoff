@@ -1,7 +1,9 @@
-// Module-scope helpers for the Takeoff Canvas — pure functions with no React
-// or component state (moved verbatim from pages/TakeoffCanvas.jsx): render
-// budget math, canvas pixel inversion, id minting, zoom clamping, the
-// status-message danger test, and the condition-template constructor/seeder.
+// Module-scope helpers for the Takeoff Canvas — no component state (moved
+// verbatim from pages/TakeoffCanvas.jsx): render budget math, canvas pixel
+// inversion, id minting, zoom clamping, the status-message danger test, and
+// the condition-template constructor/seeder. Not React-free: the seeder pulls
+// PALETTE from components/hatches.jsx, which imports React — don't import
+// this module outside the web app (mcp/ keeps its own mirrored copies).
 
 import { RENDER_SCALE } from "./sheets";
 import { STALE_TAB_MESSAGE } from "./store.js";

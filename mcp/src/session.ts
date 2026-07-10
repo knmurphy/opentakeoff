@@ -195,7 +195,7 @@ export class Session {
     return `Set the scale for ${s.key} first — use set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.`;
   }
 
-  setScale(name: string, mode: { label?: string; upp?: number; calibrate?: { p1: [number, number]; p2: [number, number]; feet: number }; use_detected?: boolean }) {
+  setScale(name: string, mode: { label?: string; upp?: number; calibrate?: { p1: [number, number]; p2: [number, number]; feet: number }; use_detected?: true }) {
     const s = this.sheet(name);
     let upp: number;
     let label: string | undefined;
@@ -217,7 +217,7 @@ export class Session {
       if (!(feet > 0)) throw new UserError("Calibration feet must be positive.");
       upp = feet / px;
       source = "calibrate";
-    } else if (mode.use_detected) {
+    } else if (mode.use_detected === true) {
       if (!s.detected) throw new UserError(`No detected scale for ${s.key} — read the title block with read_sheet_text, or calibrate from a known dimension.`);
       upp = s.detected.upp;
       label = s.detected.label;
