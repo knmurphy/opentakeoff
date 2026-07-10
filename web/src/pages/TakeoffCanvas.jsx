@@ -27,6 +27,8 @@ import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../compone
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
+import { normalizeScanRows, SCAN_ENDPOINT } from "../lib/scheduleScan";
+import { isGoogleConfigured, isSignedIn } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
@@ -2546,10 +2548,14 @@ export default function TakeoffCanvas() {
   }
 
   // ── Import from schedule ────────────────────────────────────────────────────
-  // Read the text layer inside the marqueed box, parse it, and open the approval
-  // dialog. Vector plans need no OCR — this IS the extraction; a scanned page
-  // yields no tokens (extractRegionText returns []) and we say so. Corners a,b
-  // are stage px (raw cursor, snapping exempted at pointer-down).
+  // Read the marqueed box and open the approval dialog. Two paths, ONE contract
+  // (ScheduleRow[] → the same dialog):
+  //   • vector plans: the page text layer inside the box IS the extraction —
+  //     no OCR, open to everyone (parseSchedule);
+  //   • scanned plans: the box has no text tokens, so we rasterize it and hand
+  //     the PNG to the optional AI backend (/ai/parse-schedule). That path is
+  //     login-gated (see importScheduleFromScan).
+  // Corners a,b are stage px (raw cursor, snapping exempted at pointer-down).
   async function importScheduleFromRect(a, b) {
     if (status !== "ready") { setCommitMsg("Sheet still loading — try again in a moment."); return; }
     const panel = panelAt(a[0]);
@@ -2559,14 +2565,73 @@ export default function TakeoffCanvas() {
     const rs = renderScalesRef.current.get(panel.key) || RENDER_SCALE;
     const rect = { x0: a[0] - panel.xOffset, y0: a[1], x1: b[0] - panel.xOffset, y1: b[1] };
     const seq = renderSeqRef.current;                 // a sheet switch mid-await must not pop a dialog for a page you left
+    let tokens;
     try {
       const vp = pageObj.getViewport({ scale: rs });
       const tc = await pageObj.getTextContent();
       if (seq !== renderSeqRef.current) return;
-      const rows = parseSchedule(extractRegionText(tc, vp, rect));
+      tokens = extractRegionText(tc, vp, rect);
+    } catch { setCommitMsg("Couldn't read that region."); return; }
+    // Vector-vs-scan decision: tokens present ⇒ this is a vector page, so the
+    // text layer is the schedule (OCR wouldn't help even if it parses to nothing);
+    // NO tokens ⇒ a raster/scanned page, fall through to the AI scan path.
+    if (tokens.length) {
+      const rows = parseSchedule(tokens);
       if (!rows.length) { setCommitMsg("No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header)."); return; }
       setImportRows(rows);
-    } catch { setCommitMsg("Couldn't read that region."); }
+      return;
+    }
+    await importScheduleFromScan(pageObj, rs, rect, seq);
+  }
+
+  // Scan/OCR fallback for a raster page: rasterize the marqueed region and POST
+  // it to the optional AI backend, then feed the returned rows into the SAME
+  // approval dialog. LOGIN-GATED — only a Google-configured deployment with a
+  // signed-in user reaches the network (no API key ever lives in client code).
+  async function importScheduleFromScan(pageObj, rs, rect, seq) {
+    if (!isGoogleConfigured()) {
+      setCommitMsg("No schedule found — this looks like a scanned page (no text layer). Importing from scanned plans needs the AI backend.");
+      return;
+    }
+    if (!isSignedIn()) { setCommitMsg("Sign in to import from scanned plans."); return; }
+    let png;
+    try { png = await rasterizeRegion(pageObj, rs, rect); }
+    catch { setCommitMsg("Couldn't read that region."); return; }
+    if (seq !== renderSeqRef.current) return;
+    setCommitMsg("Reading the scanned schedule…");
+    try {
+      const res = await fetch(SCAN_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height }),
+      });
+      if (seq !== renderSeqRef.current) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const rows = normalizeScanRows(await res.json());
+      if (!rows.length) { setCommitMsg("No schedule found in that scanned region — the reader returned nothing (the default backend ships no OCR model)."); return; }
+      setImportRows(rows);
+    } catch { setCommitMsg("Couldn't reach the schedule reader — is the AI backend running?"); }
+  }
+
+  // Render just the marqueed region (rs-viewport px, the space rect lives in) to
+  // an offscreen canvas and return its PNG as base64 + pixel dims. Mirrors the
+  // detail-view offscreen render: shift the region's top-left to (0,0) and clamp
+  // to the single-canvas caps so a huge marquee can't exceed the backing store.
+  async function rasterizeRegion(pageObj, rs, rect) {
+    const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
+    const regW = Math.max(1, Math.abs(rect.x1 - rect.x0)), regH = Math.max(1, Math.abs(rect.y1 - rect.y0));
+    const factor = Math.min(1, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)));
+    const bw = Math.max(1, Math.round(regW * factor)), bh = Math.max(1, Math.round(regH * factor));
+    const vp = pageObj.getViewport({ scale: rs * factor });
+    const canvas = document.createElement("canvas");
+    canvas.width = bw; canvas.height = bh;
+    await pageObj.render({
+      canvasContext: canvas.getContext("2d"),
+      viewport: vp,
+      transform: [1, 0, 0, 1, -x0 * factor, -y0 * factor],
+    }).promise;
+    const dataUrl = canvas.toDataURL("image/png");
+    return { b64: dataUrl.split(",")[1] || "", width: bw, height: bh };
   }
 
   // Approved rows → conditions. Category drives color/hatch/waste (rowToSeed);
