@@ -6,6 +6,11 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
 ### Changed
 - **Public imagery re-captured from the live app.** The old hero card and One-Click GIF pre-dated the July 5 fill fixes and showed rooms with unfilled door-swing bites — the engine has been better than its own marketing since. The new captures show what a click actually does today: the same three patient rooms on the bundled VA plan trace **wall to wall** (163 → 154.6 SF, 162 → 184.6 SF, 161 → 240.7 SF; same 579.9 SF CPT-1 total), plus a VCT clean-linen room for contrast. New `docs/img/one-click-area.gif`, `docs/img/social-card.png`, `web/public/og-card.png`; alt text updated to match.
+## 2026-07-08 (night)
+
+### Added
+- **The capture layer.** [`capture/capture_server.py`](capture/README.md) — a stdlib-only local server (no pip install) that banks the app's opt-in Contribute payloads as (geometry → label) training rows in a corpus **you** own: one JSONL row per labeled shape, content-hash dedup so re-contributions never duplicate, a verbatim payload archive, and an optional `--mirror` that copies the label file whole and atomically into a synced share (OneDrive / SharePoint / Dropbox) after every capture. `serve` / `summary` / `selftest` subcommands; wire-up is one `localStorage` line. The README gains an **Own your data** section, and the Contribute modal now points here when no endpoint is configured. When the endpoint is one **you** set in the browser (the self-capture flow), the modal drops the shared-model framing and reads as what it is — **Capture this takeoff**: your endpoint, shown inline, your corpus, nothing shared.
+- **PR ground rules.** CONTRIBUTING.md documents how pull requests work here — one concern per PR, issue-first for big changes, conventional commit subjects, the vendor-neutral rule, and review etiquette. A CODEOWNERS file auto-requests maintainer review, CI grows a capture-selftest job, and `main` is protected by a ruleset (PRs only, green CI, no force-pushes).
 
 ## 2026-07-08 (later)
 
