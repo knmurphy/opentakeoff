@@ -43,7 +43,11 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
   //     first-writes from each spawning a duplicate .opentakeoff.
   async function findSidecarFolder() {
     const child = await drive.findChild(folderId, SIDECAR_NAME);
-    return child ? child.id : null;
+    // Must be an actual FOLDER: findChild matches by name only, so a stray
+    // (non-folder) file named ".opentakeoff" would otherwise be mistaken for the
+    // sidecar and we'd try to write JSON "inside" a file. Ignore it — ensureSidecarId
+    // then creates a real folder (Drive tolerates the same-name file alongside).
+    return child && child.mimeType === FOLDER_MIME ? child.id : null;
   }
   let sidecarIdP = null;
   function ensureSidecarId() {

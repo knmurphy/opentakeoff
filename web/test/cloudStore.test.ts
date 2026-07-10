@@ -508,6 +508,24 @@ test("listFolder hides the .opentakeoff sidecar folder from the picker", async (
   assert.deepEqual(folders.map((f) => f.name).sort(), [".config", "Design Documents"]);
 });
 
+test("a stray NON-folder file named .opentakeoff is ignored; a real sidecar folder is created", async () => {
+  const drive = fakeDrive();
+  // a rogue FILE (not a folder) named .opentakeoff sits in the project — findChild
+  // matches by name only, so findSidecarFolder must reject it on mimeType.
+  drive._byId.set("rogue", { id: "rogue", name: ".opentakeoff", parent: "folder1", mimeType: "application/json", bytes: new TextEncoder().encode("{}") });
+  const store = createCloudStore("folder1", drive as any, { local: fakeLocal() as any });
+  await store.saveAnnotations({ conditions: [{ id: "x" }], shapes: [] });
+
+  // the write went into a real FOLDER named .opentakeoff, not the rogue file
+  const sidecarFolder = [...drive._byId.values()].find((r) => r.name === ".opentakeoff" && r.mimeType === "application/vnd.google-apps.folder");
+  assert.ok(sidecarFolder, "a real .opentakeoff folder must be created");
+  const ann = [...drive._byId.values()].find((r) => r.name === "annotations.json");
+  assert.equal(ann!.parent, sidecarFolder!.id);
+  // the rogue file is left untouched and was never used as a parent
+  assert.ok(drive._byId.has("rogue"));
+  assert.equal([...drive._byId.values()].some((r) => r.parent === "rogue"), false);
+});
+
 test("browser-global methods delegate to localStore untouched", async () => {
   const drive = fakeDrive();
   const local = fakeLocal();
