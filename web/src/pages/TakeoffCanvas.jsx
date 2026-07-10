@@ -76,7 +76,6 @@ const DETAIL_ENGAGE = 1.15;  // engage once stage zoom × dpr passes ~1.15 (base
 const DETAIL_MARGIN = 0.5;   // render this much extra region beyond the viewport so small pans don't expose the soft base at the edges
 const SYNC_MS = 90;          // React tf-mirror sync cadence during gestures (~11Hz)
 const GESTURE_MS = 140;      // wheel/pinch quiet window before the detail view re-renders
-const COLORS = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#475569"];
 // Hatch templates, palette, NO_FILL, and the HatchPattern/HatchSwatch pieces
 // live in components/hatches.jsx — shared with the TakeoffsPanel.
 
