@@ -32,6 +32,17 @@ const SCOPE = [
 // the token going stale.
 const EXPIRY_SKEW_MS = 60_000;
 
+// How long we'll wait on a SILENT (prompt: "") token request before giving up.
+// GIS's popup-close detection polls `window.closed`, which the browser blocks
+// once Google's own popup response sets Cross-Origin-Opener-Policy: same-origin
+// (a documented GIS/COOP interaction bug, not something our own headers can
+// fix — the restriction is imposed by accounts.google.com's response, not
+// ours). When that happens the silent attempt can open a blank popup that
+// never reports back, hanging the caller indefinitely. This timeout is ONLY
+// for the silent path — the interactive consent popup below is never
+// time-boxed, since a human is expected to take their time on it.
+const SILENT_TIMEOUT_MS = 4000;
+
 // ── in-memory state (never persisted) ───────────────────────────────────────
 let tokenClient = null;         // the GIS token client, created once
 let scriptPromise = null;       // de-dupes the <script> injection
@@ -176,6 +187,27 @@ async function requestToken(prompt) {
   return pendingPromise;
 }
 
+// Race a SILENT token request against a timeout. On timeout we abandon it —
+// null out `pending`/`pendingPromise` — so a subsequent requestToken() call
+// (e.g. signIn()'s fallback to "consent") issues a genuinely new request
+// instead of coalescing onto the stuck one. If the abandoned silent request
+// eventually does call back, `pending` is already null there, so the GIS
+// callback's own null-check just no-ops it — safe to drop.
+function requestTokenSilentWithTimeout() {
+  const attempt = requestToken("");
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending = null;
+      pendingPromise = null;
+      reject(new Error("Silent Google sign-in timed out"));
+    }, SILENT_TIMEOUT_MS);
+    attempt.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 async function fetchProfile(accessToken) {
   const res = await fetch(USERINFO_URL, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -192,7 +224,7 @@ async function fetchProfile(accessToken) {
 export async function trySilentSignIn() {
   if (!isGoogleConfigured()) return null;
   try {
-    const accessToken = await requestToken("");
+    const accessToken = await requestTokenSilentWithTimeout();
     user = await fetchProfile(accessToken);
     notify();
     return user;
@@ -213,7 +245,7 @@ export async function signIn() {
   }
   let accessToken;
   try {
-    accessToken = await requestToken("");
+    accessToken = await requestTokenSilentWithTimeout();
   } catch {
     accessToken = await requestToken("consent");
   }
@@ -229,7 +261,7 @@ export async function getAccessToken() {
   if (token && Date.now() < token.expiresAt - EXPIRY_SKEW_MS) {
     return token.accessToken;
   }
-  return requestToken("");
+  return requestTokenSilentWithTimeout();
 }
 
 // Sign out: forget the token + user and best-effort revoke at Google. Revoke
