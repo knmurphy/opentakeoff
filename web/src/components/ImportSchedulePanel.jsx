@@ -63,9 +63,9 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
   const colorByKey = useMemo(() => {
     const m = new Map();
     let n = startIndex;
-    for (const { key } of keyed) if (canPick(key) && palette.length) m.set(key, palette[n++ % palette.length]);
+    for (const { key } of keyed) if (isCreatable(tagState.get(key)) && palette.length) m.set(key, palette[n++ % palette.length]);
     return m;
-  }, [keyed, tagState, palette, startIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyed, tagState, palette, startIndex]);
 
   const grouped = useMemo(() => {
     const by = new Map(GROUPS.map((g) => [g.key, []]));
