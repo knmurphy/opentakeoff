@@ -132,6 +132,6 @@ All drawings, scales, conditions, and markups autosave to this browser (IndexedD
 ## 4. Tips
 
 - Door openings usually stay closed in One‑Click (the door leaf + swing arc are linework). If a fill **spills**, click a more enclosed spot or trace with **Area**. A hatched room with a genuinely open doorway still refuses rather than guessing — that's deliberate.
-- Raster (scanned) plans have no vector linework — One‑Click/Snap won't work; trace manually.
+- Raster (scanned) plans: One‑Click reads the scan pixels (badged so you verify edges before Create). Snap has no true endpoints on a scan, so corners come from the trace — nudge with Select if needed.
 - Set the scale **before** you measure; changing it re‑flows dependent shapes.
 - Waste is per condition — set it to match the install (e.g. ~8% straight‑lay, ~15% diagonal, ~20% herringbone).
