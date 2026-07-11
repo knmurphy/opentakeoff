@@ -394,7 +394,7 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
 
 function TakeoffsPanel({
   open, width, multiSheet,
-  conditions, activeCond, visRowById, conditionColumns, templates, palette = [],
+  conditions, activeCond, visRowById, conditionColumns, shapeLabels = [], templates, palette = [],
   matLib, matLibById, linkedCountById,
   panelPrefs, onPanelPrefs, reassigning, epoch, clearSelectionRef,
   onActivate, onSetActive, onLocate,
@@ -405,6 +405,7 @@ function TakeoffsPanel({
   onAttachLibMaterial, onPromoteMaterial, onRevertMatField, matFieldOverridden,
   onUpdateLibMaterial, onPushLibUpdate, onDeleteLibMaterial, onAddLibMaterial,
   onAddColumn, onRenameColumn, onDeleteColumn, onAddColumnValue, onRemoveColumnValue, onRenameColumnValue,
+  onAddLabel, onRenameLabel, onRemoveLabel,
   onToggleCollapse, onHoldGesture, onTogglePin,
 }) {
   const [panelTab, setPanelTab] = useState("takeoffs");       // "takeoffs" | "library" | "materials" | "columns"
@@ -798,6 +799,29 @@ function TakeoffsPanel({
             properties on the Takeoffs tab */}
         {panelTab === "columns" && (
           <div style={{ flex: 1, overflow: "auto", fontSize: 11.5 }}>
+            {/* Shape labels (#110) — a flat project-level vocabulary; each shape
+                carries at most one, assigned on the canvas. Lives here rather than
+                a 5th panel tab: it's the degenerate single-column case. */}
+            <details open style={{ borderBottom: "2px solid var(--ink-faint)" }}>
+              <summary style={{ padding: "8px 12px 4px", cursor: "pointer", fontWeight: 600, fontSize: 11.5 }}>
+                Shape labels{shapeLabels.length ? ` (${shapeLabels.length})` : ""}
+              </summary>
+              <div style={{ padding: "0 12px 4px", color: "var(--ink-muted)", fontSize: 11 }}>
+                Phase / area labels (e.g. Phase 1, East Wing) for grouping the Report by shape. Assign them while tracing on the canvas.
+              </div>
+              <div style={{ padding: "2px 12px 10px", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                {shapeLabels.map((v) => (
+                  <span key={v} style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 3px 2px 8px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11.5, color: "var(--ink)" }}>
+                    {v}
+                    <button onClick={() => onRenameLabel(v)} title="Rename this label — labeled shapes follow"
+                      style={{ padding: "0 3px", border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>✎</button>
+                    <button onClick={() => onRemoveLabel(v)} title="Remove from the list — labeled shapes keep the value (shown ungrouped in the Report)"
+                      style={{ padding: "0 3px", border: "none", background: "transparent", color: "var(--c-danger)", cursor: "pointer", fontSize: 11 }}>✕</button>
+                  </span>
+                ))}
+                <AddValueInput onAdd={onAddLabel} />
+              </div>
+            </details>
             <div style={{ padding: "8px 12px 4px", color: "var(--ink-muted)", fontSize: 11 }}>
               Custom columns (e.g. CSI Division) classify conditions for report grouping and exports. Columns and values apply to the whole project; assign values on a condition in the Takeoffs tab.
             </div>
