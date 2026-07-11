@@ -49,7 +49,7 @@ export interface Shape {
   verts_norm: [number, number][];
   computed: { area_sf: number; perimeter_lf: number };
   origin?:
-    | { method: "one_click_v1"; seed_norm: [number, number]; reviewed: true; hatch_filtered?: true }
+    | { method: "one_click_v1"; seed_norm: [number, number]; reviewed: true; hatch_filtered?: true; raster_traced?: true }
     | { method: "manual" }; // the receipt the canvas mints on every hand-traced shape
 }
 
