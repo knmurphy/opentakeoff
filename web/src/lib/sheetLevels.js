@@ -13,7 +13,7 @@
 export function sanitizeSheetLevels(raw) {
   return Object.fromEntries(
     Object.entries(raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {})
-      .filter(([, v]) => typeof v === "string" && v)
+      .filter(([, v]) => typeof v === "string" && v.trim())
   );
 }
 

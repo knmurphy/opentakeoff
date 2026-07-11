@@ -21,6 +21,7 @@ test("sanitizeSheetLevels: string/non-empty value filter", () => {
     "d.pdf": 3,              // non-string — corrupted record
     "e.pdf": { level: "L1" }, // object where a string is expected
     "f.pdf": "L2",
+    "g.pdf": "   ",          // whitespace-only — must be dropped like an empty string (Copilot review)
   };
   assert.deepEqual(sanitizeSheetLevels(raw), { "a.pdf": "L1", "f.pdf": "L2" });
 });

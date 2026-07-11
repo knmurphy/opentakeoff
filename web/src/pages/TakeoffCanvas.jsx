@@ -4041,7 +4041,7 @@ export default function TakeoffCanvas() {
                         {zoneIds && pShapes.filter((sh) => zoneIds.has(sh.id)).map((sh) => {
                           const vs = sh.verts_norm || [];
                           if (vs.length < 2) {
-                            return <circle key={"zc" + sh.id} cx={(vs[0]?.[0] || 0) * p.img.w} cy={(vs[0]?.[0] || 0) * p.img.h}
+                            return <circle key={"zc" + sh.id} cx={(vs[0]?.[0] || 0) * p.img.w} cy={(vs[0]?.[1] || 0) * p.img.h}
                               r={7 / tf.scale} fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={2.5 / tf.scale} />;
                           }
                           // Closed roles (floor_area/deduct) get a <polygon> like the
@@ -4281,7 +4281,7 @@ export default function TakeoffCanvas() {
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)" }}>
               <b style={{ fontSize: 12.5 }}>Zone check</b>
               <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--ink-muted)" }}>nothing saved</span>
-              <button onClick={() => setZoneCheck(null)} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "var(--ink)" }}>×</button>
+              <button onClick={resetZone} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "var(--ink)" }}>×</button>
             </div>
             {zoneRows.length === 0 && (
               <div style={{ padding: "10px 12px", color: "var(--ink-muted)", fontSize: 11.5 }}>No takeoffs inside this zone on this sheet.</div>
