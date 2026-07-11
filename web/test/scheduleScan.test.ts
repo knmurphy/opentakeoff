@@ -9,7 +9,7 @@
 //   - de-dupes by finish_tag (first wins), since the dialog keys on it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeScanRows, SCAN_ENDPOINT } from "../src/lib/scheduleScan.js";
+import { normalizeScanRows, SCAN_ENDPOINT, SCAN_MAX_DIM, scanRasterScale } from "../src/lib/scheduleScan.js";
 
 test("normalizes a well-formed { rows } payload", () => {
   const rows = normalizeScanRows({
@@ -76,4 +76,30 @@ test("garbage / empty shapes yield [] (nothing invented)", () => {
 
 test("endpoint constant is the takeoff-scoped AI route", () => {
   assert.equal(SCAN_ENDPOINT, "/ai/parse-schedule");
+});
+
+// scanRasterScale — the downscale guard that keeps a marquee raster within the
+// server's SCAN_MAX_DIM per-side cap (else parse-schedule 400s "invalid image
+// dimensions"). Never upscales; downscales only as far as the cap.
+test("a region within the cap is sent at full resolution (factor 1)", () => {
+  assert.equal(scanRasterScale(1000, 800), 1);
+  assert.equal(scanRasterScale(SCAN_MAX_DIM, SCAN_MAX_DIM), 1); // exactly at the cap
+});
+
+test("an oversized side scales down so neither side exceeds the cap", () => {
+  // 8192 wide → 0.5; the scaled sides land exactly on the cap, never above it
+  const f = scanRasterScale(SCAN_MAX_DIM * 2, 1000);
+  assert.equal(f, 0.5);
+  assert.ok(Math.round(SCAN_MAX_DIM * 2 * f) <= SCAN_MAX_DIM);
+  assert.ok(Math.round(1000 * f) <= SCAN_MAX_DIM);
+});
+
+test("the binding side drives the factor (portrait vs landscape)", () => {
+  assert.equal(scanRasterScale(2000, SCAN_MAX_DIM * 4), SCAN_MAX_DIM / (SCAN_MAX_DIM * 4)); // tall
+  assert.equal(scanRasterScale(SCAN_MAX_DIM * 4, 2000), SCAN_MAX_DIM / (SCAN_MAX_DIM * 4)); // wide
+});
+
+test("degenerate / non-positive dimensions never divide-by-zero or upscale", () => {
+  assert.equal(scanRasterScale(0, 0), 1);
+  assert.equal(scanRasterScale(-5, 10), 1);
 });

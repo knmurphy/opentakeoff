@@ -42,15 +42,18 @@ function parseHdList(v) {
 // that and just bound worst-case memory/time/cost against a malformed request
 // (OAuth gating stops *who* can call this, not *what* they send).
 const MAX_IMAGE_B64_LEN = 8_000_000; // ~6MB decoded PNG
+// MATCHED PAIR: the client caps the scan raster to this same value (SCAN_MAX_DIM
+// in src/lib/scheduleScan.ts) before POSTing; if the two drift the client sends
+// images this rejects with the 400 below. Keep them in sync.
 const MAX_IMAGE_DIM = 4096;
 
 // The client stamps its build-time VITE_GOOGLE_HD on each request as `client_hd`.
-// Compare it to this function's runtime ALLOWED_HD and return an operator warning
+// Compare it to this function's runtime ALLOWED_HDS and return an operator warning
 // when they've drifted — the failure mode from #91 where the client org-gate
 // (isAllowedDomain) silently no-ops because the two env values fell out of sync
 // across the two systems (GitHub build var vs. Netlify runtime var). This is
 // DIAGNOSTIC ONLY: `client_hd` is untrusted, browser-supplied, and never
-// influences the auth decision (that's verifyGoogleUser + ALLOWED_HD, above).
+// influences the auth decision (that's verifyGoogleUser + ALLOWED_HDS, above).
 // Normalizes both sides exactly as the gates do (trim + case-fold, comma-split)
 // and compares them as sets, so domain ORDER doesn't warn but a real membership
 // difference does. Returns null when they agree (incl. both empty).
