@@ -285,6 +285,9 @@ export function grandTotals(rows) {
  *   custom columns (customColProfile) carry their own `get` and append after.
  * @param {{perimByCond?: Map<any, number>, attrsByCond?: Map<any, object>, specByCond?: Map<any, object>}|null}
  *   [ctx] handed to the getters (perimeter_ref / custom / spec columns need it)
+ * @param {Array<{value: string|null, rows: any[]}>|null} [byLabel] labelGroupedRows()
+ *   result — appends a "by label" section (ordered per-bucket quantities); null/empty
+ *   omits it, so a label-less project's CSV is byte-identical to the frozen v1 export.
  * @returns {string}
  */
 export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null, byLabel = null) {
