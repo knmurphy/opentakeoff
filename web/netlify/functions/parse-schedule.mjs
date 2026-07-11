@@ -209,7 +209,7 @@ export async function handler(event) {
   // when client_hd is actually sent (a string, incl. "") — an absent field means
   // an old/other client that can't be compared, not drift, so don't false-alarm.
   if (typeof body.client_hd === "string") {
-    const drift = hdDriftWarning(sanitizeForLog(body.client_hd), ALLOWED_HD);
+    const drift = hdDriftWarning(sanitizeForLog(body.client_hd), process.env.ALLOWED_HD);
     if (drift) console.warn(`parse-schedule: ${drift}`);
   }
   const imageB64 = typeof body.image_b64 === "string" ? body.image_b64 : "";
