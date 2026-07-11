@@ -10,6 +10,7 @@
 // Geometry math reads tfRef (always current), so drawing stays accurate.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
@@ -2084,29 +2085,58 @@ export default function TakeoffCanvas() {
     if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
-    // Decide accept/reject from the LIVE proposal (proposalRef, not the
-    // possibly-stale `proposal` closure — proposeRegion can run after an
-    // await) BEFORE calling setProposal, so the updater passed to setProposal
-    // stays a pure function of its own `prev` — no setCommitMsg (or any other
-    // side effect) inside it. React may invoke an updater more than once
-    // (StrictMode double-invoke in dev, or a discarded concurrent render);
-    // firing a message from inside one would announce a proposal state that
-    // never lands.
-    const prevNow = proposalRef.current;
-    const regions = prevNow && prevNow.key === tp.key ? prevNow.regions : [];
-    if (regions.some((r) => r.kind === (negative ? "neg" : "pos") && pointInPoly(local[0], local[1], r.poly))) {
-      setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
-      return;
-    }
-    if (negative && !regions.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) {
-      setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
-      return;
-    }
-    setCommitMsg("");
-    setProposal((prev) => {
-      const rs = prev && prev.key === tp.key ? prev.regions : [];
-      return { key: tp.key, regions: [...rs, { kind: negative ? "neg" : "pos", seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+    // Decide accept/dup/carve-reject INSIDE the functional updater, against
+    // its own authoritative `prev` — not proposalRef, which only catches up
+    // on the next render's passive-effect flush (a macrotask). proposeRegion
+    // can resume after an await (the raster path shares a cached
+    // ensureRasterMask promise across concurrent clicks on the same panel),
+    // and two continuations on that shared promise resume as back-to-back
+    // MICROTASK reactions with no render/effect flush able to run in
+    // between — so a second click's dedup check would read proposalRef from
+    // BEFORE the first click's setProposal landed and wrongly pass.
+    //
+    // setCommitMsg still must not be called from inside the updater itself
+    // — React may invoke it more than once (StrictMode double-invoke, or a
+    // discarded concurrent render), and firing a message from inside one
+    // would announce a decision that never lands. So the verdict is stashed
+    // in this scope-local `outcome` var (a plain reassignment, not a
+    // setState call) and acted on AFTER setProposal returns.
+    //
+    // That read is wrapped in flushSync rather than just trusted to be
+    // synchronous: React's "run the updater eagerly, at dispatch time" fast
+    // path is an internal bail-out optimization, not a public guarantee, and
+    // it does NOT reliably apply here — proposeRegion's raster call always
+    // resumes from a promise continuation (after `await ensureRasterMask`),
+    // never a discrete DOM event, so React defers the updater to the next
+    // render instead of running it inline (confirmed against the real
+    // shared-promise race in this file: `outcome` read back as undefined
+    // every time, in both dev and a production build, with or without a
+    // second racing click). flushSync forces that render to happen, and
+    // this updater to run, before setProposal returns, so `outcome` is
+    // always populated by the time it's read below — for the ordinary
+    // single-click case AND for two clicks racing the same shared promise
+    // (the second call's setProposal, and its read of `outcome`, still runs
+    // strictly after the first call's flushSync has fully committed).
+    let outcome;
+    flushSync(() => {
+      setProposal((prev) => {
+        const rs = prev && prev.key === tp.key ? prev.regions : [];
+        const kind = negative ? "neg" : "pos";
+        if (rs.some((r) => r.kind === kind && pointInPoly(local[0], local[1], r.poly))) {
+          outcome = "dup";
+          return prev;
+        }
+        if (negative && !rs.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) {
+          outcome = "needsPos";
+          return prev;
+        }
+        outcome = "added";
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+      });
     });
+    if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
+    else if (outcome === "needsPos") setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
+    else setCommitMsg("");
   }
   async function oneClickAt(p, negative) {
     const tp = panelAt(p[0]);
