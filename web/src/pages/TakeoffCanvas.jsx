@@ -2895,17 +2895,22 @@ export default function TakeoffCanvas() {
       }
       // else: the reader is available — let it read the pixels below.
     }
-    await importScheduleFromScan(pageObj, rs, rect, seq, tokens.length > 0);
+    await importScheduleFromScan(pageObj, rs, rect, seq, tokens.length);
   }
 
   // Scan/OCR fallback for a raster page: rasterize the marqueed region and POST
   // it to the optional AI backend, then feed the returned rows into the SAME
   // approval dialog. LOGIN-GATED — only a Google-configured deployment with a
   // signed-in user reaches the network (no API key ever lives in client code).
-  // hadTokens distinguishes the two callers: a true raster page (no text layer)
-  // vs. the fallthrough from a token-bearing box whose vector parse found nothing
-  // — only the "reader found nothing" message differs, so the advice stays right.
-  async function importScheduleFromScan(pageObj, rs, rect, seq, hadTokens) {
+  // tokenCount is the region's text-token count at the routing site: 0 ⇒ a true
+  // raster page (no text layer, AI is the only reader); >0 ⇒ the fallthrough from a
+  // token-bearing box whose vector parse found nothing. We report WHICH happened
+  // (#104) but never claim the >0 case is a "fixable parser gap": scanned plans
+  // routinely carry a stray text layer (title block, dimension text, embedded OCR)
+  // that lands in the marquee yet holds no schedule, so a token-bearing box that
+  // parses to nothing is just as likely a genuine scan as a defeated vector table.
+  async function importScheduleFromScan(pageObj, rs, rect, seq, tokenCount) {
+    const hadTokens = tokenCount > 0;
     if (!isGoogleConfigured()) {
       setCommitMsg("No schedule found — this looks like a scanned page (no text layer). Importing from scanned plans needs the AI backend.");
       return;
@@ -2932,6 +2937,15 @@ export default function TakeoffCanvas() {
       catch { setCommitMsg("Sign in again to import from scanned plans."); return; }
       if (seq !== renderSeqRef.current) return;
       setCommitMsg("Reading the scanned schedule…");
+      // #104: record WHY the paid reader was reached, right before the call fires
+      // (rasterize + token succeeded), so the log correlates 1:1 with paid reads.
+      // no-text-layer = truly raster (AI-only); text-present-unparsed = tokens were
+      // in the box but the vector parser produced nothing (NOT asserted as a parser
+      // bug — a stray-text scan is indistinguishable from a defeated vector table).
+      console.info("[schedule-import] using AI reader", {
+        reason: hadTokens ? "text-present-unparsed" : "no-text-layer",
+        tokenCount,
+      });
       try {
         const res = await fetch(SCAN_ENDPOINT, {
           method: "POST",
@@ -2953,6 +2967,11 @@ export default function TakeoffCanvas() {
             : "No schedule found in that scanned region — the reader returned nothing.");
           return;
         }
+        // #104: say why the AI reader ran — honest about the token-bearing case (we
+        // read the pixels; we do NOT claim the vector parser has a bug).
+        setCommitMsg(hadTokens
+          ? `Read ${rows.length} finish${rows.length === 1 ? "" : "es"} from the image — the box had text but we couldn't read it as a table.`
+          : `Read ${rows.length} finish${rows.length === 1 ? "" : "es"} — scanned page (no text layer).`);
         setImportRows(rows);
       } catch { setCommitMsg("Couldn't reach the schedule reader — try again in a moment."); }
     } finally {
