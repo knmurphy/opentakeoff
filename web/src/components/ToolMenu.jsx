@@ -15,7 +15,7 @@ import { Icon } from "../brand/icons.jsx";
 
 const MENU_W = 232;
 
-export default function ToolMenu({ face, active = false, accent = "cobalt", title = "", items, onOpenChange, faceStyle, menuStyle }) {
+export default function ToolMenu({ face, active = false, accent = "cobalt", title = "", items, onOpenChange, faceStyle, menuStyle, disabled = false }) {
   const [open, setOpen] = useState(false);
   const [flip, setFlip] = useState(false);
   const rootRef = useRef(null);
@@ -43,6 +43,7 @@ export default function ToolMenu({ face, active = false, accent = "cobalt", titl
   const accentColor = accent === "danger" ? "var(--c-danger)" : "var(--cobalt)";
   const menuW = (menuStyle && parseInt(menuStyle.minWidth, 10)) || MENU_W;
   const toggle = () => {
+    if (disabled) return;
     if (!open && rootRef.current) {
       const r = rootRef.current.getBoundingClientRect();
       setFlip(r.left + menuW > window.innerWidth - 16);
@@ -52,12 +53,13 @@ export default function ToolMenu({ face, active = false, accent = "cobalt", titl
 
   return (
     <span ref={rootRef} style={{ position: "relative", display: "inline-flex" }}>
-      <button type="button" onClick={toggle} title={title}
+      <button type="button" onClick={toggle} title={title} disabled={disabled}
         style={{
-          display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 10px", cursor: "pointer",
+          display: "inline-flex", alignItems: "center", gap: 7, padding: "6px 10px", cursor: disabled ? "default" : "pointer",
           border: `1px solid ${active ? accentColor : "var(--ink-faint)"}`,
           background: active ? accentColor : (open ? "var(--paper-shadow)" : "transparent"),
           color: active ? "var(--paper-bright)" : "var(--ink)",
+          opacity: disabled ? 0.38 : 1,
           fontFamily: "var(--f-body)", fontSize: 12.5, fontWeight: 600, lineHeight: 1,
           ...faceStyle,
         }}>
