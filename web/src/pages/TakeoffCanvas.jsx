@@ -19,7 +19,7 @@ import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
 import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
-import SheetGallery from "../components/SheetGallery.jsx";
+import PlanNavigator from "../components/PlanNavigator.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
@@ -42,7 +42,6 @@ import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPa
 import RfiPanel from "../components/RfiPanel.jsx";
 import StampPanel from "../components/StampPanel.jsx";
 import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
-import DrivePicker from "../components/DrivePicker.jsx";
 import AccountChip from "../components/AccountChip.jsx";
 import { useGoogleAuth } from "../lib/google/AuthContext.jsx";
 import { projectHomeFolderId } from "../lib/projectHome.js";
@@ -506,7 +505,18 @@ export default function TakeoffCanvas() {
   // read at call time, so [] deps are correct.
   const pickerListFolder = useCallback((id) => store.listFolder(id), []);
   const pickerAddSheets = useCallback((items) => store.addSheets(items), []);
-  const pickerExistingNames = useMemo(() => new Set(sheets.map((s) => s.name)), [sheets]);
+  // Close a PDF: drop it from the working set (cloud: manifest only, file stays
+  // in Drive; local: deletes the stored bytes) and refresh. The [sheets] effect
+  // then prunes any open tabs whose file just left the set; shapes on those
+  // sheets persist in annotations and restore if the PDF is re-added by name.
+  const closePdf = useCallback(async (name) => { await store.removePdf(name); await refreshSheets(); }, [refreshSheets]);
+  // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
+  // file, then drop it from the working set.
+  const removeFromProject = useCallback(async (name) => {
+    if (typeof store.removeFromProject !== "function") return;
+    await store.removeFromProject(name);
+    await refreshSheets();
+  }, [refreshSheets]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -4224,32 +4234,29 @@ export default function TakeoffCanvas() {
         />
       </div>
 
-      {/* gallery-first plan-set view — overlays the mounted canvas */}
-      {view === "gallery" && (
-        <SheetGallery
+      {/* Unified plan navigator — one surface for the plan-set gallery AND the
+          Drive folder browser. Presents as a modal over the dimmed canvas when a
+          sheet is open behind it, or full-screen (onboarding) when nothing is. */}
+      {(view === "gallery" || view === "picker") && (
+        <PlanNavigator
+          canClose={openTabs.length > 0}
+          onExit={() => setView("canvas")}
+          initialMode={view === "picker" ? "browse" : "plan"}
+          cloudMode={cloudMode}
           sheets={sheets} getDoc={docFor} scales={scales} detectedScales={detectedScales}
           shapes={shapes} labels={galleryLabels}
           onLabel={(k, lbl) => setGalleryLabels((m) => (m[k] === lbl ? m : { ...m, [k]: lbl }))}
           onDetect={(k, det) => setDetectedScales((d) => (d[k]?.label === det.label ? d : { ...d, [k]: det }))}
           thumbCacheRef={thumbCacheRef} busyRef={statusRef}
-          openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
+          openTabs={openTabs} onOpen={openSheets}
           onAddFiles={handleFiles}
-          onAddFromDrive={cloudMode ? () => setView("picker") : undefined}
+          onClosePdf={closePdf}
+          onRemoveFromProject={cloudMode ? removeFromProject : undefined}
           onCloseProject={cloudMode ? closeProject : undefined}
           onBrowseProjects={cloudMode ? browseProjects : undefined}
-        />
-      )}
-
-      {/* cloud file picker — browse the project's Drive folder (metadata only) and
-          choose which PDFs to open, instead of auto-downloading the whole folder */}
-      {view === "picker" && cloudMode && (
-        <DrivePicker
-          listFolder={pickerListFolder}
+          listFolder={cloudMode ? pickerListFolder : undefined}
           addSheets={pickerAddSheets}
-          existingNames={pickerExistingNames}
-          onAdded={async () => { await refreshSheets(); setStatus("ready"); setView("gallery"); }}
-          onClose={() => setView("gallery")}
-          canClose
+          onAdded={async () => { await refreshSheets(); setStatus("ready"); }}
         />
       )}
 
