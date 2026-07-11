@@ -12,7 +12,7 @@
 //   - renameShapeLabel rewrites exact matches only — other shapes keep identity.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeShapeLabels, shapeLabelValue, sanitizeShapeLabelsOnShapes, renameShapeLabel } from "../src/lib/shapeLabels.js";
+import { sanitizeShapeLabels, shapeLabelValue, sanitizeShapeLabelsOnShapes, renameShapeLabel, assignShapeLabel } from "../src/lib/shapeLabels.js";
 
 const vocab = () => ["Phase 1", "Phase 2", "Level 1 — Slab"];   // untrimmed em-dash content is legal
 
@@ -104,6 +104,39 @@ test("rename leaves non-matching shapes with their object identity", () => {
   assert.notEqual(out[0], input[0]);   // rewritten → new object (React re-render)
   assert.equal(out[1], input[1]);      // untouched → same reference
   assert.equal(out[2], input[2]);      // labelless shape untouched
+});
+
+// ── assignShapeLabel (single-shape reassign, #111) ───────────────────────────
+
+test("assign sets the label on the matching shape only; others keep identity", () => {
+  const input = shapes();
+  const out = assignShapeLabel(input, "s2", "East Wing");
+  assert.equal(out[1].label, "East Wing");   // matched → set
+  assert.notEqual(out[1], input[1]);          // new object (re-render)
+  assert.equal(out[0], input[0]);             // untouched → identity
+  assert.equal(out[2], input[2]);
+  assert.equal(out[1].kind, "poly");          // other fields intact
+});
+
+test("assign an empty/whitespace/nullish value CLEARS the label (removes the key)", () => {
+  for (const clear of ["", "   ", null, undefined]) {
+    const out = assignShapeLabel(shapes(), "s1", clear);
+    assert.equal("label" in out[0], false, String(clear));   // key gone, not just falsy
+    assert.equal(out[0].id, "s1");
+    assert.equal(out[0].kind, "poly");                        // rest intact
+  }
+});
+
+test("clearing an already-unlabeled shape keeps its identity (no needless clone)", () => {
+  const input = shapes();
+  const out = assignShapeLabel(input, "s3", "");   // s3 has no label
+  assert.equal(out[2], input[2]);
+});
+
+test("a non-matching id leaves every shape untouched by identity", () => {
+  const input = shapes();
+  const out = assignShapeLabel(input, "nope", "East Wing");
+  for (let i = 0; i < out.length; i++) assert.equal(out[i], input[i]);
 });
 
 // ── omit-when-empty (buildPayload behavior) ──────────────────────────────────

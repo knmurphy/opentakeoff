@@ -47,6 +47,23 @@ export function sanitizeShapeLabelsOnShapes(shapes) {
   });
 }
 
+// Assign (or clear) the label on ONE shape, by id — the single-shape reassign
+// the Select tool drives (#111). A visible value sets it; an empty/whitespace/
+// nullish value CLEARS it by removing the key (the shapeLabelValue-absent state,
+// not a "" that would render as an empty group header). Only the matching shape
+// moves to a new object; every other shape — and a clear on an already-unlabeled
+// shape — keeps its identity.
+export function assignShapeLabel(shapes, id, value) {
+  const v = visible(value);
+  return shapes.map((s) => {
+    if (s?.id !== id) return s;
+    if (v) return { ...s, label: v };
+    if (!("label" in s)) return s;   // already unlabeled — nothing to clear
+    const { label, ...rest } = s;    // drop the key, keep everything else
+    return rest;
+  });
+}
+
 // Rewrite assignments when a vocabulary value is renamed — typo-fixing is the
 // common edit, and remove+re-add would strand every labeled shape on a
 // "(removed)" value. Only exact matches move to a new object (React re-render);
