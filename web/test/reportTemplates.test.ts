@@ -91,6 +91,21 @@ test("delete by id; rename by id", () => {
   });
 });
 
+test("rename to an EXISTING name is a no-op — never persist a same-name pair (would drop one on reload)", () => {
+  withMockStorage(() => {
+    saveTemplate("A", {}, "");
+    let list = saveTemplate("B", { csv: false }, "sheet");
+    const bId = list.find((t: any) => t.name === "B")!.id;
+    // rename B → "A" (taken by another id): rejected, B keeps its name
+    list = renameTemplate(bId, "A");
+    assert.deepEqual(list.map((t: any) => t.name), ["A", "B"]);
+    assert.deepEqual(loadTemplates().map((t: any) => t.name), ["A", "B"]);   // both survive a reload
+    // renaming to a FREE name still works
+    list = renameTemplate(bId, "B2");
+    assert.equal(list.find((t: any) => t.id === bId)!.name, "B2");
+  });
+});
+
 test("empty/whitespace name is a no-op save (can't create a nameless template)", () => {
   withMockStorage(() => {
     assert.deepEqual(saveTemplate("   ", {}, ""), []);

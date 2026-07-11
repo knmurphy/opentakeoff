@@ -14,8 +14,10 @@ const cleanCols = (c) => (c && typeof c === "object" && !Array.isArray(c) ? c : 
 
 // The hydrate gate, shared by loadTemplates and testable in isolation: non-array
 // → []; items need a non-empty string id and a visible name; cols coerces to an
-// object and groupBy to a string; DEDUPE BY NAME (first wins) — the name keys the
-// list UI, so duplicates would collide React keys and confuse "save-as overwrite".
+// object and groupBy to a string; DEDUPE BY NAME (first wins) — the name is the
+// user-facing handle, so two same-name templates would be indistinguishable in
+// the list and ambiguous for save-as-overwrite (which matches by name). The row
+// React key is t.id, not the name, so this isn't about key collisions.
 export function sanitizeTemplates(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
@@ -61,10 +63,13 @@ export function deleteTemplate(id) {
   return persist(loadTemplates().filter((t) => t.id !== id));
 }
 
-// Rename by id. A collision with another template's name is left to load-time
-// dedupe (first wins) — the UI should guard against it, but data can't corrupt.
+// Rename by id. NO-OP on a name collision with a DIFFERENT template — otherwise
+// two same-name rows would persist and load-time dedupe (first wins) would
+// silently drop the renamed one on the next reload (data loss). Renaming to the
+// same name, or a free name, proceeds.
 export function renameTemplate(id, name) {
   const nm = cleanName(name);
-  if (!nm) return loadTemplates();
-  return persist(loadTemplates().map((t) => (t.id === id ? { ...t, name: nm } : t)));
+  const list = loadTemplates();
+  if (!nm || list.some((t) => t.id !== id && t.name === nm)) return list;   // empty or taken by another → no-op
+  return persist(list.map((t) => (t.id === id ? { ...t, name: nm } : t)));
 }
