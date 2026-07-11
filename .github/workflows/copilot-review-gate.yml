@@ -1,0 +1,65 @@
+# Merge gate: a PR to main can't merge until GitHub Copilot has actually posted
+# its code review. Copilot reviews automatically on open, but its review lands a
+# minute or two AFTER CI goes green — so "green CI" alone let a PR merge before
+# Copilot weighed in. That exact gap shipped a ReferenceError to production once
+# (it was caught by Copilot's review, which posted just after the merge). This
+# job stays RED until a Copilot review exists on the PR, then flips green when the
+# review-submitted event re-runs it. Add `copilot-review` to the branch's required
+# status checks to enforce it.
+#
+# Note: this gates that Copilot HAS reviewed, not that every comment is resolved —
+# resolving findings stays a human judgment call. It only closes the "merged before
+# Copilot ran at all" hole.
+name: Copilot Review Gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  # Re-evaluates when Copilot (or anyone) submits/dismisses a review — this is what
+  # flips the check green once Copilot's review posts. pull_request_review workflows
+  # run from the base branch, so this must live on main to take effect.
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: copilot-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  copilot-review:
+    runs-on: ubuntu-latest
+    # Drafts aren't ready to merge; don't nag them.
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Require a Copilot code review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            // Exact login + Bot type: a prefix match would let any user named
+            // "copilot-pull-request-reviewer…" satisfy the gate, and a real user
+            // can't be type "Bot", so together these block impersonation. The
+            // [bot] suffix is what the reviews API returns; allow the bare form too.
+            const isCopilot = (u) =>
+              u && u.type === 'Bot' &&
+              /^copilot-pull-request-reviewer(\[bot\])?$/i.test(u.login || '');
+            // A dismissed review no longer counts — dismissing Copilot's review
+            // (the workflow re-runs on that event) must turn the gate red again.
+            const reviewed = reviews.some((r) => isCopilot(r.user) && r.state !== 'DISMISSED');
+            if (!reviewed) {
+              core.setFailed(
+                'Waiting for GitHub Copilot code review. It reviews automatically on open; ' +
+                'this check turns green once its review posts. Do not merge before then.'
+              );
+            } else {
+              core.info('Copilot code review present ✓');
+            }
