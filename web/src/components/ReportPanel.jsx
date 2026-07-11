@@ -154,8 +154,14 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     const get = colGetter(col);
     const v = get ? get(r, cellCtx) : r[col.key];
     // custom columns and read-only spec columns: plain left-aligned text
-    // (already coerced to string by their getter); TOTAL cells stay blank (no foot)
-    if (col.custom || col.spec) return <td key={col.key} style={{ ...td, textAlign: "left" }}>{v || "—"}</td>;
+    // (already coerced to string by their getter); TOTAL cells stay blank (no foot).
+    // spec cells can hold sentence-length values (esp. Description) — let them WRAP
+    // and cap the width so one long value can't push report/print columns off the
+    // page edge (mirrors the notes cell below). Custom columns stay nowrap.
+    if (col.custom || col.spec) {
+      const cell = col.spec ? { ...td, textAlign: "left", whiteSpace: "normal", maxWidth: 240 } : { ...td, textAlign: "left" };
+      return <td key={col.key} style={cell}>{v || "—"}</td>;
+    }
     switch (col.key) {
       case "finish":
         return (

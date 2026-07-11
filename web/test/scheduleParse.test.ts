@@ -105,7 +105,8 @@ test("rowToSeed applies category defaults and carries the product spec", () => {
   assert.equal(act.waste_pct, 0);      // ceiling default
   assert.equal(act.color, palette[4 % palette.length]); // wraps the palette
   const vct = rowToSeed(rows.find((r) => r.finish_tag === "VCT-1")!, 1, palette);
-  assert.deepEqual(vct.spec, { manufacturer: "ARMSTRONG", style: "STANDARD EXCELON IMPERIAL", color: "FORTRESS WHITE 51839", size: '12" x 12"' });
+  // spec carries description (the MATERIAL/PRODUCT cell) alongside mfr/style/color/size (#103)
+  assert.deepEqual(vct.spec, { manufacturer: "ARMSTRONG", style: "STANDARD EXCELON IMPERIAL", color: "FORTRESS WHITE 51839", size: '12" x 12"', description: "VINYL COMPOSITION TILE" });
 });
 
 test("no header structure → no rows (nothing invented)", () => {
