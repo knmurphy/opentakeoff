@@ -37,7 +37,7 @@ import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
-import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel } from "../lib/shapeLabels.js";
+import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel, shapeLabelValue, assignShapeLabel } from "../lib/shapeLabels.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
@@ -246,6 +246,7 @@ export default function TakeoffCanvas() {
   const [conditionColumns, setConditionColumns] = useState([]);  // project-level custom-column vocabulary [{ id, name, values }] — assignments live on c.attrs
   const [shapeLabels, setShapeLabels] = useState([]);  // project-level flat vocabulary of phase/area labels (#110) — assignment lives on shape.label
   const [activeCond, setActiveCond] = useState("");
+  const [activeLabel, setActiveLabel] = useState(null);   // session-only active phase/area label (#111) — new traces get it; NOT persisted (absent from buildPayload, reset on hydrate)
   const [palette, setPalette] = useState([]);   // ordered condition ids pinned to the top-bar quick-access palette (≤ PALETTE_MAX)
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
@@ -640,6 +641,7 @@ export default function TakeoffCanvas() {
     ).filter(([, v]) => typeof v === "string")));
     setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
     setShapeLabels(sanitizeShapeLabels(a.shape_labels));   // same unconditional-set rule: a snapshot load must not inherit the replaced project's label vocabulary
+    setActiveLabel(null);   // active label is session-only — never carry one from the replaced project into a fresh/loaded one
     const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
@@ -2031,6 +2033,7 @@ export default function TakeoffCanvas() {
       measure_role: asDeduct ? "deduct" : "floor_area",
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { area_sf: +(met.area * upp * upp).toFixed(2), perimeter_lf: +(met.perim * upp).toFixed(2) },
+      ...(activeLabel ? { label: activeLabel } : {}),
       origin: { method: "manual" },
     }]);
   }
@@ -2046,6 +2049,7 @@ export default function TakeoffCanvas() {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "linear",
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { perimeter_lf: +LF.toFixed(2), area_sf: tIn > 0 ? +((LF * tIn) / 12).toFixed(2) : 0 },
+      ...(activeLabel ? { label: activeLabel } : {}),
       origin: { method: "manual" },
     }]);
   }
@@ -2064,6 +2068,7 @@ export default function TakeoffCanvas() {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "surface_area", height_ft: h,
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { area_sf: +(LF * h).toFixed(2), perimeter_lf: +LF.toFixed(2) },
+      ...(activeLabel ? { label: activeLabel } : {}),
       origin: { method: "manual" },
     }]);
   }
@@ -2072,7 +2077,7 @@ export default function TakeoffCanvas() {
     const tp = panelAt(p[0]);
     setShapes((s) => [...s, {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "count",
-      verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 }, origin: { method: "manual" },
+      verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 }, ...(activeLabel ? { label: activeLabel } : {}), origin: { method: "manual" },
     }]);
   }
 
@@ -2275,6 +2280,7 @@ export default function TakeoffCanvas() {
       measure_role: r.kind === "neg" ? "deduct" : "floor_area",
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
       computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
+      ...(activeLabel ? { label: activeLabel } : {}),
       // the provenance receipt: machine-proposed, human-reviewed at the Create gate
       origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}) },
     }));
@@ -2462,7 +2468,7 @@ export default function TakeoffCanvas() {
       // same sheet: nudge so the copy is visible; other sheet: same relative spot
       const vn = c.verts_norm.map(([x, y]) => (same ? [Math.min(0.999, x + offset), Math.min(0.999, y + offset)] : [x, y]));
       // != null, not truthy: an overridden height of 0 must survive the paste
-      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft != null ? { height_ft: c.height_ft } : {}), ...(c.height_override ? { height_override: true } : {}), ...cloneOrigin(c.origin) };
+      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft != null ? { height_ft: c.height_ft } : {}), ...(c.height_override ? { height_override: true } : {}), ...(c.label ? { label: c.label } : {}), ...cloneOrigin(c.origin) };
       return { ...s, computed: recomputeShape(s) };
     });
     setShapes((s) => [...s, ...made]);
@@ -2811,6 +2817,7 @@ export default function TakeoffCanvas() {
   }
   function deleteSelected() { if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); } }
   function reassignSelected(condId) { if (selectedId) setShapes((ss) => ss.map((s) => (s.id === selectedId ? { ...s, condition_id: condId } : s))); }
+  function reassignSelectedLabel(value) { if (selectedId) setShapes((ss) => assignShapeLabel(ss, selectedId, value)); }   // Select-tool single-shape re-label (#111) — value "" / null clears it
 
   // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
   // the panel's ⌖ / double-click navigation. Fit zoom is capped so a lone
@@ -3244,6 +3251,13 @@ export default function TakeoffCanvas() {
     if (reassign && tool === "select" && selectedId) reassignSelected(id);
     setActiveCond(id);
     panelSelectionRef.current?.();   // plain activation dismisses a live bulk selection (panel view state)
+  };
+  // The label analogue (#111): with a shape selected in Select mode this re-labels
+  // it (mirroring activateCondition's reassign-on-activate); otherwise it just sets
+  // the active label for subsequent traces. value "" / null = No label / clear.
+  const activateLabel = (value) => {
+    if (tool === "select" && selectedId) reassignSelectedLabel(value);
+    setActiveLabel(value);
   };
 
   // ── top-bar quick-access palette (pinned conditions) ──────────────────────
@@ -3731,6 +3745,16 @@ export default function TakeoffCanvas() {
             ]}
           />
         </>)}
+        {shapeLabels.length > 0 && cluster(tool === "select" && selectedId ? "Label → shape" : "Label",
+          <select
+            value={tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
+            onChange={(e) => activateLabel(e.target.value || null)}
+            title="Phase/area label. New takeoffs get the active label; with a shape selected (Select tool), changing this re-labels that shape. Manage the list in the Columns tab."
+            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel ? "var(--cobalt)" : "transparent", color: activeLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
+            <option value="">No label</option>
+            {shapeLabels.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        )}
         <div style={{ flex: 1 }} />
         {cluster(`Scale — ${labelFor(focusPanel)}`,
           <ToolMenu
