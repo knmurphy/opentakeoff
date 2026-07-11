@@ -37,6 +37,7 @@ import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
+import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel } from "../lib/shapeLabels.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadCompany } from "../lib/identity.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
@@ -243,6 +244,7 @@ export default function TakeoffCanvas() {
 
   const [conditions, setConditions] = useState([]);
   const [conditionColumns, setConditionColumns] = useState([]);  // project-level custom-column vocabulary [{ id, name, values }] — assignments live on c.attrs
+  const [shapeLabels, setShapeLabels] = useState([]);  // project-level flat vocabulary of phase/area labels (#110) — assignment lives on shape.label
   const [activeCond, setActiveCond] = useState("");
   const [palette, setPalette] = useState([]);   // ordered condition ids pinned to the top-bar quick-access palette (≤ PALETTE_MAX)
   const [shapes, setShapes] = useState([]);
@@ -637,6 +639,7 @@ export default function TakeoffCanvas() {
       a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
     ).filter(([, v]) => typeof v === "string")));
     setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
+    setShapeLabels(sanitizeShapeLabels(a.shape_labels));   // same unconditional-set rule: a snapshot load must not inherit the replaced project's label vocabulary
     const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
     if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
     else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
@@ -652,7 +655,7 @@ export default function TakeoffCanvas() {
     // epoch and it clears them in place (panel tab + width survive, as they
     // always did). On the mount load this is a no-op (fresh panel state).
     setPanelEpoch((e) => e + 1);
-    setShapes(a.shapes || []);
+    setShapes(sanitizeShapeLabelsOnShapes(a.shapes || []));   // strip a corrupt shape.label at hydrate (identity-preserving); other shape fields untouched
     // normalize hydrated markups: legacy workspaces may hold markups with no id
     // (pre-dating the id field) — seed a stable id + default rfi_id so the new
     // select / edit / delete / move / RFI-link flows (all keyed on m.id) work on them.
@@ -1128,7 +1131,7 @@ export default function TakeoffCanvas() {
     // delete already prunes) and omit the key entirely when nothing survives,
     // mirroring the condition_columns omit-when-empty convention.
     const pinned = palette.filter((id) => conditions.some((c) => c.id === id));
-    return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
+    return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
   };
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
@@ -1152,7 +1155,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, palette, scales, scaleSources, markups, rfis, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, rfis, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -3085,6 +3088,18 @@ export default function TakeoffCanvas() {
     setConditionColumns((cols) => cols.filter((c) => c.id !== colId));   // orphaned attrs[colId] stay behind — harmless, nothing iterates raw attrs
   };
 
+  // shape-label vocabulary (#110): a flat project-level list; each shape carries
+  // at most one, on shape.label. Mirrors the column-value family above.
+  const addLabel = (v) => setShapeLabels((ls) => (ls.includes(v) ? ls : [...ls, v]));
+  const removeLabel = (v) => setShapeLabels((ls) => ls.filter((x) => x !== v));   // labeled shapes keep the string — it falls into an ad-hoc report group, nothing disappears from totals
+  const renameLabel = (oldV) => {
+    const newV = (window.prompt("Rename label:", oldV) || "").trim();
+    if (!newV || newV === oldV) return;
+    // rename into an existing value = merge (labels are unique — they key the chips and the report's group headers)
+    setShapeLabels((ls) => (ls.includes(newV) ? ls.filter((x) => x !== oldV) : ls.map((x) => (x === oldV ? newV : x))));
+    setShapes((sh) => renameShapeLabel(sh, oldV, newV));   // assignments follow the vocabulary
+  };
+
   // supporting-materials editing (operates on the active condition)
   const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
   const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? matEditPatch(m, patch) : m)) });   // NAME edits re-classify a geometry-less line's kind
@@ -3420,6 +3435,7 @@ export default function TakeoffCanvas() {
     onRenameTemplate: renameTemplate, onDeleteTemplate: deleteTemplate,
     onAddColumn: addColumn, onRenameColumn: renameColumn, onDeleteColumn: deleteColumn,
     onAddColumnValue: addColumnValue, onRemoveColumnValue: removeColumnValue, onRenameColumnValue: renameColumnVal,
+    onAddLabel: addLabel, onRenameLabel: renameLabel, onRemoveLabel: removeLabel,
     onAttachLibMaterial: attachLibMaterial, onPromoteMaterial: promoteMaterial, onRevertMatField: revertMatField,
     onUpdateLibMaterial: updateLibMaterial, onPushLibUpdate: pushLibUpdate,
     onDeleteLibMaterial: deleteLibMaterial, onAddLibMaterial: addLibMaterial,
@@ -4636,6 +4652,7 @@ export default function TakeoffCanvas() {
           activeCond={activeCond}
           visRowById={visRowById}
           conditionColumns={conditionColumns}
+          shapeLabels={shapeLabels}
           templates={templates}
           palette={palette}
           matLib={matLib}
