@@ -14,6 +14,23 @@ import type { ScheduleRow, Category } from "./scheduleParse.js";
 // (see web/vite.config.js); in prod it's dormant unless a backend is wired up.
 export const SCAN_ENDPOINT = "/ai/parse-schedule";
 
+// Longest side (px) the scan raster may be. MATCHED PAIR: this MUST equal
+// MAX_IMAGE_DIM in netlify/functions/parse-schedule.mjs — the server 400s
+// ("invalid image dimensions") anything larger, so the client must downscale to
+// fit or a big marquee (≈ a whole sheet) fails. Same "keep client & server caps
+// in sync" hazard as the org-gate (#91), just for pixels.
+export const SCAN_MAX_DIM = 4096;
+
+// Downscale factor for a marqueed region so neither side exceeds `maxDim`. Never
+// upscales (≤ 1), so a small crop is sent at full render resolution and only an
+// oversized one is shrunk — and only as far as the cap, never more (keeps the
+// most resolution the pipeline will accept, which matters for the model reading
+// small schedule text). Pure/testable; the canvas calls it in rasterizeRegion.
+export function scanRasterScale(regW: number, regH: number, maxDim: number = SCAN_MAX_DIM): number {
+  const w = Math.max(1, regW), h = Math.max(1, regH);
+  return Math.min(1, maxDim / w, maxDim / h);
+}
+
 // Mirror of scheduleParse's category vocabulary + which categories the dialog
 // pre-checks. Duplicated (not imported) so the parser's internals stay private;
 // the ScheduleRow *type* is the shared contract, this is just its value domain.

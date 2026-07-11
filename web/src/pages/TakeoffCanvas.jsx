@@ -28,7 +28,7 @@ import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../compone
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
-import { normalizeScanRows, SCAN_ENDPOINT } from "../lib/scheduleScan";
+import { normalizeScanRows, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
@@ -2963,11 +2963,15 @@ export default function TakeoffCanvas() {
   // Render just the marqueed region (rs-viewport px, the space rect lives in) to
   // an offscreen canvas and return its PNG as base64 + pixel dims. Mirrors the
   // detail-view offscreen render: shift the region's top-left to (0,0) and clamp
-  // to the single-canvas caps so a huge marquee can't exceed the backing store.
+  // to the single-canvas caps so a huge marquee can't exceed the backing store —
+  // AND to SCAN_MAX_DIM (scanRasterScale), the server's per-side cap, so a
+  // near-full-sheet marquee downscales to fit instead of being rejected with a
+  // 400 "invalid image dimensions". Downscales only as far as the cap, so a
+  // tighter box still goes at full resolution (better read on small schedule text).
   async function rasterizeRegion(pageObj, rs, rect) {
     const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
     const regW = Math.max(1, Math.abs(rect.x1 - rect.x0)), regH = Math.max(1, Math.abs(rect.y1 - rect.y0));
-    const factor = Math.min(1, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)));
+    const factor = Math.min(1, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)), scanRasterScale(regW, regH));
     const bw = Math.max(1, Math.round(regW * factor)), bh = Math.max(1, Math.round(regH * factor));
     const vp = pageObj.getViewport({ scale: rs * factor });
     const canvas = document.createElement("canvas");
