@@ -64,6 +64,15 @@ function domainHint() {
   return (import.meta.env && import.meta.env.VITE_GOOGLE_HD) || "";
 }
 
+// The raw build-time org domain (VITE_GOOGLE_HD), exposed so the scan caller can
+// stamp it on its request for the server's drift cross-check (the server compares
+// it to its runtime ALLOWED_HD and warns on mismatch — see parse-schedule.mjs).
+// Diagnostic only: the server's token+ALLOWED_HD gate stays authoritative and
+// never trusts this value. Returns "" when cloud mode is unlocked (no domain).
+export function orgDomainHint() {
+  return domainHint();
+}
+
 export function isGoogleConfigured() {
   return !!clientId();
 }
@@ -108,7 +117,9 @@ export function domainAllows(allowed, user) {
 // don't want, e.g., a personal gmail that signed in for the free local features
 // to be able to trigger a spend. NOTE: VITE_GOOGLE_HD is inlined at BUILD time
 // and must match the server's runtime ALLOWED_HD — see the deploy workflow. If
-// the build var is unset this returns true (server stays authoritative).
+// the build var is unset this returns true (server stays authoritative). The
+// scan caller stamps orgDomainHint() on its request so the server can warn if
+// these two ever drift apart (#91).
 export function isAllowedDomain() {
   return domainAllows(domainHint(), user);
 }

@@ -29,7 +29,7 @@ import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKe
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, SCAN_ENDPOINT } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
-import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken } from "../lib/google/auth.js";
+import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
@@ -2672,7 +2672,11 @@ export default function TakeoffCanvas() {
         const res = await fetch(SCAN_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height }),
+          // client_hd stamps this build's VITE_GOOGLE_HD so the server can warn if
+          // it has drifted from the runtime ALLOWED_HD (the client org-gate would
+          // then be silently no-op'ing). Diagnostic only — the server's authoritative
+          // token + ALLOWED_HD gate ignores it.
+          body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height, client_hd: orgDomainHint() }),
         });
         if (seq !== renderSeqRef.current) return;
         if (res.status === 401 || res.status === 403) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }

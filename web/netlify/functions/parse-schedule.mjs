@@ -20,6 +20,8 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 // "" = any verified Google account. This is the AUTHORITATIVE org gate; the
 // client mirrors it in isAllowedDomain() (src/lib/google/auth.js) as a build-time
 // VITE_GOOGLE_HD — keep the two values in sync (see .github/workflows/deploy.yml).
+// The client stamps its VITE_GOOGLE_HD on each request so hdDriftWarning() below
+// logs a warning if the two ever fall out of sync (#91).
 const ALLOWED_HD = (process.env.ALLOWED_HD || "").trim().toLowerCase();
 
 // A schedule marquee is a small crop of one sheet — these caps are generous for
@@ -27,6 +29,30 @@ const ALLOWED_HD = (process.env.ALLOWED_HD || "").trim().toLowerCase();
 // (OAuth gating stops *who* can call this, not *what* they send).
 const MAX_IMAGE_B64_LEN = 8_000_000; // ~6MB decoded PNG
 const MAX_IMAGE_DIM = 4096;
+
+// The client stamps its build-time VITE_GOOGLE_HD on each request as `client_hd`.
+// Compare it to this function's runtime ALLOWED_HD and return an operator warning
+// when they've drifted — the failure mode from #91 where the client org-gate
+// (isAllowedDomain) silently no-ops because the two env values fell out of sync
+// across the two systems (GitHub build var vs. Netlify runtime var). This is
+// DIAGNOSTIC ONLY: `client_hd` is untrusted, browser-supplied, and never
+// influences the auth decision (that's verifyGoogleUser + ALLOWED_HD, above).
+// Normalizes both sides exactly as the gates do (trim + case-fold) so cosmetic
+// differences don't warn. Returns null when they agree (incl. both empty).
+export function hdDriftWarning(clientHd, allowedHd) {
+  const c = (clientHd || "").trim().toLowerCase();
+  const a = (allowedHd || "").trim().toLowerCase();
+  if (c === a) return null;
+  return `org-gate drift: client VITE_GOOGLE_HD="${c}" != server ALLOWED_HD="${a}" — the client isAllowedDomain() gate is out of sync (see #91)`;
+}
+
+// Bound an untrusted diagnostic string before it reaches a log line: single-line
+// and length-capped so a hostile `client_hd` can't inject newlines or flood logs.
+// Slice BEFORE the regex so the whitespace-collapse never runs over an arbitrarily
+// large attacker-supplied value (bound the work, not just the output).
+function sanitizeForLog(v) {
+  return (typeof v === "string" ? v : "").slice(0, 200).replace(/\s+/g, " ").trim().slice(0, 100);
+}
 
 const json = (statusCode, body) => ({
   statusCode,
@@ -165,6 +191,17 @@ export async function handler(event) {
 
   let body;
   try { body = JSON.parse(event.body || "{}"); } catch { return json(400, { error: "bad JSON" }); }
+  // JSON.parse happily yields null/array/scalar; the rest of the handler indexes
+  // `body` as an object, so reject anything else with a clean 400 (not a 500).
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json(400, { error: "bad JSON" });
+  // Cross-check the client's stamped org domain against ours; a drift means the
+  // client-side org-gate is silently no-op'ing (#91). Log-only, never gates. Only
+  // when client_hd is actually sent (a string, incl. "") — an absent field means
+  // an old/other client that can't be compared, not drift, so don't false-alarm.
+  if (typeof body.client_hd === "string") {
+    const drift = hdDriftWarning(sanitizeForLog(body.client_hd), ALLOWED_HD);
+    if (drift) console.warn(`parse-schedule: ${drift}`);
+  }
   const imageB64 = typeof body.image_b64 === "string" ? body.image_b64 : "";
   if (!imageB64) return json(400, { error: "image_b64 required" });
   if (imageB64.length > MAX_IMAGE_B64_LEN) return json(413, { error: "image too large" });
