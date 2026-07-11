@@ -101,21 +101,24 @@ export function customColProfile(conditionColumns) {
 
 // ── Product spec (schedule-import metadata) ─────────────────────────────────
 // The schedule importer attaches an optional `condition.spec =
-// { manufacturer, style, color, size }` (all strings; the whole field is
-// ABSENT when there's no spec). These are READ-ONLY imported attributes — not a
+// { manufacturer, style, color, size, description }` (all strings; the whole
+// field is ABSENT when there's no spec). These are imported attributes — not a
 // custom column, not in materials[] — surfaced as fixed report/CSV/XLSX columns
 // so an estimator can review the specified product next to the measured
 // quantities. Values reach the getters through ctx.specByCond (Map(condition_id
 // → spec)), the same seam custom columns use, so conditionTotals rows never
 // grow a `spec` field (they're spread wholesale into the contribution payload).
 //
-// The four fields, in schedule order. "Spec Color" is deliberately NOT "Color"
-// — the condition's own appearance color is a different thing.
+// The five fields, in schedule order. "Spec Color" is deliberately NOT "Color"
+// — the condition's own appearance color is a different thing. `description` is
+// APPENDED (never inserted) so existing spec-column order in shipped exports is
+// preserved when it's added.
 export const SPEC_FIELDS = [
   { field: "manufacturer", header: "Manufacturer" },
   { field: "style",        header: "Style" },
   { field: "color",        header: "Spec Color" },
   { field: "size",         header: "Size" },
+  { field: "description",  header: "Description" },
 ];
 
 // The one visible-string rule for a spec value — a string with visible content

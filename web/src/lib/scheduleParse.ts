@@ -156,8 +156,10 @@ export type ConditionSeed = {
   hatch: string;
   waste_pct: number;
   materials: never[];
-  // product spec, for the canvas to drop into condition attrs / report columns
-  spec: { manufacturer: string; style: string; color: string; size: string };
+  // product spec, for the canvas to drop into condition attrs / report columns.
+  // `description` (the MATERIAL/PRODUCT cell, e.g. "WOOD WALL PANEL") rides along
+  // so the most human-readable label survives import instead of being dropped.
+  spec: { manufacturer: string; style: string; color: string; size: string; description: string };
   category: Category;
 };
 
@@ -170,7 +172,7 @@ export function rowToSeed(row: ScheduleRow, index: number, palette: string[] = F
     hatch: CAT_HATCH[row.category],
     waste_pct: CAT_WASTE[row.category],
     materials: [],
-    spec: { manufacturer: row.manufacturer, style: row.style, color: row.spec_color, size: row.size },
+    spec: { manufacturer: row.manufacturer, style: row.style, color: row.spec_color, size: row.size, description: row.description },
     category: row.category,
   };
 }

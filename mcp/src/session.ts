@@ -39,6 +39,11 @@ export interface Condition {
   multiplier: number;
   waste_pct: number;
   materials: unknown[];
+  // Optional product spec from "Import from schedule" (all fields optional; the
+  // whole object is absent for hand-drawn conditions). Previously survived only
+  // as an untyped `...rest` passthrough — typed here so `description` and the
+  // rest are durable across MCP reads/exports.
+  spec?: { manufacturer?: string; style?: string; color?: string; size?: string; description?: string };
 }
 
 export interface Shape {

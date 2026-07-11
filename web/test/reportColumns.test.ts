@@ -304,8 +304,22 @@ test("specColProfile: a field-column appears only when some condition carries th
   // only manufacturer populated anywhere → exactly one column
   const one = specColProfile([{ id: "a", spec: { manufacturer: "Shaw" } }] as any);
   assert.deepEqual(one.map((c: any) => c.key), ["spec:manufacturer"]);
-  // headers cover every SPEC_FIELD, and none collides with the appearance "Color"
-  assert.deepEqual(SPEC_FIELDS.map((f: any) => f.header), ["Manufacturer", "Style", "Spec Color", "Size"]);
+  // headers cover every SPEC_FIELD, and none collides with the appearance "Color".
+  // "Description" is appended last so shipped spec-column order is preserved.
+  assert.deepEqual(SPEC_FIELDS.map((f: any) => f.header), ["Manufacturer", "Style", "Spec Color", "Size", "Description"]);
+});
+
+test("specColProfile: description is a spec column, appended after size, only when populated", () => {
+  // populated description → its own column, LAST (after the original four)
+  const withDesc = specColProfile([
+    { id: "wp1", spec: { manufacturer: "Shaw", description: "WOOD WALL PANEL" } },
+  ] as any);
+  assert.deepEqual(withDesc.map((c: any) => c.key), ["spec:manufacturer", "spec:description"]);
+  assert.equal(withDesc[1].header, "Description");
+  // empty/absent description → no column (empty-gate), so legacy 4-field specs
+  // produce byte-identical output
+  const noDesc = specColProfile([{ id: "a", spec: { manufacturer: "Shaw", size: "12x24" } }] as any);
+  assert.deepEqual(noDesc.map((c: any) => c.key), ["spec:manufacturer", "spec:size"]);
 });
 
 test("spec column getter: reads ctx.specByCond by row id; blank for unspec'd / no ctx", () => {

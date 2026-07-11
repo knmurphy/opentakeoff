@@ -27,6 +27,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { attrValue, columnLabel } from "../lib/conditionColumns.js";
+import { SPEC_FIELDS } from "../lib/reportColumns.js";
 import { num } from "../lib/num.js";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
@@ -363,6 +364,28 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
       {conditionColumns.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", rowGap: 2 }} title="Classify this condition — the Report can group and export by these (manage columns in the Columns tab)">
           <ColumnSelects columns={conditionColumns} cond={c} onAssign={onAssignAttr} />
+        </div>
+      )}
+      {/* Imported product spec (mfr/style/color/size/description) — editable here,
+          read-only columns in the Report. Docked ("stack") layout only: five text
+          fields would crowd the wide top-bar band. Shown only when a spec exists
+          (schedule-imported conditions); hand-drawn conditions have none. Patch
+          spreads c.spec so one edit can't clobber the other fields, and writes to
+          spec.color — NOT the condition's line `color`. Guard that spec is a plain
+          object first: a corrupted payload (spec an array/string) would otherwise
+          render and let an edit spread it into a garbage shape ({0:"f",1:"o",…}). */}
+      {!isRow && c.spec && typeof c.spec === "object" && !Array.isArray(c.spec) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 6, marginTop: 1, borderTop: "1px solid var(--ink-faint)" }}>
+          <span style={{ color: "var(--ink-muted)", fontSize: 10, letterSpacing: 0.4, textTransform: "uppercase" }}
+            title="Product spec imported from the finish schedule — editable; shown as read-only columns in the Report / CSV / XLSX">Spec</span>
+          {SPEC_FIELDS.map(({ field, header }) => (
+            <label key={field} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "var(--ink-muted)", width: 74, flexShrink: 0 }}>{header}</span>
+              <input name={`condition-spec-${field}`} value={c.spec[field] || ""}
+                onChange={(e) => onUpdateCond({ spec: { ...c.spec, [field]: e.target.value } })}
+                style={{ flex: 1, minWidth: 0, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12, color: "var(--ink)" }} />
+            </label>
+          ))}
         </div>
       )}
     </div>
