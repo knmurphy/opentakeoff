@@ -45,9 +45,16 @@ jobs:
               pull_number: pr.number,
               per_page: 100,
             });
-            const isCopilot = (login) =>
-              (login || '').toLowerCase().startsWith('copilot-pull-request-reviewer');
-            const reviewed = reviews.some((r) => isCopilot(r.user && r.user.login));
+            // Exact login + Bot type: a prefix match would let any user named
+            // "copilot-pull-request-reviewer…" satisfy the gate, and a real user
+            // can't be type "Bot", so together these block impersonation. The
+            // [bot] suffix is what the reviews API returns; allow the bare form too.
+            const isCopilot = (u) =>
+              u && u.type === 'Bot' &&
+              /^copilot-pull-request-reviewer(\[bot\])?$/i.test(u.login || '');
+            // A dismissed review no longer counts — dismissing Copilot's review
+            // (the workflow re-runs on that event) must turn the gate red again.
+            const reviewed = reviews.some((r) => isCopilot(r.user) && r.state !== 'DISMISSED');
             if (!reviewed) {
               core.setFailed(
                 'Waiting for GitHub Copilot code review. It reviews automatically on open; ' +
