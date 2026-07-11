@@ -4,6 +4,7 @@
 // "Contribute to the open flooring model" flow.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
+import ToolMenu from "./ToolMenu.jsx";
 import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, labelGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
 import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
 import { columnLabel } from "../lib/conditionColumns.js";
@@ -271,34 +272,46 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </div>
           )}
         </div>
-        {/* JSON / Print / Marked set also work markups-only ("Revisions noted"
-            renders from markups alone); CSV and Contribute stay rows-only —
-            the CSV carries no markups and contribution is takeoff data */}
-        <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
-        <button className="btn-ghost" onClick={exportXlsx} disabled={!rows.length}
-          title="Excel workbook — Conditions / By sheet / Materials / Shapes"><Icon name="document" size={13} />XLSX</button>
-        <button className="btn-ghost" onClick={exportJson} disabled={!rows.length && !markups.length && !rfis.length}><Icon name="document" size={13} />JSON</button>
-        <button className="btn-ghost" onClick={exportShapesCsv} disabled={!shapes.length}
-          title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes CSV</button>
-        <button className="btn-ghost" onClick={exportShapesJson} disabled={!shapes.length}
-          title="Per-shape measured quantities — no multiplier, no waste"><Icon name="document" size={13} />Shapes JSON</button>
-        <button className="btn-ghost" onClick={exportRfisCsv} disabled={!rfis.length}
-          title="RFI log — one row per RFI with linked markups/sheets derived"><Icon name="rfi" size={13} />RFI CSV</button>
-        <button className="btn-ghost" onClick={exportRfisJson} disabled={!rfis.length}
-          title="RFI log as JSON"><Icon name="rfi" size={13} />RFI JSON</button>
-        <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length && !markups.length && !rfis.length}>Print</button>
-        {onMarkedSet && markups.length > 0 && (
-          <label title="Include your markups (clouds, callouts, notes, highlights) in the Marked Set PDF. Independent of the canvas layer toggle."
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--ink-muted)", cursor: "pointer", whiteSpace: "nowrap" }}>
-            <input name="include-markups" type="checkbox" checked={includeMarkups} onChange={(e) => setIncludeMarkups(e.target.checked)} />
-            Markups
-          </label>
-        )}
-        {onMarkedSet && (
-          <button className="btn-ghost" onClick={() => onMarkedSet(includeMarkups)} disabled={!rows.length && (!includeMarkups || !markups.length) && !rfis.length}
-            title={`Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`}>
-            <Icon name="document" size={13} />Marked set{markedSetDark ? " ☾" : ""}
-          </button>
+        {/* Exports consolidated into Export ▾; browser print + marked set into
+            Print ▾. JSON / Print / Marked set intentionally work markups-only
+            ("Revisions noted" renders from markups alone); CSV stays rows-only.
+            Every item keeps the exact disabled condition + tooltip its button
+            carried. RFI exports stay their own controls, shown only when RFIs exist. */}
+        <ToolMenu
+          title="Download the report and shape data"
+          disabled={!rows.length && !shapes.length && !markups.length && !rfis.length}
+          face={<><Icon name="document" size={13} />Export</>}
+          items={[
+            { section: "Report" },
+            { id: "csv", icon: "document", label: "CSV", disabled: !rows.length, onSelect: exportCsv },
+            { id: "xlsx", icon: "document", label: "Excel", disabled: !rows.length, title: "Excel workbook — Conditions / By sheet / Materials / Shapes", onSelect: exportXlsx },
+            { id: "json", icon: "document", label: "JSON", disabled: !rows.length && !markups.length && !rfis.length, title: "JSON — works markups-only / RFI-only too", onSelect: exportJson },
+            { section: "Shapes" },
+            { id: "shapes-csv", icon: "document", label: "Shapes CSV", disabled: !shapes.length, title: "Per-shape measured quantities — no multiplier, no waste", onSelect: exportShapesCsv },
+            { id: "shapes-json", icon: "document", label: "Shapes JSON", disabled: !shapes.length, title: "Per-shape measured quantities — no multiplier, no waste", onSelect: exportShapesJson },
+          ]}
+        />
+        <ToolMenu
+          title="Print the report, or generate the marked-set PDF"
+          disabled={!rows.length && !markups.length && !rfis.length /* both items are disabled exactly here: with no rows/rfis, the marked-set condition also collapses to true */}
+          face={<span>Print</span>}
+          items={[
+            { id: "print", label: "Print report", disabled: !rows.length && !markups.length && !rfis.length, title: "Print the on-screen report (browser print / save as PDF)", onSelect: () => window.print() },
+            ...(onMarkedSet ? [
+              "divider",
+              { section: "Marked set" },
+              ...(markups.length > 0 ? [{ id: "inc-markups", label: "Include markups", checked: includeMarkups, stayOpen: true, title: "Include your markups (clouds, callouts, notes, highlights) in the Marked Set PDF. Independent of the canvas layer toggle.", onSelect: () => setIncludeMarkups((v) => !v) }] : []),
+              { id: "marked-set", icon: "document", label: `Download marked set${markedSetDark ? " ☾" : ""}`, disabled: !rows.length && (!includeMarkups || !markups.length) && !rfis.length, title: `Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`, onSelect: () => onMarkedSet(includeMarkups) },
+            ] : []),
+          ]}
+        />
+        {rfis.length > 0 && (
+          <>
+            <button className="btn-ghost" onClick={exportRfisCsv}
+              title="RFI log — one row per RFI with linked markups/sheets derived"><Icon name="rfi" size={13} />RFI CSV</button>
+            <button className="btn-ghost" onClick={exportRfisJson}
+              title="RFI log as JSON"><Icon name="rfi" size={13} />RFI JSON</button>
+          </>
         )}
         <button className="btn-primary" onClick={() => setShowContribute(true)} disabled={!rows.length}
           title="Optionally contribute this takeoff's derived data to the open flooring model">
