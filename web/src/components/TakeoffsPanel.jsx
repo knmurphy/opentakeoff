@@ -800,14 +800,14 @@ function TakeoffsPanel({
         {panelTab === "columns" && (
           <div style={{ flex: 1, overflow: "auto", fontSize: 11.5 }}>
             {/* Shape labels (#110) — a flat project-level vocabulary; each shape
-                carries at most one, assigned on the canvas. Lives here rather than
-                a 5th panel tab: it's the degenerate single-column case. */}
+                carries at most one label. Lives here rather than a 5th panel tab:
+                it's the degenerate single-column case. */}
             <details open style={{ borderBottom: "2px solid var(--ink-faint)" }}>
               <summary style={{ padding: "8px 12px 4px", cursor: "pointer", fontWeight: 600, fontSize: 11.5 }}>
                 Shape labels{shapeLabels.length ? ` (${shapeLabels.length})` : ""}
               </summary>
               <div style={{ padding: "0 12px 4px", color: "var(--ink-muted)", fontSize: 11 }}>
-                Phase / area labels (e.g. Phase 1, East Wing) for grouping the Report by shape. Assign them while tracing on the canvas.
+                Phase / area labels (e.g. Phase 1, East Wing) for grouping the Report by shape.
               </div>
               <div style={{ padding: "2px 12px 10px", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 {shapeLabels.map((v) => (
