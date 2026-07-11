@@ -64,10 +64,14 @@ export default function PlanNavigator({
   // FIRST and stops them. Esc routes to back(), but only actually exits when
   // there's somewhere to go (back() enforces that). Typing in the filter field
   // is exempt so it behaves like a normal input.
-  const backRef = useRef(() => {});
+  // Esc is a ONE-PRESS dismiss (like the old DrivePicker/SheetGallery): from
+  // Browse Drive it drops back to Plan set regardless of folder depth; from Plan
+  // set it exits to the canvas (when there's one to return to). Folder climbing
+  // is the back button's / breadcrumb's job — Esc never walks the tree.
+  const escRef = useRef(() => {});
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") { e.stopPropagation(); backRef.current(); return; }
+      if (e.key === "Escape") { e.stopPropagation(); escRef.current(); return; }
       const tag = e.target?.tagName;
       if (tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") e.stopPropagation();
     };
@@ -180,10 +184,14 @@ export default function PlanNavigator({
     return Array.from({ length: n }, (_, i) => (i ? `${s.name}#${i + 1}` : s.name));
   });
 
-  // a one-sheet project has nothing to choose — open it
+  // a one-sheet project has nothing to choose — open it, but ONLY on the first
+  // landing (no tab open yet). Without the openTabs guard this fires on every
+  // remount: reopening the gallery for a 1-sheet project would enumerate, auto-
+  // open, and bounce straight back to the canvas — leaving Add plans / Browse
+  // Drive permanently unreachable.
   const enumerated = sheets.length > 0 && sheets.every((s) => pages[s.name] !== undefined);
   useEffect(() => {
-    if (mode === "plan" && enumerated && allKeys.length === 1) onOpen([allKeys[0]], false);
+    if (mode === "plan" && enumerated && allKeys.length === 1 && openTabs.length === 0) onOpen([allKeys[0]], false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, mode]);
 
@@ -256,8 +264,15 @@ export default function PlanNavigator({
     }
     if (canClose) onExit();
   }, [mode, path.length, canClose, onExit]);
-  useEffect(() => { backRef.current = back; }, [back]);
   const canGoBack = mode === "browse" || canClose;
+  // Esc: leave the current mode in one press (browse → plan, plan → canvas),
+  // independent of the back button's per-level folder climb.
+  useEffect(() => {
+    escRef.current = () => {
+      if (mode === "browse") { setMode("plan"); return; }
+      if (canClose) onExit();
+    };
+  }, [mode, canClose, onExit]);
 
   // ── close / remove a PDF from the working set ───────────────────────────
   const requestClose = (file) => setConfirmClose({ file, shapeCount: pdfShapeCount(file) });
@@ -441,9 +456,7 @@ export default function PlanNavigator({
   // ── PLAN body + footer ──────────────────────────────────────────────────
   const planBody = (
     <>
-      <div style={{ flex: 1, overflow: "auto", padding: 18 }}
-        onDragOver={(e) => { if (onAddFiles) e.preventDefault(); }}
-        onDrop={(e) => { if (onAddFiles) { e.preventDefault(); onAddFiles(e.dataTransfer?.files); } }}>
+      <div style={{ flex: 1, overflow: "auto", padding: 18 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 14 }}>
           {allKeys.map((key) => {
             const idx = sel.indexOf(key);
@@ -460,7 +473,7 @@ export default function PlanNavigator({
                 <span style={{ position: "absolute", top: 8, left: 8, zIndex: 2, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: isSel ? "none" : "1.5px solid var(--ink-faint)", background: isSel ? "var(--cobalt)" : "var(--paper-bright)", color: "var(--paper-bright)", fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 700 }}>{isSel ? idx + 1 : ""}</span>
                 <div style={{ position: "absolute", top: 8, right: 8, zIndex: 2, display: "flex", gap: 6 }}>
                   {isFirstPageOfPdf && onClosePdf && (
-                    <button onClick={(e) => { e.stopPropagation(); requestClose(parsed.file); }} title="Close this PDF — unload it from the plan set (it stays in Drive)"
+                    <button onClick={(e) => { e.stopPropagation(); requestClose(parsed.file); }} title={cloudMode ? "Close this PDF — unload it from the plan set (it stays in Drive)" : "Close this PDF — remove it from the plan set (local plans aren't stored elsewhere)"}
                       style={{ padding: "5px 8px", border: "none", background: "var(--paper-bright)", color: "var(--ink-muted)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 11, boxShadow: "var(--shadow-1)" }}>✕</button>
                   )}
                   <button onClick={(e) => { e.stopPropagation(); onOpen([key], false); }} title="Open just this sheet"
@@ -583,6 +596,8 @@ export default function PlanNavigator({
   const inner = (
     <div className={canClose ? "panel" : undefined}
       onClick={canClose ? (e) => e.stopPropagation() : undefined}
+      onDragOver={(e) => { if (onAddFiles) e.preventDefault(); }}
+      onDrop={(e) => { if (onAddFiles) { e.preventDefault(); onAddFiles(e.dataTransfer?.files); } }}
       style={canClose
         ? { position: "relative", width: "min(1100px, 92vw)", height: "85vh", display: "flex", flexDirection: "column", background: "var(--paper-cream)", boxShadow: "var(--shadow-2)", overflow: "hidden" }
         : { position: "absolute", inset: 0, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>

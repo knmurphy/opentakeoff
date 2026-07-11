@@ -505,18 +505,35 @@ export default function TakeoffCanvas() {
   // read at call time, so [] deps are correct.
   const pickerListFolder = useCallback((id) => store.listFolder(id), []);
   const pickerAddSheets = useCallback((items) => store.addSheets(items), []);
+  // Reconcile the canvas after a PDF leaves the working set. For a non-empty
+  // result the [sheets] effect already prunes openTabs/sheetGroup, but it can't:
+  //   • fix `active` when the CLOSED pdf was the one on screen (it never resets
+  //     itself), so move to a surviving sheet; and
+  //   • prune anything when the set is now EMPTY — that effect early-returns on
+  //     `!sheets.length` (it must, to protect restored tabs during load), so the
+  //     last-pdf close would otherwise strand a tab pointing at a deleted file.
+  const reconcileAfterRemoval = useCallback((name, list) => {
+    if (!list.length) {
+      setOpenTabs([]); setSheetGroup([]); setLastGroup([]); setActive(""); setPage(1);
+      setView("gallery");
+      return;
+    }
+    if (name === active) { setActive(list[0].name); setPage(1); setSheetGroup([]); }
+  }, [active]);
   // Close a PDF: drop it from the working set (cloud: manifest only, file stays
-  // in Drive; local: deletes the stored bytes) and refresh. The [sheets] effect
-  // then prunes any open tabs whose file just left the set; shapes on those
-  // sheets persist in annotations and restore if the PDF is re-added by name.
-  const closePdf = useCallback(async (name) => { await store.removePdf(name); await refreshSheets(); }, [refreshSheets]);
+  // in Drive; local: deletes the stored bytes), refresh, then reconcile the view.
+  // Shapes on the closed sheets persist in annotations and restore on re-add.
+  const closePdf = useCallback(async (name) => {
+    await store.removePdf(name);
+    reconcileAfterRemoval(name, await refreshSheets());
+  }, [refreshSheets, reconcileAfterRemoval]);
   // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
   // file, then drop it from the working set.
   const removeFromProject = useCallback(async (name) => {
     if (typeof store.removeFromProject !== "function") return;
     await store.removeFromProject(name);
-    await refreshSheets();
-  }, [refreshSheets]);
+    reconcileAfterRemoval(name, await refreshSheets());
+  }, [refreshSheets, reconcileAfterRemoval]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
