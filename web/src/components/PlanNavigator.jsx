@@ -12,7 +12,9 @@
 //     full-screen "no man's land". Esc / scrim-click return to the canvas.
 //
 // Back/up is a single control anchored top-left by the title; its meaning is
-// mode-aware (see back()). While mounted, the navigator swallows canvas keyboard
+// mode-aware (see back()). Esc is a SEPARATE, one-press dismiss (browse → plan,
+// plan → canvas) rather than the back button's per-level folder climb — see
+// escRef below. While mounted, the navigator swallows canvas keyboard
 // shortcuts in EVERY mode via a capture-phase listener — shortcut suppression is
 // keyed on "is this mounted", never on the canvas' view/mode staying in sync.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
