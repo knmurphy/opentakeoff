@@ -12,10 +12,10 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
-    "lint": "eslint src"
+    "lint": "eslint src netlify/functions"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "dependencies": {
     "fflate": "^0.8.3",
