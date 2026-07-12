@@ -816,7 +816,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           </div>
         )}
         {/* small tool credit at the end of the document (last page) */}
-        <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Measured with OpenTakeoff</p>
+        <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--text-faint)" }}>Measured with OpenTakeoff</p>
         </td></tr></tbody></table>
       </div>
 

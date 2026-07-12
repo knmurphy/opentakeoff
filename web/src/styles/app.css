@@ -251,8 +251,8 @@ input, textarea { font-family: var(--f-body); }
   .report-flow > thead td {
     font-family: var(--f-mono);
     font-size: 10.5px;
-    color: #2a2a2a;
-    border-bottom: 1px solid #999;
+    color: var(--ink);
+    border-bottom: 1px solid var(--ink-faint);
     padding: 0 0 4px;
   }
 
