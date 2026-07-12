@@ -103,6 +103,89 @@ test("scoreDetection: splits a missed truth room by whether a label seed sits wi
   assert.deepEqual(score.labellessMisses, [truth[1]]);
 });
 
+test("scoreDetection: counts one poly swallowing two truth seeds as ONE match plus an under-segmentation error, keeping precision <= 1", () => {
+  const truth: RoomTruth[] = [
+    { number: "101", seed: [30, 30] },
+    { number: "102", seed: [70, 70] },
+  ];
+  // ONE poly covers BOTH truth seeds — the merge/leak we want to penalize.
+  const predicted: PredictedRegion[] = [
+    { label: "101", poly: square(0, 0, 100, 100), seed: [50, 50] },
+  ];
+  const labels: LabelSeed[] = [];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  // Exactly one truth is credited as found (not both) — the poly is one region.
+  assert.equal(score.found.length, 1);
+  // Both swallowed rooms are surfaced under the under-segmentation error, tied
+  // to the offending poly.
+  assert.equal(score.underSegmented.length, 1);
+  assert.equal(score.underSegmented[0].poly, predicted[0]);
+  assert.deepEqual(score.underSegmented[0].truthSeeds, [truth[0], truth[1]]);
+  // Precision must NOT exceed 1: a leak that merges two rooms is not rewarded.
+  // 1 poly claims 1 truth in the matching → 1/1 = 1 (denominator is |predicted|).
+  assert.notEqual(score.precision, null);
+  assert.ok(score.precision! <= 1, `precision ${score.precision} should be <= 1`);
+  assert.equal(score.precision, 1);
+});
+
+test("scoreDetection: discriminates the three miss buckets — detection, misplaced-label, and labelless", () => {
+  const truth: RoomTruth[] = [
+    { number: "101", seed: [50, 50] }, // label seed WITHIN radius → detectionMiss
+    { number: "102", seed: [500, 500] }, // label "102" exists elsewhere on sheet → misplacedLabelMiss
+    { number: "103", seed: [900, 900] }, // no matching label anywhere → labellessMiss
+  ];
+  const predicted: PredictedRegion[] = []; // nothing detected: all three missed
+  const labels: LabelSeed[] = [
+    // near 101's seed — detector had a seed and dropped it
+    { str: "101", seed: [50 + LABEL_MATCH_RADIUS_PX - 1, 50] },
+    // "102" IS on the sheet, but tagged far from 102's room seed (real on some
+    // plans where the number is placed away from the room)
+    { str: "102", seed: [10, 10] },
+    // note: no LabelSeed with str "103" anywhere
+  ];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  assert.deepEqual(score.missed, truth);
+  assert.deepEqual(score.detectionMisses, [truth[0]]);
+  assert.deepEqual(score.misplacedLabelMisses, [truth[1]]);
+  assert.deepEqual(score.labellessMisses, [truth[2]]);
+});
+
+test("scoreDetection: matching is greedy in prediction order — a swallowing poly claims first, which can leave a tighter poly's only truth unmatched", () => {
+  // t0 sits in BOTH polys; t1 sits only in the big (swallowing) poly A.
+  // Optimal would be A→t1, B→t0 (recall 1). Greedy walks predictions in order:
+  // A claims the first unclaimed truth it contains (t0), so B (which contains
+  // only t0) is left with nothing → recall 0.5. This is a DELIBERATE,
+  // order-dependent choice: in practice each truth seed lands in exactly one
+  // correct region, so max-bipartite optimization is not worth the complexity.
+  // This test pins the documented worst case so a future refactor is a conscious
+  // decision, not an accident.
+  const truth: RoomTruth[] = [
+    { number: "101", seed: [30, 30] }, // t0 — inside both A and B
+    { number: "102", seed: [70, 70] }, // t1 — inside A only
+  ];
+  const predicted: PredictedRegion[] = [
+    { label: "A", poly: square(0, 0, 100, 100), seed: [50, 50] }, // swallows t0 and t1
+    { label: "B", poly: square(20, 20, 40, 40), seed: [30, 30] }, // tight around t0 only
+  ];
+  const labels: LabelSeed[] = [];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  // Greedy: A claims t0, t1 unmatched-but-swallowed → 1 found, recall 0.5.
+  assert.equal(score.found.length, 1);
+  assert.deepEqual(score.found, [truth[0]]);
+  assert.equal(score.recall, 0.5);
+  // A still swallows two truths → under-segmentation surfaces both.
+  assert.equal(score.underSegmented.length, 1);
+  assert.deepEqual(score.underSegmented[0].truthSeeds, [truth[0], truth[1]]);
+  // t1 is neither found nor missed (swallowed), so the miss buckets stay empty.
+  assert.deepEqual(score.missed, []);
+});
+
 test("scoreDetection: scores perfect detection — each truth matched by exactly one poly, no extras — as precision = recall = 1", () => {
   const truth: RoomTruth[] = [
     { number: "101", seed: [50, 50] },
@@ -121,6 +204,73 @@ test("scoreDetection: scores perfect detection — each truth matched by exactly
   assert.deepEqual(score.found, truth);
   assert.deepEqual(score.missed, []);
   assert.deepEqual(score.falsePositives, []);
+});
+
+test("scoreDetection: reports per-room signed area % error and summary stats for found rooms with a truth area", () => {
+  const truth: RoomTruth[] = [
+    { number: "101", seed: [50, 50], area_sf: 100 }, // exact match → 0%
+    { number: "102", seed: [250, 50], area_sf: 100 }, // detection is 10% large → +10%
+    { number: "103", seed: [450, 50] }, // no truth area → excluded from area stats
+  ];
+  const predicted: PredictedRegion[] = [
+    { label: "101", poly: square(0, 0, 100, 100), seed: [50, 50], area_sf: 100 },
+    { label: "102", poly: square(200, 0, 300, 100), seed: [250, 50], area_sf: 110 },
+    { label: "103", poly: square(400, 0, 500, 100), seed: [450, 50], area_sf: 200 },
+  ];
+  const labels: LabelSeed[] = [];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  // Only the two rooms with a truth area appear; 103 is excluded.
+  assert.equal(score.areaErrors.length, 2);
+  assert.deepEqual(score.areaErrors[0], { truth: truth[0], predicted: predicted[0], pctError: 0 });
+  assert.deepEqual(score.areaErrors[1], { truth: truth[1], predicted: predicted[1], pctError: 10 });
+
+  assert.equal(score.areaStats?.meanAbsPctError, 5); // (|0| + |10|) / 2
+  assert.equal(score.areaStats?.medianAbsPctError, 5); // median of [0, 10]
+  assert.equal(score.areaStats?.worstAbsPctError, 10);
+});
+
+test("scoreDetection: reports null area stats when no found room has a truth area", () => {
+  const truth: RoomTruth[] = [{ number: "101", seed: [50, 50] }]; // no area_sf
+  const predicted: PredictedRegion[] = [
+    { label: "101", poly: square(0, 0, 100, 100), seed: [50, 50], area_sf: 100 },
+  ];
+  const labels: LabelSeed[] = [];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  assert.deepEqual(score.areaErrors, []);
+  assert.equal(score.areaStats, null);
+});
+
+test("scoreDetection: truthComplete false vs true — the same unmatched prediction is an out-of-scope region, not a false positive", () => {
+  // One in-bid truth room the detector found, plus one extra predicted region
+  // over NO truth seed (an out-of-scope room, real when truth covers only in-bid
+  // rooms).
+  const truth: RoomTruth[] = [{ number: "101", seed: [50, 50], area_sf: 100 }];
+  const predicted: PredictedRegion[] = [
+    { label: "101", poly: square(0, 0, 100, 100), seed: [50, 50], area_sf: 100 },
+    { label: "OOS", poly: square(200, 200, 300, 300), seed: [250, 250] },
+  ];
+  const labels: LabelSeed[] = [];
+
+  // Default (clicks / complete truth): the extra region IS a false positive.
+  const complete = scoreDetection(truth, predicted, labels);
+  assert.deepEqual(complete.falsePositives, [predicted[1]]);
+  assert.equal(complete.precision, 0.5); // 1 match / 2 predicted
+  assert.deepEqual(complete.unmatchedPredictions, []);
+  assert.equal(complete.recall, 1);
+
+  // Partial truth (extracted takeoffs, in-bid only): the extra region is NOT
+  // held against precision — reported separately, precision undefined.
+  const partial = scoreDetection(truth, predicted, labels, { truthComplete: false });
+  assert.deepEqual(partial.falsePositives, []);
+  assert.equal(partial.precision, null);
+  assert.deepEqual(partial.unmatchedPredictions, [predicted[1]]);
+  // recall over the in-bid subset and area accuracy still computed
+  assert.equal(partial.recall, 1);
+  assert.equal(partial.areaStats?.meanAbsPctError, 0);
 });
 
 test("scoreDetection: treats an empty prediction as recall 0 but precision 1 (no predictions means no false positives)", () => {
