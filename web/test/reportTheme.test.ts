@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseThemeFile, themeToCssVars } from "../src/lib/reportTheme.js";
+import { parseThemeFile, themeToCssVars, activeThemeVars } from "../src/lib/reportTheme.js";
 
 const claude = JSON.parse(
   readFileSync(new URL("./fixtures/claude-design.tokens.json", import.meta.url), "utf8"),
@@ -57,9 +57,53 @@ test("themeToCssVars omits vars for absent roles (partial theme keeps defaults)"
   assert.ok(!("--f-display" in vars));
 });
 
+test("classifier ignores a 'blueprint' token even when it precedes the brand blue", () => {
+  // /blue/ naively matches "blueprint"; with first-wins, a blueprint-before-blue
+  // ordering would silently steal the accent role. The accent must stay the real blue.
+  const { theme } = parseThemeFile({
+    color: { "accent-x": { blueprint: { value: "#3E6F94" }, "brand-blue": { value: "#125792" } } },
+  });
+  assert.equal(theme.color.accent, "#125792");
+});
+
 test("drops an invalid color with a warning instead of emitting garbage", () => {
   const { theme, warnings } = parseThemeFile({ color: { neutral: { ink: { value: "rgb(1,2,3)" }, paper: { value: "#FBFBF8" } } } });
   assert.equal(theme.color.ink, undefined);
   assert.equal(theme.color.paper, "#FBFBF8");
   assert.ok(warnings.some((w) => /ink/.test(w)), `expected a warning mentioning ink, got ${JSON.stringify(warnings)}`);
+});
+
+test("never throws on malformed/untrusted input (the file is user-supplied)", () => {
+  for (const bad of [null, undefined, 42, "str", ["a"], {}, { color: 5 }, { color: { neutral: null } }]) {
+    const { theme, warnings } = parseThemeFile(bad as any);
+    assert.deepEqual(theme, { color: {}, font: {} });
+    assert.deepEqual(warnings, []);
+  }
+});
+
+test("activeThemeVars reads the stored file, adapts it, and gives fonts a fallback stack", () => {
+  assert.equal(typeof globalThis.localStorage, "undefined"); // node test env
+  (globalThis as any).localStorage = {
+    _s: { opentakeoff_report_theme: JSON.stringify(claude) } as Record<string, string>,
+    getItem(k: string) { return this._s[k] ?? null; },
+    setItem(k: string, v: string) { this._s[k] = v; },
+    removeItem(k: string) { delete this._s[k]; },
+  };
+  try {
+    const vars = activeThemeVars();
+    assert.equal(vars["--ink"], "#2E333B");
+    assert.equal(vars["--cobalt"], "#125792");
+    assert.equal(vars["--f-display"], '"Inter Tight", system-ui, sans-serif');
+  } finally {
+    delete (globalThis as any).localStorage;
+  }
+});
+
+test("activeThemeVars returns {} (defaults stand) when nothing is stored", () => {
+  (globalThis as any).localStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  try {
+    assert.deepEqual(activeThemeVars(), {});
+  } finally {
+    delete (globalThis as any).localStorage;
+  }
 });

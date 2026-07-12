@@ -50,7 +50,9 @@ export function parseThemeFile(json) {
   // role already filled is skipped (first-wins), which is why group + token order
   // is honored.
   const classify = (key) =>
-    /blue/i.test(key) ? "accent"
+    // "blueprint" is a wash tone, not the brand accent — exclude it so a
+    // blueprint-before-blue ordering can't steal the accent role (first-wins)
+    (/blue/i.test(key) && !/blueprint/i.test(key)) ? "accent"
     : /green/i.test(key) ? "positive"
     : /(orange|amber|gold|yellow)/i.test(key) ? "warning"
     : /(red|danger|error)/i.test(key) ? "danger"
