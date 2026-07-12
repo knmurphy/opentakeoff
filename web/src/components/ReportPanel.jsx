@@ -24,6 +24,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const exportJson = () => downloadText(`${baseName}.json`,
     JSON.stringify({ project_name: projectName || null, generated_with: "OpenTakeoff", units: "imperial (SF/LF — raw internal values)", display_units: units, conditions: rows, totals: g, materials: matSummary }, null, 2),
     "application/json");
+  // lazy: the SpreadsheetML writer + fflate load only when someone actually exports
+  const exportXlsx = async () => {
+    const { downloadXlsx, takeoffWorkbook } = await import("../lib/xlsx.js");
+    await downloadXlsx(`${baseName}.xlsx`, takeoffWorkbook({ projectName, units, conditions, shapes }));
+  };
 
   const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
@@ -37,6 +42,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           className="field-input" style={{ width: 260, padding: "5px 9px", fontSize: 13 }} />
         <div style={{ flex: 1 }} />
         <button className="btn-ghost" onClick={exportCsv} disabled={!rows.length}><Icon name="document" size={13} />CSV</button>
+        <button className="btn-ghost" onClick={exportXlsx} disabled={!rows.length}
+          title="Excel workbook — Summary, By sheet, Materials, and a per-shape audit tab"><Icon name="document" size={13} />Excel</button>
         <button className="btn-ghost" onClick={exportJson} disabled={!rows.length}><Icon name="document" size={13} />JSON</button>
         <button className="btn-ghost" onClick={() => window.print()} disabled={!rows.length}>Print</button>
         {onMarkedSet && (
