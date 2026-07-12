@@ -187,6 +187,9 @@ test("createLocalStore(null) is the same global store — anonymous app is byte-
   // existing "annotations" blob IS the anonymous project.
   assert.equal(createLocalStore(null), localStore);
   assert.equal(createLocalStore(), localStore);
+  // "" is anonymous too (projectIdFromUrl() returns "" for local mode) — it must
+  // NOT become a distinct "annotations:" scope
+  assert.equal(createLocalStore(""), localStore);
   // and it reads/writes the same legacy key
   await localStore.saveAnnotations({ conditions: [{ id: "c1" }], shapes: [] } as any);
   const viaNull = await createLocalStore(null).loadAnnotations();

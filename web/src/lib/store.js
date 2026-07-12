@@ -308,9 +308,12 @@ export const localStore = {
 //     pass the scope), so they are untouched here.
 // Spreading `localStore` is safe: none of its methods use `this` (they close over
 // module scope), so the copied methods keep working and we override just two.
-/** @param {string|null} [folderId] Drive project folder id; null = the global anonymous store */
+/** @param {string|null} [folderId] Drive project folder id; null/"" = the global anonymous store */
 export function createLocalStore(folderId = null) {
-  if (folderId == null) return localStore;
+  // Treat empty string like null: projectIdFromUrl() returns "" for anonymous
+  // mode, so a caller threading it through here must land on the global
+  // "annotations" blob, NOT a distinct "annotations:" scope.
+  if (folderId == null || folderId === "") return localStore;
   const annKey = ANN_KEY + ":" + folderId;
   return {
     ...localStore,
