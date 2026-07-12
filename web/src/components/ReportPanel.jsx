@@ -18,6 +18,7 @@ import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js"
 import { rfisToCsv, rfisToJson } from "../lib/rfi.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
+import { activeThemeVars } from "../lib/reportTheme.js";
 import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
@@ -43,6 +44,9 @@ const sheetNum = (v, d = 1) => {
 export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [] }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
+  // imported report theme → CSS-var overrides, scoped to this panel's subtree so
+  // it reskins the document (screen + print + masthead) without touching app chrome
+  const themeVars = useMemo(() => activeThemeVars(), []);
   const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
   const bySheet = useMemo(() => sheetTotals(conditions, shapes), [conditions, shapes]);
   const g = useMemo(() => grandTotals(rows), [rows]);
@@ -300,7 +304,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   );
 
   return (
-    <div className="report-panel" style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>
+    <div className="report-panel" style={{ ...themeVars, position: "absolute", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>
       <div className="report-toolbar" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px", borderBottom: "1px solid var(--ink)", background: "var(--paper-bright)" }}>
         <Icon name="takeoffs" size={18} />
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 16, color: "var(--ink)" }}>Takeoff report</strong>

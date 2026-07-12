@@ -1,0 +1,136 @@
+// Report theme import — map an external design-token file (Claude Design's
+// DTCG-flavored tokens.json) onto the small internal theme model the report and
+// marked-set renderers consume, then project that model onto the app's real CSS
+// custom-property names.
+//
+// The internal model is deliberately tiny and PARTIAL: only the brand primitives
+// a document needs (color roles + font families). Anything the source omits is
+// left unset so the renderers fall back to the tokens.css defaults.
+
+// Canonical #RRGGBB (uppercase). Accepts "#abc", "abc", "#aabbcc", "AABBCC".
+// Returns null for anything that isn't a 3- or 6-digit hex triple.
+export function normalizeHex(raw) {
+  const s = String(raw ?? "").trim().replace(/^#/, "");
+  const hex = s.length === 3 ? s.split("").map((c) => c + c).join("") : s;
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? "#" + hex.toUpperCase() : null;
+}
+
+/**
+ * @typedef {{ ink?: string, accent?: string, paper?: string, positive?: string, warning?: string, danger?: string }} ThemeColor
+ * @typedef {{ display?: string, body?: string, mono?: string }} ThemeFont
+ * @typedef {{ color: ThemeColor, font: ThemeFont }} Theme
+ */
+
+// ── importer ────────────────────────────────────────────────────────────────
+// parseThemeFile(json) -> { theme, warnings }
+//   theme.color: { ink, accent, paper, positive, warning, danger }  (present-only)
+//   theme.font:  { display, body, mono }                            (present-only)
+/** @param {any} json @returns {{ theme: Theme, warnings: string[] }} */
+export function parseThemeFile(json) {
+  const color = {};
+  const font = {};
+
+  const warnings = [];
+  const neutral = json?.color?.neutral || {};
+  // a role that's ABSENT is silently skipped (partial themes are normal); a role
+  // that's PRESENT but unparseable is a real authoring mistake — warn and omit
+  const setColor = (role, raw) => {
+    if (raw == null) return;
+    const h = normalizeHex(raw);
+    if (h) color[role] = h;
+    else warnings.push(`color.${role}: "${raw}" is not a hex color — skipped`);
+  };
+  setColor("ink", neutral.ink?.value);
+  setColor("paper", neutral.paper?.value);
+
+  // accents live in one or more `accent-*` groups (brand-specific naming like
+  // accent-345 / accent-fin). We don't hard-code brands — classify each token by
+  // its color NAME and take the first match for each semantic role, so 345+Fin
+  // (or any producer) map without configuration. A token that classifies to a
+  // role already filled is skipped (first-wins), which is why group + token order
+  // is honored.
+  const classify = (key) =>
+    /blue/i.test(key) ? "accent"
+    : /green/i.test(key) ? "positive"
+    : /(orange|amber|gold|yellow)/i.test(key) ? "warning"
+    : /(red|danger|error)/i.test(key) ? "danger"
+    : null;
+  for (const [group, tokens] of Object.entries(json?.color || {})) {
+    if (!/^accent/i.test(group) || !tokens || typeof tokens !== "object") continue;
+    for (const [key, tok] of Object.entries(tokens)) {
+      const role = classify(key);
+      if (role && color[role] === undefined) setColor(role, tok?.value);
+    }
+  }
+
+  const web = json?.font?.family?.web || {};
+  for (const role of ["display", "body", "mono"]) {
+    if (typeof web[role] === "string" && web[role].trim()) font[role] = web[role].trim();
+  }
+
+  return { theme: { color, font }, warnings };
+}
+
+// ── CSS adapter ───────────────────────────────────────────────────────────────
+// Internal role → the app's real tokens.css custom property. This is the ONE
+// place that knows the app's variable names, so the model stays app-agnostic and
+// reusable (the future estimating module maps through the same table).
+const COLOR_VARS = {
+  ink: "--ink",
+  accent: "--cobalt",
+  paper: "--paper-bright",
+  positive: "--c-positive",
+  warning: "--c-warning",
+  danger: "--c-danger",
+};
+const FONT_VARS = { display: "--f-display", body: "--f-body", mono: "--f-mono" };
+
+// themeToCssVars(theme) -> { "--ink": "#…", … } — present-only, so an absent role
+// leaves the tokens.css default in place (partial override).
+/** @param {Theme} theme @returns {Record<string, string>} */
+export function themeToCssVars(theme) {
+  const out = {};
+  const color = theme?.color || {};
+  for (const [role, varName] of Object.entries(COLOR_VARS)) {
+    if (color[role]) out[varName] = color[role];
+  }
+  const font = theme?.font || {};
+  for (const [role, varName] of Object.entries(FONT_VARS)) {
+    if (font[role]) out[varName] = font[role];
+  }
+  return out;
+}
+
+// ── active-theme apply layer (browser only) ──────────────────────────────────
+// The imported design-token FILE is stored verbatim under this key; it's parsed
+// and adapted at apply time so a schema change only touches parseThemeFile.
+const ACTIVE_KEY = "opentakeoff_report_theme";
+
+// activeThemeVars() -> { "--ink": …, … } CSS-var object for the CURRENT imported
+// theme (or {} if none / private mode / corrupt). Spread onto the report root so
+// the theme scopes to the document subtree, not the whole app. Imported font
+// families get a graceful fallback since they may not be loaded in-app.
+/** @returns {Record<string, string>} */
+export function activeThemeVars() {
+  try {
+    const raw = localStorage.getItem(ACTIVE_KEY);
+    if (!raw) return {};
+    const { theme } = parseThemeFile(JSON.parse(raw));
+    const vars = themeToCssVars(theme);
+    for (const k of ["--f-display", "--f-body", "--f-mono"]) {
+      if (vars[k]) vars[k] = `"${vars[k]}", system-ui, sans-serif`;
+    }
+    return vars;
+  } catch {
+    return {}; // private mode / SSR / corrupt JSON → no theme, defaults stand
+  }
+}
+
+// saveActiveThemeFile(json)/clearActiveTheme() — the import + reset seam a UI
+// picker calls. Stores the raw file so re-parsing always reflects the importer.
+export function saveActiveThemeFile(json) {
+  try { localStorage.setItem(ACTIVE_KEY, typeof json === "string" ? json : JSON.stringify(json)); } catch { /* private mode */ }
+}
+export function clearActiveTheme() {
+  try { localStorage.removeItem(ACTIVE_KEY); } catch { /* private mode */ }
+}
