@@ -229,6 +229,25 @@ export const localStore = {
     return { id, ts };
   },
 
+  // Idempotent upsert of a COMPLETE snapshot record, keyed by its own `id`.
+  // Unlike saveSnapshot (which mints a fresh id every call), this preserves the
+  // record's id verbatim — so a record that already exists elsewhere can be
+  // re-materialized here without spawning a duplicate. The caller owns every
+  // field, including the `project` scope. Deliberately does no minting, no
+  // normalizing, and no network: it's the plain-local counterpart saveSnapshot
+  // can't be, and the one primitive a later id-preserving merge needs.
+  /** @param {{id: string, ts: number, label?: string|null, project?: string|null, payload: any}} record */
+  async putSnapshot(record) {
+    // Guard the fields that make a record "complete" — the list UI renders
+    // new Date(ts) and the diff/load path reads payload, so a record missing
+    // either would persist and then surface as Invalid Date or a runtime error
+    // far from here. Reject at the boundary instead. Still no minting/normalizing.
+    if (!record || typeof record.id !== "string" || !record.id.trim()) throw new Error("putSnapshot: record.id (non-empty string) required");
+    if (typeof record.ts !== "number" || !Number.isFinite(record.ts)) throw new Error("putSnapshot: record.ts (finite number) required");
+    if (record.payload == null) throw new Error("putSnapshot: record.payload required");
+    await withDb((db) => tx(db, SNAP_STORE, "readwrite", (os) => os.put(record)));
+  },
+
   /** @param {string|null} [project] cloud project scope (Drive folderId); null = local */
   async listSnapshots(project = null) {
     const scope = project ?? null;
