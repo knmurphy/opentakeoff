@@ -41,6 +41,106 @@ export function saveCompany(c) {
   }
 }
 
+// ── trade-name profiles ───────────────────────────────────────────────────────
+// A firm can operate under more than one trade name (e.g. 345 Flooring / Fin
+// Workspaces) — same tool, different masthead identity. Profiles are the list of
+// saved trade names; the ACTIVE one is mirrored to the legacy `opentakeoff_company`
+// key so loadCompany() and every masthead/marked-set consumer keep working
+// unchanged (they always render the active trade name).
+//
+//   state = { profiles: [{ id, name, address, logo }], activeId }
+const PKEY = "opentakeoff_company_profiles";
+
+// keep only the four known string fields (drops empties, non-strings, and any
+// injected keys) — the same gate loadCompany applies, plus a required id
+function cleanProfile(p) {
+  const out = {};
+  for (const k of ["id", "name", "address", "logo"]) {
+    // trim + drop empty-after-trim, so the profile can't hold a blank-looking
+    // value that saveCompany() would drop from the mirrored legacy company
+    const v = typeof p?.[k] === "string" ? p[k].trim() : "";
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
+let idSeq = 0;
+function newId() {
+  // app runtime only (Date.now available); seq disambiguates same-ms calls
+  return "tp_" + Date.now().toString(36) + "_" + (idSeq++).toString(36);
+}
+
+// The active profile object, or null. Falls back to the first profile when the
+// stored activeId doesn't resolve (deleted/corrupt).
+export function activeProfile(state) {
+  const profiles = state?.profiles || [];
+  return profiles.find((p) => p.id === state?.activeId) || profiles[0] || null;
+}
+
+// Read the profiles state; migrates a legacy single-company record into one
+// profile so nobody loses their saved identity on upgrade.
+export function loadProfiles() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PKEY) || "null");
+    if (raw && Array.isArray(raw.profiles)) {
+      const profiles = raw.profiles.map(cleanProfile).filter((p) => p.id);
+      if (profiles.length) {
+        const activeId = profiles.some((p) => p.id === raw.activeId) ? raw.activeId : profiles[0].id;
+        return { profiles, activeId };
+      }
+    }
+  } catch {
+    /* fall through to legacy migration */
+  }
+  const legacy = loadCompany();
+  if (legacy.name || legacy.address || legacy.logo) {
+    const p = cleanProfile({ id: newId(), ...legacy });
+    return { profiles: [p], activeId: p.id };
+  }
+  return { profiles: [], activeId: null };
+}
+
+// Persist the state AND mirror the active profile to the legacy company key, so
+// loadCompany() reflects the selected trade name with no consumer changes.
+export function saveProfiles(state) {
+  try {
+    const profiles = (state?.profiles || []).map(cleanProfile).filter((p) => p.id);
+    const activeId = profiles.some((p) => p.id === state?.activeId) ? state.activeId : (profiles[0]?.id ?? null);
+    if (profiles.length) localStorage.setItem(PKEY, JSON.stringify({ profiles, activeId }));
+    else localStorage.removeItem(PKEY);
+    const act = activeProfile({ profiles, activeId });
+    saveCompany(act ? { name: act.name, address: act.address, logo: act.logo } : {});
+    return true;
+  } catch {
+    return false; // quota / private mode
+  }
+}
+
+// ── pure reducers (state in → state out) ──────────────────────────────────────
+export function addProfile(state, fields = {}) {
+  const id = newId();
+  const profiles = [...(state?.profiles || []), cleanProfile({ id, ...fields })];
+  return { state: { profiles, activeId: id }, id };
+}
+
+export function setActiveProfile(state, id) {
+  const profiles = state?.profiles || [];
+  return profiles.some((p) => p.id === id) ? { profiles, activeId: id } : state;
+}
+
+export function updateActiveProfile(state, fields) {
+  const activeId = state?.activeId;
+  const profiles = (state?.profiles || []).map((p) =>
+    p.id === activeId ? cleanProfile({ ...p, ...fields, id: p.id }) : p);
+  return { profiles, activeId };
+}
+
+export function removeProfile(state, id) {
+  const profiles = (state?.profiles || []).filter((p) => p.id !== id);
+  const activeId = state?.activeId === id ? (profiles[0]?.id ?? null) : (state?.activeId ?? null);
+  return { profiles, activeId };
+}
+
 // File/Blob → PNG dataURL, ready for pdf-lib's embedPng. Downscales to fit
 // 600×300 CSS px (logos print ~1in tall; bigger is waste) and retries smaller
 // until it fits LOGO_LIMIT. Browser-only (canvas + image decode).

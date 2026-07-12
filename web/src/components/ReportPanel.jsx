@@ -19,7 +19,7 @@ import { rfisToCsv, rfisToJson } from "../lib/rfi.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 import { activeTheme, saveActiveThemeFile, clearActiveTheme } from "../lib/reportTheme.js";
-import { loadCompany, saveCompany, normalizeLogoToPng } from "../lib/identity.js";
+import { loadCompany, normalizeLogoToPng, loadProfiles, saveProfiles, activeProfile, updateActiveProfile, addProfile, setActiveProfile, removeProfile } from "../lib/identity.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 
@@ -561,7 +561,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               ["Client", clientInfo.client_name],
               ["Reference", clientInfo.reference],
               ["Date", clientInfo.date || new Date().toLocaleDateString()],
-              ["Prepared by", company.name || "OpenTakeoff"],
+              ["Prepared by", company.name || "—"],
             ];
             return (
               <div style={{ display: "grid", gridTemplateColumns: `repeat(${cells.length}, 1fr)`, border: "1px solid var(--ink)", marginBottom: hasClient && clientInfo.client_address ? 8 : 12 }}>
@@ -585,7 +585,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             {scaleInfo.map((si) => (
               <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {!si.scale_source || si.scale_source === "unknown" ? "scale set — provenance unrecorded" : si.scale_source}</div>
             ))}
-            <div>OpenTakeoff · opentakeoff.netlify.app · Generated {new Date().toLocaleDateString()}</div>
+            <div>Generated {new Date().toLocaleDateString()}</div>
             <div>{DISCLAIMER}</div>
           </div>
         </div>
@@ -815,6 +815,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </p>
           </div>
         )}
+        {/* small tool credit at the end of the document (last page) */}
+        <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 8.5, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Measured with OpenTakeoff</p>
         </td></tr></tbody></table>
       </div>
 
@@ -834,29 +836,36 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
 // Company edits save on every change, so an overlay-click close loses nothing;
 // onSaved bumps identityRev so the print masthead re-reads immediately.
 function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
-  const [company, setCompany] = useState(loadCompany);
+  // trade-name profiles: the picker chooses which trade name is active; the
+  // active one edits below and mirrors to loadCompany() for the masthead/cover
+  const [profs, setProfs] = useState(loadProfiles);
+  const active = activeProfile(profs) || {};
   const [logoErr, setLogoErr] = useState("");
   const [saveFailed, setSaveFailed] = useState(false);
   // pick sequence: normalizeLogoToPng is async, so a slow first pick must not
-  // clobber a faster second pick — resurrect a logo removed meanwhile — or
-  // land after the modal closes (the modal unmounts on close, so a pick still
-  // normalizing would otherwise pass its own instance's seq check and persist
-  // via saveCompany from the dead fiber)
+  // clobber a faster second pick — resurrect a logo removed meanwhile — or land
+  // after the modal closes (a pick still normalizing would otherwise persist
+  // from the dead fiber)
   const logoSeq = useRef(0);
   useEffect(() => () => { logoSeq.current++; }, []);   // unmount invalidates in-flight picks
 
-  // functional form: the merge must land on whatever company is CURRENT — the
-  // logo path awaits a slow normalize, and name/address typed meanwhile must
-  // not be reverted by a stale snapshot
-  const setAndSave = (updater) => {
-    setCompany((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      const ok = saveCompany(next);
+  // one commit path: a producer runs against the CURRENT state (functional set,
+  // so a slow logo normalize can't revert a name typed meanwhile), persists, and
+  // bumps the masthead. saveProfiles mirrors the active profile to loadCompany().
+  const commit = (produce) => {
+    setProfs((prev) => {
+      const next = produce(prev);
+      const ok = saveProfiles(next);
       setSaveFailed(!ok);
       if (ok && onSaved) onSaved();
       return next;
     });
   };
+  // edit the active profile's fields — creates a first profile if none exists yet
+  const editActive = (fields) => commit((prev) => (prev.profiles.length ? updateActiveProfile(prev, fields) : addProfile(prev, fields).state));
+  const switchProfile = (id) => commit((prev) => setActiveProfile(prev, id));
+  const addTradeName = () => commit((prev) => addProfile(prev, {}).state);
+  const deleteActive = () => commit((prev) => removeProfile(prev, prev.activeId));
 
   const onLogoFile = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -867,14 +876,14 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
     try {
       const logo = await normalizeLogoToPng(file);
       if (seq !== logoSeq.current) return;   // superseded by a later pick/remove/close
-      setAndSave((prev) => ({ ...prev, logo }));
+      editActive({ logo });
     } catch (err) {
       if (seq !== logoSeq.current) return;   // stale failure — don't flash its error
       setLogoErr(err.message || String(err));
     }
   };
-  // bump the seq so an in-flight pick can't resurrect the removed logo
-  const removeLogo = () => { logoSeq.current++; setAndSave(({ logo, ...rest }) => rest); };
+  // bump the seq so an in-flight pick can't resurrect the removed logo; "" clears
+  const removeLogo = () => { logoSeq.current++; editActive({ logo: "" }); };
   const client = (field) => (e) => onClientInfo && onClientInfo({ ...clientInfo, [field]: e.target.value });
 
   const section = { fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" };
@@ -889,24 +898,38 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
           <strong style={{ fontFamily: "var(--f-display)", fontSize: 15 }}>Project info</strong>
         </div>
         <div style={{ padding: 16, fontSize: 13, lineHeight: 1.6, color: "var(--ink)" }}>
-          <div style={section}>Company — yours, saved on this device</div>
+          <div style={section}>Company — your trade names, saved on this device</div>
+          {/* trade-name picker: choose which identity prints on the report + marked-set */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0" }}>
+            <select name="trade-name" aria-label="Active trade name" value={profs.activeId || ""} onChange={(e) => switchProfile(e.target.value)}
+              className="field-input" style={{ flex: 1, minWidth: 0 }} disabled={!profs.profiles.length}>
+              {profs.profiles.length === 0 && <option value="">No trade name yet — add one</option>}
+              {profs.profiles.map((p) => <option key={p.id} value={p.id}>{p.name || "Untitled trade name"}</option>)}
+            </select>
+            <button onClick={addTradeName} className="btn-ghost" title="Add another trade name (e.g. a second brand)"
+              style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>+ Add</button>
+            {profs.profiles.length > 1 && (
+              <button onClick={deleteActive} title="Delete the selected trade name"
+                style={{ padding: "5px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--c-danger)", cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>Delete</button>
+            )}
+          </div>
           <label style={row}>
             <span className="field-label">Name</span>
-            <input name="company-name" autoComplete="organization" value={company.name || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, name: e.target.value }))}
-              placeholder="Your company" className="field-input" style={{ marginTop: 4 }} />
+            <input name="company-name" autoComplete="organization" value={active.name || ""} onChange={(e) => editActive({ name: e.target.value })}
+              placeholder="Your trade name" className="field-input" style={{ marginTop: 4 }} />
           </label>
           <label style={row}>
             <span className="field-label">Address</span>
-            <textarea name="company-address" autoComplete="street-address" value={company.address || ""} onChange={(e) => setAndSave((prev) => ({ ...prev, address: e.target.value }))}
+            <textarea name="company-address" autoComplete="street-address" value={active.address || ""} onChange={(e) => editActive({ address: e.target.value })}
               rows={2} placeholder={"Street\nCity, ST"} className="field-input" style={{ marginTop: 4, resize: "vertical" }} />
           </label>
           <div style={row}>
             <span className="field-label">Logo</span>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
               <input name="company-logo" type="file" accept="image/*" onChange={onLogoFile} style={{ fontSize: 12, minWidth: 0 }} />
-              {company.logo && (
+              {active.logo && (
                 <>
-                  <img src={company.logo} alt="Company logo" style={{ width: 120, height: "auto", flex: "none", border: "1px solid var(--ink-faint)", background: "var(--well)" }} />
+                  <img src={active.logo} alt="Company logo" style={{ width: 120, height: "auto", flex: "none", border: "1px solid var(--ink-faint)", background: "var(--well)" }} />
                   <button onClick={removeLogo}
                     style={{ border: "none", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontSize: 11.5, padding: 0, whiteSpace: "nowrap" }}>Remove logo</button>
                 </>
