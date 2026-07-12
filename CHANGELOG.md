@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-11
+
+### Fixed
+- **A wall height override now survives copy/paste — and an explicit 0 never falls back to the condition height.** Copy and duplicate dropped the `height_override` flag, and paste spread `height_ft` on truthiness, so a wall deliberately overridden to `0 ft` pasted with no height at all and silently recomputed at the condition height. Overrides now ride with their value through copy/duplicate/paste, and `recomputeShape`/`describeShape` honor an explicit override outright — even zero — while legacy shapes keep the condition fallback. (`verticalWallSf` is untouched on purpose: it estimates wall SF from floor perimeters at the condition height, display-only.)
+
 ## 2026-07-09
 
 ### Added
