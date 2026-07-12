@@ -240,7 +240,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     JSON.stringify(shapesToJson(shapesDetail(conditions, shapes, sheetLabel), projectName), null, 2),
     "application/json");
 
-  const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1px solid var(--ink)", whiteSpace: "nowrap" };
+  const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1.25px solid var(--ink)", whiteSpace: "nowrap" };
   const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
 
   // one condition-table cell, keyed off the column profile; values come
@@ -461,39 +461,60 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         <table className="report-flow"><thead><tr><td>
           {projectName || "Untitled project"} — {DISCLAIMER}
         </td></tr></thead><tbody><tr><td>
-        {/* print-only masthead — hidden on screen via app.css */}
+        {/* print-only masthead — hidden on screen via app.css. Title-block header
+            (logo/firm row · project title · bordered fact grid), the drafting-
+            spec-book letterhead treatment. */}
         <div className="report-print-header">
-          {(company.logo || company.name || company.address) && (
-            <div style={{ marginBottom: 10 }}>
-              {company.logo && <img src={company.logo} alt="" style={{ maxHeight: 48, maxWidth: 200, display: "block", marginBottom: 4 }} />}
-              {company.name && <div style={{ fontWeight: 700, fontSize: 12 }}>{company.name}</div>}
-              {company.address && <div style={{ fontSize: 10.5, whiteSpace: "pre-line" }}>{company.address}</div>}
+          {/* firm row: logo + name/address on the left, report kind on the right,
+              closed by a strong rule */}
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, borderBottom: "1.25px solid var(--ink)", paddingBottom: 9 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              {company.logo && <img src={company.logo} alt="" style={{ maxHeight: 46, maxWidth: 170, objectFit: "contain", display: "block" }} />}
+              {(company.name || company.address) && (
+                <div style={{ minWidth: 0 }}>
+                  {company.name && <div style={{ fontFamily: "var(--f-display)", fontWeight: 700, fontSize: 12.5, lineHeight: 1.15 }}>{company.name}</div>}
+                  {company.address && <div style={{ fontSize: 9.5, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.35 }}>{company.address}</div>}
+                </div>
+              )}
             </div>
+            <div style={{ fontFamily: "var(--f-mono)", fontSize: 8, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--ink-muted)", whiteSpace: "nowrap" }}>Takeoff Report</div>
+          </div>
+
+          {/* project title */}
+          <div style={{ fontFamily: "var(--f-display)", fontSize: 25, fontWeight: 700, letterSpacing: "0.005em", textTransform: "uppercase", lineHeight: 0.98, margin: "11px 0 9px" }}>{projectName || "Untitled project"}</div>
+
+          {/* title-block fact grid */}
+          {(() => {
+            const cells = [
+              ["Client", clientInfo.client_name],
+              ["Reference", clientInfo.reference],
+              ["Date", clientInfo.date || new Date().toLocaleDateString()],
+              ["Prepared by", company.name || "OpenTakeoff"],
+            ];
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${cells.length}, 1fr)`, border: "1px solid var(--ink)", marginBottom: hasClient && clientInfo.client_address ? 8 : 12 }}>
+                {cells.map(([k, v], i) => (
+                  <div key={k} style={{ padding: "7px 11px", borderRight: i < cells.length - 1 ? "1px solid var(--ink-faint)" : "none", minWidth: 0 }}>
+                    <div style={{ fontFamily: "var(--f-mono)", fontSize: 7.5, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--ink-muted)", marginBottom: 2 }}>{k}</div>
+                    <div style={{ fontFamily: "var(--f-body)", fontSize: 11.5, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v || "—"}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+          {/* client address rides below the grid (multi-line; capped so a pasted
+              40-line address can't eat the page) */}
+          {hasClient && clientInfo.client_address && (
+            <div style={{ fontSize: 9.5, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.4, marginBottom: 12 }}>{clientInfo.client_address.split("\n").slice(0, 4).join("\n")}</div>
           )}
-          <div style={{ fontFamily: "var(--f-display)", fontSize: 20, fontWeight: 700 }}>{projectName || "Untitled project"}</div>
-          {hasClient && (
-            <div style={{ fontSize: 10.5, marginTop: 2, lineHeight: 1.5 }}>
-              {clientInfo.client_name && <div>Prepared for: {clientInfo.client_name}</div>}
-              {/* print-overflow guard: a pasted 40-line address must not eat the
-                  page (the PDF cover caps its whole client block at 6 lines) */}
-              {clientInfo.client_address && <div style={{ whiteSpace: "pre-line" }}>{clientInfo.client_address.split("\n").slice(0, 6).join("\n")}</div>}
-              {clientInfo.reference && <div>Ref: {clientInfo.reference}</div>}
-              {clientInfo.date && <div>Date: {clientInfo.date}</div>}
-            </div>
-          )}
-          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, margin: "2px 0 0" }}>Generated {new Date().toLocaleDateString()}</div>
-          {scaleInfo.length > 0 && (
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, lineHeight: 1.6, marginTop: 6 }}>
-              {/* pre-provenance projects have a scale but no record of HOW it was
-                  set — say so in words; the machine JSON keeps the raw "unknown" */}
-              {scaleInfo.map((si) => (
-                <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {!si.scale_source || si.scale_source === "unknown" ? "scale set — provenance unrecorded" : si.scale_source}</div>
-              ))}
-            </div>
-          )}
-          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, marginTop: 6 }}>OpenTakeoff — opentakeoff.netlify.app</div>
-          <div style={{ fontSize: 10.5, marginTop: 2, borderBottom: "1px solid var(--ink-faint)", paddingBottom: 8, marginBottom: 12 }}>
-            {DISCLAIMER}
+
+          {/* meta footer: scale provenance · attribution · disclaimer */}
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 8.5, color: "var(--ink-muted)", lineHeight: 1.6, borderTop: "1px solid var(--ink-faint)", paddingTop: 6, marginBottom: 12 }}>
+            {scaleInfo.map((si) => (
+              <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {!si.scale_source || si.scale_source === "unknown" ? "scale set — provenance unrecorded" : si.scale_source}</div>
+            ))}
+            <div>OpenTakeoff · opentakeoff.netlify.app · Generated {new Date().toLocaleDateString()}</div>
+            <div>{DISCLAIMER}</div>
           </div>
         </div>
         {/* the empty-state hides once markups exist — "Revisions noted" below
@@ -576,14 +597,14 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             })}
             <tfoot>
               <tr>
-                <td style={{ ...td, textAlign: "left", borderTop: "2px solid var(--ink)", fontWeight: 700 }}>Total</td>
+                <td style={{ ...td, textAlign: "left", borderTop: "2px solid var(--ink)", borderBottom: "2px solid var(--ink)", background: "var(--paper-cream)", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "var(--f-mono)" }}>Total</td>
                 {/* finish is always first & locked; every other visible column gets its
                     own td — footed columns render foot(g), ref columns never foot */}
                 {tableCols.slice(1).map((c) => (
                   c.foot && !c.ref ? (
-                    <td key={c.key} style={{ ...td, borderTop: "2px solid var(--ink)", ...(c.accent ? { color: "var(--cobalt)", ...(c.key === "total_sf_net" ? { fontWeight: 700 } : {}) } : {}) }}>{num(c.foot(g))}</td>
+                    <td key={c.key} style={{ ...td, borderTop: "2px solid var(--ink)", borderBottom: "2px solid var(--ink)", background: "var(--paper-cream)", fontWeight: 700, ...(c.accent ? { color: "var(--cobalt)" } : {}) }}>{num(c.foot(g))}</td>
                   ) : (
-                    <td key={c.key} style={{ ...td, borderTop: "2px solid var(--ink)" }}></td>
+                    <td key={c.key} style={{ ...td, borderTop: "2px solid var(--ink)", borderBottom: "2px solid var(--ink)", background: "var(--paper-cream)" }}></td>
                   )
                 ))}
               </tr>
@@ -607,7 +628,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         )}
         {rows.length > 0 && bySheet.length > 0 && (
           <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
-            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>By sheet</h3>
+            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink)", margin: "0 0 10px", paddingBottom: 5, borderBottom: "1.25px solid var(--ink)" }}>By sheet</h3>
             {bySheet.map((gp) => (
               <div key={gp.sheet_id} style={{ margin: "0 0 14px" }}>
                 <h3 style={{ fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.06em", color: "var(--ink-muted)", margin: "0 0 6px" }}>{sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id}</h3>
@@ -655,7 +676,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         {markups.some((m) => m.type !== "svg") && (
           <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
             {/* svg symbols are decorative vector stamps, not revision notes — excluded */}
-            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>Revisions noted</h3>
+            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink)", margin: "0 0 10px", paddingBottom: 5, borderBottom: "1.25px solid var(--ink)" }}>Revisions noted</h3>
             <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
               <thead>
                 <tr>
@@ -685,7 +706,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         )}
         {matSummary.length > 0 && (
           <div style={{ maxWidth: 980, margin: "26px auto 0" }}>
-            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 14, color: "var(--ink)", margin: "0 0 8px" }}>Supporting materials — buy list</h3>
+            <h3 style={{ fontFamily: "var(--f-display)", fontSize: 12, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink)", margin: "0 0 10px", paddingBottom: 5, borderBottom: "1.25px solid var(--ink)" }}>Supporting materials — buy list</h3>
             <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)" }}>
               <thead>
                 <tr>
