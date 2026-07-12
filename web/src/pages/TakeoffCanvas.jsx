@@ -3842,11 +3842,14 @@ export default function TakeoffCanvas() {
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
             <Icon name="oneClick" size={15} />Detect Rooms
           </button>
+          {/* Internal validation tool (issue #127) — dev builds only; never rendered in production. */}
+          {import.meta.env.DEV && (
           <button onClick={() => setTool("label")}
             title="Label GT — click inside each real room to record a ground-truth seed for the batch-detection validation corpus (issue #127). Click a marker to remove it. Truth is written to a gitignored .labels sidecar next to the plan. Internal validation tool."
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink-faint)", background: tool === "label" ? "var(--ink)" : "transparent", color: tool === "label" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
             <Icon name="oneClick" size={15} />Label GT{tool === "label" ? ` · ${gtRooms.length}` : ""}
           </button>
+          )}
           <ToolMenu
             title="Cut Out — subtract voids/columns (counts negative)"
             active={tool === "deduct"} accent="danger"
