@@ -274,8 +274,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     JSON.stringify(shapesToJson(shapesDetail(conditions, shapes, sheetLabel), projectName), null, 2),
     "application/json");
 
-  const th = { textAlign: "right", padding: "7px 10px", fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1.25px solid var(--ink)", whiteSpace: "nowrap" };
-  const td = { textAlign: "right", padding: "8px 10px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
+  const th = { textAlign: "right", padding: "7px 6px", fontFamily: "var(--f-mono)", fontSize: 12.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink-muted)", borderBottom: "1.25px solid var(--ink)", whiteSpace: "nowrap" };
+  const td = { textAlign: "right", padding: "8px 6px", fontVariantNumeric: "tabular-nums", borderBottom: "1px solid var(--ink-faint)", whiteSpace: "nowrap" };
 
   // one condition-table cell, keyed off the column profile; values come
   // through the shared colGetter so the table and the CSV read the same
@@ -545,11 +545,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               {(company.name || company.address) && (
                 <div style={{ minWidth: 0 }}>
                   {company.name && <div style={{ fontFamily: "var(--f-display)", fontWeight: 700, fontSize: 12.5, lineHeight: 1.15 }}>{company.name}</div>}
-                  {company.address && <div style={{ fontSize: 9.5, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.35 }}>{company.address}</div>}
+                  {company.address && <div style={{ fontSize: 11, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.35 }}>{company.address}</div>}
                 </div>
               )}
             </div>
-            <div style={{ fontFamily: "var(--f-mono)", fontSize: 8, letterSpacing: "0.22em", textTransform: "uppercase", color: "var(--ink-muted)", whiteSpace: "nowrap" }}>Takeoff Report</div>
+            <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-muted)", whiteSpace: "nowrap" }}>Takeoff Report</div>
           </div>
 
           {/* project title */}
@@ -567,8 +567,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               <div style={{ display: "grid", gridTemplateColumns: `repeat(${cells.length}, 1fr)`, border: "1px solid var(--ink)", marginBottom: hasClient && clientInfo.client_address ? 8 : 12 }}>
                 {cells.map(([k, v], i) => (
                   <div key={k} style={{ padding: "7px 11px", borderRight: i < cells.length - 1 ? "1px solid var(--ink-faint)" : "none", minWidth: 0 }}>
-                    <div style={{ fontFamily: "var(--f-mono)", fontSize: 7.5, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--ink-muted)", marginBottom: 2 }}>{k}</div>
-                    <div style={{ fontFamily: "var(--f-body)", fontSize: 11.5, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v || "—"}</div>
+                    <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--ink-muted)", marginBottom: 2 }}>{k}</div>
+                    <div style={{ fontFamily: "var(--f-body)", fontSize: 12.5, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v || "—"}</div>
                   </div>
                 ))}
               </div>
@@ -577,11 +577,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           {/* client address rides below the grid (multi-line; capped so a pasted
               40-line address can't eat the page) */}
           {hasClient && clientInfo.client_address && (
-            <div style={{ fontSize: 9.5, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.4, marginBottom: 12 }}>{clientInfo.client_address.split("\n").slice(0, 4).join("\n")}</div>
+            <div style={{ fontSize: 11, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.4, marginBottom: 12 }}>{clientInfo.client_address.split("\n").slice(0, 4).join("\n")}</div>
           )}
 
           {/* meta footer: scale provenance · attribution · disclaimer */}
-          <div style={{ fontFamily: "var(--f-mono)", fontSize: 8.5, color: "var(--ink-muted)", lineHeight: 1.6, borderTop: "1px solid var(--ink-faint)", paddingTop: 6, marginBottom: 12 }}>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10, color: "var(--ink-muted)", lineHeight: 1.6, borderTop: "1px solid var(--ink-faint)", paddingTop: 6, marginBottom: 12 }}>
             {scaleInfo.map((si) => (
               <div key={si.sheet_id}>{sheetLabel ? sheetLabel(si.sheet_id) : si.sheet_id} — {!si.scale_source || si.scale_source === "unknown" ? "scale set — provenance unrecorded" : si.scale_source}</div>
             ))}
@@ -816,7 +816,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
           </div>
         )}
         {/* small tool credit at the end of the document (last page) */}
-        <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 8.5, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Measured with OpenTakeoff</p>
+        <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-faint)" }}>Measured with OpenTakeoff</p>
         </td></tr></tbody></table>
       </div>
 
