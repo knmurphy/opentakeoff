@@ -151,28 +151,61 @@ export function detectRegions(
  *  squarely in the empty middle and is robust to trace/flood jitter. */
 export const OVERLAP_THRESH = 0.5;
 
-/** Exact intersection area (mask cells set in BOTH) of two same-mask regions.
- *
- *  Fails loud on mismatched lengths rather than silently truncating: same-mask
- *  regions always share `region.length === mw*mh`, so a length mismatch means two
- *  DIFFERENT mask geometries slipped into one batch (e.g. a future raster+vector
- *  mixed pass). `Math.min` would quietly compare only the shared prefix and return
- *  a garbage overlap; throwing here makes that a hard, obvious failure. On valid
- *  equal-length input this is byte-identical to the old popcount (`n === a.length`). */
-function intersectionCount(a: Uint8Array, b: Uint8Array): number {
-  if (a.length !== b.length) {
-    throw new Error(`intersectionCount: region length mismatch (${a.length} vs ${b.length})`);
+/** A region's tight bounding box in mask cells: the min/max x,y of its SET cells.
+ *  An empty region (no set cells) is signalled by `minx > maxx` (sentinels never
+ *  updated), which yields an empty overlap rectangle and hence a 0 intersection —
+ *  matching the old whole-mask popcount, which also returns 0 for an empty region. */
+interface BBox { minx: number; miny: number; maxx: number; maxy: number; }
+
+/** One O(cells) pass over a region's bitmap to find its tight bbox. Computed ONCE
+ *  per region up front so the pairwise loop can (a) skip pairs whose bboxes are
+ *  disjoint and (b) restrict the AND-popcount to the overlap rectangle — the whole
+ *  point of the perf fix. */
+function regionBBox(region: Uint8Array, mw: number, mh: number): BBox {
+  let minx = mw, miny = mh, maxx = -1, maxy = -1;
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      if (region[row + x]) {
+        if (x < minx) minx = x;
+        if (x > maxx) maxx = x;
+        if (y < miny) miny = y;
+        if (y > maxy) maxy = y;
+      }
+    }
   }
-  const n = a.length;
+  return { minx, miny, maxx, maxy };
+}
+
+/** Exact intersection area (mask cells set in BOTH) of two same-mask regions,
+ *  restricted to the OVERLAP RECTANGLE of their bboxes.
+ *
+ *  Correctness (byte-identical to a whole-mask popcount): outside a region's tight
+ *  bbox it has NO set cells, so `A AND B` can be non-zero only where BOTH regions
+ *  have set cells — i.e. only inside `bboxA ∩ bboxB`. Scanning just that rectangle
+ *  therefore counts exactly the same cells the old full scan did. If the rectangle
+ *  is empty (disjoint bboxes) the intersection is provably 0, so we return 0 without
+ *  touching either buffer — this subsumes the "disjoint bbox → skip" prefilter. */
+function intersectionCount(
+  a: Uint8Array, b: Uint8Array, mw: number, ba: BBox, bb: BBox,
+): number {
+  const x0 = ba.minx > bb.minx ? ba.minx : bb.minx;
+  const y0 = ba.miny > bb.miny ? ba.miny : bb.miny;
+  const x1 = ba.maxx < bb.maxx ? ba.maxx : bb.maxx;
+  const y1 = ba.maxy < bb.maxy ? ba.maxy : bb.maxy;
+  if (x0 > x1 || y0 > y1) return 0;   // disjoint (or empty) bboxes → no shared cells
   let c = 0;
-  for (let i = 0; i < n; i++) if (a[i] && b[i]) c++;
+  for (let y = y0; y <= y1; y++) {
+    const row = y * mw;
+    for (let x = x0; x <= x1; x++) if (a[row + x] && b[row + x]) c++;
+  }
   return c;
 }
 
 /** Containment overlap of two regions: intersection / min(area). A fragment mostly
  *  inside a full room → ~1; two near-identical rings → ~1; abutting rooms → ~0. */
-function containmentOverlap(a: DetectedRegion, b: DetectedRegion): number {
-  const inter = intersectionCount(a.flood.region, b.flood.region);
+function containmentOverlap(a: DetectedRegion, b: DetectedRegion, mw: number, ba: BBox, bb: BBox): number {
+  const inter = intersectionCount(a.flood.region, b.flood.region, mw, ba, bb);
   const denom = Math.min(a.flood.count, b.flood.count);
   return denom > 0 ? inter / denom : 0;
 }
@@ -194,13 +227,28 @@ function containmentOverlap(a: DetectedRegion, b: DetectedRegion): number {
 export function dedupeRegions(regions: DetectedRegion[]): DetectedRegion[] {
   const n = regions.length;
   if (n <= 1) return regions.slice();
-  // Guard: mask-popcount intersection is only valid across regions that share the
-  // SAME mask geometry. A single detectRooms call always does; fail loud otherwise.
+  // Guard + bbox precompute in ONE up-front pass over the regions:
+  //  • mask-popcount intersection is only valid across regions that share the SAME
+  //    mask geometry — a single detectRooms call always does; fail loud otherwise.
+  //  • the length guard MUST live here, not in the pairwise popcount: the overlap-
+  //    rectangle scan indexes only cells `< mw*mh`, so it would never touch (and
+  //    never notice) an over-long buffer. Checking `region.length === mw*mh` up
+  //    front keeps the fail-loud contract for a future raster+vector mixed batch,
+  //    and catches it even for pairs the bbox prefilter would otherwise skip.
+  //  • each region's tight bbox is computed once here (O(cells) per region) so the
+  //    O(n²) pairwise loop can restrict its popcount to the bbox-overlap rectangle.
   const { mw, mh } = regions[0].flood;
-  for (let i = 1; i < n; i++) {
-    if (regions[i].flood.mw !== mw || regions[i].flood.mh !== mh) {
+  const cells = mw * mh;
+  const bboxes: BBox[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const f = regions[i].flood;
+    if (f.mw !== mw || f.mh !== mh) {
       throw new Error("dedupeRegions: regions must share one mask geometry (same mw/mh)");
     }
+    if (f.region.length !== cells) {
+      throw new Error(`dedupeRegions: region length mismatch (${f.region.length} vs ${cells})`);
+    }
+    bboxes[i] = regionBBox(f.region, mw, mh);
   }
   // union-find over the overlap graph
   const parent = Array.from({ length: n }, (_, i) => i);
@@ -208,7 +256,7 @@ export function dedupeRegions(regions: DetectedRegion[]): DetectedRegion[] {
   const union = (a: number, b: number): void => { const ra = find(a), rb = find(b); if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb); };
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (containmentOverlap(regions[i], regions[j]) >= OVERLAP_THRESH) union(i, j);
+      if (containmentOverlap(regions[i], regions[j], mw, bboxes[i], bboxes[j]) >= OVERLAP_THRESH) union(i, j);
     }
   }
   // pick the best representative per cluster by a TOTAL order (order-independent):

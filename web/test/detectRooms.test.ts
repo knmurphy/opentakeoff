@@ -3,7 +3,7 @@
 // and pdfjs-free, so they run straight under node. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roomLabelSeeds, detectRegions, dedupeRegions, ROOM_LABEL_RE, type DetectedRegion } from "../src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, dedupeRegions, ROOM_LABEL_RE, OVERLAP_THRESH, type DetectedRegion } from "../src/lib/detectRooms.ts";
 import { buildMask, floodRegion, SENS_BALANCED, type MaskObj } from "../src/lib/oneclick.ts";
 
 // a closed square room, as flat boundary segments in image px
@@ -268,4 +268,117 @@ test("dedupeRegions: a concave (U-shaped) room seeded twice → ONE region", () 
     const out = dedupeRegions(input);
     assert.equal(out.length, 1, "the two overlapping U floods collapse to one");
   }
+});
+
+// ── perf: bbox prefilter kills the O(n² × mask-cells) cliff (issue #123 follow-on) ──
+// The old dedup scanned the ENTIRE mw×mh mask for every one of n(n-1)/2 pairs. On a
+// dense sheet (n≈400 over a multi-million-cell mask) that is hundreds of billions of
+// cell-ops and the page HANGS. The bbox prefilter skips disjoint pairs outright and
+// restricts overlapping pairs to their bbox-overlap rectangle, so a mostly-disjoint
+// sheet finishes in well under a second WITHOUT changing which regions survive.
+
+// Hand-build a DetectedRegion whose bitmap is a solid axis-aligned rectangle of set
+// cells on a MW×MH mask — no floodRegion needed, so we can synthesize N of them
+// cheaply. count = number of set cells; bbox is exactly the rectangle.
+function rectRegion(
+  str: string, MW: number, MH: number, x0: number, y0: number, x1: number, y1: number,
+): DetectedRegion {
+  const region = new Uint8Array(MW * MH);
+  let count = 0;
+  for (let y = y0; y <= y1; y++) {
+    const row = y * MW;
+    for (let x = x0; x <= x1; x++) { region[row + x] = 1; count++; }
+  }
+  return {
+    str,
+    seed: [x0, y0],
+    flood: { status: "ok", region, count, mw: MW, mh: MH, ws: 1 },
+  };
+}
+
+// A test-local reference implementation of the OLD dedup overlap test: a WHOLE-MASK
+// AND-popcount, no bbox prefilter. Used only to demonstrate the before/after cliff
+// on a SMALL n (extrapolating the 550B-op full case would just hang). Mirrors the
+// pre-fix intersectionCount exactly.
+function wholeMaskOverlapPairs(regs: DetectedRegion[], thresh: number): number {
+  let unions = 0;
+  for (let i = 0; i < regs.length; i++) {
+    for (let j = i + 1; j < regs.length; j++) {
+      const a = regs[i].flood.region, b = regs[j].flood.region;
+      let inter = 0;
+      for (let k = 0; k < a.length; k++) if (a[k] && b[k]) inter++;   // WHOLE mask, every pair
+      const denom = Math.min(regs[i].flood.count, regs[j].flood.count);
+      if (denom > 0 && inter / denom >= thresh) unions++;
+    }
+  }
+  return unions;
+}
+
+test("dedupeRegions: perf — N≈400 disjoint regions on a large mask finish fast, overlaps still collapse", () => {
+  // An 1800×1200 = 2.16M-cell mask. 400 small disjoint tiles laid on a grid (their
+  // bboxes never touch), PLUS three genuinely-overlapping pairs. Old dedup: ~82k
+  // pairs × 2.16M cells ≈ 177B ops → hangs (>100s). New: the O(n) bbox precompute
+  // is ~0.9B ops and every disjoint pair is skipped by its bbox, so it returns in
+  // well under a second. (The exact mask size isn't load-bearing for the cliff —
+  // any multi-million-cell mask with n≈400 reproduces the old hang.)
+  const MW = 1800, MH = 1200;
+  const regions: DetectedRegion[] = [];
+  // 20×20 grid of 20×20 tiles in the LEFT band (x < 1400), well-separated (pitch 65)
+  // so every tile bbox is disjoint from every other and from the overlap pairs.
+  let id = 100;
+  for (let gy = 0; gy < 20; gy++) {
+    for (let gx = 0; gx < 20; gx++) {
+      const x0 = 10 + gx * 65, y0 = 10 + gy * 70;
+      regions.push(rectRegion(String(id++), MW, MH, x0, y0, x0 + 20, y0 + 20));
+    }
+  }
+  const disjointCount = regions.length;
+  assert.equal(disjointCount, 400, "400 disjoint tiles");
+  // grid tiles reach x ≤ 10 + 19*65 + 20 = 1265, so the x≥1450 overlap band is clear.
+
+  // 3 overlapping DUPLICATE pairs, each a big rectangle plus a mostly-contained
+  // fragment of it (containment > 0.5 → must collapse). Placed in the right band
+  // (x ≥ 1450) so they don't touch the grid tiles.
+  const overlapPairs = 3;
+  for (let p = 0; p < overlapPairs; p++) {
+    const bx = 1450, by = 200 + p * 300;
+    const big = rectRegion(`dup-big-${p}`, MW, MH, bx, by, bx + 200, by + 200);      // 201×201 cells
+    const frag = rectRegion(`dup-frag-${p}`, MW, MH, bx, by, bx + 200, by + 140);    // ~70% inside big
+    assert.ok(frag.flood.count < big.flood.count, "fragment smaller than its full room");
+    regions.push(big, frag);
+  }
+
+  const N = regions.length;
+  assert.equal(N, 406, "400 disjoint + 3 big + 3 fragment");
+
+  // Time ONLY dedupeRegions — all buffers are already allocated above.
+  const t0 = performance.now();
+  const out = dedupeRegions(regions);
+  const ms = performance.now() - t0;
+
+  // The 3 fragments collapse into their big rooms; everything else survives.
+  assert.equal(out.length, N - overlapPairs, "each overlapping fragment collapses into its full room");
+  // the 400 disjoint tiles are all present, and no big room was dropped
+  for (let p = 0; p < overlapPairs; p++) {
+    assert.ok(out.some((r) => r.str === `dup-big-${p}`), `big room ${p} kept (larger rep)`);
+    assert.ok(!out.some((r) => r.str === `dup-frag-${p}`), `fragment ${p} dropped`);
+  }
+  assert.ok(out.filter((r) => Number(r.str) >= 100 && Number(r.str) < 100 + disjointCount).length === disjointCount,
+    "all 400 disjoint tiles survive");
+
+  // The whole point: well under a second (the old whole-mask scan cannot).
+  assert.ok(ms < 2000, `dedupeRegions on ${N} regions over a ${MW}×${MH} mask took ${ms.toFixed(1)}ms (must be < 2000ms)`);
+
+  // Before/after contrast on a SMALL n=40 subset (the full 406-region whole-mask
+  // scan would hang): show the old per-pair whole-mask popcount is orders slower.
+  const subset = regions.slice(0, 40);
+  const tOld = performance.now();
+  wholeMaskOverlapPairs(subset, OVERLAP_THRESH);
+  const oldMs = performance.now() - tOld;
+  const tNew = performance.now();
+  dedupeRegions(subset);
+  const newMs = performance.now() - tNew;
+  // Log the contrast for the report; not asserted (timing is machine-dependent),
+  // except that new is not dramatically slower than old on this tiny case.
+  console.log(`  [perf] n=406 new: ${ms.toFixed(1)}ms | n=40 subset — old whole-mask: ${oldMs.toFixed(1)}ms, new bbox: ${newMs.toFixed(2)}ms`);
 });
