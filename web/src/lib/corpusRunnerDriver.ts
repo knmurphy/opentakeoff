@@ -31,7 +31,7 @@ import {
   SENS_BALANCED,
   type Point,
 } from "./oneclick.ts";
-import { roomLabelSeeds, detectRegions } from "./detectRooms.ts";
+import { roomLabelSeeds, detectRegions, dedupeRegions } from "./detectRooms.ts";
 import { traceRegion } from "./oneclick.ts";
 import { ringsByFillColor } from "./takeoffExtractDriver.ts";
 import {
@@ -60,13 +60,34 @@ export interface PageInputs {
   OPS: Record<string, number>;
 }
 
+// One scored variant (BEFORE = raw detectRegions, AFTER = dedupeRegions applied).
+// Carries the objects needed to diff FOUND-ROOM IDENTITY across variants — the
+// whole measurement hinges on comparing which truth rooms were cleanly found,
+// not merely how many. Because BOTH variants score against the SAME `truth`
+// array (same object references), `found` can be diffed by identity exactly.
+export interface Variant {
+  detectedCount: number;   // clean detected regions (= predicted.length)
+  score: Score;
+  labels: LabelAgreement;
+  predicted: PredictedRegion[];
+}
+
 export interface PageResult {
   verdict: string;
   k: number;
   truthCount: number;      // marked (in-scope) truth rooms with a usable seed
-  detectedCount: number;   // clean detected regions
-  score: Score;
-  labels: LabelAgreement;
+  truth: RoomTruth[];      // the shared truth array (identity anchor for diffs)
+  before: Variant;         // predicted = detectRegions(...)
+  after: Variant;          // predicted = dedupeRegions(detectRegions(...))
+}
+
+function scoreVariant(
+  predicted: PredictedRegion[],
+  truth: RoomTruth[],
+  labels: LabelSeed[],
+): Variant {
+  const score = scoreDetection(truth, predicted, labels, { truthComplete: false });
+  return { detectedCount: predicted.length, score, labels: labelAgreement(score, predicted), predicted };
 }
 
 export function runPage(inp: PageInputs): PageResult {
@@ -90,18 +111,29 @@ export function runPage(inp: PageInputs): PageResult {
   const geom = extractVectorGeometry(opList, transform, OPS);
   const maskObj = buildMask(geom.segs, width, height, undefined, geom.meta);
   const detSeeds = roomLabelSeeds(text, transform);
+
+  // ONE detection call. We score it TWICE — raw (BEFORE) and deduped (AFTER) —
+  // from this single set of regions so that any change in `found` is attributable
+  // to dedup ALONE, not to a re-derivation that might differ for other reasons.
   const regions = detectRegions(maskObj, detSeeds, SENS_BALANCED);
-  const predicted: PredictedRegion[] = [];
-  for (const r of regions) {
-    const poly = traceRegion(r.flood) as Point[];
-    if (poly.length < 3) continue;
-    predicted.push({
-      label: r.str,
-      poly,
-      seed: r.seed,
-      area_sf: ringAreaSf(poly, k),  // px² ÷ shared k — directly comparable to truth
-    });
-  }
+  const dedupedRegions = dedupeRegions(regions);
+
+  const toPredicted = (rs: typeof regions): PredictedRegion[] => {
+    const out: PredictedRegion[] = [];
+    for (const r of rs) {
+      const poly = traceRegion(r.flood) as Point[];
+      if (poly.length < 3) continue;
+      out.push({
+        label: r.str,
+        poly,
+        seed: r.seed,
+        area_sf: ringAreaSf(poly, k),  // px² ÷ shared k — directly comparable to truth
+      });
+    }
+    return out;
+  };
+  const predictedBefore = toPredicted(regions);
+  const predictedAfter = toPredicted(dedupedRegions);
 
   // ── build the scoring inputs from the extracted ground truth ───────────────
   // A truth room = one extracted ring. Its seed is a GUARANTEED-interior point:
@@ -119,16 +151,13 @@ export function runPage(inp: PageInputs): PageResult {
   });
   const labels: LabelSeed[] = detSeeds.map((s) => ({ str: s.str, seed: s.seed }));
 
-  const score = scoreDetection(truth, predicted, labels, { truthComplete: false });
-  const labels2 = labelAgreement(score, predicted);
-
   return {
     verdict: gt.report.verdict,
     k,
     truthCount: truth.length,
-    detectedCount: predicted.length,
-    score,
-    labels: labels2,
+    truth,
+    before: scoreVariant(predictedBefore, truth, labels),
+    after: scoreVariant(predictedAfter, truth, labels),
   };
 }
 
@@ -199,32 +228,65 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         continue;
       }
       if (res.verdict !== "marked") continue;   // only marked pages carry truth
-      const s = res.score;
+      const b = res.before.score;
+      const a = res.after.score;
+      const T = res.truthCount;
+
+      // FOUND-SET IDENTITY DIFF — the crux. Both scores ran against the SAME
+      // `truth` array, so found rooms share object identity across variants.
+      // Dedup only REMOVES regions, so found_after ⊆ found_before must hold; a
+      // room in after-but-not-before would be a harness bug (assert loudly). Any
+      // room in before-but-not-after is a REAL recall regression — dedup dropped
+      // a room a clean poly had found. That is the number Kevin is watching.
+      const beforeSet = new Set(b.found);
+      const afterSet = new Set(a.found);
+      const droppedFound = b.found.filter((t) => !afterSet.has(t));   // recall regressions
+      const gainedFound = a.found.filter((t) => !beforeSet.has(t));   // must be empty
+      if (gainedFound.length) {
+        throw new Error(
+          `HARNESS BUG ${plan} p${pn}: dedup ADDED found room(s) ` +
+          `${gainedFound.map((t) => t.number ?? "?").join(",")} — dedup only removes regions, ` +
+          `so found_after must be a subset of found_before.`,
+        );
+      }
+
+      const recall = (s: Score): number =>
+        s.missed.length + s.found.length ? +(s.found.length / (s.found.length + s.missed.length)).toFixed(3) : 0;
+      // precision proxy = found / detected (the complete-truth precision FLOOR).
+      const prec = (s: Score, det: number): number | null => (det ? +(s.found.length / det).toFixed(3) : null);
+
       const row = {
         plan,
         page: pn,
         k: +res.k.toFixed(2),
-        detected: res.detectedCount,
-        truth: res.truthCount,
-        recall: s.missed.length + s.found.length ? +(s.found.length / (s.found.length + s.missed.length)).toFixed(3) : 0,
-        found: s.found.length,
-        missed: s.missed.length,
-        areaMeanAbsPct: areaMeanAbsPct(s),
-        underSeg: s.underSegmented.length,
-        unmatchedDet: s.unmatchedPredictions.length,
-        labelCorrect: res.labels.correct.length,
-        labelWrong: res.labels.wrong.length,
-        labelUnlabeled: res.labels.unlabeled.length,
-        detectionMisses: s.detectionMisses.length,
-        misplacedLabelMisses: s.misplacedLabelMisses.length,
-        labellessMisses: s.labellessMisses.length,
+        truth: T,
+        // BEFORE (raw detectRegions)
+        detBefore: res.before.detectedCount,
+        foundBefore: b.found.length,
+        recallBefore: recall(b),
+        precBefore: prec(b, res.before.detectedCount),
+        // AFTER (dedupeRegions)
+        detAfter: res.after.detectedCount,
+        foundAfter: a.found.length,
+        recallAfter: recall(a),
+        precAfter: prec(a, res.after.detectedCount),
+        // dedup effect
+        collapsed: res.before.detectedCount - res.after.detectedCount,
+        droppedFound: droppedFound.map((t) => t.number ?? "(unlabeled)"),
+        recallRegression: droppedFound.length > 0,
+        // context
+        underSegBefore: b.underSegmented.length,
+        underSegAfter: a.underSegmented.length,
+        areaMeanAbsPctBefore: areaMeanAbsPct(b),
+        areaMeanAbsPctAfter: areaMeanAbsPct(a),
       };
       rowsOut.push(row);
       if (!jsonOut) {
         console.error(
-          `${plan} p${pn}: det=${row.detected} truth=${row.truth} recall=${row.recall} ` +
-          `areaErr=${row.areaMeanAbsPct}% underSeg=${row.underSeg} unmatched=${row.unmatchedDet} ` +
-          `label[ok=${row.labelCorrect} WRONG=${row.labelWrong} unlab=${row.labelUnlabeled}]`,
+          `${plan} p${pn}: truth=${T} | BEFORE det=${row.detBefore} found=${row.foundBefore} ` +
+          `recall=${row.recallBefore} prec=${row.precBefore} | AFTER det=${row.detAfter} ` +
+          `found=${row.foundAfter} recall=${row.recallAfter} prec=${row.precAfter} | ` +
+          `collapsed=${row.collapsed} REGRESSION=${row.recallRegression ? row.droppedFound.join(",") : "none"}`,
         );
       }
     }
