@@ -73,6 +73,35 @@ export function verticalWallSf(shapes, conditionId, heightFt, multiplier = 1) {
   return round2(perim * h * (multiplier || 1));
 }
 
+// Per-sheet base quantities: where the takeoff lives in the drawing set, one
+// row per (sheet, condition) that actually has shapes. BASE measured numbers
+// only — no multiplier, no waste: those are ordering concerns and apply at
+// condition level (conditionTotals). This is for reconciling sheet by sheet.
+export function sheetTotals(conditions, shapes) {
+  const condById = new Map(conditions.map((c) => [c.id, c]));
+  const acc = new Map();   // sheet_id \x00 condition_id -> row
+  for (const s of shapes) {
+    const c = condById.get(s.condition_id);
+    if (!c || !s.sheet_id) continue;
+    const key = `${s.sheet_id}\x00${c.id}`;
+    let row = acc.get(key);
+    if (!row) { row = { sheet_id: s.sheet_id, id: c.id, finish_tag: c.finish_tag, floor_sf: 0, wall_sf: 0, border_sf: 0, lf: 0, ea: 0 }; acc.set(key, row); }
+    const cp = s.computed || {};
+    switch (s.measure_role) {
+      case "deduct": row.floor_sf -= cp.area_sf || 0; break;
+      case "floor_area": row.floor_sf += cp.area_sf || 0; break;
+      case "surface_area": row.wall_sf += cp.area_sf || 0; break;
+      case "linear": row.lf += cp.perimeter_lf || 0; row.border_sf += cp.area_sf || 0; break;
+      case "count": row.ea += cp.count || 1; break;
+      default: break;
+    }
+  }
+  const condOrder = new Map(conditions.map((c, i) => [c.id, i]));
+  return [...acc.values()]
+    .map((r) => ({ ...r, floor_sf: round2(r.floor_sf), wall_sf: round2(r.wall_sf), border_sf: round2(r.border_sf), lf: round2(r.lf) }))
+    .sort((a, b) => a.sheet_id.localeCompare(b.sheet_id) || condOrder.get(a.id) - condOrder.get(b.id));
+}
+
 // Combined buy list: same-named materials summed across all conditions (each
 // condition is rounded first, then summed — you order per condition).
 export function materialsSummary(rows) {
