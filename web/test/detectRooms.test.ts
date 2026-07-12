@@ -3,8 +3,8 @@
 // and pdfjs-free, so they run straight under node. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roomLabelSeeds, detectRegions, ROOM_LABEL_RE } from "../src/lib/detectRooms.ts";
-import { buildMask, SENS_BALANCED, type MaskObj } from "../src/lib/oneclick.ts";
+import { roomLabelSeeds, detectRegions, dedupeRegions, ROOM_LABEL_RE, type DetectedRegion } from "../src/lib/detectRooms.ts";
+import { buildMask, floodRegion, SENS_BALANCED, type MaskObj } from "../src/lib/oneclick.ts";
 
 // a closed square room, as flat boundary segments in image px
 function squareSegs(x0: number, y0: number, x1: number, y1: number): number[] {
@@ -127,4 +127,105 @@ test("detectRegions: mixed batch — clean, hatch-escalated, and leak seeds gate
   assert.ok(byStr["201"] && byStr["201"].status === "ok" && !byStr["201"].hatchFiltered, "room A: clean ok");
   assert.ok(byStr["202"] && byStr["202"].status === "ok" && byStr["202"].hatchFiltered, "room B: hatch-escalated ok");
   assert.ok(!byStr["203"], "the between-walls seed is withheld");
+});
+
+// ── ring-merge dedup (issue #123 follow-on) ─────────────────────────────────
+// dedupeRegions collapses DUPLICATE/FRAGMENT floods that the per-seed pointInPoly
+// skip misses: two seeds in ONE room (two labels), a fragment flood inside a full
+// room, and concave rooms seeded twice. It compares floods by MASK-POPCOUNT
+// intersection (exact at mask resolution, concave-native, order-independent),
+// keeping the larger-count region per overlap cluster.
+
+// Test-local mirror of the containment overlap (intersection / min area), so a
+// fixture can assert two floods really do (or don't) overlap before checking dedup.
+function containmentSanity(a: DetectedRegion, b: DetectedRegion): number {
+  const ra = a.flood.region, rb = b.flood.region;
+  const n = Math.min(ra.length, rb.length);
+  let inter = 0;
+  for (let i = 0; i < n; i++) if (ra[i] && rb[i]) inter++;
+  return inter / Math.min(a.flood.count, b.flood.count);
+}
+
+// Flood a room at a given seed to get a real DetectedRegion (region buffer + count).
+function detectAt(mo: MaskObj, str: string, seed: [number, number]): DetectedRegion {
+  const f = floodRegion(mo, seed[0], seed[1], SENS_BALANCED);
+  assert.equal(f.status, "ok", `seed ${str} @ ${seed} should flood clean`);
+  return { str, seed, flood: f as Extract<typeof f, { status: "ok" }> };
+}
+
+test("dedupeRegions: two near-identical rings (one room, two labels) → ONE region, order-independent", () => {
+  // One 600×400 room, TWO label seeds inside it. Each floods to (nearly) the same
+  // region — the classic duplicate the pointInPoly skip misses when both seeds are
+  // processed against an empty proposal in the same batch resume.
+  const mo = buildMask([...border, ...room], IMG_W, IMG_H, MAXDIM);
+  const a = detectAt(mo, "101", [200, 300]);
+  const b = detectAt(mo, "102", [600, 200]);
+  // sanity: both are the SAME room — their masks overlap almost entirely
+  const fwd = dedupeRegions([a, b]);
+  assert.equal(fwd.length, 1, "two seeds in one room collapse to a single region");
+  const rev = dedupeRegions([b, a]);
+  assert.equal(rev.length, 1, "reversed input also collapses to one");
+  // order-independence: the SAME representative survives regardless of input order
+  assert.equal(fwd[0].str, rev[0].str, "same representative kept in both orders");
+  assert.deepEqual(fwd[0].seed, rev[0].seed, "same seed kept in both orders");
+});
+
+// Build a DetectedRegion whose region buffer is an arbitrary subset of a full
+// room's flood — a "fragment flood" mostly inside the full room (e.g. a strict
+// pass trapped by a partial hatch band). Shares the full room's mask geometry.
+function fragmentOf(full: DetectedRegion, keepFrac: number, str: string, seed: [number, number]): DetectedRegion {
+  const src = full.flood.region;
+  const region = new Uint8Array(src.length);
+  let count = 0;
+  const target = Math.floor(full.flood.count * keepFrac);
+  for (let i = 0; i < src.length && count < target; i++) if (src[i]) { region[i] = 1; count++; }
+  return { str, seed, flood: { ...full.flood, region, count } };
+}
+
+test("dedupeRegions: a fragment poly mostly inside a full room → fragment dropped, full room kept", () => {
+  const mo = buildMask([...border, ...room], IMG_W, IMG_H, MAXDIM);
+  const full = detectAt(mo, "101", [400, 300]);
+  const frag = fragmentOf(full, 0.35, "101b", [410, 310]);   // 35% of the full room, all interior cells
+  assert.ok(frag.flood.count < full.flood.count, "fragment is smaller than the full room");
+  for (const input of [[full, frag], [frag, full]]) {
+    const out = dedupeRegions(input);
+    assert.equal(out.length, 1, "fragment collapses into the full room");
+    assert.equal(out[0].str, "101", "the LARGER full room is the survivor, not the fragment");
+    assert.deepEqual(out[0].seed, [400, 300]);
+  }
+});
+
+test("dedupeRegions: two abutting DISTINCT rooms sharing a wall → BOTH kept (no over-merge)", () => {
+  // Two rooms side by side separated by a single shared wall at x=500. Their
+  // interior floods share NO cells (the wall is a barrier), so containment ≈ 0.
+  // This is the recall-regression guard: distinct rooms must never merge.
+  const wall = squareSegs(100, 100, 500, 500);              // left room 100..500
+  const wall2 = squareSegs(500, 100, 900, 500);             // right room 500..900 (shares x=500 edge)
+  const mo = buildMask([...border, ...wall, ...wall2], IMG_W, IMG_H, MAXDIM);
+  const left = detectAt(mo, "101", [300, 300]);
+  const right = detectAt(mo, "102", [700, 300]);
+  for (const input of [[left, right], [right, left]]) {
+    const out = dedupeRegions(input);
+    assert.equal(out.length, 2, "abutting distinct rooms are both kept");
+    assert.deepEqual(new Set(out.map((r) => r.str)), new Set(["101", "102"]));
+  }
+});
+
+test("dedupeRegions: a concave (U-shaped) room seeded twice → ONE region", () => {
+  // A U/concave room: a wide room with a solid PENINSULA hanging down from the top
+  // middle, so the floodable area is a U — two arms joined across the bottom. Two
+  // seeds, one per arm, flood the SAME connected concave region. Mask popcount
+  // handles this natively; a Sutherland–Hodgman clip of the (non-convex) U-ring
+  // would give a WRONG intersection area here.
+  const uRoom = squareSegs(100, 100, 700, 500);             // outer room walls (600×400)
+  const peninsula = squareSegs(300, 100, 500, 320);         // solid block hanging from the top → makes it a U
+  const mo = buildMask([...border, ...uRoom, ...peninsula], IMG_W, IMG_H, MAXDIM);
+  const leftArm = detectAt(mo, "101", [180, 200]);          // seed in the left arm
+  const rightArm = detectAt(mo, "102", [620, 200]);         // seed in the right arm
+  // both seeds flood the whole U (arms joined below the peninsula) → same region
+  assert.ok(containmentSanity(leftArm, rightArm) > 0.9, "both arms flood the same connected U region");
+  for (const input of [[leftArm, rightArm], [rightArm, leftArm]]) {
+    const out = dedupeRegions(input);
+    assert.equal(out.length, 1, "the two overlapping U floods collapse to one");
+  }
 });

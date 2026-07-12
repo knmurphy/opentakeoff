@@ -32,7 +32,7 @@ import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } 
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
-import { roomLabelSeeds, detectRegions } from "../lib/detectRooms";
+import { roomLabelSeeds, detectRegions, dedupeRegions } from "../lib/detectRooms";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
@@ -2346,13 +2346,16 @@ export default function TakeoffCanvas() {
     if (toolRef.current !== "oneclick" || (proposalRef.current && proposalRef.current.key !== tp.key)) { setCommitMsg(""); return; }
     if (!seeds.length) { setCommitMsg("No room-number labels found on this sheet — click rooms with One-Click (O)."); return; }
     // Status gate: keep only clean `ok` floods (leak/tiny/boundary silently
-    // dropped). Fan each into the SAME proposal — proposeRegion's own pointInPoly
-    // check skips a seed landing inside an already-accepted region this run.
-    const regions = detectRegions(mo, seeds, fillSens);
+    // dropped). Then ring-merge dedup — the cheap per-seed pointInPoly skip below
+    // misses near-identical rings from two labels in one room and fragment floods,
+    // so dedupeRegions collapses substantially-overlapping floods (mask-popcount
+    // containment) to ONE larger-area representative per room BEFORE proposing.
+    const regions = dedupeRegions(detectRegions(mo, seeds, fillSens));
     let added = 0;
     for (const r of regions) {
-      // silent=true: proposeRegion's own pointInPoly check dedups a seed inside
-      // an already-accepted region this run; the batch owns the summary message.
+      // silent=true: proposeRegion's own pointInPoly check still supplements dedup —
+      // it skips a seed landing inside a region already accepted this run (e.g. a
+      // manually-clicked region in the same-panel proposal); the batch owns the message.
       if (proposeRegion(r.flood, tp, r.seed, false, false, "detect_rooms_v1", true) === "added") added++;
     }
     setCommitMsg(added

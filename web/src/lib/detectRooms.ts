@@ -117,3 +117,105 @@ export function detectRegions(
   }
   return out;
 }
+
+// ── ring-merge dedup ────────────────────────────────────────────────────────
+// The status gate keeps every CLEAN flood, but two seeds in one room (a room with
+// two labels), a fragment poly mostly inside a full room, and a concave room
+// seeded twice all emit DUPLICATE/overlapping floods. The cheap per-seed
+// pointInPoly skip in TakeoffCanvas misses these (near-identical rings from two
+// seeds, and fragment floods). dedupeRegions is the real geometric dedup: cluster
+// regions that overlap substantially and keep ONE representative per cluster.
+//
+// INTERSECTION METHOD — mask popcount, NOT polygon clipping. Every region in one
+// detectRooms call floods the SAME MaskObj, so every flood.region shares identical
+// mw/mh/ws. The intersection area of two regions is then exactly the number of
+// mask cells set in BOTH — popcount(region_i AND region_j). This is:
+//   • exact at mask resolution (no clipper rounding),
+//   • concave-native (a U-shaped room's two overlapping floods intersect correctly
+//     where Sutherland–Hodgman would be wrong, its clip poly being non-convex),
+//   • degenerate-safe (two abutting rooms sharing a WALL share zero interior cells,
+//     so their intersection is 0 — no shared-edge clipper pathology),
+//   • order-independent (AND is commutative; clustering is by geometry).
+// Failure mode of the approximation: sub-cell detail below one mask cell (~1/ws px)
+// is invisible. That is far finer than a room boundary, so it never affects the
+// dup-vs-distinct decision (see OVERLAP_THRESH). Regions from DIFFERENT masks must
+// never be compared this way — the guard below fails loud if a batch ever mixes
+// mask geometries.
+
+/** Two regions are the SAME room when their containment ratio
+ *  `intersection / min(areaA, areaB)` reaches this. Chosen at 0.5: a real dup
+ *  (a fragment mostly inside a full room, or two near-identical rings) normalizes
+ *  toward ~1.0 because min() is the smaller/contained region; two abutting DISTINCT
+ *  rooms share only a wall, so their interior masks intersect at ~0. The gap
+ *  between those is enormous, so the exact threshold is not sensitive — 0.5 sits
+ *  squarely in the empty middle and is robust to trace/flood jitter. */
+export const OVERLAP_THRESH = 0.5;
+
+/** Exact intersection area (mask cells set in BOTH) of two same-mask regions. */
+function intersectionCount(a: Uint8Array, b: Uint8Array): number {
+  const n = Math.min(a.length, b.length);
+  let c = 0;
+  for (let i = 0; i < n; i++) if (a[i] && b[i]) c++;
+  return c;
+}
+
+/** Containment overlap of two regions: intersection / min(area). A fragment mostly
+ *  inside a full room → ~1; two near-identical rings → ~1; abutting rooms → ~0. */
+function containmentOverlap(a: DetectedRegion, b: DetectedRegion): number {
+  const inter = intersectionCount(a.flood.region, b.flood.region);
+  const denom = Math.min(a.flood.count, b.flood.count);
+  return denom > 0 ? inter / denom : 0;
+}
+
+/** Collapse duplicate/fragment floods to one region per overlap cluster.
+ *
+ *  Two regions are clustered when `containmentOverlap >= OVERLAP_THRESH`. Clusters
+ *  are transitive (union-find), so a chain A–B, B–C groups A,B,C even if A,C don't
+ *  directly overlap enough. The KEPT representative of a cluster is the LARGER-area
+ *  region (a fragment flood is smaller than the full-room flood it sits inside);
+ *  ties break deterministically on `str` then `seed` so the result is IDENTICAL
+ *  regardless of input order.
+ *
+ *  Order-independence holds because: intersection (AND) is commutative, so the
+ *  overlap graph is order-free; union-find over that graph yields the same
+ *  partition for any input order; and the representative is chosen by a total
+ *  order on (count, str, seed), not by first-seen. The output preserves the input
+ *  order of the surviving representatives (stable filter). */
+export function dedupeRegions(regions: DetectedRegion[]): DetectedRegion[] {
+  const n = regions.length;
+  if (n <= 1) return regions.slice();
+  // Guard: mask-popcount intersection is only valid across regions that share the
+  // SAME mask geometry. A single detectRooms call always does; fail loud otherwise.
+  const { mw, mh } = regions[0].flood;
+  for (let i = 1; i < n; i++) {
+    if (regions[i].flood.mw !== mw || regions[i].flood.mh !== mh) {
+      throw new Error("dedupeRegions: regions must share one mask geometry (same mw/mh)");
+    }
+  }
+  // union-find over the overlap graph
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a: number, b: number): void => { const ra = find(a), rb = find(b); if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb); };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (containmentOverlap(regions[i], regions[j]) >= OVERLAP_THRESH) union(i, j);
+    }
+  }
+  // pick the best representative per cluster by a TOTAL order (order-independent):
+  // larger area first, then lexicographic str, then seed x, then seed y.
+  const better = (i: number, j: number): boolean => {
+    const a = regions[i], b = regions[j];
+    if (a.flood.count !== b.flood.count) return a.flood.count > b.flood.count;
+    if (a.str !== b.str) return a.str < b.str;
+    if (a.seed[0] !== b.seed[0]) return a.seed[0] < b.seed[0];
+    return a.seed[1] < b.seed[1];
+  };
+  const rep = new Map<number, number>();  // cluster root → chosen member index
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    const cur = rep.get(r);
+    if (cur === undefined || better(i, cur)) rep.set(r, i);
+  }
+  const keep = new Set(rep.values());
+  return regions.filter((_, i) => keep.has(i));   // stable: preserves input order of survivors
+}
