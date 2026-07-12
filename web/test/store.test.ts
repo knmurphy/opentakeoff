@@ -153,6 +153,30 @@ test("legacy snapshot record with no `project` field reads back as null (local) 
   assert.equal(await store.getSnapshot("snap_legacy", "A"), null);
 });
 
+test("putSnapshot: idempotent, id-preserving upsert of a verbatim record incl. scope", async () => {
+  // A record as it would arrive from elsewhere (e.g. a pulled remote file):
+  // full shape, its OWN id (not minted here), an explicit project scope.
+  const rec = { id: "snap_abc123", ts: 4242, label: "pulled", project: "A", payload: { shapes: [{ id: "s1" }] } };
+
+  await store.putSnapshot(rec);
+  // materialized verbatim, under the given scope, keyed by its own id
+  assert.deepEqual(await store.getSnapshot("snap_abc123", "A"), rec);
+  assert.deepEqual((await store.listSnapshots("A")).map((r: any) => r.id), ["snap_abc123"]);
+  // scope is honored: invisible to local and to another project
+  assert.equal(await store.getSnapshot("snap_abc123"), null);
+  assert.deepEqual(await store.listSnapshots("B"), []);
+
+  // idempotent: re-putting the SAME id doesn't duplicate (upsert, not append);
+  // new content overwrites in place — this is what makes a union merge safe.
+  await store.putSnapshot({ ...rec, label: "relabeled" });
+  assert.deepEqual((await store.listSnapshots("A")).map((r: any) => r.id), ["snap_abc123"]);
+  assert.equal((await store.getSnapshot("snap_abc123", "A"))!.label, "relabeled");
+
+  // guards a keyless put (SNAP_STORE keyPath is "id") with a clear error
+  await assert.rejects(store.putSnapshot({ ts: 1, payload: {} } as any), /record\.id/);
+  await assert.rejects(store.putSnapshot(null as any), /record\.id/);
+});
+
 test("v1->v2 upgrade preserves pdfs + annotations, and snapshots work after", async () => {
   // Seed a v1 database exactly the way the shipped v1 code laid it out.
   const v1 = await rawOpen(1, (db) => {
