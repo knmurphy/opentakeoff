@@ -12,7 +12,7 @@
 // Node CLI usage (needs the pdfjs-dist legacy build):
 //   node --import tsx src/lib/takeoffExtractDriver.ts <plan.pdf> [page]
 
-import { reconstructRings, parseLegend, buildGroundTruth, type Point, type GroundTruth, type PathOps } from "./takeoffExtract.ts";
+import { reconstructRings, parseLegend, parseQuantityColumn, parseScaleK, buildGroundTruth, type Point, type GroundTruth, type PathOps } from "./takeoffExtract.ts";
 import { roomLabelSeeds } from "./detectRooms.ts";
 
 /** Group every FILLED ring on a page by its fill color "r,g,b", in device px.
@@ -84,9 +84,17 @@ export async function extractPage(
   const vp = page.getViewport({ scale: 1 });
   const [opList, text] = await Promise.all([page.getOperatorList(), page.getTextContent()]);
   const rings = ringsByFillColor(opList, vp.transform, OPS);
-  const legend = parseLegend((text.items || []).map((it: any) => ({ str: it.str, transform: it.transform })));
+  const items = (text.items || []).map((it: any) => ({ str: it.str, transform: it.transform }));
+  // Same-baseline code↔qty pairing (the usual layout). When a split-column
+  // titleblock (PNB-SoDo Mithun) pairs 0 rows, fall back to the standalone
+  // quantity column so the marked plan isn't lost (issue #127 BUG 2).
+  let legend = parseLegend(items);
+  if (legend.length === 0) legend = parseQuantityColumn(items);
+  // The sheet's own plot-scale text constrains k to the physically-plausible
+  // value, killing low-k phantom rings (issue #127 BUG 1).
+  const scaleHint = parseScaleK(items);
   const seeds = roomLabelSeeds(text, vp.transform);
-  return buildGroundTruth(plan, rings, legend, seeds);
+  return buildGroundTruth(plan, rings, legend, seeds, scaleHint);
 }
 
 // ── CLI entry (best-effort; used to validate against the confidential corpus) ─
@@ -99,15 +107,34 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const data = new Uint8Array(fs.readFileSync(pdfPath));
   const doc = await pdfjs.getDocument({ data }).promise;
   const plan = pathMod.basename(pdfPath, ".pdf");
-  const pn = pageArg ? parseInt(pageArg, 10) : 1;
-  const page = await doc.getPage(pn);
-  const gt = await extractPage(plan, page, pdfjs.OPS);
+  // Corpus takeoffs live on pages 4–14, not just page 1: walk every page, run
+  // extraction per page, and aggregate the ground-truth rows (tagged by page)
+  // across the whole document (issue #127 BUG 3). An optional page arg pins a
+  // single page for debugging.
+  const single = pageArg ? parseInt(pageArg, 10) : 0;
+  const first = single || 1;
+  const last = single || doc.numPages;
+
+  const pages: any[] = [];
+  const allRows: any[] = [];
+  for (let pn = first; pn <= last; pn++) {
+    const page = await doc.getPage(pn);
+    const gt = await extractPage(plan, page, pdfjs.OPS);
+    for (const r of gt.rows) allRows.push({ page: pn, material: r.material, area_sf: +r.area_sf.toFixed(2), roomNumber: r.roomNumber });
+    pages.push({
+      page: pn, verdict: gt.report.verdict, k: +gt.report.k.toFixed(2),
+      materials: gt.report.materials.filter((m) => m.accept).map((m) => ({ material: m.material, color: m.color, extractedSF: +m.extractedSF.toFixed(2), legendSF: m.legendSF, residualPct: +m.residualPct.toFixed(3) })),
+      unmatchedColors: gt.report.unmatchedColors,
+      unmatchedLegend: gt.report.unmatchedLegend,
+      rowsCount: gt.rows.length,
+      roomsLabeled: gt.rows.filter((r) => r.roomNumber).length,
+    });
+  }
   console.log(JSON.stringify({
-    plan: gt.report.plan, page: pn, verdict: gt.report.verdict, k: gt.report.k, recall: gt.report.recall,
-    materials: gt.report.materials.filter((m) => m.accept).map((m) => ({ material: m.material, color: m.color, extractedSF: +m.extractedSF.toFixed(2), legendSF: m.legendSF, residualPct: +m.residualPct.toFixed(3) })),
-    unmatchedColors: gt.report.unmatchedColors,
-    unmatchedLegend: gt.report.unmatchedLegend,
-    rowsCount: gt.rows.length,
-    roomsLabeled: gt.rows.filter((r) => r.roomNumber).length,
+    plan, numPages: doc.numPages, recall: "partial",
+    markedPages: pages.filter((p) => p.verdict === "marked").map((p) => p.page),
+    totalRows: allRows.length,
+    pages,
+    rows: allRows,
   }, null, 2));
 }

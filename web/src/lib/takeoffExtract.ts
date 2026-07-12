@@ -99,6 +99,80 @@ export function parseLegend(items: TextItem[]): LegendRow[] {
   return rows;
 }
 
+// ── 2a. split-column legend (quantity column) ───────────────────────────────
+// Some titleblocks (Mithun's on PNB-SoDo) stack the material-code column and the
+// quantity column hundreds of px apart in Y, so parseLegend's same-baseline
+// pairing finds 0 rows and the marked plan is lost. The rescue: recover the
+// QUANTITY column on its own — a vertical run of "<number> SF|LF" items sharing
+// an x-band — and feed those SF *values* to reconcile with synthetic material
+// names (reconcile only needs the SF magnitudes; the code↔qty bijection is
+// satisfied by placeholders). The discriminator that keeps this from re-admitting
+// scattered architect callouts (Mercy): a genuine column is a TIGHT x-band with
+// MANY members (a real vertical list), not an incidental 2–3 way x-coincidence.
+const QCOL_X_TOL = 3;         // device px — a shared column x-band is tight
+const QCOL_MIN_RUN = 4;       // ≥4 items in the band ⇒ a real quantity column
+// leading-quantity form: the item IS a quantity cell ("892.92 SF"), not prose
+// that merely contains a number. Anchored so "2 SF NFA REQUIRED" style callouts
+// still count only as their leading value (they don't cluster into a column).
+const QTY_CELL = /^\s*([\d,]+(?:\.\d+)?)\s*(SF|LF|EA)\b/i;
+
+export function parseQuantityColumn(items: TextItem[]): LegendRow[] {
+  // collect every item that is a bare quantity cell, with its x origin
+  const cells: { x: number; qty: number; unit: LegendRow["unit"] }[] = [];
+  for (const it of items) {
+    const m = (it.str || "").match(QTY_CELL);
+    if (!m) continue;
+    const qty = parseFloat(m[1].replace(/,/g, ""));
+    if (!isFinite(qty) || qty <= 0) continue;
+    cells.push({ x: it.transform[4], qty, unit: m[2].toUpperCase() as LegendRow["unit"] });
+  }
+  // find the largest tight x-band (a vertical run at one column x)
+  let best: typeof cells = [];
+  for (const pivot of cells) {
+    const band = cells.filter((c) => Math.abs(c.x - pivot.x) <= QCOL_X_TOL);
+    if (band.length > best.length) best = band;
+  }
+  if (best.length < QCOL_MIN_RUN) return [];   // no real column ⇒ nothing recovered
+  // synthetic material names so reconcile's bijection has one row per value
+  return best.map((c, i) => ({ material: `QCOL-${i}`, qty: c.qty, unit: c.unit }));
+}
+
+// ── 2b. scale prior ─────────────────────────────────────────────────────────
+// A page's own titleblock states its plot scale ("Scale: 1/8\" = 1'-0\""). At
+// getViewport({ scale: 1 }) a paper inch is 72 device px, so a "1/n inch = 1
+// foot" plan maps 1 SF (real) to (72/n)² device-px². That closed form gives the
+// PHYSICALLY-PLAUSIBLE k the reconciler should reconcile at — without it,
+// consensusK blindly picks the largest ratio cluster and a dense sheet
+// reconciles at 8–40× the true scale, emitting phantom rings (issue #127).
+//
+// The scale string can arrive as one text item or split across items ("SCALE:"
+// then "1/8\" = 1'-0\""), and the dash spacing varies ("1'-0\"" / "1' - 0\"").
+// We only need the plot fraction 1/n"; the "= 1'-0\"" confirms it's a plot
+// scale (a length, not a random fraction) but n alone fixes k.
+const SCALE_FRAC = /1\s*\/\s*(\d{1,3})\s*["”]\s*=\s*1\s*['’]/;   // 1/8" = 1'…
+
+/** Expected k (device-px²/SF at scale:1) from the sheet's plot-scale text, or
+ *  undefined if no "1/n\" = 1'-0\"" plot scale is present. k = (72/n)². */
+export function parseScaleK(items: TextItem[]): number | undefined {
+  // try each item, then the whole joined text (handles the split "SCALE:" case)
+  const strs = items.map((it) => it.str || "");
+  const candidates = [...strs, strs.join(" ")];
+  for (const s of candidates) {
+    const m = s.match(SCALE_FRAC);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > 0) return (72 / n) * (72 / n);
+    }
+  }
+  return undefined;
+}
+
+// The standard architectural plot scales and their k at scale:1 — the snap set
+// when a sheet states no scale text. A cluster far from EVERY standard is
+// physically implausible (the low-k phantom) and must be rejected.
+const STANDARD_KS = [1 / 32, 1 / 16, 3 / 32, 1 / 8, 3 / 16, 1 / 4, 3 / 8, 1 / 2, 3 / 4, 1]
+  .map((inchPerFoot) => (72 * inchPerFoot) * (72 * inchPerFoot));   // 5.06 … 5184
+
 // ── 3. legend-checksum reconciliation (consensus-k RANSAC) ──────────────────
 // The scale k (device-px² per SF) varies by sheet, so recover it from the data.
 // Naively fitting a SEPARATE k per material trivially matches and proves
@@ -136,6 +210,7 @@ const K_MIN = 1;                // ignore degenerate/near-zero ratios
 export function reconcile(
   colorAreas: Record<string, number>,
   legend: LegendRow[],
+  scaleHint?: number,   // expected k from the sheet's plot-scale text (parseScaleK)
 ): Reconciliation {
   // area reconciliation only applies to AREA materials (SF). LF/EA rows can't
   // be checked against polygon area.
@@ -149,8 +224,13 @@ export function reconcile(
     for (const r of areaRows) { const k = a / r.qty; if (k >= K_MIN) cands.push(k); }
   }
 
-  // 2. consensus k = center of the largest tight cluster of candidate ratios
-  const k = consensusK(cands);
+  // 2. consensus k, constrained by the SCALE PRIOR (issue #127). Without it,
+  // consensusK picks the LARGEST ratio cluster, so a dense sheet reconciles at a
+  // physically-impossible low k (2.6, 20.2, 40.3 vs the true ~81) and emits
+  // phantom rings. The prior, in priority order: (a) the sheet's own scale text
+  // → prefer the cluster nearest that k; (b) no text → snap to the nearest
+  // standard architectural k and reject a cluster far from EVERY standard.
+  const k = consensusK(cands, scaleHint);
 
   // 3. assign each color to the legend row it best reproduces at k
   const claimed = new Set<string>();
@@ -198,20 +278,54 @@ export function reconcile(
   return { k, assignments, unmatchedColors, unmatchedLegend, verdict };
 }
 
-// The recurring cluster: for each candidate ratio, count how many others sit
-// within K_CLUSTER_TOL of it; the winner's members average to k. Ties/empties
-// fall back to the median (still a reasonable single estimate).
-function consensusK(cands: number[]): number {
-  if (cands.length === 0) return 0;
-  let bestCenter = cands[0], bestCount = -1;
+// how far a cluster center may sit from the scale-prior k and still be accepted
+// as "the same scale" (device-px area carries ring-reconstruction slop, so this
+// is looser than K_CLUSTER_TOL). 25% comfortably spans the ~1–3% real residuals
+// while excluding the 4×/8×/16× phantom clusters.
+const SCALE_MATCH_TOL = 0.25;
+
+// A ratio cluster: its averaged center and its member count.
+function clusters(cands: number[]): { center: number; count: number }[] {
+  const out: { center: number; count: number }[] = [];
   for (const pivot of cands) {
     const members = cands.filter((v) => Math.abs(v - pivot) / pivot <= K_CLUSTER_TOL);
-    if (members.length > bestCount) {
-      bestCount = members.length;
-      bestCenter = members.reduce((s, v) => s + v, 0) / members.length;
-    }
+    out.push({ center: members.reduce((s, v) => s + v, 0) / members.length, count: members.length });
   }
-  return bestCenter;
+  return out;
+}
+
+// Consensus k under the SCALE PRIOR (issue #127). The recurring cluster alone
+// (largest count) is NOT trustworthy — dense linework/hatch fills form a huge
+// spurious low-k cluster that outvotes the genuine one. So:
+//   (a) scaleHint present → return the cluster nearest the hint (within
+//       SCALE_MATCH_TOL). If none is near, return the hint itself: genuine fills
+//       still reconcile at it, phantoms do not, so the sheet fails "marked".
+//   (b) no hint → among clusters landing near a STANDARD architectural k, take
+//       the largest; snap it to that standard. If NO cluster is near any
+//       standard, the sheet only reconciles at an implausible k → return 0 so
+//       nothing reproduces the legend (phantom rejected).
+function consensusK(cands: number[], scaleHint?: number): number {
+  if (cands.length === 0) return scaleHint && scaleHint > 0 ? scaleHint : 0;
+  const cs = clusters(cands);
+
+  if (scaleHint && scaleHint > 0) {
+    let best: { center: number; count: number } | null = null;
+    for (const c of cs) {
+      if (Math.abs(c.center - scaleHint) / scaleHint > SCALE_MATCH_TOL) continue;
+      if (!best || c.count > best.count) best = c;   // most-supported cluster near the hint
+    }
+    return best ? best.center : scaleHint;           // fall back to the stated scale
+  }
+
+  // no scale text: keep only clusters near a standard architectural k, largest wins
+  const nearStd = (k: number) =>
+    STANDARD_KS.some((s) => Math.abs(k - s) / s <= SCALE_MATCH_TOL);
+  let best: { center: number; count: number } | null = null;
+  for (const c of cs) {
+    if (!nearStd(c.center)) continue;
+    if (!best || c.count > best.count) best = c;
+  }
+  return best ? best.center : 0;   // no plausible standard scale ⇒ reject
 }
 
 // ── 4. per-room association ─────────────────────────────────────────────────
@@ -270,6 +384,7 @@ export function buildGroundTruth(
   ringsByColor: Record<string, Point[][]>,
   legend: LegendRow[],
   seeds: RoomSeedLike[] = [],
+  scaleHint?: number,   // expected k from the sheet's plot-scale text (parseScaleK)
 ): GroundTruth {
   // Σ area per color drives reconciliation: ABS area PER RING, summed. This
   // reproduces the 83 King legend to the decimal (12 CPT-3 rings → 2674.32).
@@ -284,7 +399,7 @@ export function buildGroundTruth(
   for (const color of Object.keys(ringsByColor)) {
     colorAreas[color] = ringsByColor[color].reduce((s, ring) => s + ringArea(ring), 0);
   }
-  const rec = reconcile(colorAreas, legend);
+  const rec = reconcile(colorAreas, legend, scaleHint);
   const k = rec.k || 1;
 
   // Emit ground-truth rings ONLY for a "marked" sheet (≥2 over-determined

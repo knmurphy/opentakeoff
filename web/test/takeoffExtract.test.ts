@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import {
   reconstructRings,
   parseLegend,
+  parseScaleK,
+  parseQuantityColumn,
   reconcile,
   nearestRoomNumber,
   buildGroundTruth,
@@ -195,7 +197,10 @@ test("buildGroundTruth: assembles per-ring ground-truth records for accepted mat
     { material: "VCT-1", qty: 500,  unit: "SF" as const },
   ];
   const seeds = [{ str: "701", seed: [20, 20] as [number, number] }];  // inside cpt3a
-  const gt = buildGroundTruth("83 King", ringsByColor, legend, seeds);
+  // areas ARE SF here (k=1), a synthetic convenience — supply it as the scale
+  // hint so this test exercises ground-truth assembly, not the scale-prior gate
+  // (which now, by design, rejects a non-standard k that has no scale text).
+  const gt = buildGroundTruth("83 King", ringsByColor, legend, seeds, 1);
   // report
   assert.ok(Math.abs(gt.report.k - 1) < 0.01, "k≈1 for unit test");
   assert.equal(gt.report.verdict, "marked");
@@ -213,4 +218,114 @@ test("buildGroundTruth: assembles per-ring ground-truth records for accepted mat
   assert.ok(Array.isArray(gt.rows[0].poly) && gt.rows[0].poly.length >= 3, "poly carried in device px");
   // scope-partial: output is confirmed rooms, flagged as partial recall
   assert.equal(gt.report.recall, "partial");
+});
+
+// ── BUG 1: scale prior ──────────────────────────────────────────────────────
+// consensusK used to blindly pick the LARGEST cluster of area/SF ratios, so a
+// dense sheet reconciled at a low, physically-impossible k (2.59, 20.17, 40.26)
+// and emitted phantom rings. The fix: derive an expected k from the sheet's own
+// "Scale:" text and constrain the cluster choice to the physically plausible k.
+
+test("parseScaleK: reads '1/8\"=1'-0\"' → k≈81 device-px²/SF (k=(72/n)^2)", () => {
+  // the real corpus scale strings, incl. spacing variants seen on PNB and AKMS
+  assert.ok(Math.abs(parseScaleK([ti("Scale: 1/8\" = 1'-0\"", 0, 0)])! - 81) < 0.5);
+  assert.ok(Math.abs(parseScaleK([ti("1/8\" = 1' - 0\"", 0, 0)])! - 81) < 0.5, "spaces around the dash tolerated");
+  assert.ok(Math.abs(parseScaleK([ti("1/4\" = 1'-0\"", 0, 0)])! - 324) < 1, "1/4\" ⇒ 324");
+  assert.ok(Math.abs(parseScaleK([ti("1/16\" = 1'-0\"", 0, 0)])! - 20.25) < 0.2, "1/16\" ⇒ 20.25");
+  // AKMS splits it across two items — the fraction alone still resolves
+  assert.ok(Math.abs(parseScaleK([ti("SCALE:", 0, 0), ti("1/8\" = 1'-0\"", 0, 0)])! - 81) < 0.5);
+  // no scale text ⇒ undefined (fall back to the standard-snap prior)
+  assert.equal(parseScaleK([ti("LEVEL 2 FINISH PLAN", 0, 0)]), undefined);
+});
+
+test("reconcile with a scale hint: prefers the genuine k≈81 cluster over a LARGER spurious low-k cluster (AKMS p6 hazard)", () => {
+  // Synthesize AKMS-p6's failure mode: a dense sheet whose bogus 20.25 cluster
+  // (near-standard 1/16\") has MORE members than the genuine 81 cluster. Without
+  // the hint, consensusK picks 20.25 and marks phantoms; WITH the hint it must
+  // pick 81. Two SF rows so 81 can reconcile ≥2 materials.
+  const legend = [
+    { material: "CPTT-3", qty: 1000, unit: "SF" as const },
+    { material: "LIN-1", qty: 500, unit: "SF" as const },
+  ];
+  // real fills reconcile at 81: 1000·81 = 81000, 500·81 = 40500.
+  const colorAreas: Record<string, number> = {
+    "89,221,208": 81000,   // → CPTT-3 at k=81
+    "206,224,174": 40500,  // → LIN-1  at k=81
+    // a crowd of tiny hatch specks whose pairwise ratios cluster tightly at ~20.25
+    "1,1,1": 20250, "2,2,2": 20250, "3,3,3": 10125, "4,4,4": 10125, "5,5,5": 5062,
+  };
+  // WITHOUT hint: the largest tight cluster wins → NOT 81 (regression witness)
+  const noHint = reconcile(colorAreas, legend);
+  assert.ok(Math.abs(noHint.k - 81) > 5, `sanity: without a hint consensus drifts off 81 (got ${noHint.k})`);
+  // WITH hint: pick the cluster nearest the text-derived k → 81, both mats reconcile
+  const hinted = reconcile(colorAreas, legend, 81);
+  assert.ok(Math.abs(hinted.k - 81) < 1, `hinted k≈81, got ${hinted.k}`);
+  assert.equal(hinted.verdict, "marked");
+  assert.equal(hinted.assignments.filter((a) => a.accept).length, 2);
+});
+
+test("reconcile: a wrong-k sheet with NO scale text is rejected (not 'marked') when its only cluster is physically implausible", () => {
+  // No scale hint. Fills reconcile ONLY at a non-standard low k (~2.6) against a
+  // legend — the phantom-ring case (REBID p3). With no plausible standard k and
+  // rings that are specks at any standard k, the sheet must NOT be "marked".
+  const legend = [
+    { material: "CPT-1", qty: 1000, unit: "SF" as const },
+    { material: "CONC-2", qty: 50, unit: "SF" as const },
+  ];
+  // areas that ONLY cluster at k≈2.6 (2600, 130); at k=81 they'd be 32 SF / 1.6 SF
+  const colorAreas = { "0,0,0": 2600, "245,245,245": 130 };
+  const r = reconcile(colorAreas, legend);
+  assert.notEqual(r.verdict, "marked", "a sheet that only reconciles at implausible low k is not a marked takeoff");
+});
+
+// ── BUG 2: split-column legend (PNB-SoDo) ───────────────────────────────────
+// PNB-SoDo's Mithun titleblock stacks the code column and the quantity column
+// hundreds of px apart in y, so parseLegend pairs 0 rows and the plan is lost.
+// parseQuantityColumn recovers the SF values from the vertical quantity column
+// independently so reconcile can still mark the sheet.
+
+test("parseQuantityColumn: recovers a vertical run of SF quantities sharing an x-band (PNB-SoDo)", () => {
+  // PNB-SoDo's real quantity column: 4 SF + 1 LF at x≈980, evenly stepped in y.
+  const items = [
+    ti("892.92 SF", 980, 261),
+    ti("967.11 SF", 980, 386),
+    ti("95.06 SF", 980, 510),
+    ti("21.52 SF", 980, 635),
+    ti("351.73 LF", 980, 760),
+  ];
+  const col = parseQuantityColumn(items);
+  const sf = col.filter((r) => r.unit === "SF").map((r) => r.qty).sort((a, b) => a - b);
+  assert.deepEqual(sf, [21.52, 95.06, 892.92, 967.11], "the four SF values recovered");
+  // synthetic placeholder material names, one per row (bijection for reconcile)
+  assert.equal(new Set(col.map((r) => r.material)).size, col.length, "each row a distinct synthetic name");
+});
+
+test("parseQuantityColumn: scattered SF callouts (Mercy) do NOT form a column ⇒ no rows (no false-positive)", () => {
+  // Mercy's SF texts are architect room callouts scattered across x — the widest
+  // tight x-band holds only 3 items, below the vertical-run threshold.
+  const items = [
+    ti("67 SF", 924, 399), ti("228 SF", 932, 318), ti("164 SF", 943, 480),
+    ti("48 SF", 1061, 253), ti("147 SF", 1124, 297), ti("666 SF", 1152, 404),
+    ti("198 SF", 1211, 488), ti("163 SF", 1432, 484), ti("242 SF", 1452, 417),
+    // a 3-item incidental x-alignment (the worst case) must still be rejected
+    ti("203 SF", 571, 2281), ti("164 SF", 571, 2179), ti("134 SF", 571, 2080),
+  ];
+  assert.equal(parseQuantityColumn(items).length, 0, "scattered callouts are not a quantity column");
+});
+
+test("split-column PNB-SoDo reconciles via the quantity column: fills reproduce the SF values at k=81 ⇒ 'marked'", () => {
+  // The proven PNB numbers: 238,62,62 → 892.92 and 189,149,212 → 21.52 at k=81.
+  const colItems = [
+    ti("892.92 SF", 980, 261), ti("967.11 SF", 980, 386),
+    ti("95.06 SF", 980, 510), ti("21.52 SF", 980, 635), ti("351.73 LF", 980, 760),
+  ];
+  const legend = parseQuantityColumn(colItems);  // synthetic SF rows
+  const colorAreas = {
+    "238,62,62": 892.92 * 81,     // → 892.92 SF at k=81
+    "189,149,212": 21.52 * 81,    // → 21.52 SF
+    "0,0,0": 40000,               // native linework — reconciles to nothing
+  };
+  const r = reconcile(colorAreas, legend, 81);
+  assert.equal(r.verdict, "marked");
+  assert.ok(r.assignments.filter((a) => a.accept).length >= 2, "≥2 fills reproduce distinct SF values");
 });
