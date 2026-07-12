@@ -157,6 +157,30 @@ test("delete removes local AND the Drive file, and a later list does not resurre
   assert.deepEqual(list, [], "no resurrection");
 });
 
+test("delete immediately after save (push still in flight) does not resurrect", async () => {
+  const { base, provider, sync } = mk();
+  const meta = await sync.saveSnapshot("racy", { shapes: [1] });
+  // delete WITHOUT whenIdle — the background push may not have created the
+  // remote file yet; deleteSnapshot must wait it out then remove the file
+  await sync.deleteSnapshot(meta.id);
+  await sync.whenIdle(); // nothing should still be pending
+  assert.equal(await base.getSnapshot(meta.id, F), null);
+  assert.equal(remoteSnapshotFiles(provider).length, 0, "no remote file survives a racy delete");
+  assert.deepEqual(await sync.listSnapshots(), [], "no resurrection");
+});
+
+test("pullMissing skips a remote record whose project scope doesn't match this folder", async () => {
+  const { base, provider, sync } = mk();
+  const sidecar = await provider.createFolder(F, ".opentakeoff");
+  const snaps = await provider.createFolder(sidecar.id, "snapshots");
+  // a record with no project — verbatim materialization would leak it into the
+  // anonymous/null local scope; it must be skipped
+  await provider.putJson({ folderId: snaps.id, name: "snap_foreign.json", data: { id: "snap_foreign", ts: 1, label: "x", payload: {} } });
+
+  assert.deepEqual(await sync.listSnapshots(), []);
+  assert.equal(await base.getSnapshot("snap_foreign"), null, "did not leak into the anonymous scope");
+});
+
 test("offline: a failed pull returns the local list instead of throwing/hanging", async () => {
   const { sync, provider, base } = mk();
   await base.saveSnapshot("local-only", { shapes: [1] }, F);

@@ -58,15 +58,14 @@ function withTimeout(p, ms) {
  * @param {number} [opts.timeoutMs] cap on the awaited pull in listSnapshots
  */
 export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, timeoutMs = 2500 }) {
-  // Best-effort background work (pushes) is tracked so tests — and only tests —
-  // can await quiescence via the non-enumerable whenIdle(); production never
-  // awaits it (that's the point of fire-and-forget).
-  const pending = new Set();
-  function track(p) {
-    const q = p.finally(() => pending.delete(q));
-    pending.add(q);
-    return q;
-  }
+  // In-flight background pushes, keyed by snapshot id. Two consumers:
+  //   • deleteSnapshot awaits the push for its id BEFORE deleting the remote
+  //     file — otherwise a delete that races an unfinished push would find no
+  //     file to delete, and the late push would create it and let a later pull
+  //     resurrect the "deleted" snapshot.
+  //   • whenIdle (test-only) awaits all of them; production never does (that's
+  //     the point of fire-and-forget).
+  const inflightPush = new Map();
 
   // Resolve the shared `.opentakeoff` folder id. Injected resolver wins; else a
   // local memoized locate-else-create mirroring cloudStore.ensureSidecarId
@@ -120,6 +119,11 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
         continue; // a corrupt/unreadable remote file must not wedge the whole list
       }
       if (!record || record.id !== id) continue; // defensive: name/id must agree
+      // Keep this project's scope: only materialize records that belong to this
+      // folder. A record with no `project` (or a foreign one) is malformed for
+      // this Drive folder — materializing it verbatim would leak it into the
+      // anonymous/null local scope (store.js treats missing project as null).
+      if ((record.project ?? null) !== folderId) continue;
       try {
         await base.putSnapshot(record);
       } catch {
@@ -135,7 +139,7 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
     // so snapSync must win the spread AND respect the arg).
     async saveSnapshot(label, payload, project = folderId) {
       const meta = await base.saveSnapshot(label, payload, project);
-      track((async () => {
+      const push = (async () => {
         const record = await base.getSnapshot(meta.id, project);
         if (!record) return;
         const snapsFolder = await ensureSnapshotsFolderId();
@@ -143,7 +147,10 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
       })().catch(() => {
         // Swallow: local is canonical. A failed push means "not backed up yet",
         // surfaced by the Slice 6 status line — never asserted as backed up here.
-      }));
+      }).finally(() => {
+        if (inflightPush.get(meta.id) === push) inflightPush.delete(meta.id);
+      });
+      inflightPush.set(meta.id, push);
       return meta;
     },
 
@@ -174,6 +181,11 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
     // so the window is: delete-offline → later come online → list.
     async deleteSnapshot(id) {
       await base.deleteSnapshot(id);
+      // Wait out any in-flight push for this id first, so the remote file (if it
+      // is going to exist) exists BEFORE we try to delete it — otherwise a late
+      // push would recreate it and a later pull would resurrect the snapshot.
+      const push = inflightPush.get(id);
+      if (push) { try { await push; } catch { /* push already swallows */ } }
       try {
         await withTimeout((async () => {
           const snapsFolder = await ensureSnapshotsFolderId();
@@ -191,7 +203,7 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
   // addSheets et al. when spread into the composite store).
   Object.defineProperty(api, "whenIdle", {
     enumerable: false,
-    value: async () => { while (pending.size) await Promise.all([...pending]); },
+    value: async () => { while (inflightPush.size) await Promise.all([...inflightPush.values()]); },
   });
 
   return api;
