@@ -16,7 +16,7 @@ export function normalizeHex(raw) {
 }
 
 /**
- * @typedef {{ ink?: string, accent?: string, paper?: string, positive?: string, warning?: string, danger?: string }} ThemeColor
+ * @typedef {{ ink?: string, accent?: string, paper?: string, paper2?: string, paper3?: string, positive?: string, warning?: string, danger?: string }} ThemeColor
  * @typedef {{ display?: string, body?: string, mono?: string }} ThemeFont
  * @typedef {{ name?: string, color: ThemeColor, font: ThemeFont }} Theme
  */
@@ -45,7 +45,10 @@ export function parseThemeFile(json) {
     else warnings.push(`color.${role}: "${raw}" is not a hex color — skipped`);
   };
   setColor("ink", neutral.ink?.value);
+  // the neutral paper scale: base / raised / pressed — maps to bright/cream/shadow
   setColor("paper", neutral.paper?.value);
+  setColor("paper2", neutral["paper-2"]?.value);
+  setColor("paper3", neutral["paper-3"]?.value);
 
   // accents live in one or more `accent-*` groups (brand-specific naming like
   // accent-345 / accent-fin). We don't hard-code brands — classify each token by
@@ -81,10 +84,10 @@ export function parseThemeFile(json) {
 // Internal role → the app's real tokens.css custom property. This is the ONE
 // place that knows the app's variable names, so the model stays app-agnostic and
 // reusable (the future estimating module maps through the same table).
+// simple 1:1 roles; the paper scale is handled separately (1 role → 2-3 vars).
 const COLOR_VARS = {
   ink: "--ink",
   accent: "--cobalt",
-  paper: "--paper-bright",
   positive: "--c-positive",
   warning: "--c-warning",
   danger: "--c-danger",
@@ -100,6 +103,12 @@ export function themeToCssVars(theme) {
   for (const [role, varName] of Object.entries(COLOR_VARS)) {
     if (color[role]) out[varName] = color[role];
   }
+  // paper scale → base/raised/pressed. A lone `paper` also seeds --paper-cream
+  // (the report backdrop + totals band + group heads all read --paper-cream), so
+  // those surfaces recolor with the tables instead of stranding on the default.
+  if (color.paper) { out["--paper-bright"] = color.paper; out["--paper-cream"] = color.paper; }
+  if (color.paper2) out["--paper-cream"] = color.paper2;
+  if (color.paper3) out["--paper-shadow"] = color.paper3;
   const font = theme?.font || {};
   for (const [role, varName] of Object.entries(FONT_VARS)) {
     if (font[role]) out[varName] = font[role];
@@ -124,8 +133,11 @@ export function activeTheme() {
     if (!raw) return empty;
     const { theme, warnings } = parseThemeFile(JSON.parse(raw));
     const vars = themeToCssVars(theme);
-    for (const k of ["--f-display", "--f-body", "--f-mono"]) {
-      if (vars[k]) vars[k] = `"${vars[k]}", system-ui, sans-serif`;
+    // append a fallback stack in case the imported family isn't loaded in-app;
+    // mono keeps a MONOSPACE fallback so numeric columns stay aligned
+    const FALLBACK = { "--f-display": "system-ui, sans-serif", "--f-body": "system-ui, sans-serif", "--f-mono": "ui-monospace, monospace" };
+    for (const [k, fb] of Object.entries(FALLBACK)) {
+      if (vars[k]) vars[k] = `"${vars[k]}", ${fb}`;
     }
     return { vars, name: theme.name || null, warnings };
   } catch {

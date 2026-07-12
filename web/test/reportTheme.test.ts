@@ -54,6 +54,18 @@ test("themeToCssVars maps roles onto the app's real custom-property names", () =
   assert.equal(vars["--f-display"], "Inter Tight");
 });
 
+test("maps the neutral paper scale onto bright/cream/shadow; a lone paper also seeds cream", () => {
+  const vars = themeToCssVars(parseThemeFile(claude).theme);
+  assert.equal(vars["--paper-bright"], "#FBFBF8");  // neutral.paper
+  assert.equal(vars["--paper-cream"], "#EBE5D6");   // neutral.paper-2 (report backdrop + totals band)
+  assert.equal(vars["--paper-shadow"], "#DCD5C5");  // neutral.paper-3
+  // a theme carrying only `paper` seeds --paper-cream too, so the backdrop and
+  // fills don't fall back to the unthemed default while the tables recolor
+  const only = themeToCssVars(parseThemeFile({ color: { neutral: { paper: { value: "#F0F0F0" } } } }).theme);
+  assert.equal(only["--paper-bright"], "#F0F0F0");
+  assert.equal(only["--paper-cream"], "#F0F0F0");
+});
+
 test("themeToCssVars omits vars for absent roles (partial theme keeps defaults)", () => {
   const vars = themeToCssVars({ color: { ink: "#111111" }, font: {} });
   assert.equal(vars["--ink"], "#111111");
@@ -99,6 +111,9 @@ test("activeThemeVars reads the stored file, adapts it, and gives fonts a fallba
     assert.equal(vars["--ink"], "#2E333B");
     assert.equal(vars["--cobalt"], "#125792");
     assert.equal(vars["--f-display"], '"Inter Tight", system-ui, sans-serif');
+    // mono keeps a monospace fallback so figures stay column-aligned if the
+    // imported family isn't available
+    assert.equal(vars["--f-mono"], '"Inter Tight", ui-monospace, monospace');
   } finally {
     delete (globalThis as any).localStorage;
   }
