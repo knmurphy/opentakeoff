@@ -172,9 +172,14 @@ test("putSnapshot: idempotent, id-preserving upsert of a verbatim record incl. s
   assert.deepEqual((await store.listSnapshots("A")).map((r: any) => r.id), ["snap_abc123"]);
   assert.equal((await store.getSnapshot("snap_abc123", "A"))!.label, "relabeled");
 
-  // guards a keyless put (SNAP_STORE keyPath is "id") with a clear error
+  // guards the fields that make a record "complete": id (SNAP_STORE keyPath),
+  // a finite ts (list UI renders new Date(ts)), and a payload (diff/load reads it)
   await assert.rejects(store.putSnapshot({ ts: 1, payload: {} } as any), /record\.id/);
+  await assert.rejects(store.putSnapshot({ id: "   ", ts: 1, payload: {} } as any), /record\.id/);
   await assert.rejects(store.putSnapshot(null as any), /record\.id/);
+  await assert.rejects(store.putSnapshot({ id: "snap_x", payload: {} } as any), /record\.ts/);
+  await assert.rejects(store.putSnapshot({ id: "snap_x", ts: NaN, payload: {} } as any), /record\.ts/);
+  await assert.rejects(store.putSnapshot({ id: "snap_x", ts: 1 } as any), /record\.payload/);
 });
 
 test("v1->v2 upgrade preserves pdfs + annotations, and snapshots work after", async () => {
