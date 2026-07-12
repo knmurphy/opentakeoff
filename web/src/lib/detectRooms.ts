@@ -19,8 +19,48 @@ import { floodRegion, SENS_BALANCED } from "./oneclick";
 import type { MaskObj, FloodResult } from "./oneclick";
 
 /** A room-number label pattern: 2–3 digits with an optional trailing letter
- *  (134, 139A, 170). Same shape estimators read off a finish plan. */
+ *  (134, 139A, 170). Same shape estimators read off a finish plan.
+ *
+ *  Deliberately capped at 3 digits: a BARE 4-digit token on a plan is almost never
+ *  a room number — it is a CSI spec section (073113), a dimension (9000), or a year
+ *  (2024). Floor-prefixed 4-digit room numbers DO exist (AKMS: "1024", "1202A"),
+ *  but they arrive inside a "<name> - <number>" label, where the dash structure
+ *  makes them unambiguous; ROOM_DASH_LABEL_RE recovers those without widening this
+ *  bare-token rule (which would sweep the noise back in — measured on real plans). */
 export const ROOM_LABEL_RE = /^\d{2,3}[A-Z]?$/;
+
+/** The AKMS / large-plan convention: a room-name label whose number is the trailing
+ *  token after a hyphen separator — "CLASSROOM - 1024", "RESTROOM - 1202A",
+ *  "STAIR 6 - S106", "VESTIBULE - V1013". Structure, not digit count, is what makes
+ *  the number safe to trust here:
+ *    group 1  the name (starts with a letter; may contain digits, spaces, /&.),
+ *    " - "    a spaced hyphen separator (distinguishes a room label from "A-101"),
+ *    group 2  the room id: an optional leading letter, 3–4 digits, an optional
+ *             trailing unit letter (1024, 1202A, S106, V1013). 3-digit ids match
+ *             here too so a "NAME - 101" plan behaves consistently; 5+ digits (a
+ *             spec section) and bare numbers are rejected. */
+export const ROOM_DASH_LABEL_RE = /^[A-Za-z][A-Za-z0-9 /&.]*?\s-\s([A-Za-z]?\d{3,4}[A-Za-z]?)$/;
+
+/** Recover the room number from a single text-layer label item, or null if the
+ *  item is not a room label. Two tiers, tried in order:
+ *    1. Tokenize on whitespace and keep the first bare room-number token
+ *       (ROOM_LABEL_RE) — the demo/finish-plan convention ("134", "OFFICE 101").
+ *    2. Fall back to the name-dash-number structure (ROOM_DASH_LABEL_RE) for
+ *       floor-prefixed 4-digit rooms that tier 1 can't reach ("CLASSROOM - 1024").
+ *  Pure and DOM/pdfjs-free so it unit-tests straight under node. This is the
+ *  "recover correct text" step of the room-detection fix (issue #123): the AKMS
+ *  labels are already clean ASCII in the text layer, so no glyph/ToUnicode
+ *  reconstruction is needed — the miss was purely a label-FORMAT gap. The tier-2
+ *  fall-through is a strict no-op on any plan whose labels already satisfy tier 1
+ *  (measured: +0 seeds on the working plans, +307 on AKMS). */
+export function roomNumberFromLabel(str: string | undefined): string | null {
+  const s = (str || "").trim();
+  if (!s) return null;
+  const bare = s.split(/\s+/).find((tok) => ROOM_LABEL_RE.test(tok));
+  if (bare) return bare;
+  const m = ROOM_DASH_LABEL_RE.exec(s);
+  return m ? m[1] : null;
+}
 
 /** The subset of a pdf.js text item we use: the string and its own text-matrix
  *  (a 6-element [a,b,c,d,e,f]). */
@@ -61,11 +101,12 @@ function composeTransform(m1: number[], m2: number[]): number[] {
  *  (PDF space → device px), the SAME transform detectScale/extractRegionText
  *  pass to pdfjsLib.Util.transform.
  *
- *  A label item's string may be JUST the number ("134") or a name+number
- *  ("OFFICE 101", "CORRIDOR 104") — pdf.js combines a single show-text op into
- *  one item, and the "number+name" convention is common on finish plans (see
- *  issue #81). So we tokenize on whitespace and keep the item if ANY token
- *  matches the room-number pattern.
+ *  A label item's string may be JUST the number ("134"), a name+number
+ *  ("OFFICE 101", "CORRIDOR 104"), or a name-DASH-number ("CLASSROOM - 1024",
+ *  "STAIR 6 - S106") — pdf.js combines a single show-text op into one item, and
+ *  both conventions are common on plans (see issue #81, and the AKMS large-plan
+ *  set). roomNumberFromLabel handles all three: tokenize for the bare/space forms,
+ *  fall back to the dash structure for floor-prefixed 4-digit rooms.
  *
  *  The seed is the label's text-matrix ORIGIN ([e, f], the item's baseline
  *  bottom-left) — design point 2's "text-item position", faithful and cheap. For
@@ -79,7 +120,7 @@ export function roomLabelSeeds(
   const out: RoomLabelSeed[] = [];
   for (const it of textContent.items || []) {
     if (!it.transform) continue;
-    const num = (it.str || "").trim().split(/\s+/).find((tok) => ROOM_LABEL_RE.test(tok));
+    const num = roomNumberFromLabel(it.str);
     if (!num) continue;
     const t = composeTransform(viewportTransform, it.transform);
     out.push({ str: num, seed: [t[4], t[5]] });

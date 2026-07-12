@@ -3,7 +3,7 @@
 // and pdfjs-free, so they run straight under node. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roomLabelSeeds, detectRegions, dedupeRegions, ROOM_LABEL_RE, OVERLAP_THRESH, type DetectedRegion } from "../src/lib/detectRooms.ts";
+import { roomLabelSeeds, roomNumberFromLabel, detectRegions, dedupeRegions, ROOM_LABEL_RE, OVERLAP_THRESH, type DetectedRegion } from "../src/lib/detectRooms.ts";
 import { buildMask, floodRegion, SENS_BALANCED, type MaskObj } from "../src/lib/oneclick.ts";
 
 // a closed square room, as flat boundary segments in image px
@@ -19,6 +19,43 @@ test("ROOM_LABEL_RE: matches 2–3 digit room numbers with an optional letter", 
   for (const no of ["1", "1234", "A134", "13.4", "13-4", "CE-5", "557SF", "", "12AB", "1a"]) {
     assert.ok(!ROOM_LABEL_RE.test(no), `${no} should NOT be a room label`);
   }
+});
+
+// ── name-dash-number labels (AKMS convention: floor-prefixed 4-digit rooms) ──
+// A large / multi-story plan numbers rooms with a floor prefix: "CLASSROOM - 1024",
+// "RESTROOM - 1202A", "STAIR 6 - S106". pdf.js emits the whole label as ONE item
+// (no font-encoding problem — the text is clean ASCII), but the number is FOUR
+// digits, so the bare-token pattern (`\d{2,3}`) never matches and the item yields
+// no seed. roomNumberFromLabel recovers the number when the item is structured as
+// "<name> - <number>", WITHOUT widening the bare-token rule (which would sweep in
+// spec-section codes, dimensions and years — all 4-digit but NOT dash-labelled).
+test("roomNumberFromLabel: bare and name+space labels behave exactly like the token rule", () => {
+  assert.equal(roomNumberFromLabel("134"), "134", "bare 3-digit → itself");
+  assert.equal(roomNumberFromLabel(" 139A "), "139A", "trimmed, letter suffix");
+  assert.equal(roomNumberFromLabel("OFFICE 101"), "101", "name + space + number");
+  assert.equal(roomNumberFromLabel("MECH 12"), "12", "2-digit after a name");
+  assert.equal(roomNumberFromLabel("CORRIDOR"), null, "a word, no number");
+  assert.equal(roomNumberFromLabel("SEE NOTE 5"), null, "single digit is not a room number");
+  assert.equal(roomNumberFromLabel("A-101"), null, "sheet number token, no plain room-number token");
+});
+
+test("roomNumberFromLabel: name-dash-4-digit labels (AKMS) recover the room number", () => {
+  assert.equal(roomNumberFromLabel("CLASSROOM - 1024"), "1024");
+  assert.equal(roomNumberFromLabel("RESTROOM - 1202A"), "1202A", "trailing unit letter kept");
+  assert.equal(roomNumberFromLabel("STAGE MAKEUP ROOM - 1105"), "1105", "multi-word name");
+  assert.equal(roomNumberFromLabel("STAIR 6 - S106"), "S106", "letter-prefixed room id");
+  assert.equal(roomNumberFromLabel("VESTIBULE - V1013"), "V1013");
+  assert.equal(roomNumberFromLabel("OT / PT - 1009"), "1009", "slash/spacing in the name");
+});
+
+test("roomNumberFromLabel: 4-digit NON-room tokens stay rejected (no bare-token widening)", () => {
+  // These are exactly why the bare pattern caps at 3 digits: without a "<name> - "
+  // structure a 4-digit token is a spec section, dimension or year, not a room.
+  assert.equal(roomNumberFromLabel("1024"), null, "bare 4-digit → NOT a seed");
+  assert.equal(roomNumberFromLabel("2024"), null, "a year");
+  assert.equal(roomNumberFromLabel("SEE 073113"), null, "6-digit spec section after a name");
+  assert.equal(roomNumberFromLabel("NOTE - 12345"), null, "5 digits is too long for a room number");
+  assert.equal(roomNumberFromLabel("557SF"), null, "an area callout");
 });
 
 test("roomLabelSeeds: keeps room-number labels, drops the rest, seeds at the text-matrix origin", () => {
@@ -52,6 +89,23 @@ test("roomLabelSeeds: name+number labels (the demo plan's convention) are KEPT, 
   const seeds = roomLabelSeeds({ items }, identity);
   assert.deepEqual(seeds.map((s) => s.str), ["101", "104", "12"], "the room number is extracted from the combined label");
   assert.deepEqual(seeds[0].seed, [300, 250], "seed is the item's text-matrix origin, not a per-glyph offset");
+});
+
+test("roomLabelSeeds: AKMS name-dash-number labels seed at the item origin, noise stays out", () => {
+  // The real AKMS regression: floor-prefixed 4-digit labels arrive as one item.
+  // Each must produce a seed at its text-matrix origin; 4-digit non-room text
+  // (a bare dimension, a bare year) must NOT.
+  const identity = [1, 0, 0, 1, 0, 0];
+  const items = [
+    { str: "CLASSROOM - 1024", transform: [1, 0, 0, 1, 564, 943] },
+    { str: "RESTROOM - 1202A", transform: [1, 0, 0, 1, 2563, 1312] },
+    { str: "STAIR 6 - S106", transform: [1, 0, 0, 1, 1096, 1754] },
+    { str: "8973", transform: [1, 0, 0, 1, 10, 10] },          // bare dimension → dropped
+    { str: "2024", transform: [1, 0, 0, 1, 20, 20] },          // bare year → dropped
+  ];
+  const seeds = roomLabelSeeds({ items }, identity);
+  assert.deepEqual(seeds.map((s) => s.str), ["1024", "1202A", "S106"]);
+  assert.deepEqual(seeds[0].seed, [564, 943], "seed is the item's text-matrix origin");
 });
 
 test("roomLabelSeeds: composes the viewport transform (PDF space → device px)", () => {
