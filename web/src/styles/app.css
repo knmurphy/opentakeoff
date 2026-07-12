@@ -212,6 +212,13 @@ input, textarea { font-family: var(--f-body); }
     display: block !important;
     background: #fff !important;   /* the app's dark view must never print dark */
     color: #111;
+    /* render element fills in the PDF regardless of the browser's "Background
+       graphics" toggle (off by default): the condition color swatches, the
+       totals band, and the grouped section-head fills all rely on background
+       color to read. Scoped to the panel so only the document — not app chrome —
+       forces exact colors. */
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
   }
   body.report-open .report-scroll {
     overflow: visible !important;
