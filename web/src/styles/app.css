@@ -181,7 +181,7 @@ input, textarea { font-family: var(--f-body); }
 .report-flow > thead { display: none; }
 .report-flow > tbody > tr > td { padding: 0; }
 
-@page { margin: 14mm 12mm 16mm; }
+@page { margin: 12mm 9mm 14mm; }
 
 @media print {
   /* Only the report subtree prints; the canvas chrome behind it does not.
@@ -222,6 +222,13 @@ input, textarea { font-family: var(--f-body); }
        forces exact colors. */
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+    /* lift the lighter text for print contrast — the on-screen greys read too
+       faint on paper. Print-scoped, so the app UI is untouched. --ink-faint also
+       carries hairline rules, so it darkens modestly (crisper rows), while the
+       muted/faint TEXT tones go clearly darker. */
+    --ink-muted: #45423a;
+    --text-faint: #45423a;
+    --ink-faint: #7c7a68;
   }
   body.report-open .report-scroll {
     overflow: visible !important;
@@ -243,9 +250,9 @@ input, textarea { font-family: var(--f-body); }
   .report-flow > thead { display: table-header-group; }
   .report-flow > thead td {
     font-family: var(--f-mono);
-    font-size: 9px;
-    color: #333;
-    border-bottom: 1px solid #999;
+    font-size: 10.5px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--ink-faint);
     padding: 0 0 4px;
   }
 
