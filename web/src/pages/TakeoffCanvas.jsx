@@ -2755,8 +2755,16 @@ export default function TakeoffCanvas() {
             </div>
           )}
 
-          {/* zoom buttons */}
-          <div style={{ position: "absolute", left: 14, bottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* zoom buttons. Left presses stop here: the container's onPointerDown
+              treats any left press as a deferred canvas click (pendingClickRef +
+              pointer capture), so a press on these buttons ALSO fired the armed
+              tool at the button's coordinates — with One-Click armed, a zoom
+              click could select a giant region through the button. Right/middle/
+              Space presses still bubble so a pan can start on top of the stack;
+              dblclick stops too so rapid zoom clicks can't finishShape(). */}
+          <div onPointerDown={(e) => { if (e.button === 0 && !spaceRef.current) e.stopPropagation(); }}
+            onDoubleClick={(e) => e.stopPropagation()}
+            style={{ position: "absolute", left: 14, bottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
             {[["+", 1.25], ["−", 0.8]].map(([lbl, f]) => (
               <button key={lbl} onClick={() => { const r = containerRef.current.getBoundingClientRect(); zoomAround(r.width / 2, r.height / 2, f); }}
                 style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 18, fontWeight: 700 }}>{lbl}</button>
