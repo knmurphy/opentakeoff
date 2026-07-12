@@ -16,6 +16,17 @@ const PDF_EXT = /\.pdf$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp)$/i;
 const ZIP_EXT = /\.zip$/i;
 
+// Zip-bomb bounds. Real plan sets are dozens of sheets, maybe a couple hundred
+// on a hospital job — the caps sit far above anything legitimate while keeping
+// a hostile archive from exhausting the tab: an entry count cap, a nesting
+// depth cap (zip-in-zip recursion), and per-entry/total decompressed-size caps
+// (fflate reports uncompressed sizes before inflating, so oversized entries
+// are refused without ever being decompressed).
+const MAX_ZIP_ENTRIES = 500;
+const MAX_ZIP_DEPTH = 2;
+const MAX_ENTRY_BYTES = 512 * 1024 * 1024;        // 512 MB per entry
+const MAX_TOTAL_BYTES = 1536 * 1024 * 1024;       // 1.5 GB decompressed per drop
+
 const isPdf = (name, type = "") => PDF_EXT.test(name) || type === "application/pdf";
 const isImage = (name, type = "") => IMAGE_EXT.test(name) || (type || "").startsWith("image/");
 const isZip = (name, type = "") => ZIP_EXT.test(name) || /zip/i.test(type);
@@ -39,17 +50,22 @@ async function looksLikeZip(file) {
 }
 
 // Decompress only the entries we can use (saves memory on big plan sets); report
-// anything else as skipped via onSkip rather than silently dropping it.
-async function unzipBytes(bytes, onSkip) {
+// anything else as skipped via onSkip rather than silently dropping it. `budget`
+// is shared across nested zips in one drop, so the caps hold for the whole batch.
+async function unzipBytes(bytes, onSkip, budget) {
   const { unzip } = await import("fflate");
   return new Promise((resolve, reject) => {
     unzip(bytes, {
       filter: (f) => {
         if (isJunk(f.name)) return false;
         const bn = baseName(f.name);
-        const ok = isPdf(bn) || isImage(bn) || isZip(bn);
-        if (!ok) onSkip?.(bn);
-        return ok;
+        if (!(isPdf(bn) || isImage(bn) || isZip(bn))) { onSkip?.(bn, "unsupported type"); return false; }
+        if (budget.entries >= MAX_ZIP_ENTRIES) { onSkip?.(bn, `zip entry cap (${MAX_ZIP_ENTRIES}) reached`); return false; }
+        if (f.originalSize > MAX_ENTRY_BYTES) { onSkip?.(bn, "entry too large"); return false; }
+        if (budget.bytes + f.originalSize > MAX_TOTAL_BYTES) { onSkip?.(bn, "zip decompressed-size cap reached"); return false; }
+        budget.entries += 1;
+        budget.bytes += f.originalSize;
+        return true;
       },
     }, (err, data) => (err ? reject(err) : resolve(data)));
   });
@@ -102,22 +118,26 @@ export async function ingestFiles(fileList, { onProgress } = {}) {
     pdfs.push(name === file.name ? file : new File([file], name, { type: "application/pdf" }));
   };
 
-  async function process(file) {
+  // one budget per drop: nested zips draw from the same entry/byte caps
+  const budget = { entries: 0, bytes: 0 };
+
+  async function process(file, depth = 0) {
     const name = file.name || "file";
     try {
       if (isPdf(name, file.type)) { pushPdf(file); return; }
       if (isImage(name, file.type)) { onProgress?.(`Converting ${baseName(name)}…`); pushPdf(await imageToPdf(file)); return; }
       if (isZip(name, file.type) || (await looksLikeZip(file))) {
+        if (depth >= MAX_ZIP_DEPTH) { skipped.push({ name: baseName(name), reason: `zip nested deeper than ${MAX_ZIP_DEPTH} levels` }); return; }
         onProgress?.(`Unzipping ${baseName(name)}…`);
         const entries = await unzipBytes(new Uint8Array(await file.arrayBuffer()),
-          (bn) => skipped.push({ name: bn, reason: "unsupported type" }));
+          (bn, reason) => skipped.push({ name: bn, reason }), budget);
         const paths = Object.keys(entries);
         if (!paths.length) { skipped.push({ name: baseName(name), reason: "no plans found in zip" }); return; }
         for (const path of paths) {
           const bn = baseName(path);
           if (isPdf(bn)) pushPdf(new File([entries[path]], bn, { type: "application/pdf" }));
           else if (isImage(bn)) { onProgress?.(`Converting ${bn}…`); pushPdf(await imageToPdf(new File([entries[path]], bn))); }
-          else if (isZip(bn)) await process(new File([entries[path]], bn, { type: "application/zip" }));
+          else if (isZip(bn)) await process(new File([entries[path]], bn, { type: "application/zip" }), depth + 1);
         }
         return;
       }
