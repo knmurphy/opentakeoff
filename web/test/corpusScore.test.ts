@@ -103,12 +103,16 @@ test("scoreDetection: splits a missed truth room by whether a label seed sits wi
   assert.deepEqual(score.labellessMisses, [truth[1]]);
 });
 
-test("scoreDetection: counts one poly swallowing two truth seeds as ONE match plus an under-segmentation error, keeping precision <= 1", () => {
+test("scoreDetection: a lone poly swallowing two truth seeds is a merge that credits NO clean find — recall = precision = 0 (a leak is never rewarded)", () => {
   const truth: RoomTruth[] = [
     { number: "101", seed: [30, 30] },
     { number: "102", seed: [70, 70] },
   ];
-  // ONE poly covers BOTH truth seeds — the merge/leak we want to penalize.
+  // ONE poly covers BOTH truth seeds and there is NO tight single-seed poly over
+  // either — the pure merge/leak. Under the geometry-counting rule a ≥2-seed poly
+  // is under-segmentation: it finds NOTHING (both seeds are merge-only), so
+  // neither truth is credited and precision is 0, not 1. This is the incoherence
+  // the fix kills: a merge used to score precision = recall = 1.
   const predicted: PredictedRegion[] = [
     { label: "101", poly: square(0, 0, 100, 100), seed: [50, 50] },
   ];
@@ -116,18 +120,19 @@ test("scoreDetection: counts one poly swallowing two truth seeds as ONE match pl
 
   const score = scoreDetection(truth, predicted, labels);
 
-  // Exactly one truth is credited as found (not both) — the poly is one region.
-  assert.equal(score.found.length, 1);
+  // NO clean find: the merge poly credits nothing.
+  assert.deepEqual(score.found, []);
+  assert.equal(score.recall, 0);
   // Both swallowed rooms are surfaced under the under-segmentation error, tied
   // to the offending poly.
   assert.equal(score.underSegmented.length, 1);
   assert.equal(score.underSegmented[0].poly, predicted[0]);
   assert.deepEqual(score.underSegmented[0].truthSeeds, [truth[0], truth[1]]);
-  // Precision must NOT exceed 1: a leak that merges two rooms is not rewarded.
-  // 1 poly claims 1 truth in the matching → 1/1 = 1 (denominator is |predicted|).
-  assert.notEqual(score.precision, null);
-  assert.ok(score.precision! <= 1, `precision ${score.precision} should be <= 1`);
-  assert.equal(score.precision, 1);
+  // Precision: 0 distinct-found over 1 predicted poly → 0. A leak that merges two
+  // rooms scores zero, never 1.
+  assert.equal(score.precision, 0);
+  // Both truths are merge-only → both are genuine misses.
+  assert.deepEqual(score.missed, truth);
 });
 
 test("scoreDetection: discriminates the three miss buckets — detection, misplaced-label, and labelless", () => {
@@ -154,36 +159,49 @@ test("scoreDetection: discriminates the three miss buckets — detection, mispla
   assert.deepEqual(score.labellessMisses, [truth[2]]);
 });
 
-test("scoreDetection: matching is greedy in prediction order — a swallowing poly claims first, which can leave a tighter poly's only truth unmatched", () => {
+test("scoreDetection: matching is ORDER-INDEPENDENT — reversing the prediction list yields identical recall, precision, found, and under-segmentation, and a leak can never score perfect", () => {
   // t0 sits in BOTH polys; t1 sits only in the big (swallowing) poly A.
-  // Optimal would be A→t1, B→t0 (recall 1). Greedy walks predictions in order:
-  // A claims the first unclaimed truth it contains (t0), so B (which contains
-  // only t0) is left with nothing → recall 0.5. This is a DELIBERATE,
-  // order-dependent choice: in practice each truth seed lands in exactly one
-  // correct region, so max-bipartite optimization is not worth the complexity.
-  // This test pins the documented worst case so a future refactor is a conscious
-  // decision, not an accident.
+  //   A = square(0,0,100,100) contains BOTH t0 and t1 → a merge (≥2 seeds): it
+  //       credits NO clean find and is flagged under-segmented.
+  //   B = square(20,20,40,40) contains ONLY t0 → a clean single-seed poly: it
+  //       cleanly finds t0.
+  // The geometry-counting rule does not depend on emission order, so [A,B] and
+  // [B,A] must produce the SAME numbers. And because t1 is only ever covered by
+  // the merge poly, it is a MISS — a leak cannot score a perfect recall.
   const truth: RoomTruth[] = [
-    { number: "101", seed: [30, 30] }, // t0 — inside both A and B
-    { number: "102", seed: [70, 70] }, // t1 — inside A only
+    { number: "101", seed: [30, 30] }, // t0 — inside both A and B → found via clean B
+    { number: "102", seed: [70, 70] }, // t1 — inside A only (merge-only) → missed
   ];
-  const predicted: PredictedRegion[] = [
-    { label: "A", poly: square(0, 0, 100, 100), seed: [50, 50] }, // swallows t0 and t1
-    { label: "B", poly: square(20, 20, 40, 40), seed: [30, 30] }, // tight around t0 only
-  ];
+  const A: PredictedRegion = { label: "A", poly: square(0, 0, 100, 100), seed: [50, 50] };
+  const B: PredictedRegion = { label: "B", poly: square(20, 20, 40, 40), seed: [30, 30] };
   const labels: LabelSeed[] = [];
 
-  const score = scoreDetection(truth, predicted, labels);
+  const forward = scoreDetection(truth, [A, B], labels);
+  const reversed = scoreDetection(truth, [B, A], labels);
 
-  // Greedy: A claims t0, t1 unmatched-but-swallowed → 1 found, recall 0.5.
-  assert.equal(score.found.length, 1);
-  assert.deepEqual(score.found, [truth[0]]);
-  assert.equal(score.recall, 0.5);
-  // A still swallows two truths → under-segmentation surfaces both.
-  assert.equal(score.underSegmented.length, 1);
-  assert.deepEqual(score.underSegmented[0].truthSeeds, [truth[0], truth[1]]);
-  // t1 is neither found nor missed (swallowed), so the miss buckets stay empty.
-  assert.deepEqual(score.missed, []);
+  // Order independence: the two runs agree on every scoring number.
+  assert.equal(forward.recall, reversed.recall);
+  assert.equal(forward.precision, reversed.precision);
+  assert.deepEqual(forward.found, reversed.found);
+  assert.deepEqual(forward.missed, reversed.missed);
+  assert.equal(forward.underSegmented.length, reversed.underSegmented.length);
+  assert.deepEqual(
+    forward.underSegmented[0].truthSeeds,
+    reversed.underSegmented[0].truthSeeds,
+  );
+
+  // Coherent outcome: t0 found via clean poly B; A flagged under-segmented; t1 a
+  // miss → recall 0.5. A leak (merge poly) cannot make the detection score
+  // perfect. Distinct-found = 1 truth over 2 predicted polys → precision 0.5.
+  assert.deepEqual(forward.found, [truth[0]]);
+  assert.deepEqual(forward.missed, [truth[1]]);
+  assert.equal(forward.recall, 0.5);
+  assert.equal(forward.precision, 0.5);
+  assert.equal(forward.underSegmented.length, 1);
+  assert.deepEqual(forward.underSegmented[0].truthSeeds, [truth[0], truth[1]]);
+  // t1 was covered only by the merge poly, so it is now a genuine miss and flows
+  // into the miss buckets (no label near it, no matching label str) → labelless.
+  assert.deepEqual(forward.labellessMisses, [truth[1]]);
 });
 
 test("scoreDetection: scores perfect detection — each truth matched by exactly one poly, no extras — as precision = recall = 1", () => {
@@ -229,6 +247,31 @@ test("scoreDetection: reports per-room signed area % error and summary stats for
   assert.equal(score.areaStats?.meanAbsPctError, 5); // (|0| + |10|) / 2
   assert.equal(score.areaStats?.medianAbsPctError, 5); // median of [0, 10]
   assert.equal(score.areaStats?.worstAbsPctError, 10);
+});
+
+test("scoreDetection: excludes a zero-area truth room from area stats (area_sf:0 must not poison stats to Infinity)", () => {
+  // A truth room with area_sf:0 would make pctError = (pred - 0)/0 = Infinity
+  // under a `== null` guard (which does NOT catch 0). The zero-area room must be
+  // EXCLUDED, and the normal 100 room scored on its own.
+  const truth: RoomTruth[] = [
+    { number: "101", seed: [50, 50], area_sf: 0 }, // zero truth area → excluded
+    { number: "102", seed: [250, 50], area_sf: 100 }, // normal → scored
+  ];
+  const predicted: PredictedRegion[] = [
+    { label: "101", poly: square(0, 0, 100, 100), seed: [50, 50], area_sf: 80 },
+    { label: "102", poly: square(200, 0, 300, 100), seed: [250, 50], area_sf: 100 },
+  ];
+  const labels: LabelSeed[] = [];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  // Only the 100 room contributes an area row — the zero-area room is dropped.
+  assert.equal(score.areaErrors.length, 1);
+  assert.deepEqual(score.areaErrors[0], { truth: truth[1], predicted: predicted[1], pctError: 0 });
+  // No Infinity leaked into the stats.
+  assert.equal(score.areaStats?.meanAbsPctError, 0);
+  assert.equal(score.areaStats?.worstAbsPctError, 0);
+  assert.ok(Number.isFinite(score.areaStats!.worstAbsPctError));
 });
 
 test("scoreDetection: reports null area stats when no found room has a truth area", () => {
@@ -285,4 +328,58 @@ test("scoreDetection: treats an empty prediction as recall 0 but precision 1 (no
   // still makes the total miss visible, so precision 1 hides nothing from a gate
   // comparison — and a number beats NaN when this feeds a threshold.
   assert.equal(score.precision, 1);
+});
+
+test("scoreDetection: classifies the three miss buckets WITH real polys present (found rooms coexist with each miss kind)", () => {
+  // A found room plus one miss of each kind, and REAL polys on the sheet (a
+  // clean poly for the found room + one false-positive poly) — so the miss-bucket
+  // classifier is exercised alongside live detections, not only under predicted:[].
+  const truth: RoomTruth[] = [
+    { number: "100", seed: [50, 50] }, // found via clean poly
+    { number: "101", seed: [400, 50] }, // label near seed → detectionMiss
+    { number: "102", seed: [800, 800] }, // number exists elsewhere → misplacedLabelMiss
+    { number: "103", seed: [900, 900] }, // no matching label → labellessMiss
+  ];
+  const predicted: PredictedRegion[] = [
+    { label: "100", poly: square(0, 0, 100, 100), seed: [50, 50] }, // clean find of 100
+    { label: "ghost", poly: square(600, 0, 700, 100), seed: [650, 50] }, // covers no seed → FP
+  ];
+  const labels: LabelSeed[] = [
+    { str: "101", seed: [400 + LABEL_MATCH_RADIUS_PX - 1, 50] }, // near 101 → detectionMiss
+    { str: "102", seed: [10, 10] }, // "102" on sheet but far from its room → misplacedLabelMiss
+    // no label str "103" anywhere → labellessMiss
+  ];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  assert.deepEqual(score.found, [truth[0]]);
+  assert.deepEqual(score.missed, [truth[1], truth[2], truth[3]]);
+  assert.deepEqual(score.detectionMisses, [truth[1]]);
+  assert.deepEqual(score.misplacedLabelMisses, [truth[2]]);
+  assert.deepEqual(score.labellessMisses, [truth[3]]);
+  assert.deepEqual(score.falsePositives, [predicted[1]]);
+  assert.equal(score.recall, 0.25); // 1 of 4
+  assert.equal(score.precision, 0.5); // 1 clean find over 2 predicted polys
+});
+
+test("scoreDetection: handles empty truth — recall 0, all predictions are false positives, no miss buckets", () => {
+  const truth: RoomTruth[] = [];
+  const predicted: PredictedRegion[] = [
+    { label: "x", poly: square(0, 0, 100, 100), seed: [50, 50] },
+  ];
+  const labels: LabelSeed[] = [];
+
+  const score = scoreDetection(truth, predicted, labels);
+
+  // No truth → recall convention is 0 (nothing to find). The lone poly covers no
+  // truth seed, so it is a false positive → precision 0 (0 found / 1 predicted).
+  assert.equal(score.recall, 0);
+  assert.equal(score.precision, 0);
+  assert.deepEqual(score.found, []);
+  assert.deepEqual(score.missed, []);
+  assert.deepEqual(score.falsePositives, [predicted[0]]);
+  assert.deepEqual(score.underSegmented, []);
+  assert.deepEqual(score.detectionMisses, []);
+  assert.deepEqual(score.labellessMisses, []);
+  assert.equal(score.areaStats, null);
 });

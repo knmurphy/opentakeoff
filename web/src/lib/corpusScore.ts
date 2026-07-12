@@ -37,8 +37,9 @@ export interface LabelSeed {
 // One under-segmentation error: a single predicted poly whose interior holds two
 // or more truth seeds. The detector merged distinct rooms into one region (a
 // leak). `truthSeeds` lists ALL swallowed rooms so a reviewer sees which rooms
-// got merged; the matching still credits the poly with only ONE found room, so
-// the merge is penalized (the extra rooms are unmatched), never rewarded.
+// got merged; a merge poly credits NO clean find at all (only single-seed polys
+// are clean), so the merge is penalized — its rooms are found only if some OTHER
+// clean poly also covers them, never by the merge itself.
 export interface UnderSegmentation {
   poly: PredictedRegion;
   truthSeeds: RoomTruth[];
@@ -96,73 +97,67 @@ export function scoreDetection(
   opts?: ScoreOptions,
 ): Score {
   const truthComplete = opts?.truthComplete ?? true;
-  // Build a 1-to-1 matching between predicted polys and truth rooms: each poly
-  // claims AT MOST ONE truth (the first not-yet-claimed truth inside it, in
-  // truth order) and each truth is claimed by AT MOST ONE poly. The matching
-  // size is the numerator for BOTH recall and precision, which unifies the two
-  // dedup pathologies:
-  //   • duplicate (2 polys over 1 truth): only the first poly claims it → the
-  //     second poly matches nothing, diluting precision (numerator 1 / 2 polys).
-  //   • under-segmentation (1 poly over 2 truths): the poly claims one truth →
-  //     the other truth is unmatched, so precision stays <= 1 and the merge is
-  //     penalized instead of rewarded.
-  // A greedy claim suffices for these axis-aligned cases; the module never
-  // needs max-bipartite because each truth seed sits in at most one "correct"
-  // region in practice.
-  const truthClaimedBy = new Array<PredictedRegion | null>(truth.length).fill(null);
-  const polyClaims = new Array<number | null>(predicted.length).fill(null);
-  predicted.forEach((p, pi) => {
-    for (let ti = 0; ti < truth.length; ti++) {
-      if (truthClaimedBy[ti]) continue;
-      const [tx, ty] = truth[ti].seed;
-      if (pointInPoly(tx, ty, p.poly)) {
-        truthClaimedBy[ti] = p;
-        polyClaims[pi] = ti;
-        break;
-      }
+  // ORDER-INDEPENDENT geometry counting. For each predicted poly, count how many
+  // truth seeds it geometrically contains (pointInPoly). The seed count alone —
+  // not the emission order — decides everything, so reversing `predicted` cannot
+  // change any score:
+  //   • exactly 1 seed → a CLEAN detection of that one truth room.
+  //   • >= 2 seeds → UNDER-SEGMENTATION (a merge/leak): it credits NO clean find
+  //     and is flagged under `underSegmented` with every seed it swallowed.
+  //   • 0 seeds → a false positive (complete truth) / unmatchedPrediction
+  //     (partial truth).
+  // A truth seed is FOUND iff it is contained in >= 1 clean (single-seed) poly. A
+  // truth seed that is ONLY ever covered by >= 2-seed merge polys is a MISS (and
+  // its covering poly is under-segmented). This is provably coherent: a merge can
+  // never score a clean find, so a leak can never reach a perfect number.
+  const seedsIn = (p: PredictedRegion): RoomTruth[] =>
+    truth.filter((room) => pointInPoly(room.seed[0], room.seed[1], p.poly));
+
+  // For each truth (by index) record: was it covered by any CLEAN poly, and the
+  // FIRST such clean poly (predicted order) — the one that owns its area row.
+  const cleanPolyForTruth = new Array<PredictedRegion | null>(truth.length).fill(null);
+  const underSegmented: UnderSegmentation[] = [];
+  predicted.forEach((p) => {
+    const swallowed = seedsIn(p);
+    if (swallowed.length === 1) {
+      const ti = truth.indexOf(swallowed[0]);
+      if (cleanPolyForTruth[ti] == null) cleanPolyForTruth[ti] = p; // first clean poly wins
+    } else if (swallowed.length >= 2) {
+      underSegmented.push({ poly: p, truthSeeds: swallowed });
     }
+    // 0 seeds → false positive / unmatched, handled below.
   });
 
-  // `found` = matched truths in TRUTH order (so existing deepEqual(found, truth)
-  // assertions survive); `missed` = truths whose seed falls inside NO poly at
-  // all. A truth swallowed as an under-segmentation extra is NEITHER found nor
-  // missed — it is surfaced only under `underSegmented`, so the cap-2 miss
-  // buckets classify only true absences. Invariant: found + missed may be < truth.
+  // `found` = truths cleanly detected, in TRUTH order (so deepEqual(found, truth)
+  // assertions survive). `missed` = every other truth — including truths covered
+  // only by merge polys, which are now genuine misses (a leak does not find a
+  // room), so they flow into the miss buckets. Invariant: found + missed = truth.
   const found: RoomTruth[] = [];
   const missed: RoomTruth[] = [];
   truth.forEach((room, ti) => {
-    if (truthClaimedBy[ti]) {
-      found.push(room);
-      return;
-    }
-    const [x, y] = room.seed;
-    const insideSomePoly = predicted.some((p) => pointInPoly(x, y, p.poly));
-    if (!insideSomePoly) missed.push(room);
-    // else: swallowed by an already-claimed poly → recorded under underSegmented.
-  });
-
-  // Under-segmentation: any poly containing >= 2 truth seeds. It merged rooms.
-  const underSegmented: UnderSegmentation[] = [];
-  predicted.forEach((p) => {
-    const swallowed = truth.filter((room) =>
-      pointInPoly(room.seed[0], room.seed[1], p.poly),
-    );
-    if (swallowed.length >= 2) underSegmented.push({ poly: p, truthSeeds: swallowed });
+    if (cleanPolyForTruth[ti]) found.push(room);
+    else missed.push(room);
   });
 
   // Area accuracy: for each FOUND room whose truth carries an area, compare the
-  // matched predicted region's area against it. "Matched predicted region" is
-  // the poly the 1-to-1 matching assigned to that truth (truthClaimedBy) — the
-  // same poly that credits the found/precision numbers, so the area row and the
-  // precision row can never disagree about which region belongs to the room. We
+  // clean poly's area against it. "Clean poly" is the FIRST single-seed poly
+  // (predicted order) covering that truth — the same poly that credited the
+  // found/precision number, so the area row and the precision row can never
+  // disagree about which region belongs to the room. (A truth may sit in more
+  // than one clean poly when the detector duplicates a region; picking the first
+  // is deterministic — area accuracy is not required to be order-independent.) We
   // compare the two provided `area_sf` values directly (this module is in image
   // px with no px→ft scale, so poly-geometry area is meaningless here). Rows
   // require an area on BOTH sides; missing either excludes the room.
   const areaErrors: AreaError[] = [];
   truth.forEach((room, ti) => {
-    const poly = truthClaimedBy[ti];
+    const poly = cleanPolyForTruth[ti];
     if (!poly) return; // not a found room
-    if (room.area_sf == null || poly.area_sf == null) return;
+    // Guard `room.area_sf > 0`: a zero (or missing) truth area would make
+    // pctError = (pred - 0)/0 = Infinity and poison areaStats. `== null` does NOT
+    // catch 0, so we test `> 0` explicitly. A zero PREDICTED area is fine — it is
+    // the numerator, not the divisor — so poly only needs to be present.
+    if (room.area_sf == null || room.area_sf <= 0 || poly.area_sf == null) return;
     const pctError = ((poly.area_sf - room.area_sf) / room.area_sf) * 100;
     areaErrors.push({ truth: room, predicted: poly, pctError });
   });
@@ -178,15 +173,23 @@ export function scoreDetection(
     areaStats = { meanAbsPctError, medianAbsPctError, worstAbsPctError };
   }
 
-  const matchSize = polyClaims.filter((c) => c !== null).length;
-  const recall = truth.length ? matchSize / truth.length : 0;
+  // Numerator shared by recall AND precision: the count of DISTINCT truth rooms
+  // cleanly found. recall = found/|truth|; precision(complete) = found/|predicted|.
+  // Provably <= 1 in complete mode: distinct-found <= #clean polys <= |predicted|.
+  // Both dedup pathologies fall out of this single numerator:
+  //   • duplicate (2 clean polys over 1 truth): the truth counts once, but both
+  //     polys sit in the |predicted| denominator → precision diluted to 1/2.
+  //   • under-segmentation (1 poly over >= 2 truths): the merge poly is NOT clean,
+  //     so it credits nothing and the merged truths are misses → precision falls.
+  const foundCount = found.length;
+  const recall = truth.length ? foundCount / truth.length : 0;
 
-  // Predictions whose poly contains NO truth seed. (A duplicate poly over a seed
-  // another poly already claimed still CONTAINS a seed, so it is excluded here —
-  // it only dilutes precision via the denominator.)
-  const unmatchedByTruth = predicted.filter(
-    (p) => !truth.some((room) => pointInPoly(room.seed[0], room.seed[1], p.poly)),
-  );
+  // Predictions whose poly contains NO truth seed. (A duplicate clean poly over a
+  // truth another clean poly already covers still CONTAINS a seed, so it is
+  // excluded here — it only dilutes precision via the denominator. Merge polys
+  // also contain seeds, so they too are excluded — they are surfaced under
+  // `underSegmented`, not here.)
+  const unmatchedByTruth = predicted.filter((p) => seedsIn(p).length === 0);
 
   // With COMPLETE truth (clicks), an unmatched prediction is a genuine false
   // positive and precision is meaningful. With PARTIAL truth (in-bid-only
@@ -194,17 +197,18 @@ export function scoreDetection(
   // precision: it goes to `unmatchedPredictions`, precision is `null`, and
   // recall/area over the covered subset stand on their own.
   //
-  // Precision numerator is the 1-to-1 matching size, not raw poly hits, so two
-  // polys over one seed count once (extra poly costs precision) AND one poly
-  // over two seeds counts once (precision stays <= 1). Empty prediction ⇒
-  // precision 1 by convention: zero predictions means zero false positives.
+  // Precision numerator is distinct-found (clean detections), not raw poly hits,
+  // so two clean polys over one seed count once (the extra poly costs precision)
+  // AND a merge poly over >= 2 seeds counts zero (a leak is penalized, precision
+  // stays <= 1). Empty prediction ⇒ precision 1 by convention: zero predictions
+  // means zero false positives.
   let falsePositives: PredictedRegion[];
   let unmatchedPredictions: PredictedRegion[];
   let precision: number | null;
   if (truthComplete) {
     falsePositives = unmatchedByTruth;
     unmatchedPredictions = [];
-    precision = predicted.length ? matchSize / predicted.length : 1;
+    precision = predicted.length ? foundCount / predicted.length : 1;
   } else {
     falsePositives = [];
     unmatchedPredictions = unmatchedByTruth;
