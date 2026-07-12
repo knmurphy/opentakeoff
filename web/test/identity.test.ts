@@ -84,6 +84,14 @@ test("reducers: add / set-active / update-active / remove", () => {
   assert.equal(setActiveProfile(state, "nope"), state);            // unknown id is a no-op
 });
 
+test("profile fields are trimmed and empties dropped, matching the legacy mirror", () => {
+  let { state } = addProfile({ profiles: [], activeId: null }, { name: "   ", address: "  Lynnwood, WA  " });
+  assert.equal(activeProfile(state).name, undefined);            // whitespace-only dropped, not "   "
+  assert.equal(activeProfile(state).address, "Lynnwood, WA");    // trimmed
+  state = updateActiveProfile(state, { name: "  345 Flooring  " });
+  assert.equal(activeProfile(state).name, "345 Flooring");
+});
+
 test("saveProfiles round-trips and mirrors the active profile to loadCompany", () => {
   const store = stubStore();
   try {

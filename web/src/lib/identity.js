@@ -56,7 +56,10 @@ const PKEY = "opentakeoff_company_profiles";
 function cleanProfile(p) {
   const out = {};
   for (const k of ["id", "name", "address", "logo"]) {
-    if (typeof p?.[k] === "string" && p[k]) out[k] = p[k];
+    // trim + drop empty-after-trim, so the profile can't hold a blank-looking
+    // value that saveCompany() would drop from the mirrored legacy company
+    const v = typeof p?.[k] === "string" ? p[k].trim() : "";
+    if (v) out[k] = v;
   }
   return out;
 }
