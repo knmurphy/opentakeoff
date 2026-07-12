@@ -151,9 +151,19 @@ export function detectRegions(
  *  squarely in the empty middle and is robust to trace/flood jitter. */
 export const OVERLAP_THRESH = 0.5;
 
-/** Exact intersection area (mask cells set in BOTH) of two same-mask regions. */
+/** Exact intersection area (mask cells set in BOTH) of two same-mask regions.
+ *
+ *  Fails loud on mismatched lengths rather than silently truncating: same-mask
+ *  regions always share `region.length === mw*mh`, so a length mismatch means two
+ *  DIFFERENT mask geometries slipped into one batch (e.g. a future raster+vector
+ *  mixed pass). `Math.min` would quietly compare only the shared prefix and return
+ *  a garbage overlap; throwing here makes that a hard, obvious failure. On valid
+ *  equal-length input this is byte-identical to the old popcount (`n === a.length`). */
 function intersectionCount(a: Uint8Array, b: Uint8Array): number {
-  const n = Math.min(a.length, b.length);
+  if (a.length !== b.length) {
+    throw new Error(`intersectionCount: region length mismatch (${a.length} vs ${b.length})`);
+  }
+  const n = a.length;
   let c = 0;
   for (let i = 0; i < n; i++) if (a[i] && b[i]) c++;
   return c;

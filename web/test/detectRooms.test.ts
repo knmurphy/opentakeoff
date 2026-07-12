@@ -211,6 +211,46 @@ test("dedupeRegions: two abutting DISTINCT rooms sharing a wall → BOTH kept (n
   }
 });
 
+test("dedupeRegions: a fully-walled closet nested INSIDE a larger room → BOTH kept (floodRegion recall)", () => {
+  // Recall regression, driven by REAL floods (the coverage gap): a small fully-
+  // walled closet sits ENTIRELY inside a larger room, so the two are separate
+  // connected components. The large room's flood is blocked by the closet's walls
+  // and therefore EXCLUDES the closet interior, so their masks share ~0 cells —
+  // even though the closet's bbox nests inside the big room's bbox (the case a
+  // naive bbox/containment heuristic would wrongly merge). dedupeRegions must keep
+  // BOTH: it never drops a genuinely distinct nested room.
+  const bigRoom = squareSegs(100, 100, 700, 500);            // 600×400 outer room
+  const closet = squareSegs(550, 150, 650, 250);             // 100×100 walled closet inside it
+  const mo = buildMask([...border, ...bigRoom, ...closet], IMG_W, IMG_H, MAXDIM);
+  const big = detectAt(mo, "101", [200, 300]);               // seed in the open part of the big room
+  const small = detectAt(mo, "102", [600, 200]);             // seed inside the closet
+  // the big-room flood is walled off from the closet interior → near-zero overlap
+  assert.ok(containmentSanity(big, small) < 0.1, "big room excludes the closet interior (separate components)");
+  for (const input of [[big, small], [small, big]]) {
+    const out = dedupeRegions(input);
+    assert.equal(out.length, 2, "the nested closet and its enclosing room are BOTH kept");
+    assert.deepEqual(new Set(out.map((r) => r.str)), new Set(["101", "102"]));
+  }
+});
+
+test("dedupeRegions: mismatched region bitmap lengths (same mw/mh) fail loud, not silently truncate", () => {
+  // Defensive guard for a future raster+vector mixed batch: if two regions ever
+  // carried DIFFERENT bitmap lengths, intersectionCount's old Math.min would have
+  // quietly compared only the shared prefix and returned a garbage overlap. We
+  // construct two regions with IDENTICAL mw/mh (so the mw/mh geometry guard does
+  // NOT fire) but different region.length, and assert dedupeRegions throws.
+  const mo = buildMask([...border, ...room], IMG_W, IMG_H, MAXDIM);
+  const a = detectAt(mo, "101", [400, 300]);
+  // b: same mask geometry (mw/mh/ws), but a region buffer one cell longer.
+  const longer = new Uint8Array(a.flood.region.length + 1);
+  longer.set(a.flood.region);
+  const b: DetectedRegion = { str: "102", seed: [410, 310], flood: { ...a.flood, region: longer } };
+  assert.equal(b.flood.mw, a.flood.mw, "same mw so the geometry guard does not fire first");
+  assert.equal(b.flood.mh, a.flood.mh, "same mh so the geometry guard does not fire first");
+  assert.throws(() => dedupeRegions([a, b]), /length/, "mismatched bitmap lengths throw, not truncate");
+  assert.throws(() => dedupeRegions([b, a]), /length/, "and in the reverse order too");
+});
+
 test("dedupeRegions: a concave (U-shaped) room seeded twice → ONE region", () => {
   // A U/concave room: a wide room with a solid PENINSULA hanging down from the top
   // middle, so the floodable area is a U — two arms joined across the bottom. Two
