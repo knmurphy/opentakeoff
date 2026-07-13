@@ -172,13 +172,27 @@ export function createSyncStore({ base, provider, folderId, onRemoteUpdate, save
     // Anything else is a real divergence (someone else wrote) → reconcile (4c).
     // Using the recorded baseRev handles the first-push case uniformly: `targetRev-1`
     // arithmetic can't express "based on null" (a not-landed first push leaves the
-    // remote rev-less/null, and rev 0 never exists). NOTE the baseRev===null case:
-    // a torn FIRST push can't be told apart from a rev-less external write (both
-    // leave remoteRev null), so null===null re-pushes and blind-overwrites — an
-    // unresolvable ambiguity that survives 4c unchanged (see the case-c test).
+    // remote rev-less/null, and rev 0 never exists).
     await metaDelete(K.marker);
     const baseRev = typeof marker.baseRev === "number" ? marker.baseRev : null;
-    if (remoteRev === baseRev) return true; // our push never landed → re-push
+    if (remoteRev === baseRev) {
+      // The first-push case (baseRev===null, remoteRev===null) is ALSO matched by a
+      // rev-less EXTERNAL write (a flag-off teammate) — indistinguishable by rev. But
+      // it IS distinguishable by DATA: our own landed first push would show rev 1
+      // (caught by the targetRev branch above), so a null-rev remote carrying actual
+      // data here is provably external, not our un-landed push. Reconcile it (snapshot
+      // the opted local, adopt the teammate's write) instead of blind-overwriting —
+      // this closes the last unsnapshotted-loss path. A genuinely-EMPTY remote (no
+      // data) is our own un-landed push → re-push. (Numeric baseRev never takes this
+      // branch: a same-rev remote there is unambiguously our unchanged base, so
+      // re-pushing our legitimately-ahead local is correct — reconciling would revert
+      // it to the base rev and drop the un-pushed edits.)
+      if (baseRev === null && remote?.data != null) {
+        await reconcile(remote);            // external rev-less write → remote wins (Slice 4c)
+        return false;
+      }
+      return true;                          // our push never landed → re-push
+    }
     await reconcile(remote);                // real divergence → remote wins (Slice 4c)
     return false;
   }

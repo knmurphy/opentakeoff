@@ -176,25 +176,31 @@ test("recovery: a crashed FIRST push (rev-less base) re-pushes instead of silent
   assert.equal(await metaGet("sync:A:marker"), undefined);
 });
 
-test("recovery (case c): a rev-less external write on a torn first push is blind-overwritten (unresolvable ambiguity, survives 4c)", async () => {
-  // First push torn: marker {targetRev:1, baseRev:null}. Meanwhile a flag-off
-  // teammate wrote a rev-less doc. baseRev=null CANNOT distinguish "our first push
-  // never landed" from that external write — both leave the remote rev-less/null. So
-  // recover's null===null branch re-pushes and blind-overwrites. 4c does NOT change
-  // this: the ambiguity is fundamental (there is nothing to compare), so unlike a
-  // rev-bearing divergence there is no signal that would let 4c reconcile instead.
-  // Pinned so a future 4c change can't silently start snapshotting/adopting here.
+test("recovery (case c): a rev-less external write on a torn first push is RECONCILED — remote wins, local snapshotted (4c)", async () => {
+  // First push torn: marker {targetRev:1, baseRev:null}. Meanwhile a flag-off teammate
+  // wrote a rev-less doc. baseRev=null can't distinguish "our push never landed" from an
+  // external write by REV alone (both leave remoteRev null) — but it CAN by DATA: our own
+  // landed first push would show rev 1 (caught by the targetRev branch), so a null-rev
+  // remote carrying actual data is provably external. 4c reconciles it (snapshot the opted
+  // local, adopt the teammate's write) rather than blind-overwriting — closing the last
+  // unsnapshotted-loss path. (A genuinely-empty remote — our own un-landed push — still
+  // re-pushes; see the sibling "crashed FIRST push" test with fakeProvider(null).)
   await metaPut("sync:A:marker", { targetRev: 1, baseRev: null });
   await metaPut("sync:A:touched", true);
   const base = createLocalStore("A");
   await base.saveAnnotations({ conditions: [{ id: "mine" }], shapes: [] });
   const provider = fakeProvider({ data: { conditions: [{ id: "theirs" }], shapes: [] }, rev: null }); // rev-less external write
-  const sync = createSyncStore({ base, provider, folderId: "A" }) as any;
+  const snaps: any[] = [];
+  const saveSnapshot = async (label: string, payload: any, folderId: string) => { snaps.push({ label, payload, folderId }); return { id: `s${snaps.length}` }; };
+  const sync = createSyncStore({ base, provider, folderId: "A", saveSnapshot }) as any;
   await sync.whenSynced();
   await sync.whenPushed();
 
-  assert.equal(provider._remote.rev, 1); // re-pushed (not stranded locally)
-  assert.deepEqual(provider._remote.data.conditions, [{ id: "mine" }]); // 4b overwrites the rev-less remote
+  assert.deepEqual(conds(await base.loadAnnotations()), [{ id: "theirs" }]); // teammate's write adopted, NOT clobbered
+  assert.equal(await metaGet("sync:A:synced_rev"), null); // adopts the rev-less remote's (absent) rev
+  assert.equal(snaps.length, 1); // the opted local is snapshotted (recoverable)...
+  assert.deepEqual(snaps[0].payload.conditions, [{ id: "mine" }]); // ...as our divergent work
+  assert.equal(provider._remote.rev, null); // reconcile adopts LOCALLY — no re-push over the teammate's file
 });
 
 test("recovery: a diverged remote is reconciled — remote wins, local snapshotted, synced_rev adopts (4c)", async () => {
