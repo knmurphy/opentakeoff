@@ -8,6 +8,7 @@ import ProjectHome from "./components/ProjectHome.jsx";
 import { GoogleAuthProvider, useGoogleAuth } from "./lib/google/AuthContext.jsx";
 import { projectIdFromUrl, setActiveStore } from "./lib/store.js";
 import { isGoogleConfigured, getAccessToken } from "./lib/google/auth.js";
+import { cloudSyncOptedIn } from "./lib/prefs.js";
 import { projectHomeFolderId } from "./lib/projectHome.js";
 import { initTheme } from "./lib/theme.js";
 
@@ -102,17 +103,28 @@ function ProjectGate({ projectId }) {
     setError("");
     (async () => {
       try {
+        const optedIn = cloudSyncOptedIn();   // per-browser flag, default OFF → legacy path
         const [{ createDrive }, { createCloudStore }] = await Promise.all([
           import("./lib/google/drive.js"),
           import("./lib/cloudStore.js"),
         ]);
         const drive = createDrive({ getToken: getAccessToken });
+        let next;
+        if (optedIn) {
+          // Local-first: assemble the composite. composite.js (and the sync modules
+          // it imports) is pulled in ONLY here, so the legacy path and the anonymous
+          // bundle never load any Drive-sync code.
+          const { buildLocalFirstStore } = await import("./lib/sync/composite.js");
+          next = buildLocalFirstStore(projectId, drive, createCloudStore(projectId, drive));
+        } else {
+          next = createCloudStore(projectId, drive);   // LEGACY Drive-canonical path — byte-identical to today
+        }
         // Install + arm only while this effect is still current: a stale
         // continuation (user navigated away before the imports resolved) must
-        // not re-install its cloud store over whatever replaced it — the
-        // unmount cleanup already restored the local store.
+        // not re-install its store over whatever replaced it — the unmount
+        // cleanup already restored the local store.
         if (live) {
-          setActiveStore(createCloudStore(projectId, drive));
+          setActiveStore(next);
           setStoreReady(true);
         }
       } catch (e) {

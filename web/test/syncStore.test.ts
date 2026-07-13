@@ -553,3 +553,35 @@ test("4c: flushPending is callable but non-enumerable (survives neither Object.k
   assert.ok(!Object.keys(sync).includes("flushPending")); // but it's invisible to the spread
   await sync.flushPending(); // no-op safe when nothing is pending
 });
+
+// ── Slice 5: #73 regression on the opted-in local-first path ─────────────────
+
+test("#73 regression: after a FAILED-pull mount, loadAnnotations still returns local and a restore persists + pushes at a fresh rev", async () => {
+  // #73: a failed cloud mount used to disarm autosave, so a snapshot restore right
+  // after was silently dropped. On the local-first opted-in path the reconciler's
+  // loadAnnotations returns local instantly and NEVER throws on a failed pull, so
+  // the canvas always hydrates + arms; and a restore replayed through saveAnnotations
+  // mints synced_rev+1 and pushes clean regardless of the failed pull (expectedRev
+  // comes from the durable synced_rev, never payload.rev). This pins the store half;
+  // the canvas always-arm half is structural (the success path at mount runs because
+  // loadAnnotations resolves) and is covered end-to-end by the Playwright pass.
+  const base = createLocalStore("A");
+  await base.saveAnnotations({ conditions: [{ id: "pre" }], shapes: [] }); // prior local work
+  await metaPut("sync:A:synced_rev", 2);
+  await metaPut("sync:A:touched", true);
+  const provider = fakeProvider({ data: { conditions: [], shapes: [] }, rev: 2 });
+  provider._failPull = true; // the mount pull FAILS — the #73 trigger
+
+  const sync = createSyncStore({ base, provider, folderId: "A" }) as any;
+  assert.deepEqual(conds(await sync.loadAnnotations()), [{ id: "pre" }]); // local returned, no throw (canvas arms)
+  await sync.whenSynced(); // bootstrap swallowed the failed pull
+
+  provider._failPull = false; // network returns for the push
+  await sync.saveAnnotations({ conditions: [{ id: "restored" }], shapes: [] }); // the snapshot restore
+  await sync.whenPushed();
+
+  assert.deepEqual(conds(await base.loadAnnotations()), [{ id: "restored" }]); // persisted locally (not dropped)
+  assert.equal(provider._remote.rev, 3); // pushed at synced_rev+1
+  assert.deepEqual(provider._remote.data.conditions, [{ id: "restored" }]);
+  assert.equal(await metaGet("sync:A:synced_rev"), 3);
+});

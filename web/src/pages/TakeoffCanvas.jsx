@@ -375,8 +375,18 @@ export default function TakeoffCanvas() {
   // it directly (no echo to swallow). A snapshot Load reuses hydrate() too, but
   // mid-session it runs with this already armed, so a restore saves — unchanged
   // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
-  // and is not persisted; that pre-existing gap is tracked in #73.)
+  // and is not persisted — the #73 gap, which persists on the LEGACY cloud path.
+  // On the opted-in local-first path #73 is RETIRED: loadAnnotations returns local
+  // and never throws, so the mount always hydrates + arms, and a restore's setStates
+  // re-fire this effect with saves armed → the restored payload persists + pushes.)
   const savesArmed = useRef(false);
+  // One-shot suppression for a background reconcile (Slice 5). A remote adopt (mount
+  // seed / 4c conflict resolution) re-hydrates via onRemoteUpdate mid-session, when
+  // saves are already armed — that hydrate would otherwise re-fire the autosave
+  // effect and push the just-adopted content back at synced_rev+1 (rev churn on a
+  // seed; a spurious conflict + loser-snapshot on an adopt). Set true right before
+  // the reconcile hydrate; the autosave effect swallows exactly the next run.
+  const suppressNextSave = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -1144,6 +1154,10 @@ export default function TakeoffCanvas() {
     // edit (only the fresh-identity setState from loading). Arm and skip it so a
     // link-open reads without writing; every later run is a real edit and saves.
     if (!savesArmed.current) { savesArmed.current = true; return; }
+    // Swallow a reconcile re-hydrate's echo (see suppressNextSave): the adopted
+    // content is already canonical locally and on Drive at its own rev — re-pushing
+    // it would churn revs (seed) or spuriously conflict + loser-snapshot (adopt).
+    if (suppressNextSave.current) { suppressNextSave.current = false; return; }
     const payload = buildPayload();
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
@@ -1179,6 +1193,41 @@ export default function TakeoffCanvas() {
       }
     };
   }, []);
+
+  // ── Local-first sync bridge (Slice 5) ──────────────────────────────────────
+  // On the opted-in path the active store carries a non-enumerable `syncBridge`
+  // (main.jsx). Register the canvas's reconcile handlers into it so the plain-JS
+  // reconciler can re-hydrate the canvas and read in-flight state. On the legacy
+  // cloud path (and anonymous local) there is no bridge → these are no-ops, so the
+  // flag-off behavior is byte-identical. Handlers are nulled on unmount so a late
+  // reconcile never setState()s an unmounted tree.
+  useEffect(() => {
+    const bridge = store.syncBridge;
+    if (!bridge) return;
+    // A remote adopt (mount seed, or a 4c conflict resolution) hands us the winning
+    // annotations to render. Suppress the resulting autosave echo, then hydrate via
+    // the same state-application path as mount + snapshot restore. hydrate is stable
+    // (it only calls setters + reads refs), so capturing it once is safe.
+    bridge.onRemoteUpdate = (data) => { suppressNextSave.current = true; hydrate(data || {}); };
+    return () => { bridge.onRemoteUpdate = null; };
+    // hydrate is stable for a given mount (only setters + refs + the pinned store's
+    // cloudMode), so capture it once. Listing it would re-register every render —
+    // opening a null window where an arriving reconcile is dropped — for no gain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Expose current in-flight state to the reconciler's defer-gate (the store's
+  // maybeFlush declines to adopt-over-local while this returns true). Re-registered
+  // whenever that state changes so the store always reads a fresh predicate. The
+  // full defer/queue-collapse/saveDataRef-invalidation behavior is Slice 5b.
+  useEffect(() => {
+    const bridge = store.syncBridge;
+    if (!bridge) return;
+    bridge.isBusy = () => (
+      poly.length > 0 || calib.length > 0 || check.length > 0 ||
+      !!proposal || !!scaleGuide || !!prevScale || saveStateRef.current === "saving"
+    );
+    return () => { bridge.isBusy = null; };
+  }, [poly, calib, check, proposal, scaleGuide, prevScale]);
 
   function fitToView(w, h) {
     const el = containerRef.current;
