@@ -28,6 +28,21 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
   return { isError: !!res.isError, data: JSON.parse(res.content[0].text) };
 }
 
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const originalWrite = process.stderr.write;
+  let output = "";
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    output += chunk.toString();
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return output;
+}
+
 test("tools/list: all ten tools, each described with the coordinate contract", async () => {
   const client = await pair();
   const { tools } = await client.listTools();
@@ -88,6 +103,40 @@ test("set_scale: zero or several modes are rejected; one mode works", async () =
   const badLabel = await call(client, "set_scale", { sheet: KEY, label: "3/7\" = 1'-0\"" });
   assert.equal(badLabel.isError, true);
   assert.match(badLabel.data.error, /Unknown scale label/);
+});
+
+test("tool tracing: opt-in structured metadata goes to stderr without result content", async () => {
+  const client = await pair();
+  const originalTrace = process.env.OPENTAKEOFF_MCP_TRACE;
+  try {
+    delete process.env.OPENTAKEOFF_MCP_TRACE;
+    const quiet = await captureStderr(async () => {
+      await call(client, "takeoff_summary");
+    });
+    assert.equal(quiet, "");
+
+    process.env.OPENTAKEOFF_MCP_TRACE = "1";
+    const traced = await captureStderr(async () => {
+      await call(client, "measure_polygon", { sheet: KEY, verts: [[0, 0], [100, 0], [100, 100]] });
+    });
+
+    const lines = traced.trim().split("\n");
+    assert.equal(lines.length, 1);
+    const event = JSON.parse(lines[0]);
+    assert.equal(event.event, "opentakeoff_mcp_tool_call");
+    assert.equal(event.tool, "measure_polygon");
+    assert.equal(event.sheet, KEY);
+    assert.equal(event.is_error, true);
+    assert.equal(typeof event.duration_ms, "number");
+    assert.ok(event.duration_ms >= 0);
+    assert.equal(typeof event.result_size, "number");
+    assert.ok(event.result_size > 0);
+    assert.doesNotMatch(traced, /Set the scale/);
+    assert.doesNotMatch(traced, /verts/);
+  } finally {
+    if (originalTrace === undefined) delete process.env.OPENTAKEOFF_MCP_TRACE;
+    else process.env.OPENTAKEOFF_MCP_TRACE = originalTrace;
+  }
 });
 
 test("delete_shape: removes a committed shape; unknown id is isError", async () => {

@@ -57,6 +57,16 @@ see `src/hush.ts`.)
 `tsx` is a runtime dependency, not a build tool: the engine is imported
 straight from `web/src/lib` as TypeScript, so plain `node` can't run it.
 
+For tool-call debugging, opt into structured stderr tracing:
+
+```bash
+OPENTAKEOFF_MCP_TRACE=1 node --import tsx server.ts
+```
+
+Each tool call writes one JSON line to stderr with the tool name, duration,
+sheet, result size, and error flag. The trace never writes to stdout and never
+includes document text, shape vertices, or result payload content.
+
 ## Tools
 
 | Tool | What it does |
