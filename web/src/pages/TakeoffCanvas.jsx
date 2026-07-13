@@ -408,7 +408,10 @@ export default function TakeoffCanvas() {
   // drains a deferred render (and un-blocks autosave, which stays suppressed while a
   // render is deferred). Without it, suppression could wedge saves indefinitely.
   const [idleTick, setIdleTick] = useState(0);
-  const bumpIdle = () => setIdleTick((t) => t + 1);
+  // Only meaningful on the opted-in path (the idle-drain no-ops without a bridge), so
+  // gate on syncBridge — this keeps the flag-off / anonymous path free of the extra
+  // interaction-end re-renders, preserving byte-for-byte legacy behavior (invariant #4).
+  const bumpIdle = () => { if (store.syncBridge) setIdleTick((t) => t + 1); };
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
