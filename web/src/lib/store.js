@@ -331,7 +331,8 @@ export function createLocalStore(folderId = null) {
 // bookkeeping that isn't part of an annotations payload. The optional annotation
 // sync layer uses it for per-project `sync:<folderId>:*` fields, each stored under
 // its OWN key so the separate async paths that touch them (autosave / push /
-// crash-recovery) each do a single put and can never lost-update a shared record.
+// crash-recovery) each do a single put — there is no shared record to suffer a
+// lost update.
 // Generic and Drive-free: nothing here reaches the network, so exposing it does
 // not compromise the snapshot cut-line. Callers own key namespacing; the sync
 // layer confines itself to the `sync:` prefix (distinct from the annotation /

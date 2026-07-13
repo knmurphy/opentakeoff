@@ -244,6 +244,11 @@ test("meta KV: round-trips values, misses read undefined, delete removes, keys a
   // overwriting a key replaces in place
   await metaPut("sync:A:synced_rev", 9);
   assert.equal(await metaGet("sync:A:synced_rev"), 9);
+
+  // false round-trips too (a boolean flipped true -> false must read back false,
+  // not undefined/null — the read path has no `|| default` to swallow it)
+  await metaPut("sync:A:touched", false);
+  assert.equal(await metaGet("sync:A:touched"), false);
 });
 
 test("meta KV does not collide with the annotations blob", async () => {
