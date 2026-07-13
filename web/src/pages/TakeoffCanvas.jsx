@@ -28,6 +28,7 @@ import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../compone
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
+import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
@@ -395,6 +396,12 @@ export default function TakeoffCanvas() {
   // that reason. A future "skip setState if unchanged" optimization on either would
   // reopen an escape; keep both guarantees.
   const suppressNextSave = useRef(false);
+  // Slice 5b defer-gate scratch: `busyStateRef` mirrors the state half of the busy
+  // predicate every render so computeBusy can read it via a ref (always fresh, stable
+  // to capture); `remotePendingRender` marks a reconcile whose RENDER we deferred
+  // because the canvas went busy after the store adopted (Case 2), drained on idle.
+  const busyStateRef = useRef({});
+  const remotePendingRender = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -1204,40 +1211,73 @@ export default function TakeoffCanvas() {
     };
   }, []);
 
-  // ── Local-first sync bridge (Slice 5) ──────────────────────────────────────
+  // ── Local-first sync bridge (Slices 5a + 5b) ───────────────────────────────
   // On the opted-in path the active store carries a non-enumerable `syncBridge`
-  // (main.jsx). Register the canvas's reconcile handlers into it so the plain-JS
-  // reconciler can re-hydrate the canvas and read in-flight state. On the legacy
-  // cloud path (and anonymous local) there is no bridge → these are no-ops, so the
-  // flag-off behavior is byte-identical. Handlers are nulled on unmount so a late
-  // reconcile never setState()s an unmounted tree.
+  // (main.jsx); on the legacy cloud path (and anonymous local) there is none, so
+  // every handler below is a no-op and flag-off behavior is byte-identical.
+
+  // The defer-gate predicate. computeBusy reads ONLY refs (busyStateRef, mirrored
+  // from state every render, plus the interaction refs), so it is always fresh yet
+  // stable to capture once — no re-registration null window. isCanvasBusy is the
+  // pure, unit-tested core (lib/canvasBusy.js); it must report EVERY interaction mode
+  // a mid-session re-hydrate would clobber (trace/calibrate/check, One-Click review,
+  // a scheduled save, an active drag, the open text editor, an in-flight OCR scan).
+  busyStateRef.current = { poly, calib, check, proposal, scaleGuide, prevScale };
+  const computeBusy = () => isCanvasBusy({
+    ...busyStateRef.current,
+    saveState: saveStateRef.current,
+    dragging: !!dragRef.current || !!ocDragRef.current,
+    editing: editingRef.current,
+    scanning: scanBusyRef.current,
+  });
+
+  // Register both reconcile handlers ONCE. onRemoteUpdate handles CASE 2: the store
+  // adopted remote→local, then the canvas went busy in maybeFlush's ~2-IDB-write gap
+  // before this fires. Re-check busy at APPLY time — if busy, DEFER the render (local
+  // already equals remote on Drive; the idle-drain below re-hydrates) rather than
+  // clobber the in-flight work; else suppress the echo and hydrate. EITHER branch
+  // nulls saveDataRef so the unmount flush can't push a pre-adopt payload at a fresh
+  // rev over the remote winner. (It does NOT stop an already-scheduled debounced save
+  // firing stale — that is the documented residual, active-co-editing-only.)
   useEffect(() => {
     const bridge = store.syncBridge;
     if (!bridge) return;
-    // A remote adopt (mount seed, or a 4c conflict resolution) hands us the winning
-    // annotations to render. Suppress the resulting autosave echo, then hydrate via
-    // the same state-application path as mount + snapshot restore. hydrate is stable
-    // (it only calls setters + reads refs), so capturing it once is safe.
-    bridge.onRemoteUpdate = (data) => { suppressNextSave.current = true; hydrate(data || {}); };
-    return () => { bridge.onRemoteUpdate = null; };
-    // hydrate is stable for a given mount (only setters + refs + the pinned store's
-    // cloudMode), so capture it once. Listing it would re-register every render —
-    // opening a null window where an arriving reconcile is dropped — for no gain.
+    bridge.isBusy = computeBusy;
+    bridge.onRemoteUpdate = (data) => {
+      saveDataRef.current = null;
+      if (computeBusy()) { remotePendingRender.current = true; return; }
+      suppressNextSave.current = true;
+      hydrate(data || {});
+    };
+    return () => { bridge.isBusy = null; bridge.onRemoteUpdate = null; };
+    // computeBusy + hydrate are stable for a given mount (they read only refs / call
+    // setters), so capture once; listing them would re-register every render, opening
+    // a null window where an arriving reconcile is dropped.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Expose current in-flight state to the reconciler's defer-gate (the store's
-  // maybeFlush declines to adopt-over-local while this returns true). Re-registered
-  // whenever that state changes so the store always reads a fresh predicate. The
-  // full defer/queue-collapse/saveDataRef-invalidation behavior is Slice 5b.
+
+  // Idle-drain. When the canvas goes idle, drain BOTH defer paths:
+  //   CASE 1 — the store deferred at its own gate (isBusy true → never adopted,
+  //     pendingRemote held, local untouched): flushPending() adopts now and fires
+  //     onRemoteUpdate → hydrate.
+  //   CASE 2 — we deferred the render above: re-read LOCAL (freshest — the adopt, or a
+  //     local edit the user saved during the busy window; stashing the remote data
+  //     would silently clobber that saved edit) and hydrate.
+  // `saveState` is in the deps because the last thing to clear on going idle is usually
+  // the debounced save (saving→saved) — and it must gate re-hydrate anyway so a
+  // committed trace's pending save lands before we re-read (CRITICAL-b).
   useEffect(() => {
     const bridge = store.syncBridge;
-    if (!bridge) return;
-    bridge.isBusy = () => (
-      poly.length > 0 || calib.length > 0 || check.length > 0 ||
-      !!proposal || !!scaleGuide || !!prevScale || saveStateRef.current === "saving"
-    );
-    return () => { bridge.isBusy = null; };
-  }, [poly, calib, check, proposal, scaleGuide, prevScale]);
+    if (!bridge || computeBusy()) return;
+    bridge.flushPending?.();
+    if (remotePendingRender.current) {
+      remotePendingRender.current = false;
+      store.loadAnnotations().then((a) => { suppressNextSave.current = true; hydrate(a || {}); }).catch(() => {});
+    }
+    // computeBusy/hydrate are stable (refs/setters); the state deps below ARE the
+    // idle-transition triggers that should re-evaluate the drain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poly, calib, check, proposal, scaleGuide, prevScale, saveState]);
 
   function fitToView(w, h) {
     const el = containerRef.current;
