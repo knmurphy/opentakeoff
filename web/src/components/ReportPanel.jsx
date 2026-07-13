@@ -6,7 +6,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import ToolMenu from "./ToolMenu.jsx";
 import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, labelGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
-import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf } from "../lib/reportColumns.js";
+import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf, applyUnits } from "../lib/reportColumns.js";
+import { areaVal, areaUnit, lenVal, lenUnit } from "../lib/units";
 import { columnLabel } from "../lib/conditionColumns.js";
 import { shapeLabelValue } from "../lib/shapeLabels.js";
 import { loadTemplates, saveTemplate, deleteTemplate, renameTemplate, mergeTemplates, overwriteTemplates } from "../lib/reportTemplates.js";
@@ -43,7 +44,7 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [] }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [], units = "imperial" }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
   // imported report theme → { vars, name, warnings }. vars are spread onto this
@@ -123,7 +124,14 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // one condition carries that spec field, so a no-spec project is byte-for-
   // byte unchanged (frozen 13 → built-in opt-ins → custom → spec)
   const specCols = specColProfile(conditions);
-  const tableCols = visibleCols([...TABLE_PROFILE, ...customCols, ...specCols], colPrefs);
+  // metric display converts AT THE DESCRIPTOR (applyUnits): headers swap to
+  // m²/m, the SY column retires, and every dimensioned getter/foot wraps in
+  // the converter — renderCell and the tfoot below need no unit awareness.
+  // The CSV/XLSX exports get RAW descriptors + `units`; conversion happens
+  // inside totalsToCsv/reportWorkbook so each output has ONE conversion site.
+  const M = units === "metric";
+  const AU = areaUnit(units), LU = lenUnit(units);
+  const tableCols = applyUnits(visibleCols([...TABLE_PROFILE, ...customCols, ...specCols], colPrefs), units);
   // group-by choice: "" (none) | "sheet" | a custom column id; normalized
   // ONCE per render and used everywhere (select value AND partitioning) — a
   // stale colId must fall back to None, never reach the select or the
@@ -271,9 +279,9 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   };
 
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
-  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx, byLabelExport.length ? byLabelExport : null, brand.brandName), "text/csv");
+  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx, byLabelExport.length ? byLabelExport : null, brand.brandName, units), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, rfis, sheetLabel, conditionColumns, attrsByCond, shapeLabels, byLabel: byLabelExport }), null, 2),
+    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, rfis, sheetLabel, conditionColumns, attrsByCond, shapeLabels, byLabel: byLabelExport, displayUnits: units }), null, 2),
     "application/json");
   const exportRfisCsv = () => downloadText(`${baseName}_rfis.csv`, rfisToCsv(rfis, markups, projectName, sheetLabel, brand.brandName), "text/csv");
   const exportRfisJson = () => downloadText(`${baseName}_rfis.json`,
@@ -281,7 +289,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
   // column picker like the CSV); buildXlsx lazy-loads fflate on first use
   const exportXlsx = async () => {
-    const sheets = reportWorkbook({ rows, bySheet, shapeRows: shapesDetail(conditions, shapes, sheetLabel), cols: csvCols, ctx, sheetLabel });
+    const sheets = reportWorkbook({ rows, bySheet, shapeRows: shapesDetail(conditions, shapes, sheetLabel), cols: csvCols, ctx, sheetLabel, units });
     const bytes = await buildXlsx(sheets);
     downloadText(`${baseName}.xlsx`, bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   };
@@ -710,10 +718,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
         )}
         {rows.length > 0 && (
           <p style={{ maxWidth: 980, margin: "14px auto 0", fontSize: 11.5, color: "var(--ink-muted)", lineHeight: 1.6 }}>
-            <strong>SF ordered</strong> = measured quantity × waste %. Waste is set per condition in the canvas. Wall SF comes from Surface-Area
-            traces (run × height); Border SF from Linear runs with a thickness.
+            <strong>{AU} ordered</strong> = measured quantity × waste %. Waste is set per condition in the canvas. Wall {AU} comes from Surface-Area
+            traces (run × height); Border {AU} from Linear runs with a thickness.{M ? " Supporting-material coverage rates stay as entered (SF/LF-based)." : ""}
             {tableCols.some((c) => c.key === "perimeter_ref") && (
-              <> Perim LF (ref) sums floor-trace perimeters — includes door openings and shared walls; reference only, never totaled or waste-adjusted.</>
+              <> Perim {LU} (ref) sums floor-trace perimeters — includes door openings and shared walls; reference only, never totaled or waste-adjusted.</>
             )}
             {/* bridge to the base-quantity By-sheet section below — the two
                 slice the same shapes with different semantics */}
@@ -732,10 +740,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                   <thead>
                     <tr>
                       <th style={{ ...th, textAlign: "left" }}>Finish</th>
-                      <th style={th}>Floor SF</th>
-                      <th style={th}>Wall SF</th>
-                      <th style={th}>Border SF</th>
-                      <th style={th}>LF</th>
+                      <th style={th}>Floor {AU}</th>
+                      <th style={th}>Wall {AU}</th>
+                      <th style={th}>Border {AU}</th>
+                      <th style={th}>{LU}</th>
                       <th style={th}>EA</th>
                     </tr>
                   </thead>
@@ -749,10 +757,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                             {r.multiplier > 1 && <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>×{r.multiplier}</span>}
                           </span>
                         </td>
-                        <td style={td}>{sheetNum(r.floor_sf)}</td>
-                        <td style={td}>{sheetNum(r.wall_sf)}</td>
-                        <td style={td}>{sheetNum(r.border_sf)}</td>
-                        <td style={td}>{sheetNum(r.lf)}</td>
+                        <td style={td}>{sheetNum(areaVal(r.floor_sf, units))}</td>
+                        <td style={td}>{sheetNum(areaVal(r.wall_sf, units))}</td>
+                        <td style={td}>{sheetNum(areaVal(r.border_sf, units))}</td>
+                        <td style={td}>{sheetNum(lenVal(r.lf, units))}</td>
                         <td style={td}>{sheetNum(r.ea, 0)}</td>
                       </tr>
                     ))}

@@ -5,6 +5,7 @@
 // derived columns live HERE (getters), never as new row fields.
 import { round2 } from "./num.js";
 import { attrValue, columnLabel } from "./conditionColumns.js";
+import { M_PER_FT, M2_PER_SF } from "./units";
 
 // key → (row, ctx) => primitive. ctx (optional):
 //   { perimByCond: Map(condition_id → unrounded floor-perimeter LF) }
@@ -78,6 +79,42 @@ export const CSV_PROFILE = [
 // (totalsToCsv), and XLSX (reportWorkbook) all resolve through here so the
 // three outputs can never read different values for the same column.
 export const colGetter = (c) => c.get || GETTERS[c.key];
+
+// ── Metric display (units port) ─────────────────────────────────────────────
+// Unit-system conversion happens at the COLUMN DESCRIPTOR, the one seam every
+// output (table, CSV, XLSX Conditions tab) already resolves values through —
+// internal math stays feet (lib/units contract). In metric the SY column
+// retires, headers swap SF→m² / LF→m, and each dimensioned column's getter
+// (and tfoot foot) wraps in the converter; the descriptor also carries `conv`
+// so the CSV/XLSX TOTAL rows (which read grandTotals by key, not through
+// getters) convert the same way. Imperial passes the input through UNTOUCHED —
+// identity, so the frozen v1 CSV golden and every existing caller are
+// byte-identical.
+const COL_DIM = {
+  floor_sf: "area", wall_sf: "area", border_sf: "area", total_sf: "area",
+  total_sf_net: "area", waste_sf: "area",
+  lf: "len", lf_net: "len", waste_lf: "len", perimeter_ref: "len",
+};
+export const METRIC_LABELS = { area: "m²", len: "m" };        // on-screen table
+export const METRIC_CSV_LABELS = { area: "m2", len: "m" };    // CSV/XLSX (ASCII, matches the legend PDF)
+export function applyUnits(cols, units, labels = METRIC_LABELS) {
+  if (units !== "metric") return cols;
+  return cols.filter((c) => c.key !== "sy_net").map((c) => {
+    const dim = COL_DIM[c.key];
+    if (!dim) return c;
+    const conv = dim === "area"
+      ? (v) => round2((Number(v) || 0) * M2_PER_SF)
+      : (v) => round2((Number(v) || 0) * M_PER_FT);
+    const base = colGetter(c);
+    return {
+      ...c,
+      header: c.header.replace(/\bSF\b/g, labels.area).replace(/\bLF\b/g, labels.len),
+      conv,
+      get: (r, ctx) => conv(base(r, ctx)),
+      ...(c.foot ? { foot: (g) => conv(c.foot(g)) } : {}),
+    };
+  });
+}
 
 // User-defined condition columns → runtime column descriptors, appended after
 // either profile. Keys are "custom:<colId>" — can't collide with built-in

@@ -64,14 +64,8 @@ import {
   MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, HL_INKS, HL_SIZES,
 } from "../lib/canvasConstants.js";
 import { autoRenderScale, invertCanvasPixels, uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
-import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit } from "../lib/units";
+import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
-
-// Display units for the check tool + scale guide. Upstream carries a metric
-// display mode (ft/m toggle) this fork hasn't ported; the helpers in lib/units
-// take a UnitSystem, so we pin it here — swap for the units state when the
-// metric port lands.
-const UNITS = "imperial";
 
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
@@ -238,6 +232,12 @@ export default function TakeoffCanvas() {
   });
   const [calib, setCalib] = useState([]);
   const [pendingLen, setPendingLen] = useState("");
+  // Display unit system (ft/m toggle beside the scale picker) — DISPLAY LAYER
+  // ONLY: all stored takeoff math stays feet (lib/units contract), so toggling
+  // never rewrites a shape, a scale, or a coverage rate. Browser default via
+  // localStorage; a project that saved a units field overrides on hydrate.
+  const [units, setUnits] = useState(() => { try { return localStorage.getItem("opentakeoff_units") === "metric" ? "metric" : "imperial"; } catch { return "imperial"; } });
+  useEffect(() => { try { localStorage.setItem("opentakeoff_units", units); } catch { /* private mode */ } }, [units]);
   const [check, setCheck] = useState([]);             // Check tool: 0–2 stage-px points along a printed dimension
   const [checkStated, setCheckStated] = useState(""); // what the drawing says that dimension is
   const [scaleGuide, setScaleGuide] = useState(null); // ephemeral calibrated ruler {key, feet, px, label, at:[x,y]} — never persisted (buildPayload doesn't read it)
@@ -739,6 +739,9 @@ export default function TakeoffCanvas() {
     }
     setScales(sc);
     setScaleSources(src);
+    // display units ride the payload (additive) — a metric project opens metric
+    // on any machine; payloads without the field keep this browser's toggle
+    if (a.units === "metric" || a.units === "imperial") setUnits(a.units);
   };
   useEffect(() => {
     let off = false;
@@ -1171,7 +1174,10 @@ export default function TakeoffCanvas() {
     // delete already prunes) and omit the key entirely when nothing survives,
     // mirroring the condition_columns omit-when-empty convention.
     const pinned = palette.filter((id) => conditions.some((c) => c.id === id));
-    return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
+    // units is additive and diff-only (the sheet_levels convention): imperial —
+    // the default — omits the key, so an old imperial project's payload is
+    // byte-identical on round-trip; only a metric project carries the field.
+    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
   };
   // Runtime restore of a saved payload — Snapshot Load and Revision Restore
   // share this one path. A runtime load (unlike mount) can interrupt work in
@@ -1218,7 +1224,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, rfis, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo]);
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, rfis, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo, units]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -1829,18 +1835,18 @@ export default function TakeoffCanvas() {
         // live length to the cursor while picking the second end of the dimension.
         // No CARPET_ROLL_FT amber here — a dimension string is not a seam plan.
         const u = uppFor(panelAt(check[0][0]).key);
-        if (u) txt = fmtCheckLen(Math.hypot(cur[0] - check[0][0], cur[1] - check[0][1]) * u, UNITS) + (lock ? ` · ${lock.deg}°` : "");
+        if (u) txt = fmtCheckLen(Math.hypot(cur[0] - check[0][0], cur[1] - check[0][1]) * u, units) + (lock ? ` · ${lock.deg}°` : "");
       } else if ((tool === "rect" || tool === "deduct-rect") && poly.length === 1 && liveUpp) {
         // rectangle: live W × H + area (SF and SY imperial — carpet is bought in SY)
         const a = poly[0];
         const w = Math.abs(cur[0] - a[0]) * liveUpp, h = Math.abs(cur[1] - a[1]) * liveUpp;
         const sf = w * h;
-        txt = `${fmtCheckLen(w, UNITS)} × ${fmtCheckLen(h, UNITS)} · ${num(areaVal(sf, UNITS))} ${areaUnit(UNITS)}${UNITS === "metric" ? "" : ` · ${num(sf / 9)} SY`}`;
+        txt = `${fmtCheckLen(w, units)} × ${fmtCheckLen(h, units)} · ${num(areaVal(sf, units))} ${areaUnit(units)}${units === "metric" ? "" : ` · ${num(sf / 9)} SY`}`;
         over = w >= CARPET_ROLL_FT - 0.02 || h >= CARPET_ROLL_FT - 0.02;
       } else if (drawing && anchor && liveUpp) {
         // line/polyline: live segment length, ALWAYS (not just under the 45° lock)
         const len = Math.hypot(cur[0] - anchor[0], cur[1] - anchor[1]) * liveUpp;
-        txt = lock ? `${lock.deg}° · ${fmtCheckLen(len, UNITS)}` : fmtCheckLen(len, UNITS);
+        txt = lock ? `${lock.deg}° · ${fmtCheckLen(len, units)}` : fmtCheckLen(len, units);
         over = len >= CARPET_ROLL_FT - 0.02;
       } else if (lock) {
         txt = `${lock.deg}°`;
@@ -1907,16 +1913,17 @@ export default function TakeoffCanvas() {
     const tag = condById[s.condition_id]?.finish_tag || "?";
     const a = s.computed?.area_sf || 0, lf = s.computed?.perimeter_lf || 0;
     if (s.measure_role === "count") return `${tag} · ${num(s.computed?.count || 1, 0)} EA`;
-    if (s.measure_role === "deduct") return `${tag} · −${num(a)} SF deduct`;
+    if (s.measure_role === "deduct") return `${tag} · −${fa(a)} deduct`;
     if (s.measure_role === "surface_area") {
-      // same height semantics as recomputeShape: an override wins outright (even 0)
+      // same height semantics as recomputeShape: an override wins outright (even 0).
+      // Heights stay feet in both systems — they're ENTERED in feet everywhere.
       const h = s.height_override === true
         ? Number(s.height_ft) || 0
         : Number(s.height_ft) || Number(condById[s.condition_id]?.height_ft) || 0;
-      return `${tag} · ${num(a)} SF wall (${num(lf)} LF × ${num(h, 2)}′)`;
+      return `${tag} · ${fa(a)} wall (${fl(lf)} × ${num(h, 2)}′)`;
     }
-    if (s.measure_role === "linear") return `${tag} · ${num(lf)} LF${a > 0 ? ` · ${num(a)} SF border` : ""}`;
-    return `${tag} · ${num(a)} SF · ${num(a / 9)} SY`;
+    if (s.measure_role === "linear") return `${tag} · ${fl(lf)}${a > 0 ? ` · ${fa(a)} border` : ""}`;
+    return `${tag} · ${faSY(a)}`;
   }
   // STACK-style hover readout: small, follows the cursor, gone on hover-off
   function updateHover(e) {
@@ -2091,7 +2098,7 @@ export default function TakeoffCanvas() {
     const uppBitmap = uppStored / factorFor(key);   // feet per bitmap px, matches uppFor math
     const z = tfRef.current.scale;
     // round guide length picked so the bar is legible (≥160 screen px) at the current zoom
-    const CAND = UNITS === "metric" ? [1, 2, 5, 10, 20, 50, 100].map((m) => m / M_PER_FT) : [2, 5, 10, 20, 50, 100, 200];
+    const CAND = units === "metric" ? [1, 2, 5, 10, 20, 50, 100].map((m) => m / M_PER_FT) : [2, 5, 10, 20, 50, 100, 200];
     const feet = CAND.find((f) => (f / uppBitmap) * z >= 160) ?? CAND[CAND.length - 1];
     const r = containerRef.current.getBoundingClientRect();
     const t = tfRef.current;
@@ -2159,7 +2166,7 @@ export default function TakeoffCanvas() {
   }
 
   function applyCalibration() {
-    const feet = parseFloat(pendingLen);
+    const feet = calInputToFeet(parseFloat(pendingLen), units);   // metric users type meters; stored scale stays feet
     if (!(feet > 0) || calib.length !== 2) return;
     const pa = panelAt(calib[0][0]), pb = panelAt(calib[1][0]);
     if (pa.key !== pb.key) {
@@ -2179,7 +2186,7 @@ export default function TakeoffCanvas() {
   // Check tool's one-tap recalibrate: the measured span IS a calibration line —
   // same math as applyCalibration, sourced from the check points + stated value.
   function recalibrateFromCheck() {
-    const feet = parseLenInput(checkStated, UNITS);
+    const feet = parseLenInput(checkStated, units);
     if (!(feet > 0) || check.length !== 2) return;
     const pa = panelAt(check[0][0]);
     if (panelAt(check[1][0])?.key !== pa?.key) return; // cross-panel span — the UI hides the button, but keep the function safe standalone
@@ -2459,7 +2466,7 @@ export default function TakeoffCanvas() {
     }));
     setShapes((s) => [...s, ...made]);
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
-    setCommitMsg(`Created ${made.length} takeoff${made.length === 1 ? "" : "s"} — ${sf.toLocaleString(undefined, { maximumFractionDigits: 1 })} SF ${condById[activeCond]?.finish_tag || ""}. Click the next room.`);
+    setCommitMsg(`Created ${made.length} takeoff${made.length === 1 ? "" : "s"} — ${fa(sf)} ${condById[activeCond]?.finish_tag || ""}. Click the next room.`);
     setProposal(null);
   }
 
@@ -2687,7 +2694,7 @@ export default function TakeoffCanvas() {
       const brand = resolveBranding({ ...(await loadBrandingSelection(projectIdFromUrl())), profiles: loadProfiles().profiles });
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: brand.company, credit: brand.credit, coverTitle: brand.coverTitle,
-        dark: darkMode, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
+        dark: darkMode, units, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -3374,6 +3381,10 @@ export default function TakeoffCanvas() {
   const condH = Number(aCond?.height_ft) || 0; // the live-readout JSX below still reads this
   const vertTotal = verticalWallSf(visibleShapes, activeCond, aCond?.height_ft, condMult);
   const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
+  // unit-system display edge: internal math is always feet (lib/units.ts)
+  const fa = (sf, d = 1) => `${num(areaVal(sf, units), d)} ${areaUnit(units)}`;
+  const fl = (lf, d = 1) => `${num(lenVal(lf, units), d)} ${lenUnit(units)}`;
+  const faSY = (sf) => (units === "metric" ? fa(sf) : `${num(sf)} SF · ${num(sf / 9)} SY`);
   const stdValue = unitsPerPx ? (STANDARD_SCALES.find((s) => Math.abs(s.upp - unitsPerPx) < 1e-9)?.label || "") : "";
   // Check tool: measured span at the current scale vs what the drawing says
   const checkPanel = check.length ? panelAt(check[0][0]) : null;
@@ -3381,7 +3392,7 @@ export default function TakeoffCanvas() {
   const checkCross = check.length === 2 && panelAt(check[1][0]).key !== checkPanel.key;
   const checkPx = check.length === 2 && !checkCross ? Math.hypot(check[1][0] - check[0][0], check[1][1] - check[0][1]) : 0;
   const checkFeet = checkUpp && checkPx ? checkPx * checkUpp : null;
-  const checkStatedFeet = parseLenInput(checkStated, UNITS);
+  const checkStatedFeet = parseLenInput(checkStated, units);
   const checkErrPct = checkFeet && checkStatedFeet > 0 ? ((checkFeet - checkStatedFeet) / checkStatedFeet) * 100 : null;
 
   const markupCount = markups.filter((m) => panelKeySet.has(m.sheet_id)).length;
@@ -3972,14 +3983,21 @@ export default function TakeoffCanvas() {
         )}
         <div style={{ flex: 1 }} />
         {cluster(`Scale — ${labelFor(focusPanel)}`,
-          <ToolMenu
-            title={scaleTitle}
-            onOpenChange={onScaleMenuDepth}
-            face={<span>{scaleFace}</span>}
-            faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 11.5, ...scaleFaceStyle }}
-            menuStyle={{ minWidth: 250 }}
-            items={scaleItems}
-          />
+          <>
+            <button onClick={() => setUnits((u) => (u === "metric" ? "imperial" : "metric"))}
+              title={units === "metric" ? "Metric display (m² / m) — click for imperial. Calibrate in meters; 1:50-style scales in the list. Display only — stored takeoffs never change." : "Imperial display (SF / LF) — click for metric (m² / m, calibrate in meters, 1:50-style scales). Display only — stored takeoffs never change."}
+              style={{ padding: "6px 10px", border: `1px solid ${units === "metric" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: units === "metric" ? "var(--cobalt)" : "transparent", color: units === "metric" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, lineHeight: 1 }}>
+              {units === "metric" ? "m" : "ft"}
+            </button>
+            <ToolMenu
+              title={scaleTitle}
+              onOpenChange={onScaleMenuDepth}
+              face={<span>{scaleFace}</span>}
+              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 11.5, ...scaleFaceStyle }}
+              menuStyle={{ minWidth: 250 }}
+              items={scaleItems}
+            />
+          </>
         )}
         {cluster("Action",
           <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 150 }}>
@@ -4117,7 +4135,7 @@ export default function TakeoffCanvas() {
         <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
           {calib.length < 2 ? <span>Custom scale: click two points along a known dimension ({calib.length}/2). Tip: use the longest dimension. (Or just pick a standard scale above.)</span> : (
             <span>Real length:{" "}
-              <input name="calibration-length" type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder="feet" autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> ft
+              <input name="calibration-length" type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder={units === "metric" ? "meters" : "feet"} autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
               <button onClick={applyCalibration} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Apply</button>
               <button onClick={() => setCalib([])} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
             </span>
@@ -4139,8 +4157,8 @@ export default function TakeoffCanvas() {
             <span style={{ color: "var(--c-danger)" }}>Those two clicks landed on the same point — click the two <b>ends</b> of a printed dimension.</span>
           ) : (
             <span>
-              measures <b style={{ fontFamily: "var(--f-mono)" }}>{fmtCheckLen(checkFeet, UNITS)}</b> at {stdValue || "custom scale"} · drawing says{" "}
-              <input name="check-stated-length" value={checkStated} onChange={(e) => setCheckStated(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} placeholder={UNITS === "metric" ? "meters" : `feet (12'6, 6" ok)`} autoFocus style={{ width: 100, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {UNITS === "metric" ? "m" : "ft"}
+              measures <b style={{ fontFamily: "var(--f-mono)" }}>{fmtCheckLen(checkFeet, units)}</b> at {stdValue || "custom scale"} · drawing says{" "}
+              <input name="check-stated-length" value={checkStated} onChange={(e) => setCheckStated(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} placeholder={units === "metric" ? "meters" : `feet (12'6, 6" ok)`} autoFocus style={{ width: 100, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
               {checkErrPct != null && (() => {
                 // checkVerdict grades the ROUNDED value the chip displays (and
                 // normalizes -0), so color and number can never contradict —
@@ -4677,7 +4695,7 @@ export default function TakeoffCanvas() {
                   {checkFeet != null && (
                     <text x={(check[0][0] + check[1][0]) / 2} y={(check[0][1] + check[1][1]) / 2 - 8 / tf.scale}
                       fontSize={12.5 / tf.scale} fontWeight={700} fill="#1f3fc7" textAnchor="middle"
-                      stroke="#fff" strokeWidth={3 / tf.scale} paintOrder="stroke">{fmtCheckLen(checkFeet, UNITS)}</text>
+                      stroke="#fff" strokeWidth={3 / tf.scale} paintOrder="stroke">{fmtCheckLen(checkFeet, units)}</text>
                   )}
                 </>
               )}
@@ -4687,14 +4705,14 @@ export default function TakeoffCanvas() {
               {scaleGuide && panelKeySet.has(scaleGuide.key) && (() => {
                 const [gx, gy] = scaleGuide.at;
                 const z = tf.scale;
-                const unitPx = scaleGuide.px / (UNITS === "metric" ? scaleGuide.feet * M_PER_FT : scaleGuide.feet); // one ft (or 1 m) in px
+                const unitPx = scaleGuide.px / (units === "metric" ? scaleGuide.feet * M_PER_FT : scaleGuide.feet); // one ft (or 1 m) in px
                 const step = unitPx * z >= 6 ? 1 : unitPx * z * 5 >= 6 ? 5 : 0;
-                const nUnits = UNITS === "metric" ? Math.round(scaleGuide.feet * M_PER_FT) : scaleGuide.feet;
+                const nUnits = units === "metric" ? Math.round(scaleGuide.feet * M_PER_FT) : scaleGuide.feet;
                 const ticks = step ? Array.from({ length: Math.floor(nUnits / step) + 1 }, (_, i) => i * step) : [0, nUnits];
                 // "at 1/8″ = 1′-0″" reads right for a scale string; a source word ("calibrated", "custom") reads better parenthesized
                 const scaleTxt = /[=:]/.test(scaleGuide.label) ? `at ${scaleGuide.label}` : `(${scaleGuide.label})`;
-                const lbl = UNITS === "metric" ? `${nUnits} m ${scaleTxt}` : `${scaleGuide.feet}′ ${scaleTxt}`;
-                const cap = UNITS === "metric" ? "a door is about 0.9 m — if this bar looks wildly off, the scale is wrong" : "a door opening is about 3′ — if this bar looks wildly off, the scale is wrong";
+                const lbl = units === "metric" ? `${nUnits} m ${scaleTxt}` : `${scaleGuide.feet}′ ${scaleTxt}`;
+                const cap = units === "metric" ? "a door is about 0.9 m — if this bar looks wildly off, the scale is wrong" : "a door opening is about 3′ — if this bar looks wildly off, the scale is wrong";
                 return (
                   <g style={{ pointerEvents: "none" }}>
                     <line x1={gx} y1={gy} x2={gx + scaleGuide.px} y2={gy} stroke="#fff" strokeWidth={7 / z} strokeLinecap="round" />
@@ -4762,8 +4780,8 @@ export default function TakeoffCanvas() {
             const sf = pos.reduce((n, r) => n + r.area_sf, 0) - neg.reduce((n, r) => n + r.area_sf, 0);
             return (
               <>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(sf)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF selected</span></div>
-                <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""} · {num(sf / 9)} SY</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(areaVal(sf, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} selected</span></div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""}{units === "metric" ? "" : ` · ${num(sf / 9)} SY`}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>{ocSel ? "drag to move · Delete drops this point · Esc deselects" : "hover a fill to edit: drag a corner or edge · shift-click an edge adds a point"}</div>
                 <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
                 {proposal.regions.some((r) => r.rt) && (
@@ -4776,8 +4794,8 @@ export default function TakeoffCanvas() {
               const liveLF = openLen(poly) * liveUpp;
               return condH > 0 ? (
                 <>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>{num(liveLF * condH)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF wall</span></div>
-                  <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{num(liveLF)} LF × {num(condH, 2)} ft</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>{num(areaVal(liveLF * condH, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} wall</span></div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{fl(liveLF)} × {num(condH, 2)} ft</div>
                 </>
               ) : <div style={{ fontSize: 12.5, color: "var(--c-danger)" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition editor</div>;
             })()
@@ -4786,15 +4804,15 @@ export default function TakeoffCanvas() {
               <span style={{ color: "var(--c-danger)", fontSize: 12.5 }}>Zone on one sheet — that point landed on a different sheet. Finish is disabled; Esc or Undo last point to fix it.</span>
             ) : (
               <>
-                {liveArea != null && poly.length >= 3 && <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF in zone</span></div>}
+                {liveArea != null && poly.length >= 3 && <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(areaVal(liveArea, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} in zone</span></div>}
                 <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>⏎, double-click, or the Finish button closes the zone and lists everything inside · Esc cancels</div>
               </>
             )
           ) : liveArea != null && poly.length >= 3 ? (
             <>
-              <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "var(--c-danger)" : "var(--ink)" }}>{tool === "deduct" ? "−" : ""}{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF</span></div>
-              <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{num(liveArea / 9)} SY &nbsp;·&nbsp; {num(livePerim)} LF perim</div>
-              {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {num(livePerim * condH)} SF vert · {num((liveArea * condH) / 27)} CY</div>}
+              <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "var(--c-danger)" : "var(--ink)" }}>{tool === "deduct" ? "−" : ""}{num(areaVal(liveArea, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)}</span></div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{units === "metric" ? `${fl(livePerim)} perim` : `${num(liveArea / 9)} SY  ·  ${num(livePerim)} LF perim`}</div>
+              {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {fa(livePerim * condH)} vert{units === "metric" ? "" : ` · ${num((liveArea * condH) / 27)} CY`}</div>}
             </>
           ) : (
             <div style={{ fontSize: 12.5, opacity: 0.6 }}>{!unitsPerPx ? "Set scale first" : tool === "zone" ? "Trace a region (an apartment, a wing) — ⏎ closes it and lists every condition inside" : !activeCond ? "Pick a condition" : tool === "oneclick" ? "Click inside a room — it selects itself" : tool === "surface" ? "Trace the wall run" : "Click to trace an area"}</div>
@@ -4806,7 +4824,7 @@ export default function TakeoffCanvas() {
               <input name="shape-height-ft" type="number" min="0" step="0.25" value={selShape.height_ft ?? ""}
                 onChange={(e) => setShapeHeight(e.target.value)}
                 style={{ width: 56, padding: "2px 5px", border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>ft → {num(selShape.computed?.area_sf || 0)} SF</span>
+              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>ft → {fa(selShape.computed?.area_sf || 0)}</span>
               {condH > 0 && Number(selShape.height_ft) !== condH && (
                 <button onClick={clearShapeHeight} title="Set this wall to the condition height" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0 }}>↺</button>
               )}
@@ -4814,12 +4832,12 @@ export default function TakeoffCanvas() {
           )}
           <div style={{ height: 1, background: "var(--divider-soft)", margin: "8px 0" }} />
           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, opacity: 0.5 }}>{aCond?.finish_tag || "—"} total ({condRow?.shape_count || 0}{condMult > 1 ? ` ×${condMult}` : ""})</div>
-          {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(condTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF</span> <span style={{ fontSize: 12, fontWeight: 500, color: "var(--ink-secondary)" }}>· {num(condTotal / 9)} SY</span></div>}
-          {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(wallTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF wall</span></div>}
-          {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(borderTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF border</span></div>}
-          {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lfTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>LF</span></div>}
+          {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(condTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)}</span> {units === "imperial" && <span style={{ fontSize: 12, fontWeight: 500, color: "var(--ink-secondary)" }}>· {num(condTotal / 9)} SY</span>}</div>}
+          {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(wallTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)} wall</span></div>}
+          {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(borderTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)} border</span></div>}
+          {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lenVal(lfTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{lenUnit(units)}</span></div>}
           {countTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(countTotal, 0)} <span style={{ fontSize: 12, fontWeight: 600 }}>EA</span></div>}
-          {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{num(vertTotal)} SF vert (perim × H)</div>}
+          {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{fa(vertTotal)} vert (perim × H)</div>}
           {condTotal === 0 && lfTotal === 0 && countTotal === 0 && wallTotal === 0 && borderTotal === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginTop: 2 }}>—</div>}
           <div style={{ fontSize: 10.5, opacity: 0.45, marginTop: 6 }}>{visibleShapes.length} shapes on {groupKeys.length > 1 ? `${groupKeys.length} sheets` : "sheet"} · zoom {(tf.scale * 100).toFixed(0)}%</div>
         </div>
@@ -4843,10 +4861,10 @@ export default function TakeoffCanvas() {
             )}
             {zoneRows.map((zr) => {
               const parts = [];
-              if (zr.floor_sf) parts.push(`${num(zr.floor_sf)} SF`);
-              if (zr.wall_sf) parts.push(`${num(zr.wall_sf)} SF wall`);
-              if (zr.border_sf) parts.push(`${num(zr.border_sf)} SF border`);
-              if (zr.lf) parts.push(`${num(zr.lf)} LF`);
+              if (zr.floor_sf) parts.push(fa(zr.floor_sf));
+              if (zr.wall_sf) parts.push(`${fa(zr.wall_sf)} wall`);
+              if (zr.border_sf) parts.push(`${fa(zr.border_sf)} border`);
+              if (zr.lf) parts.push(fl(zr.lf));
               if (zr.ea) parts.push(`${num(zr.ea, 0)} EA`);
               const open = zoneExpand === zr.id;
               return (
@@ -4914,6 +4932,7 @@ export default function TakeoffCanvas() {
           open={takeoffsOpen}
           width={panelW}
           multiSheet={groupKeys.length > 1}
+          units={units}
           conditions={conditions}
           activeCond={activeCond}
           visRowById={visRowById}
@@ -4987,7 +5006,7 @@ export default function TakeoffCanvas() {
       {showReport && (
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
-          clientInfo={clientInfo} onClientInfo={setClientInfo}
+          clientInfo={clientInfo} onClientInfo={setClientInfo} units={units}
           conditions={conditions} shapes={shapes} markups={markups} rfis={rfis}
           conditionColumns={conditionColumns} shapeLabels={shapeLabels}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
@@ -5000,7 +5019,7 @@ export default function TakeoffCanvas() {
       {showRevisions && (
         <RevisionsPanel
           current={buildPayload()}
-          units={UNITS}
+          units={units}
           onRestore={restoreSavedPayload}
           onClose={() => setShowRevisions(false)}
         />

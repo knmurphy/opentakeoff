@@ -29,6 +29,7 @@ import { Icon } from "../brand/icons.jsx";
 import { attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { SPEC_FIELDS } from "../lib/reportColumns.js";
 import { num } from "../lib/num.js";
+import { areaVal, areaUnit, lenVal, lenUnit } from "../lib/units";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
 import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutDerivedFields, showsGroutCalc, showsGroutDeriveAffordance } from "../lib/coverage.js";
@@ -393,7 +394,7 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
 }
 
 function TakeoffsPanel({
-  open, width, multiSheet,
+  open, width, multiSheet, units = "imperial",
   conditions, activeCond, visRowById, conditionColumns, shapeLabels = [], templates, palette = [],
   matLib, matLibById, linkedCountById,
   panelPrefs, onPanelPrefs, reassigning, epoch, clearSelectionRef,
@@ -546,6 +547,10 @@ function TakeoffsPanel({
 
   const aCond = conditions.find((c) => c.id === activeCond);
 
+  // unit-system display edge (mirrors the canvas HUD): internal math stays feet
+  const fa = (sf) => `${num(areaVal(sf, units))} ${areaUnit(units)}`;
+  const fl = (lf) => `${num(lenVal(lf, units))} ${lenUnit(units)}`;
+
   const renderCondRow = (c) => {
     const row = visRowById.get(c.id);
     const mult = c.multiplier || 1;
@@ -578,7 +583,7 @@ function TakeoffsPanel({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
             <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
-              {sf ? `${num(sf)} SF` : ""}{wsf ? `${sf ? " · " : ""}${num(wsf)} SF wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${num(lf)} LF` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
+              {sf ? fa(sf) : ""}{wsf ? `${sf ? " · " : ""}${fa(wsf)} wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${fl(lf)}` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
             </div>
           </div>
           <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
