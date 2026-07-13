@@ -274,6 +274,7 @@ export default function TakeoffCanvas() {
   });
   useEffect(() => { try { localStorage.setItem("opentakeoff_fill_sens", String(fillSens)); } catch { /* private mode */ } }, [fillSens]);
   const [saveState, setSaveState] = useState("idle");
+  const [loadError, setLoadError] = useState("");   // annotations load failed — autosave stays disarmed
   // internal state is { text }, minted FRESH on every setCommitMsg call — a
   // byte-identical message (e.g. two "Couldn't open X" in a row) still gets a
   // new object identity, so the effect below (keyed on this object) restarts
@@ -372,8 +373,10 @@ export default function TakeoffCanvas() {
   // autosave dep to a fresh identity, so the effect fires once on the post-load
   // render with no edit behind it; that lone run arms this and returns instead of
   // writing — otherwise merely opening a shared ?project= link would CREATE
-  // annotations.json in the folder (see #68). Error paths that skip hydrate arm
-  // it directly (no echo to swallow). A snapshot Load reuses hydrate() too, but
+  // annotations.json in the folder (see #68). Error paths that skip hydrate
+  // leave BOTH hydrated and this disarmed: the in-memory state is empty there,
+  // so arming would let the first edit overwrite the intact saved takeoff with
+  // nothing (the loadError banner explains). A snapshot Load reuses hydrate() too, but
   // mid-session it runs with this already armed, so a restore saves — unchanged
   // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
   // and is not persisted — the #73 gap, which persists on the LEGACY cloud path.
@@ -748,10 +751,11 @@ export default function TakeoffCanvas() {
       // annotations): same rule as a stale tab — leave autosave DISARMED so empty
       // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
       if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
-      // hydrate never ran here, so there is no echo render to swallow — arm
-      // directly so the user's first edit saves without being eaten.
-      hydrated.current = true;
-      savesArmed.current = true;
+      // Do NOT arm autosave on any other failed load either: the in-memory
+      // state is empty, so the first edit would overwrite the intact saved
+      // takeoff with nothing. Leave it disarmed (hydrated stays false) and say
+      // so in a banner — a reload retries the read.
+      setLoadError(String((e && e.message) || e || "unknown error"));
     });
     return () => { off = true; };
     // run-once mount load — hydrate is intentionally not a dep (re-running would
@@ -4799,6 +4803,16 @@ export default function TakeoffCanvas() {
           onCreate={createFromSchedule}
           onClose={() => setImportRows(null)}
         />
+      )}
+
+      {loadError && (
+        <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 60, display: "flex", alignItems: "center", gap: 12, maxWidth: 640, padding: "10px 14px", background: "var(--paper-bright)", border: "1px solid var(--c-danger)", boxShadow: "var(--shadow-2)", fontSize: 12.5, color: "var(--ink)" }}>
+          <span>
+            <strong style={{ color: "var(--c-danger)" }}>Couldn't load this project's saved takeoff</strong> ({loadError}).
+            Autosave is paused so nothing overwrites your saved work — reload the tab to retry.
+          </span>
+          <button onClick={() => window.location.reload()} style={{ whiteSpace: "nowrap", padding: "6px 12px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 12 }}>Reload</button>
+        </div>
       )}
 
       {showReport && (
