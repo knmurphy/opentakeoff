@@ -135,6 +135,22 @@ python3 capture/capture_server.py    # then, in the app's browser console:
 
 Run OpenTakeoff as-is and none of this exists for you — nothing is captured, nothing leaves your machine. Install it and every takeoff you *choose* to contribute compounds into an asset you own. This is the open edition of the capture layer inside [Spline](https://spline.quisutdeus.io), the commercial Division-9 estimating system OpenTakeoff was carved from, where capture runs far deeper — ambient on autosave and commit, no button: provisional rows bank while you draw, certified rows land on commit with the exploded materials assembly, edits carry a decision trail, and each job's corpus files itself into that GC's folder on the company share. The full pitch, the row schema, and the training angle live in [`capture/README.md`](capture/README.md).
 
+## The research behind OpenTakeoff
+
+OpenTakeoff is the open half of an applied-research program run by a working commercial flooring estimator ([Kentucky AI](https://kentucky-ai.com)). The boundary is deliberate, and it's the same one the best open-core scientific software draws: **the measurement engine — rendering, scale, geometry, exports, the MCP server — is Apache-2.0 and stays open. The AI models we train on our own estimating archive are proprietary.** You get a real tool with no seat licenses; we keep the part that only our data can build.
+
+The research side runs like a lab, not a demo reel:
+
+- **Markup-as-label training data (patent pending).** Every takeoff an estimator saves in professional takeoff software stores the drawn regions as vector geometry, and reconstructing those polygons reproduces the recorded quantities exactly. Two decades of estimating work is an exact, verifiable training corpus — that's the thesis the whole program tests.
+- **Parameter-efficient tuning, not pretraining.** The models are QLoRA adapters on open-weights bases (~0.1% of parameters trained), specialized from a verified bid archive — cheap enough to retrain when the data says retrain, small enough to ship. The flagship adapter predicts bid totals at **12.3% median absolute percentage error on a 51-project temporal holdout**, against 62.8% for the untuned base — full method and honest caveats on the [model card](https://huggingface.co/quisutdeus1/div9-flooring-estimator-gemma4-31b).
+- **Verified labels in, verified rulers out.** Before any historical bid becomes training data it passes a dual-document verification gate: totals must reconcile between the bid workbook and the separately filed proposal, change orders only count when corroborated by an actual change-order document, and line-item arithmetic is recomputed and forensically checked. Unverifiable projects don't train.
+- **Frozen holdouts and verifiable rulers.** Every model is scored against temporally held-out projects it never trained on — future bids, not a random split — with a geometry scorer whose own error floor is measured (0.4%), so we know when a number is model error versus measurement error.
+- **Multi-seed replication.** No result is promoted from a single training run; promotion requires seed replication with paired bootstrap confidence intervals — and the cross-seed spread gets published, not just the best seed.
+- **Negative results are kept.** The experiment ledger records what failed and why — an unfreeze recipe that destroyed detection, a vertical-specialist model that lost to the generalist's cross-vertical transfer — alongside what worked.
+- **Leak-audited before release.** Identifiers are replaced *before* training (the weights never see a real name), and every public artifact passes a differential red-team: adversarial extraction probes against the tuned model with the untuned base as control.
+
+Sanitized research artifacts — model cards, benchmark specs, papers — are published as they clear review: [Hugging Face](https://huggingface.co/quisutdeus1) · [kentucky-ai.com](https://kentucky-ai.com).
+
 ## Bring your own AI (optional)
 
 OpenTakeoff can ask a vision model **you** provide to read things off the plan — starting with the drawn scale when a sheet's text doesn't state one (scans, rotated notes, image title blocks). Click **AI** in the toolbar and point it at an **OpenAI-style** endpoint (the default — local runtimes on your own machine speak it and need no key) or an **Anthropic-style** endpoint, plus a vision-capable model id.
