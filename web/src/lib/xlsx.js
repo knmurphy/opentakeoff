@@ -1,296 +1,220 @@
-// Native Excel (.xlsx) export — a hand-rolled SpreadsheetML writer zipped with
-// fflate (already a dependency; lazy-loaded like the ingest zip path, so Excel
-// export costs nothing until the button is clicked). No SheetJS, no exceljs:
-// the report needs exactly one thing — worksheets of plain cells — and a
-// megabyte of spreadsheet library is the wrong price for it.
+// Minimal SpreadsheetML (.xlsx) writer — hand-rolled, zipped with fflate
+// (already a dependency; lazy-loaded like the ingest zip path — see #16).
+// No SheetJS (stale npm package with CVEs), no exceljs (~1MB).
 //
-// Two layers:
-//   buildXlsxParts(sheets)  -> Map<path, xmlString>   pure, fully testable
-//   xlsxBytes(sheets)       -> Promise<Uint8Array>    parts zipped by fflate
-//   downloadXlsx(name, sheets)                        browser download
-//   takeoffWorkbook(...)    -> sheets[]               the report as a workbook
+// Scope: exactly what the takeoff report needs — multiple worksheets of plain
+// cells. Strings go out as inline strings (<c t="inlineStr"><is><t>…), numbers
+// as plain <v>; no shared-strings table, no formulas (so pasted "=..." finish
+// tags can never execute — inline strings are inert text), no column widths.
+// A minimal styles.xml ships because Excel expects the part to exist.
 //
-// A sheet is { name, rows, autoFilter?, freezeTop? } where rows is an array of
-// cell arrays. A cell is:
-//   number            -> numeric cell (NaN/Infinity written as blank)
-//   string            -> inline string, XML-escaped
-//   null/undefined/"" -> skipped
-//   { v, s }          -> value with a named style (see STYLE below)
-//
-// Every string goes out as an INLINE string (<is><t>…), never a shared string
-// and never a formula — so a condition named "=HYPERLINK(…)" or "+SUM(A1)" is
-// inert text in Excel, the same reasoning as CSV formula-injection hygiene.
-// Numbers keep full precision in <v>; display rounding is the style's job
-// (#,##0.0 for quantities, #,##0 for counts), so the workbook shows what the
-// report shows while the cells stay exact for downstream arithmetic.
+// The workbook builder (reportWorkbook) reads the SAME sources as the CSV/JSON
+// exports — conditionTotals rows through GETTERS, sheetTotals via roundSheetRow,
+// materialsSummary, shapesDetail — so the four tabs carry the same numbers as
+// the on-screen table: waste applied only to order quantities, never measured.
 
-import { conditionTotals, grandTotals, materialsSummary, sheetTotals } from "./totals.js";
-import { parseSheetKey } from "./sheets";
-import { areaVal, areaUnit, lenVal, lenUnit } from "./units";
+import { GETTERS, colGetter } from "./reportColumns.js";
+import { grandTotals, materialsSummary, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 
-// Named styles -> cellXfs index in stylesXml(). th = bold header with a rule
-// under it; qty = 1-decimal grouped number; int = whole number; b* = bold
-// (grand-total row). Keep the two tables in lockstep.
-const STYLE = { th: 1, qty: 2, int: 3, b: 4, bqty: 5, bint: 6 };
+// ---------------------------------------------------------------------------
+// XML plumbing
 
-// XML-escape text, dropping the control characters XML 1.0 forbids (a pasted
-// NUL or vertical tab in a condition name must not produce a file Excel
-// refuses to open). Tab/newline/CR survive. Escape sequences, never literal
-// control bytes — a raw byte in source makes git treat the file as binary.
-export function xmlEsc(v) {
+// Escape a value for XML text/attribute content. Also strips control chars
+// that are illegal in XML 1.0 (condition names are user data — a pasted \x00
+// must not produce a file Excel refuses to open). Keeps \t \n \r.
+export function escXml(v) {
   return String(v)
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "") // eslint-disable-line no-control-regex
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
-// 0-based column index -> spreadsheet letters (0=A, 25=Z, 26=AA …)
-export function colRef(i) {
+// 0 → A, 25 → Z, 26 → AA … (spreadsheet column letters)
+export function colLetter(i) {
   let s = "";
   for (let n = i; n >= 0; n = Math.floor(n / 26) - 1) s = String.fromCharCode(65 + (n % 26)) + s;
   return s;
 }
 
-// Excel worksheet-name rules: non-empty, ≤31 chars, none of [ ] : * ? / \,
-// no leading/trailing apostrophe, unique case-insensitively, and "History" is
-// reserved by Excel. `used` carries the taken names across calls.
-export function safeSheetName(name, used = new Set()) {
-  let s = String(name ?? "").replace(/[[\]:*?/\\]/g, " ").replace(/^'+|'+$/g, "").trim().slice(0, 31).trim();
-  if (!s || s.toLowerCase() === "history") s = s ? `${s}_` : "Sheet";
-  let out = s;
-  for (let n = 2; used.has(out.toLowerCase()); n++) {
-    const tail = ` (${n})`;
-    out = s.slice(0, 31 - tail.length) + tail;
+// Excel sheet-name rules: non-empty, ≤31 chars, no [ ] : * ? / \ , unique
+// within the workbook (case-insensitive), no leading/trailing apostrophe.
+// `used` is a Set of lower-cased names already taken; the returned name is
+// added to it.
+export function sanitizeSheetName(name, used = new Set()) {
+  let s = String(name ?? "").replace(/[[\]:*?/\\]/g, "_").replace(/^'+|'+$/g, "").trim();
+  if (!s) s = "Sheet";
+  s = s.slice(0, 31).trim();
+  let candidate = s;
+  for (let n = 2; used.has(candidate.toLowerCase()); n++) {
+    const suffix = ` (${n})`;
+    candidate = s.slice(0, 31 - suffix.length) + suffix;
   }
-  used.add(out.toLowerCase());
-  return out;
+  used.add(candidate.toLowerCase());
+  return candidate;
 }
 
-const cellVal = (c) => (c !== null && typeof c === "object" ? c.v : c);
-const cellStyle = (c) => (c !== null && typeof c === "object" && c.s ? STYLE[c.s] || 0 : 0);
-const isBlank = (v) => v === null || v === undefined || v === "";
-
-// Column widths from content: Excel's width unit is roughly one character.
-// Grouped 1-decimal display adds ~2 chars over the raw digits; +2 breathing
-// room; clamp so a long note can't produce a 300-char column.
-function colWidths(rows) {
-  const w = [];
-  for (const row of rows) row.forEach((c, i) => {
-    const v = cellVal(c);
-    if (isBlank(v)) return;
-    const len = typeof v === "number" ? String(Math.round(v)).length + 3 : String(v).length;
-    if (!w[i] || len > w[i]) w[i] = len;
-  });
-  return w.map((len) => Math.min(44, Math.max(8, (len || 0) + 2)));
-}
-
-// One worksheet part. Row/cell refs (r=) are explicit so skipped blanks never
-// shift their neighbours.
-/** @param {{ rows: any[][], autoFilter?: { cols: number, rows: number } | null, freezeTop?: boolean }} sheet */
-export function worksheetXml({ rows, autoFilter = null, freezeTop = false }) {
-  const parts = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'];
-  parts.push('<sheetViews><sheetView workbookViewId="0">'
-    + (freezeTop ? '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' : "")
-    + "</sheetView></sheetViews>");
-  const widths = colWidths(rows);
-  if (widths.length) {
-    parts.push("<cols>" + widths.map((wd, i) => `<col min="${i + 1}" max="${i + 1}" width="${wd}" customWidth="1"/>`).join("") + "</cols>");
-  }
-  parts.push("<sheetData>");
-  rows.forEach((row, ri) => {
-    parts.push(`<row r="${ri + 1}">`);
-    row.forEach((c, ci) => {
-      const v = cellVal(c);
-      if (isBlank(v)) return;
-      const ref = `${colRef(ci)}${ri + 1}`;
-      const s = cellStyle(c);
-      const sAttr = s ? ` s="${s}"` : "";
-      if (typeof v === "number") {
-        if (Number.isFinite(v)) parts.push(`<c r="${ref}"${sAttr}><v>${v}</v></c>`);
-        return;
+// One worksheet part from rows of cell values (array of arrays).
+//   number (finite)      → <c r=… ><v>…</v></c>
+//   null / undefined / "" → cell skipped entirely
+//   anything else         → inline string, XML-escaped
+export function sheetXml(rows) {
+  const out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'];
+  rows.forEach((cells, ri) => {
+    out.push(`<row r="${ri + 1}">`);
+    cells.forEach((v, ci) => {
+      if (v === null || v === undefined || v === "") return;
+      const ref = `${colLetter(ci)}${ri + 1}`;
+      if (typeof v === "number" && Number.isFinite(v)) {
+        out.push(`<c r="${ref}"><v>${v}</v></c>`);
+      } else {
+        const t = escXml(v);
+        // preserve leading/trailing whitespace the way Excel expects
+        const sp = /^\s|\s$/.test(String(v)) ? ' xml:space="preserve"' : "";
+        out.push(`<c r="${ref}" t="inlineStr"><is><t${sp}>${t}</t></is></c>`);
       }
-      const t = xmlEsc(v);
-      const sp = /^\s|\s$/.test(String(v)) ? ' xml:space="preserve"' : "";
-      parts.push(`<c r="${ref}"${sAttr} t="inlineStr"><is><t${sp}>${t}</t></is></c>`);
     });
-    parts.push("</row>");
+    out.push("</row>");
   });
-  parts.push("</sheetData>");
-  // autoFilter: header + data rows only — a grand-total row below the range
-  // stays out of the filter. Emitted AFTER sheetData (schema order).
-  if (autoFilter && autoFilter.cols > 0 && autoFilter.rows > 0) {
-    parts.push(`<autoFilter ref="A1:${colRef(autoFilter.cols - 1)}${autoFilter.rows}"/>`);
-  }
-  parts.push("</worksheet>");
-  return parts.join("");
+  out.push("</sheetData></worksheet>");
+  return out.join("");
 }
 
-// Minimal stylesheet: two custom number formats, normal + bold fonts, and the
-// two fills/one border Excel insists exist. cellXfs order must match STYLE.
-function stylesXml() {
-  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + '<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.0"/><numFmt numFmtId="165" formatCode="#,##0"/></numFmts>'
-    + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
-    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
-    + '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
-    + '<border><left/><right/><top/><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders>'
-    + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-    + '<cellXfs count="7">'
-    + '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-    + '<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1"/>'
-    + '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-    + '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
-    + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
-    + '<xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>'
-    + '<xf numFmtId="165" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>'
-    + "</cellXfs>"
-    + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
-    + "</styleSheet>";
-}
+// The bare-minimum stylesheet — Excel treats fillId 0 (none) and 1 (gray125)
+// as reserved, so both ship even though no cell references a style.
+const STYLES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+  '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+  '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>' +
+  '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+  '<borders count="1"><border/></borders>' +
+  '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+  '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>' +
+  '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+  "</styleSheet>";
 
-// The full package as path -> XML string. Pure: tests unzip nothing, they
-// read the parts straight off this map.
-export function buildXlsxParts(sheets) {
+// ---------------------------------------------------------------------------
+// Workbook assembly
+
+/**
+ * Zip sheet definitions into an .xlsx byte array.
+ * @param {Array<{name: string, rows: any[][]}>} sheets one entry per tab, in order
+ * @returns {Promise<Uint8Array>} download with MIME
+ *   application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+ */
+export async function buildXlsx(sheets) {
+  const { zipSync, strToU8 } = await import("fflate"); // lazy — same pattern as ingest.js
   const used = new Set();
-  const named = sheets.map((sh) => ({ ...sh, name: safeSheetName(sh.name, used) }));
-  const parts = new Map();
-  parts.set("[Content_Types].xml",
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-    + '<Default Extension="xml" ContentType="application/xml"/>'
-    + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-    + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-    + named.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")
-    + "</Types>");
-  parts.set("_rels/.rels",
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
-    + "</Relationships>");
-  parts.set("xl/workbook.xml",
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-    + "<sheets>"
-    + named.map((sh, i) => `<sheet name="${xmlEsc(sh.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")
-    + "</sheets></workbook>");
-  parts.set("xl/_rels/workbook.xml.rels",
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-    + named.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")
-    + `<Relationship Id="rId${named.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`
-    + "</Relationships>");
-  parts.set("xl/styles.xml", stylesXml());
-  named.forEach((sh, i) => parts.set(`xl/worksheets/sheet${i + 1}.xml`, worksheetXml(sh)));
-  return parts;
-}
+  const names = sheets.map((s) => sanitizeSheetName(s.name, used));
 
-export async function xlsxBytes(sheets) {
-  const { zipSync, strToU8 } = await import("fflate");
-  const files = {};
-  for (const [path, xml] of buildXlsxParts(sheets)) files[path] = strToU8(xml);
-  return zipSync(files, { level: 6 });
-}
+  const contentTypes = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+    '<Default Extension="xml" ContentType="application/xml"/>',
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>',
+    ...sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`),
+    "</Types>"].join("");
 
-export async function downloadXlsx(filename, sheets) {
-  const bytes = await xlsxBytes(sheets);
-  const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const rootRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+    "</Relationships>";
+
+  const workbook = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>',
+    ...names.map((name, i) => `<sheet name="${escXml(name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`),
+    "</sheets></workbook>"].join("");
+
+  const wbRels = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">',
+    ...sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`),
+    `<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`,
+    "</Relationships>"].join("");
+
+  const files = {
+    "[Content_Types].xml": strToU8(contentTypes),
+    "_rels/.rels": strToU8(rootRels),
+    "xl/workbook.xml": strToU8(workbook),
+    "xl/_rels/workbook.xml.rels": strToU8(wbRels),
+    "xl/styles.xml": strToU8(STYLES_XML),
+  };
+  sheets.forEach((s, i) => { files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s.rows)); });
+  return zipSync(files);
 }
 
 // ---------------------------------------------------------------------------
-// The takeoff report as a workbook — same sources and same numbers as the
-// on-screen table and the CSV/JSON exports (conditionTotals / grandTotals /
-// materialsSummary / sheetTotals), so the four tabs can never disagree with
-// the report. Waste applies to order quantities only, never measured ones.
+// The takeoff report workbook: Conditions / By sheet / Materials / Shapes
 
-const ROLE_LABEL = {
-  floor_area: "Floor area", deduct: "Deduct", surface_area: "Wall (surface)",
-  linear: "Linear", count: "Count",
-};
+/**
+ * Map the report's data sources onto the four workbook tabs. Pure (no fflate)
+ * so tests can assert the cell values directly.
+ * @param {object} args
+ * @param {any[]} args.rows conditionTotals() rows (shapeless conditions filtered out)
+ * @param {Array<{sheet_id: any, rows: any[]}>} args.bySheet sheetTotals() result
+ * @param {any[]} args.shapeRows shapesDetail() result
+ * @param {Array<{key: string, header: string}>} [args.cols] visible CSV_PROFILE
+ *   columns — the Conditions tab honors the same column picker the CSV uses
+ * @param {{perimByCond?: Map<any, number>, attrsByCond?: Map<any, object>, specByCond?: Map<any, object>}|null}
+ *   [args.ctx] handed to the getters
+ * @param {((sheetId: any) => string)|null} [args.sheetLabel]
+ * @returns {Array<{name: string, rows: any[][]}>}
+ */
+export function reportWorkbook({ rows = [], bySheet = [], shapeRows = [], cols = null, ctx = null, sheetLabel = null }) {
+  const columns = cols || [];
+  const label = (id) => (sheetLabel ? sheetLabel(id) : id);
 
-// "plan.pdf#3" -> "plan — p.3" (page 1 keys are the bare file name)
-function sheetLabel(sheetId) {
-  const { file, page } = parseSheetKey(sheetId);
-  const stem = file.replace(/\.pdf$/i, "");
-  return page > 1 ? `${stem} — p.${page}` : stem;
-}
-
-export function takeoffWorkbook({ projectName = "", units = "imperial", conditions, shapes }) {
-  const M = units === "metric";
-  const AU = areaUnit(units), LU = lenUnit(units);
-  const av = (sf) => areaVal(sf, units), lv = (lf) => lenVal(lf, units);
-  const rows = conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0);
+  // Conditions — same columns, getters, and TOTAL row as totalsToCsv (per-
+  // column get, i.e. custom columns, falls back to the shared GETTERS)
+  const conditions = [columns.map((c) => c.header)];
+  for (const r of rows) conditions.push(columns.map((c) => colGetter(c)?.(r, ctx)));
   const g = grandTotals(rows);
-  const th = (v) => ({ v, s: "th" });
-  const qty = (v) => ({ v, s: "qty" });
-  const int = (v) => ({ v, s: "int" });
+  conditions.push(columns.map((c) => {
+    if (c.key === "finish") return "TOTAL";
+    if (c.key === "waste_sf" || c.key === "waste_lf") return GETTERS[c.key](g);
+    return g[c.key] !== undefined ? g[c.key] : "";
+  }));
 
-  // — Summary: the STACK-style per-condition breakdown + grand total —
-  const sumHeader = ["Finish", "Shapes", "Multiplier", "Waste %", `Floor ${AU}`, `Wall ${AU}`, `Border ${AU}`,
-    `Total ${AU}`, LU, "EA", `Total ${AU} (w/ waste)`, `${LU} (w/ waste)`, ...(M ? [] : ["SY (w/ waste)"])];
-  const summary = [sumHeader.map(th)];
-  for (const r of rows) {
-    summary.push([r.finish_tag, int(r.shape_count), int(r.multiplier), int(r.waste_pct),
-      qty(av(r.floor_sf)), qty(av(r.wall_sf)), qty(av(r.border_sf)), qty(av(r.total_sf)), qty(lv(r.lf)), int(r.ea),
-      qty(av(r.total_sf_net)), qty(lv(r.lf_net)), ...(M ? [] : [qty(r.sy_net)])]);
+  // By sheet — base (unmultiplied) quantities, rounded at serialization only
+  const bySheetRows = [["Sheet", "Sheet ID", "Finish", "Floor SF", "Wall SF", "Border SF", "LF", "EA"]];
+  for (const gp of bySheet) {
+    for (const row of gp.rows) {
+      const mult = row.multiplier || 1;
+      const finish = mult > 1 ? `${row.finish_tag} ×${mult}` : row.finish_tag;
+      const r = roundSheetRow(row);
+      bySheetRows.push([String(label(gp.sheet_id)), String(gp.sheet_id), finish, r.floor_sf, r.wall_sf, r.border_sf, r.lf, r.ea]);
+    }
   }
-  summary.push([{ v: "TOTAL", s: "b" }, "", "", "", "", "", "", { v: av(g.total_sf), s: "bqty" }, { v: lv(g.lf), s: "bqty" },
-    { v: g.ea, s: "bint" }, { v: av(g.total_sf_net), s: "bqty" }, { v: lv(g.lf_net), s: "bqty" }, ...(M ? [] : [{ v: g.sy_net, s: "bqty" }])]);
-  summary.push([]);
-  summary.push([`Total ${AU} (w/ waste) = measured quantity × waste %. Wall ${AU} comes from Surface-Area traces (run × height); Border ${AU} from Linear runs with a thickness.`]);
-  if (projectName) summary.push([`Project: ${projectName} — generated with OpenTakeoff`]);
+  if (hasMultipliers(bySheet)) bySheetRows.push([], [BY_SHEET_BASE_NOTE]);
 
-  // — By sheet: where the quantities live in the drawing set —
-  const bySheetRows = sheetTotals(conditions, shapes);
-  const bySheet = [["Sheet", "Finish", `Floor ${AU}`, `Wall ${AU}`, `Border ${AU}`, LU, "EA"].map(th)];
-  for (const r of bySheetRows) {
-    bySheet.push([sheetLabel(r.sheet_id), r.finish_tag,
-      qty(av(r.floor_sf)), qty(av(r.wall_sf)), qty(av(r.border_sf)), qty(lv(r.lf)), int(r.ea)]);
-  }
-  bySheet.push([]);
-  bySheet.push(["Base measured quantities per sheet — the condition multiplier and waste apply at condition level (see Summary)."]);
-
-  // — Materials: per-condition needs, then the combined buy list —
-  const basisLabel = (b) => (b === "linear" ? LU : b === "count" ? "EA" : AU);
-  const matRows = [];
+  // Materials — per condition, then the combined buy list (mirrors the CSV)
+  const basisLabel = (b) => (b === "linear" ? "LF" : b === "count" ? "EA" : "SF");
+  const materials = [["Finish", "Material", "Qty", "Unit", "Coverage", "Note"]];
   for (const r of rows) for (const m of (r.materials || [])) {
-    matRows.push([r.finish_tag, m.name, qty(m.qty), m.unit, `1 ${m.unit || "unit"} / ${m.per} ${basisLabel(m.basis)}`, m.note || ""]);
+    materials.push([r.finish_tag, m.name, m.qty, m.unit, `1 ${m.unit || "unit"} / ${m.per} ${basisLabel(m.basis)}`, m.note || ""]);
   }
-  const materials = [["Finish", "Material", "Qty", "Unit", "Coverage", "Note"].map(th), ...matRows];
   const combined = materialsSummary(rows);
   if (combined.length) {
-    materials.push([]);
-    materials.push(["Material (combined)", "Qty", "Unit"].map(th));
-    for (const m of combined) materials.push([m.name, qty(m.qty), m.unit]);
+    materials.push([], ["Material (combined)", "Qty", "Unit"]);
+    for (const s of combined) materials.push([s.name, s.qty, s.unit]);
   }
 
-  // — Shapes: the per-shape audit trail (deducts carry their sign) —
-  const shapesRows = [["#", "Sheet", "Finish", "Role", `Area ${AU}`, LU, "EA", `Height ${M ? "m" : "ft"}`].map(th)];
-  const condById = new Map(conditions.map((c) => [c.id, c]));
-  shapes.forEach((s, i) => {
-    const c = condById.get(s.condition_id);
-    if (!c) return;
-    const cp = s.computed || {};
-    const sign = s.measure_role === "deduct" ? -1 : 1;
-    shapesRows.push([int(i + 1), sheetLabel(s.sheet_id), c.finish_tag, ROLE_LABEL[s.measure_role] || s.measure_role,
-      cp.area_sf ? qty(av(sign * cp.area_sf)) : "",
-      s.measure_role === "linear" && cp.perimeter_lf ? qty(lv(cp.perimeter_lf)) : "",
-      s.measure_role === "count" ? int(cp.count || 1) : "",
-      s.measure_role === "surface_area" && s.height_ft ? qty(M ? lv(s.height_ft) : s.height_ft) : ""]);
-  });
-
-  const out = [
-    { name: "Summary", rows: summary, freezeTop: true, autoFilter: { cols: sumHeader.length, rows: 1 + rows.length } },
-    { name: "By sheet", rows: bySheet, freezeTop: true, autoFilter: { cols: 7, rows: 1 + bySheetRows.length } },
+  // Shapes — measured only: no multiplier, no waste (shapesDetail semantics)
+  const shapesTab = [
+    ["Per-shape measured quantities — no multiplier or waste; deducts negative; LF on floor/deduct/surface rows is trace reference only (incl. openings) — linear rows alone sum to condition LF"],
+    ["Shape", "Sheet", "Sheet ID", "Finish", "Role", "Area SF", "LF", "EA", "Height ft", "Height override", "Origin"],
   ];
-  if (matRows.length) out.push({ name: "Materials", rows: materials, freezeTop: true });
-  out.push({ name: "Shapes", rows: shapesRows, freezeTop: true, autoFilter: { cols: 8, rows: shapesRows.length } });
-  return out;
+  for (const r of shapeRows) {
+    shapesTab.push([String(r.shape_id), String(r.sheet), String(r.sheet_id), r.finish, r.role,
+      r.area_sf, r.lf, r.ea, r.height_ft, r.height_override ? "yes" : "", r.origin]);
+  }
+
+  return [
+    { name: "Conditions", rows: conditions },
+    { name: "By sheet", rows: bySheetRows },
+    { name: "Materials", rows: materials },
+    { name: "Shapes", rows: shapesTab },
+  ];
 }

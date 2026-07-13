@@ -32,6 +32,7 @@ export const icons = {
   cloud: (s) => <I size={s}><path d="M6 9 a2.3 2.3 0 0 1 4 -1.4 a2.3 2.3 0 0 1 4 0 a2.3 2.3 0 0 1 4 1.4 a2.3 2.3 0 0 1 0.4 3 a2.3 2.3 0 0 1 -0.4 3 a2.3 2.3 0 0 1 -4 1.4 a2.3 2.3 0 0 1 -4 0 a2.3 2.3 0 0 1 -4 -1.4 a2.3 2.3 0 0 1 -0.4 -3 a2.3 2.3 0 0 1 0.4 -3 Z" /></I>,
   callout: (s) => <I size={s}><circle cx="6" cy="17" r="1.1" fill="currentColor" /><line x1="6.8" y1="16.2" x2="13" y2="10" /><rect x="13" y="5.5" width="8" height="6" /></I>,
   textNote: (s) => <I size={s}><path d="M5 5 H 19 M5 5 V 7.5 M19 5 V 7.5 M12 5 V 19 M9.5 19 H 14.5" /></I>,
+  highlight: (s) => <I size={s}><rect x="4" y="7" width="16" height="10" /><line x1="7" y1="12" x2="17" y2="12" /></I>,
   copy: (s) => <I size={s}><rect x="8" y="8" width="12" height="12" /><path d="M16 8 V 4 H 4 V 16 H 8" /></I>,
   paste: (s) => <I size={s}><rect x="5" y="5" width="14" height="16" /><rect x="9" y="3" width="6" height="4" /><line x1="9" y1="12" x2="15" y2="12" /><line x1="9" y1="16" x2="15" y2="16" /></I>,
   duplicate: (s) => <I size={s}><rect x="8" y="8" width="12" height="12" /><path d="M16 8 V 4 H 4 V 16 H 8" /><path d="M12 14 H 16 M14 12 V 16" /></I>,
@@ -44,15 +45,22 @@ export const icons = {
   chevronLeft: (s) => <I size={s}><path d="M15 6 L 9 12 L 15 18" /></I>,
   chevronRight: (s) => <I size={s}><path d="M9 6 L 15 12 L 9 18" /></I>,
   markup: (s) => <I size={s}><path d="M12 3 L 17 10 L 12 21 L 7 10 Z" /><line x1="12" y1="3" x2="12" y2="12.5" /><circle cx="12" cy="13" r="1" fill="currentColor" /></I>,
+  // stamp — a press-down rubber stamp over its impression line (the tool-chest motif)
+  stamp: (s) => <I size={s}><rect x="8" y="3" width="8" height="6" rx="1" /><path d="M6 15 L 9 9 H 15 L 18 15 Z" /><line x1="4" y1="19" x2="20" y2="19" /></I>,
+  // RFI — a hexagon echoing the on-canvas ⬢ RFI marker, with a question motif
+  rfi: (s) => <I size={s}><path d="M12 3 L 19 7 V 15 L 12 19 L 5 15 V 7 Z" /><path d="M10 10 a2 2 0 1 1 2.6 1.9 C 12 12.2 12 12.6 12 13.2" /><circle cx="12" cy="15.6" r="0.9" fill="currentColor" /></I>,
   takeoffs: (s) => <I size={s}><rect x="4" y="5" width="3" height="3" fill="currentColor" stroke="none" /><line x1="10" y1="6.5" x2="20" y2="6.5" /><rect x="4" y="10.5" width="3" height="3" fill="currentColor" stroke="none" /><line x1="10" y1="12" x2="20" y2="12" /><rect x="4" y="16" width="3" height="3" fill="currentColor" stroke="none" /><line x1="10" y1="17.5" x2="20" y2="17.5" /></I>,
-  revisions: (s) => <I size={s}><circle cx="12" cy="12" r="8" /><path d="M12 7.5 V 12 L 15.4 14" /><circle cx="12" cy="12" r="0.9" fill="currentColor" /></I>,
   zone: (s) => <I size={s}><path d="M4 4 H 8 M11 4 H 15 M18 4 H 20 V 6 M20 9 H 20 V 13 M20 16 V 20 H 17 M14 20 H 10 M7 20 H 4 V 16 M4 13 V 9 M4 6 V 4" /><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none" /></I>,
-  highlighter: (s) => <I size={s}><path d="M5 21 L8.5 17.5 M8.5 17.5 L6.8 14 L14 6.8 L17.2 10 L10 17.2 Z M14 6.8 L15.8 5 L19 8.2 L17.2 10" /></I>,
   target: (s) => <I size={s}><circle cx="12" cy="12" r="6" /><path d="M12 3 V 7 M12 17 V 21 M3 12 H 7 M17 12 H 21" /><circle cx="12" cy="12" r="1" fill="currentColor" /></I>,
   height: (s) => <I size={s}><line x1="6" y1="4" x2="18" y2="4" /><line x1="6" y1="20" x2="18" y2="20" /><path d="M12 6.5 V 17.5 M12 6.5 L 9.8 8.7 M12 6.5 L 14.2 8.7 M12 17.5 L 9.8 15.3 M12 17.5 L 14.2 15.3" /></I>,
   thickness: (s) => <I size={s}><line x1="5" y1="5" x2="5" y2="19" /><line x1="19" y1="5" x2="19" y2="19" /><path d="M7.5 12 H 16.5 M7.5 12 L 9.7 9.8 M7.5 12 L 9.7 14.2 M16.5 12 L 14.3 9.8 M16.5 12 L 14.3 14.2" /></I>,
   oneClick: (s) => <I size={s}><path d="M9 3 H 3 V 9" /><path d="M15 3 H 21 V 9" /><path d="M3 15 V 21 H 9" /><path d="M21 15 V 21 H 15" /><path d="M12 7.4 L 13.2 10.8 L 16.6 12 L 13.2 13.2 L 12 16.6 L 10.8 13.2 L 7.4 12 L 10.8 10.8 Z" /></I>,
   hiRes: (s) => <I size={s}><rect x="3" y="5" width="18" height="14" /><path d="M7 15 V 9 M7 12 H 10.5 M10.5 9 V 15" /><path d="M14 9 V 15 M14 9 H 15.6 A 3 3 0 0 1 15.6 15 H 14" /></I>,
+  // pushpin / thumbtack — the quick-access palette "pin this condition" action.
+  // Cap bar at top, tapered body to a collar, needle to the point.
+  pin: (s) => <I size={s}><line x1="8" y1="3" x2="16" y2="3" /><path d="M10 3 V 8 L 7 11 H 17 L 14 8 V 3" /><line x1="12" y1="11" x2="12" y2="20" /></I>,
+  // mixer sliders — the toolbar render/fill settings menu
+  sliders: (s) => <I size={s}><path d="M4 7 H 6.8 M11.2 7 H 20" /><path d="M4 17 H 12.8 M17.2 17 H 20" /><circle cx="9" cy="7" r="2.2" /><circle cx="15" cy="17" r="2.2" /></I>,
 };
 
 export function Icon({ name, size = 18 }) {

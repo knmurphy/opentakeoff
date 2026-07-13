@@ -3,8 +3,8 @@
 // traceRegion machinery the vector path uses (the mask shape is the contract).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildRasterMask, toGray, adaptiveThreshold, closeMask, RASTER_RDP_EPS } from "../src/lib/rastermask.js";
-import { floodRegion, traceRegion, ringArea } from "../src/lib/oneclick.js";
+import { buildRasterMask, toGray, interiorMean, adaptiveThreshold, closeMask, RASTER_RDP_EPS, INVERT_MEAN } from "../src/lib/rastermask.ts";
+import { floodRegion, traceRegion, ringArea } from "../src/lib/oneclick.ts";
 
 // deterministic PRNG (mulberry32) — noise tests never flake
 function rng(seed: number) {
@@ -166,6 +166,35 @@ test("illumination gradient alone produces no ink", () => {
   let ink = 0;
   for (let i = 0; i < mask.length; i++) ink += mask[i];
   assert.equal(ink, 0, "a smooth gradient is illumination, not ink");
+});
+
+test("Finding 3: dark scan-bed margins don't wrongly invert a positive scan", () => {
+  // a 48px (~16%) dark border on every side ⇒ ~54% of the sheet is dark
+  // margin, same shape as the finding's uncropped-flatbed-scan trigger; the
+  // room itself sits in the light interior, untouched.
+  const img = makeImage(W, H, (set) => {
+    const margin = 48;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (x < margin || x >= W - margin || y < margin || y >= H - margin) set(x, y, 10);
+    }
+    rectOutline(set, 100, 100, 200, 200, 2, 0);
+  });
+  const mo = buildRasterMask(img, W, H, 1);
+  const f = floodRegion(mo, 150, 150);
+  assert.equal(f.status, "ok", "a positive scan with dark margins must not invert into an all-ink sheet");
+});
+
+test("interiorMean ignores a dark border that drags the full-bleed mean below INVERT_MEAN", () => {
+  const img = makeImage(W, H, (set) => {
+    const margin = 48;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (x < margin || x >= W - margin || y < margin || y >= H - margin) set(x, y, 10);
+    }
+  });
+  const { gray, mean } = toGray(img, W * H);
+  assert.ok(mean < INVERT_MEAN, `full-bleed mean should read dark (${mean})`);
+  const im = interiorMean(gray, W, H);
+  assert.ok(im > INVERT_MEAN, `interior mean should read light, unswayed by the border (${im})`);
 });
 
 test("closeMask is width-preserving where there is no gap", () => {

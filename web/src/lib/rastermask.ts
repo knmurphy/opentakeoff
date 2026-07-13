@@ -62,6 +62,31 @@ export function toGray(rgba: Uint8Array | Uint8ClampedArray, n: number): { gray:
   return { gray, mean: n ? sum / n : 255 };
 }
 
+/** Mean gray over the sheet INTERIOR only (excludes a marginFrac border on each
+ *  side). A positive (dark-ink-on-light-paper) scan with dark flatbed-bed
+ *  margins or scan-software clip padding around the actual page content can
+ *  measure "dark on average" under the full-bleed mean and invert wrongly —
+ *  paper becomes ink, and every One-Click on that sheet fails. Sampling only
+ *  the interior — where the plan content actually lives — is immune to a dark
+ *  BORDER; it doesn't fix a genuinely dark interior (a heavy solid-poché
+ *  sheet), which remains the documented Area-trace fallback case. Falls back
+ *  to the full-frame mean on a sheet too small to have a meaningful interior. */
+export function interiorMean(gray: Uint8Array, mw: number, mh: number, marginFrac = 0.12): number {
+  const mx = Math.floor(mw * marginFrac), my = Math.floor(mh * marginFrac);
+  const x0 = mx, x1 = mw - mx, y0 = my, y1 = mh - my;
+  if (x1 <= x0 || y1 <= y0) {
+    let sum = 0;
+    for (let i = 0; i < gray.length; i++) sum += gray[i];
+    return gray.length ? sum / gray.length : 255;
+  }
+  let sum = 0, count = 0;
+  for (let y = y0; y < y1; y++) {
+    const row = y * mw;
+    for (let x = x0; x < x1; x++) { sum += gray[row + x]; count++; }
+  }
+  return count ? sum / count : 255;
+}
+
 /** Bradley–Roth adaptive mean threshold + absolute dark floor → 1 = ink. */
 export function adaptiveThreshold(gray: Uint8Array, mw: number, mh: number, t = RASTER_T, absInk = RASTER_ABS_INK): Uint8Array {
   // integral image, (mw+1)×(mh+1); max sum 3000·3000·255 ≈ 2.3e9 < 2^32
@@ -124,8 +149,11 @@ export function buildRasterMask(
   opts: RasterMaskOpts = {},
 ): MaskObj {
   const n = mw * mh;
-  const { gray, mean } = toGray(rgba, n);
-  if (mean < INVERT_MEAN) for (let i = 0; i < n; i++) gray[i] = 255 - gray[i]; // negative scan
+  const { gray } = toGray(rgba, n);
+  // interior-only mean for the polarity call (see interiorMean) — a full-bleed
+  // mean would wrongly invert a positive scan with dark scan-bed margins
+  const polarityMean = interiorMean(gray, mw, mh);
+  if (polarityMean < INVERT_MEAN) for (let i = 0; i < n; i++) gray[i] = 255 - gray[i]; // negative scan
   let mask = adaptiveThreshold(gray, mw, mh, opts.t, opts.absInk);
   if (opts.bridge !== false) mask = closeMask(mask, mw, mh);
   return { mask, mw, mh, ws, softCount: 0 };
