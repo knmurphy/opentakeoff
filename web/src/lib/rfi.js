@@ -60,7 +60,7 @@ export function linkedMarkups(rfi, markups = []) {
  * @param {string} [projectName]
  * @param {((sheetId: any) => string)|null} [sheetLabel]
  */
-export function rfisToCsv(rfis = [], markups = [], projectName = "", sheetLabel = null) {
+export function rfisToCsv(rfis = [], markups = [], projectName = "", sheetLabel = null, brandName = "OpenTakeoff") {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   const header = [
     "Number", "Subject", "Status", "Ball in court", "Priority",
@@ -90,7 +90,7 @@ export function rfisToCsv(rfis = [], markups = [], projectName = "", sheetLabel 
       sheets,
     ].map(esc).join(","));
   }
-  const title = projectName ? `# ${projectName} — OpenTakeoff RFI log\n` : "";
+  const title = projectName ? `# ${projectName} — ${brandName} RFI log\n` : "";
   return title + lines.join("\n") + "\n";
 }
 

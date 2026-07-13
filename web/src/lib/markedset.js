@@ -153,7 +153,7 @@ function invertPixels(cv) {
   ctx.restore();
 }
 
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, rfis = [], conditions, getPage, loadPdfData, company, clientInfo }) {
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, coverTitle = "Marked Set" }) {
   const { PDFDocument, StandardFonts, rgb, degrees } = await import("pdf-lib");
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   // resolve a linked markup's RFI number for the on-sheet marker (ASCII, WinAnsi-safe)
@@ -197,10 +197,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     if (dark) pg.drawRectangle({ x: 0, y: 0, width: 612, height: 792, color: rgb(...DARK_BG) });
     // the star is the canvas vertex mark — same 4-point / 0.38-inner geometry
     pg.drawSvgPath(starPath(0, 0, 11), { x: 52, y: 738, color: cobalt });
-    draw("Marked Set", { x: 70, y: 731, size: 17, font: bold, color: ink });
+    // cover wordmark: "OpenTakeoff · Marked Set" in default mode, "Marked Set"
+    // when a trade name brands the doc (the branding resolver decides)
+    const coverTitleSafe = winAnsiSafe(coverTitle);
+    draw(coverTitleSafe, { x: 70, y: 731, size: 17, font: bold, color: ink });
     // the identity column's clamp wall: the title's right edge plus breathing
     // room, so a long company name in the no-logo case can't overprint the title
-    const wordmarkRight = 70 + bold.widthOfTextAtSize("Marked Set", 17) + 12;
+    const wordmarkRight = 70 + bold.widthOfTextAtSize(coverTitleSafe, 17) + 12;
     // company identity — a right-aligned column ending at x=560, clear of the
     // wordmark and the 22pt project name at x=52: logo top pinned to 748
     // (bottom lands at 700 when full 48pt height), name + address stacked
@@ -547,13 +550,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     text(`${sh.label} · marked set`, 14, 20, 8, muted);
   }
 
-  // small tool credit on the LAST page only — the sole OpenTakeoff mention left
-  // in the deliverable (white-label)
+  // small tool credit on the LAST page only — the subtle parent credit shown in
+  // clear-label mode. Default mode passes null: the cover already carries the
+  // "OpenTakeoff · " wordmark, so a separate credit would be redundant.
   const allPages = doc.getPages();
   const lastPg = allPages[allPages.length - 1];
-  if (lastPg) {
-    const credit = "Measured with OpenTakeoff";
-    const cw = font.widthOfTextAtSize(credit, 7);
+  if (lastPg && credit) {
+    const cw = font.widthOfTextAtSize(winAnsiSafe(credit), 7);
     lastPg.drawText(winAnsiSafe(credit), { x: (612 - cw) / 2, y: 22, size: 7, font, color: muted });
   }
 

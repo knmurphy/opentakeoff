@@ -19,7 +19,9 @@ import { rfisToCsv, rfisToJson } from "../lib/rfi.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 import { activeTheme, saveActiveThemeFile, clearActiveTheme } from "../lib/reportTheme.js";
-import { loadCompany, normalizeLogoToPng, loadProfiles, saveProfiles, activeProfile, updateActiveProfile, addProfile, setActiveProfile, removeProfile } from "../lib/identity.js";
+import { normalizeLogoToPng, loadProfiles, saveProfiles, activeProfile, updateActiveProfile, addProfile, setActiveProfile, removeProfile } from "../lib/identity.js";
+import { resolveBranding, loadBrandingSelection, saveBrandingSelection } from "../lib/branding.js";
+import { projectIdFromUrl } from "../lib/store.js";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 
@@ -79,10 +81,24 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // whether the Marked Set PDF carries the markups. Default on; ORTHOGONAL to the
   // canvas markup-layer hide — that never changes the export, only this does.
   const [includeMarkups, setIncludeMarkups] = useState(true);
-  // bumped by the Project info modal on every company save, so the print
-  // masthead's loadCompany() below re-reads (a cheap localStorage parse)
-  const [identityRev, setIdentityRev] = useState(0); // eslint-disable-line no-unused-vars
-  const company = loadCompany();
+  // bumped by the Project info modal on every company/branding save, so the
+  // print masthead re-reads (a cheap localStorage parse + one meta-KV load)
+  const [identityRev, setIdentityRev] = useState(0);
+  // per-project branding selection (async meta KV); reloads when the modal saves
+  // OR when the project id changes (a switch while the report stays mounted)
+  const projectId = projectIdFromUrl();
+  const [brandSel, setBrandSel] = useState({ mode: "default", profileId: null });
+  useEffect(() => {
+    let alive = true;
+    loadBrandingSelection(projectId).then((s) => { if (alive) setBrandSel(s); });
+    return () => { alive = false; };
+  }, [identityRev, projectId]);
+  // resolveBranding decides the masthead identity, the export title tag, and the
+  // end credit. company is null in default mode → the firm block renders the
+  // OpenTakeoff brand name instead of a trade-name identity (read only inside the
+  // brand.clear branch below, so it is never dereferenced when null).
+  const brand = resolveBranding({ ...brandSel, profiles: loadProfiles().profiles });
+  const company = brand.company;
   const hasClient = Boolean(clientInfo.client_name || clientInfo.client_address || clientInfo.reference || clientInfo.date);
   const [colPrefs, setColPrefs] = useState(loadColPrefs);
   const [showCols, setShowCols] = useState(false);
@@ -255,11 +271,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   };
 
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
-  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx, byLabelExport.length ? byLabelExport : null), "text/csv");
+  const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx, byLabelExport.length ? byLabelExport : null, brand.brandName), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
     JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, rfis, sheetLabel, conditionColumns, attrsByCond, shapeLabels, byLabel: byLabelExport }), null, 2),
     "application/json");
-  const exportRfisCsv = () => downloadText(`${baseName}_rfis.csv`, rfisToCsv(rfis, markups, projectName, sheetLabel), "text/csv");
+  const exportRfisCsv = () => downloadText(`${baseName}_rfis.csv`, rfisToCsv(rfis, markups, projectName, sheetLabel, brand.brandName), "text/csv");
   const exportRfisJson = () => downloadText(`${baseName}_rfis.json`,
     JSON.stringify(rfisToJson(rfis, projectName), null, 2), "application/json");
   // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
@@ -269,7 +285,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     const bytes = await buildXlsx(sheets);
     downloadText(`${baseName}.xlsx`, bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   };
-  const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName), "text/csv");
+  const exportShapesCsv = () => downloadText(`${baseName}_shapes.csv`, shapesToCsv(shapesDetail(conditions, shapes, sheetLabel), projectName, brand.brandName), "text/csv");
   const exportShapesJson = () => downloadText(`${baseName}_shapes.json`,
     JSON.stringify(shapesToJson(shapesDetail(conditions, shapes, sheetLabel), projectName), null, 2),
     "application/json");
@@ -541,12 +557,20 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               closed by a strong rule */}
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16, borderBottom: "1.25px solid var(--ink)", paddingBottom: 9 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-              {company.logo && <img src={company.logo} alt="" style={{ maxHeight: 46, maxWidth: 170, objectFit: "contain", display: "block" }} />}
-              {(company.name || company.address) && (
-                <div style={{ minWidth: 0 }}>
-                  {company.name && <div style={{ fontFamily: "var(--f-display)", fontWeight: 700, fontSize: 12.5, lineHeight: 1.15 }}>{company.name}</div>}
-                  {company.address && <div style={{ fontSize: 11, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.35 }}>{company.address}</div>}
-                </div>
+              {/* clear-label: the trade-name identity. default: the OpenTakeoff
+                  brand name (no company data shown — "purely OpenTakeoff") */}
+              {brand.clear ? (
+                <>
+                  {company.logo && <img src={company.logo} alt="" style={{ maxHeight: 46, maxWidth: 170, objectFit: "contain", display: "block" }} />}
+                  {(company.name || company.address) && (
+                    <div style={{ minWidth: 0 }}>
+                      {company.name && <div style={{ fontFamily: "var(--f-display)", fontWeight: 700, fontSize: 12.5, lineHeight: 1.15 }}>{company.name}</div>}
+                      {company.address && <div style={{ fontSize: 11, color: "var(--ink-muted)", whiteSpace: "pre-line", lineHeight: 1.35 }}>{company.address}</div>}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{ fontFamily: "var(--f-display)", fontWeight: 700, fontSize: 12.5, lineHeight: 1.15 }}>{brand.brandName}</div>
               )}
             </div>
             <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-muted)", whiteSpace: "nowrap" }}>Takeoff Report</div>
@@ -561,7 +585,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               ["Client", clientInfo.client_name],
               ["Reference", clientInfo.reference],
               ["Date", clientInfo.date || new Date().toLocaleDateString()],
-              ["Prepared by", company.name || "—"],
+              ["Prepared by", brand.brandName],
             ];
             return (
               <div style={{ display: "grid", gridTemplateColumns: `repeat(${cells.length}, 1fr)`, border: "1px solid var(--ink)", marginBottom: hasClient && clientInfo.client_address ? 8 : 12 }}>
@@ -815,8 +839,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             </p>
           </div>
         )}
-        {/* small tool credit at the end of the document (last page) */}
-        <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--text-faint)" }}>Measured with OpenTakeoff</p>
+        {/* subtle parent credit — clear-label mode only (default mode is already
+            OpenTakeoff-branded in the masthead, so a separate credit is redundant) */}
+        {brand.credit && (
+          <p style={{ maxWidth: 980, margin: "20px auto 0", textAlign: "center", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--text-faint)" }}>{brand.credit}</p>
+        )}
         </td></tr></tbody></table>
       </div>
 
@@ -836,8 +863,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
 // Company edits save on every change, so an overlay-click close loses nothing;
 // onSaved bumps identityRev so the print masthead re-reads immediately.
 function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
-  // trade-name profiles: the picker chooses which trade name is active; the
-  // active one edits below and mirrors to loadCompany() for the masthead/cover
+  // trade-name profiles: the picker chooses which trade name is active for
+  // EDITING; the active one still mirrors to the legacy company key (backward
+  // compat). Which trade name BRANDS a project is the separate per-project
+  // branding selection below (resolveBranding), not this active-id.
   const [profs, setProfs] = useState(loadProfiles);
   const active = activeProfile(profs) || {};
   const [logoErr, setLogoErr] = useState("");
@@ -851,7 +880,8 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
 
   // one commit path: a producer runs against the CURRENT state (functional set,
   // so a slow logo normalize can't revert a name typed meanwhile), persists, and
-  // bumps the masthead. saveProfiles mirrors the active profile to loadCompany().
+  // bumps the masthead via onSaved. saveProfiles also mirrors the active profile
+  // to the legacy company key (backward compat).
   const commit = (produce) => {
     setProfs((prev) => {
       const next = produce(prev);
@@ -866,6 +896,31 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
   const switchProfile = (id) => commit((prev) => setActiveProfile(prev, id));
   const addTradeName = () => commit((prev) => addProfile(prev, {}).state);
   const deleteActive = () => commit((prev) => removeProfile(prev, prev.activeId));
+
+  // branding mode — per-project (meta KV, keyed on the project id). Toggling
+  // clear-label on brands the deliverables as the trade name; off (default) is
+  // OpenTakeoff. Persists immediately and bumps the masthead via onSaved.
+  const projectId = projectIdFromUrl();
+  const [brandSel, setBrandSel] = useState({ mode: "default", profileId: null });
+  useEffect(() => {
+    let alive = true;
+    loadBrandingSelection(projectId).then((s) => { if (alive) setBrandSel(s); });
+    return () => { alive = false; };
+  }, [projectId]);
+  // side effects stay OUT of the setState updater (React may double-invoke it):
+  // update local state, then persist and only bump the masthead AFTER the write
+  // commits — so the parent's meta-KV reload can't race ahead and read the old value
+  const setBranding = (patch) => {
+    const next = { ...brandSel, ...patch };
+    // turning clear-label on with no explicit pick defaults to the first profile
+    if (next.mode === "clearlabel" && !next.profileId) next.profileId = profs.profiles[0]?.id ?? null;
+    setBrandSel(next);
+    saveBrandingSelection(projectId, next).then((ok) => { if (ok && onSaved) onSaved(); });
+  };
+  // which chip highlights — the SAME fallback the resolver uses (activeProfile),
+  // so a stale/deleted profileId highlights the profile the deliverable actually
+  // brands as (profiles[0]) instead of highlighting nothing
+  const brandProfileId = activeProfile({ profiles: profs.profiles, activeId: brandSel.profileId })?.id || null;
 
   const onLogoFile = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -938,6 +993,35 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
             {logoErr && <p style={err}>{logoErr}</p>}
           </div>
           {saveFailed && <p style={err}>Couldn't save on this device</p>}
+
+          {/* branding mode — per project. Off = OpenTakeoff (default); on brands
+              the report + marked set as the selected trade name, keeping a subtle
+              "Measured with OpenTakeoff" credit. Disabled until a trade name exists. */}
+          <div style={{ ...section, borderTop: "1px solid var(--ink-faint)", marginTop: 14, paddingTop: 12 }}>Branding — how this project's documents present</div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0", cursor: profs.profiles.length ? "pointer" : "not-allowed", opacity: profs.profiles.length ? 1 : 0.6 }}>
+            <input type="checkbox" name="trade-name-brand" checked={brandSel.mode === "clearlabel"} disabled={!profs.profiles.length}
+              onChange={(e) => setBranding({ mode: e.target.checked ? "clearlabel" : "default" })} />
+            <span style={{ fontSize: 12.5 }}>
+              Trade name — brand as your company
+              {!profs.profiles.length && <span style={{ color: "var(--ink-muted)" }}> (add a trade name first)</span>}
+            </span>
+          </label>
+          {brandSel.mode === "clearlabel" && profs.profiles.length > 1 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "0 0 8px" }}>
+              {profs.profiles.map((p) => {
+                const on = brandProfileId === p.id;
+                return (
+                  <button key={p.id} onClick={() => setBranding({ profileId: p.id })} title="Brand this project as this trade name"
+                    style={{ padding: "4px 10px", fontSize: 12, cursor: "pointer",
+                      border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`,
+                      background: on ? "var(--cobalt)" : "transparent", color: on ? "var(--paper-bright)" : "var(--ink)" }}>
+                    {p.name || "Untitled trade name"}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div style={{ ...section, borderTop: "1px solid var(--ink-faint)", marginTop: 14, paddingTop: 12 }}>Client / job — saved with this project</div>
           <label style={row}>
             <span className="field-label">Client name</span>
