@@ -504,6 +504,42 @@ test("4c crash order: synced_rev advances AFTER the local adopt — a torn adopt
   assert.equal(await metaGet("sync:A:synced_rev"), 3); // synced_rev NOT advanced → proves it's written LAST
 });
 
+test("4c TOCTOU: going busy DURING the pre-adopt snapshot defers the overwrite and RETAINS the pending remote for retry", async () => {
+  const base = createLocalStore("A");
+  await metaPut("sync:A:synced_rev", 3);
+  await metaPut("sync:A:touched", true);
+  const provider = fakeProvider({ data: { conditions: [{ id: "theirs" }], shapes: [] }, rev: 8 });
+  const snaps: any[] = [];
+  const updates: any[] = [];
+  let busy = false;
+  // The user starts in-flight work exactly during the loser-snapshot await — the window
+  // the loop-top isBusy() check can't see. Arm it to fire once so the retry can succeed.
+  let armed = true;
+  const saveSnapshot = async (label: string, payload: any, folderId: string) => {
+    snaps.push({ label, payload, folderId });
+    if (armed) { armed = false; busy = true; }
+    return { id: `s${snaps.length}` };
+  };
+  const sync = createSyncStore({ base, provider, folderId: "A", saveSnapshot, isBusy: () => busy, onRemoteUpdate: (d: any, r: any) => updates.push({ d, r }) }) as any;
+  await sync.whenSynced();
+
+  await sync.saveAnnotations({ conditions: [{ id: "mine" }], shapes: [] });
+  await sync.whenPushed();
+
+  // The re-check right before the destructive overwrite caught the flip → deferred, NOT clobbered.
+  assert.deepEqual(conds(await base.loadAnnotations()), [{ id: "mine" }]); // local intact
+  assert.equal(await metaGet("sync:A:synced_rev"), 3); // synced_rev not advanced
+  assert.equal(updates.length, 0); // canvas not re-rendered
+  assert.equal(snaps.length, 1); // the deferred attempt's backup is durable (harmless immutable extra)
+
+  // Pending was RETAINED (not dropped on defer) → once idle, flushPending adopts it.
+  busy = false;
+  await sync.flushPending();
+  assert.deepEqual(conds(await base.loadAnnotations()), [{ id: "theirs" }]); // now adopted
+  assert.equal(await metaGet("sync:A:synced_rev"), 8);
+  assert.equal(updates.length, 1);
+});
+
 test("4c: flushPending is callable but non-enumerable (survives neither Object.keys nor the composite spread)", async () => {
   const sync = createSyncStore({ base: createLocalStore("A"), provider: fakeProvider(), folderId: "A" }) as any;
   await sync.whenSynced();

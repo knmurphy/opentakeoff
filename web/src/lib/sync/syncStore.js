@@ -101,11 +101,24 @@ export function createSyncStore({ base, provider, folderId, onRemoteUpdate, save
     // deferred yields ONE backup of the cumulative local, not O(conflicts) spam.
     while (pendingRemote && !isBusy()) {
       const remote = pendingRemote;
-      pendingRemote = null;
       const loser = await base.loadAnnotations();            // cumulative local divergence
       await saveSnapshot("Conflict backup", loser, folderId); // durable + syncs (Slice 2)
+      // Re-check the gate AS LATE AS POSSIBLE — right before the destructive overwrite.
+      // isBusy() was false at loop-top, but the user can start in-flight work during the
+      // loadAnnotations/saveSnapshot awaits; adopting then would clobber it. If they did,
+      // defer: pendingRemote is still set, so flushPending() retries once idle. (The loser
+      // snapshot already taken is harmless — an immutable extra backup; content-hash dedup
+      // is the plan's named punt.) This narrows the LOCAL clobber window to just the two
+      // fast IDB writes below; it does NOT close the canvas RE-RENDER race — onRemoteUpdate
+      // fires synchronously here but the canvas applies it async, so Slice 5's callback must
+      // ALSO re-check busy at apply time and re-defer (recorded in the Slice 5 task).
+      if (isBusy()) break;
       await base.saveAnnotations(remote.data);               // adopt remote as canonical
       await metaPut(K.syncedRev, remote.rev);                // advance LAST (crash spine)
+      // Consume ONLY after a fully-successful adopt: a throw in the writes above leaves
+      // pendingRemote set for a later retry (never a dropped update), and if a fresher
+      // remote queued during the awaits we keep it — the loop drains to it next iteration.
+      if (pendingRemote === remote) pendingRemote = null;
       if (onRemoteUpdate) onRemoteUpdate(remote.data, remote.rev);
     }
   }
@@ -272,7 +285,7 @@ export function createSyncStore({ base, provider, folderId, onRemoteUpdate, save
   // flushPending is wiring, not test-only: Slice 5 holds the raw annSync reference
   // (not the spread) and calls it from a canvas effect when in-flight work clears.
   Object.defineProperty(api, "whenSynced", { enumerable: false, value: () => bootstrap });
-  Object.defineProperty(api, "whenPushed", { enumerable: false, value: async () => { while (pushing) await pushing; await flushPending(); } });
+  Object.defineProperty(api, "whenPushed", { enumerable: false, value: async () => { while (pushing) await pushing; } });
   Object.defineProperty(api, "flushPending", { enumerable: false, value: flushPending });
 
   return api;
