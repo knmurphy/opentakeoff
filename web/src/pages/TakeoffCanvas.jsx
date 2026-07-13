@@ -9,322 +9,103 @@
 // scroll pans (any tool); pinch (ctrl-wheel) zooms; Space-drag / middle-drag pan.
 // Geometry math reads tfRef (always current), so drawing stays accurate.
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { store } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, projectIdFromUrl } from "../lib/store.js";
+import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
+import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
+import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
 import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
-import SheetGallery from "../components/SheetGallery.jsx";
+import PlanNavigator from "../components/PlanNavigator.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
-import RevisionsPanel from "../components/RevisionsPanel.jsx";
+import SnapshotPanel from "../components/SnapshotPanel.jsx";
+import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
+import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
-import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, extractSheetNumber, detectScale, scaleFromLabel } from "../lib/sheets";
-import { isAiConfigured, visionQuery, scaleReadPrompt } from "../lib/ai.js";
-import AiSettings from "../components/AiSettings.jsx";
-import { areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, fmtCheckLen, parseLenInput, M_PER_FT } from "../lib/units";
-import { shapesInZone } from "../lib/zone.js";
-import { playFromCondition, conditionFromPlay, upsertPlay, loadPlays, savePlays } from "../lib/plays.js";
-import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM } from "../lib/oneclick";
+import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
+import { normalizeLoadedGroups } from "../lib/sheetGroups";
+import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
+import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
+import { normalizeTag } from "../lib/scheduleEdit";
+import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
+import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { shapesInZone } from "../lib/zone.js";
+import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
+import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
+import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel, shapeLabelValue, assignShapeLabel } from "../lib/shapeLabels.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
-import { starPath, cloudPath, thinStroke, strokePathD, chiselRibbon, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, distToSeg, hitShape } from "../lib/geometry.js";
-import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutCoverageSfPerBag } from "../lib/coverage.js";
+import { loadProfiles } from "../lib/identity.js";
+import { resolveBranding, loadBrandingSelection } from "../lib/branding.js";
+import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
+import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
+import { nextRfiNumber } from "../lib/rfi.js";
+import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch, matEditPatch } from "../lib/materials.js";
+import RfiPanel from "../components/RfiPanel.jsx";
+import StampPanel from "../components/StampPanel.jsx";
+import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
+import AccountChip from "../components/AccountChip.jsx";
+import { useGoogleAuth } from "../lib/google/AuthContext.jsx";
+import { projectHomeFolderId } from "../lib/projectHome.js";
+import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
+// Pure data constants (render/zoom budgets, snap tuning, tool descriptors,
+// flooring starter conditions) live in lib/canvasConstants.js; the pure
+// module-scope helpers (autoRenderScale, invertCanvasPixels, uid, clamp,
+// isDangerMsg, instantiateTemplate, seedConditions) in lib/canvasUtil.js.
+import {
+  PANEL_GAP, MAX_CANVAS_DIM, MAX_CANVAS_AREA,
+  DETAIL_ENGAGE, DETAIL_MARGIN, SYNC_MS, GESTURE_MS, SNAP_CELL,
+  MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS,
+} from "../lib/canvasConstants.js";
+import { autoRenderScale, invertCanvasPixels, uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
+import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT } from "../lib/units";
+import * as panelGeom from "../lib/panelGeometry.js";
+
+// Display units for the check tool + scale guide. Upstream carries a metric
+// display mode (ft/m toggle) this fork hasn't ported; the helpers in lib/units
+// take a UnitSystem, so we pin it here — swap for the units state when the
+// metric port lands.
+const UNITS = "imperial";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-const MIN_SCALE = 0.03;
-const MAX_SCALE = 32;  // stage zoom is in raster px — with the 28MP base budget this keeps ≈ the old deep-zoom ceiling (detail view carries the crispness)
-const PANEL_GAP = 48;  // px between side-by-side sheets in a multi-sheet group
-// Carpet roll width — a run reaching this needs a seam. The live cursor readout
-// turns amber at/past it so the estimator sees where seams fall while tracing.
-const CARPET_ROLL_FT = 12;
-// Base raster: enough density for fit-to-view + the first stretch of zoom; sharpness
-// past 1:1 comes from the DETAIL VIEW (region re-render), never from a giant full-sheet
-// bitmap. Rastering to the browser caps would put a 36×24" sheet at 179MP ≈ 716MB of
-// backing store per panel — a 4-up ≈ 2.9GB, which Chrome silently fails to keep
-// composited (blank sheet at zoom-out, evicted chrome). Quantities are scale-free
-// (verts are normalized and the render factor cancels in the area math), so the budget
-// only trades memory for base-layer sharpness. Hi-Res opts a sheet INTO the auto
-// budget per-user (the default stays the lean baseline raster).
-const QUALITY_CEILING = 8.0;                  // hard cap on render scale (≈576 px/in) — binds only on small pages now
-const MAX_CANVAS_DIM  = 16384;                // safe max side for a single canvas (Chrome/Firefox/Safari desktop)
-const MAX_CANVAS_AREA = 16384 * 16384 * 0.9;  // per-canvas pixel cap — the DETAIL view's density factor uses this
-const MAX_PANEL_AREA  = 28e6;                 // base-raster pixel budget per panel (~112MB RGBA; 4-up ≈ 450MB)
-// Largest pdf.js render scale a wPt×hPt-point page can use within the base budget;
-// never below the baseline RENDER_SCALE, never above the ceiling.
-const autoRenderScale = (wPt, hPt) => {
-  if (!(wPt > 0 && hPt > 0)) return RENDER_SCALE;
-  const byDim  = Math.min(MAX_CANVAS_DIM / wPt, MAX_CANVAS_DIM / hPt);
-  const byArea = Math.sqrt(MAX_PANEL_AREA / (wPt * hPt));
-  return Math.max(RENDER_SCALE, Math.min(QUALITY_CEILING, byDim, byArea));
-};
-// Detail view: once zoomed past the base raster's 1:1 IN DEVICE PIXELS, we overlay a
-// crop of JUST the visible region, re-rendered from the PDF vectors at the current zoom —
-// Bluebeam/AutoCAD-style. Crispness becomes unbounded (up to the per-region canvas cap)
-// without ever holding a giant full-sheet bitmap; the region is ~viewport-sized so the cap
-// effectively never binds. Engage compares t.scale × devicePixelRatio (softness starts
-// when the raster is upscaled in device px — on a 2× display that's t.scale 0.5, not 1).
-const DETAIL_ENGAGE = 1.15;  // engage once stage zoom × dpr passes ~1.15 (base raster starts to soften)
-const DETAIL_MARGIN = 0.5;   // render this much extra region beyond the viewport so small pans don't expose the soft base at the edges
-const SYNC_MS = 90;          // React tf-mirror sync cadence during gestures (~11Hz)
-const GESTURE_MS = 140;      // wheel/pinch quiet window before the detail view re-renders
-const COLORS = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#475569"];
+// Hatch templates, palette, NO_FILL, and the HatchPattern/HatchSwatch pieces
+// live in components/hatches.jsx — shared with the TakeoffsPanel.
 
-// Architectural / flooring hatch templates. Each condition gets a line color, a
-// fill color (or No Fill), and one hatch style — rendered as an SVG <pattern> so
-// finishes read like a real drawing.
-const HATCHES = [
-  { id: "solid", label: "Solid" },
-  { id: "diag", label: "Diagonal" },
-  { id: "diag2", label: "Diagonal reverse" },
-  { id: "cross", label: "Crosshatch" },
-  { id: "diagdense", label: "Diagonal dense" },
-  { id: "horiz", label: "Horizontal" },
-  { id: "vert", label: "Vertical" },
-  { id: "grid", label: "Square / tile" },
-  { id: "brick", label: "Brick / running bond" },
-  { id: "plank", label: "Plank / wood" },
-  { id: "herring", label: "Herringbone" },
-  { id: "basket", label: "Basketweave" },
-  { id: "checker", label: "Checker" },
-  { id: "wave", label: "Wave / scallop" },
-  { id: "fleur", label: "Fleur-de-lis" },
-  { id: "speckle", label: "Terrazzo / speckle" },
-];
-const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
-const NO_FILL = "none";
+// Docked Takeoffs panel geometry — per-user UI prefs (localStorage, diff-only
+// overrides like the report column prefs), NEVER in the takeoff payload: panel
+// width inside buildPayload would show up as noise in every snapshot diff.
+// (The width clamp (clampPanelW, wrapping PANEL_MIN_W/PANEL_MAX_W) is exported
+// by the panel itself — ONE clamp, so a future range change can't diverge
+// between the panel's own drag clamp and the load-time clamp here.)
+const PANEL_PREFS_KEY = "opentakeoff_panel";
+// The docked panel now starts COLLAPSED: the top-bar palette band (pinned chips
+// + the restored active-condition appearance editor) is the primary condition
+// surface, so the sidebar stays out of the way until you ask for it — via the
+// canvas rail toggle or by double-clicking a palette chip (openConditionInPanel).
+// Prefs persist diff-only against these defaults. Because the OLD default was
+// open (collapsed:false), a previously-open panel stored no diff and is
+// indistinguishable from "never touched", so this flip DOES start those users
+// collapsed on first load after the change (a one-time migration, not a per-user
+// choice being honored). An explicit COLLAPSE made under the old default is
+// preserved; any later toggle re-persists normally.
+const PANEL_DEFAULTS = { w: 320, collapsed: true, strip: false, az: false, group: false };
+// Top-bar quick-access condition palette: a curated handful (≤9) of pinned
+// conditions for one-click activation without leaving the canvas. Palette holds
+// condition ids (workspace-scoped), so it persists with the annotation payload,
+// not the per-user panel prefs. Capped at 9 so it maps 1:1 onto the 1–9 hotkeys.
+const PALETTE_MAX = 9;
 
-// SVG <pattern> for a condition (userSpaceOnUse → scales with the plan, CAD-style).
-// Invert a canvas's pixels in place: one difference-with-white pass (an
-// involution — applying it again flips back). This is how the negative/dark
-// view works: pixel inversion costs one pass at draw time, where a CSS
-// `filter: invert(1)` would make every sheet canvas a permanently-filtered
-// compositor layer re-processed on every frame — with several panels open on
-// a hi-Hz display that chain overloads the compositor (layer eviction =
-// flicker/void glitches).
-function invertCanvasPixels(cv) {
-  if (!cv || !cv.width || !cv.height) return;
-  const ctx = cv.getContext("2d");
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);   // raw device px — ignore any render transform
-  ctx.globalCompositeOperation = "difference";
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.restore();
-}
-
-function HatchPattern({ id, type, line, fill, dark }) {
-  // Design system: two stroke weights (SW1 single-family, SW2 dual/dense so no
-  // pattern shouts), per-pattern tile sizes, even pitches, ~8–16% ink coverage
-  // across the set. Corner-crossing paths carry ±3 continuation stubs so tiles
-  // stay seamless. QA wall: append ?hatchqa to the canvas URL.
-  const SW1 = 1.0, SW2 = 0.8;
-  const so = dark ? 0.95 : 0.85;
-  const s = (d, sw = SW1) => <path d={d} stroke={line} strokeWidth={sw} strokeOpacity={so} fill="none" />;
-  const wrap = (kids, w = 12, h = 12) => (
-    <pattern id={id} patternUnits="userSpaceOnUse" width={w} height={h}>
-      {fill && fill !== NO_FILL ? <rect width={w} height={h} fill={fill} opacity={dark ? 0.32 : 0.18} /> : null}
-      {kids}
-    </pattern>
-  );
-  switch (type) {
-    case "diag": return wrap(s("M0,12 L12,0 M-3,3 L3,-3 M9,15 L15,9"));
-    case "diag2": return wrap(s("M0,0 L12,12 M-3,9 L3,15 M9,-3 L15,3"));
-    case "cross": return wrap(<>{s("M0,12 L12,0 M-3,3 L3,-3 M9,15 L15,9", SW2)}{s("M0,0 L12,12 M-3,9 L3,15 M9,-3 L15,3", SW2)}</>);
-    case "diagdense": return wrap(s("M0,6 L6,0 M0,12 L12,0 M6,12 L12,6 M-2,2 L2,-2 M10,14 L14,10", SW2));
-    case "horiz": return wrap(s("M0,4 L8,4"), 8, 8);
-    case "vert": return wrap(s("M4,0 L4,8"), 8, 8);
-    case "grid": return wrap(s("M0,5 L10,5 M5,0 L5,10", SW2), 10, 10);
-    case "brick": return wrap(<>{s("M0,0 L16,0 M0,8 L16,8", SW2)}{s("M4,0 L4,8 M12,8 L12,16", SW2)}</>, 16, 16);
-    case "plank": return wrap(<>{s("M0,0 L24,0 M0,8 L24,8", SW2)}{s("M6,0 L6,8 M18,8 L18,16", SW2)}</>, 24, 16);
-    case "herring": return wrap(<>{s("M0,6 L6,0 L12,6")}{s("M0,12 L6,6 L12,12")}</>);
-    case "basket": return wrap(<>{s("M0,3 L6,3")}{s("M9,0 L9,6")}{s("M3,6 L3,12")}{s("M6,9 L12,9")}</>);
-    case "checker": return wrap(<>{<rect x={0} y={0} width={6} height={6} fill={line} opacity={dark ? 0.30 : 0.22} />}{<rect x={6} y={6} width={6} height={6} fill={line} opacity={dark ? 0.30 : 0.22} />}</>);
-    case "wave": return wrap(<>{s("M0,3 Q3,0 6,3 T12,3")}{s("M0,9 Q3,6 6,9 T12,9")}</>);
-    case "dots": return wrap(<>{[[3, 3], [9, 9]].map(([x, y]) => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.05} fill={line} fillOpacity={so} />)}</>);  // legacy — off the picker, still renders
-    case "fleur": return wrap(
-      <g fill={line} fillOpacity={so} stroke="none">
-        <path d="M8 2.2 C6.7 4 6.7 6.2 8 8.2 C9.3 6.2 9.3 4 8 2.2 Z" />
-        <path d="M4.6 4.8 C3 5.9 2.9 8.2 4.9 8.7 C4.6 7.4 4.7 6 4.6 4.8 Z" />
-        <path d="M11.4 4.8 C13 5.9 13.1 8.2 11.1 8.7 C11.4 7.4 11.3 6 11.4 4.8 Z" />
-        <rect x="5.4" y="9.3" width="5.2" height="1.2" />
-        <path d="M8 10.9 C7.1 11.9 7.1 12.9 8 13.8 C8.9 12.9 8.9 11.9 8 10.9 Z" />
-      </g>, 16, 16);
-    case "speckle": return wrap(<>{[[3, 4, 1.3], [11, 2.5, 0.8], [7.5, 9, 1.1], [13.5, 12.5, 1.3], [4, 13, 0.8]].map(([x, y, r], i) => <circle key={i} cx={x} cy={y} r={r} fill={line} fillOpacity={so} />)}</>, 16, 16);
-    default: return wrap(null);  // solid: only the fill bg
-  }
-}
-
-// Preview swatch — renders the ACTUAL pattern so the picker always matches the draw.
-function HatchSwatch({ type, line, fill }) {
-  const fc = fill && fill !== NO_FILL ? fill : null;
-  const pid = `sw-${type}-${String(line).replace("#", "")}-${String(fill).replace("#", "")}`;
-  return (
-    <svg width="32" height="22" style={{ display: "block", overflow: "hidden", borderRadius: 4 }}>
-      {type !== "solid" && <defs><HatchPattern id={pid} type={type} line={line} fill={fill} /></defs>}
-      <rect x="0.5" y="0.5" width="31" height="21" rx="2" stroke="#b9b3a4"
-        fill={type === "solid" ? (fc || "#fff") : `url(#${pid})`}
-        fillOpacity={type === "solid" ? (fc ? 0.45 : 1) : 1} />
-    </svg>
-  );
-}
-
-let _idn = 0;
-const uid = (p) => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
-const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 // Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
 // hit-testing) live in lib/geometry.js — byte-identical with Spline's copy.
-const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
 
-// toolbar menus — STACK-style: the menu face shows the armed tool
-const MEASURE_TOOLS = [
-  { id: "oneclick", icon: "oneClick", label: "One-Click Area", shortcut: "O" },
-  { id: "area", icon: "area", label: "Area", shortcut: "A" },
-  { id: "rect", icon: "rectTool", label: "Rectangle", shortcut: "R" },
-  { id: "linear", icon: "linear", label: "Linear", shortcut: "L" },
-  { id: "surface", icon: "surface", label: "Surface Area", shortcut: "S" },
-  { id: "count", icon: "count", label: "Count", shortcut: "C" },
-];
-const CUT_TOOLS = [
-  { id: "deduct", icon: "deduct", label: "Erase shape", shortcut: "D" },
-  { id: "deduct-rect", icon: "deductRect", label: "Erase rectangle", shortcut: "⇧D" },
-];
-const MARKUP_TOOLS = [
-  { id: "highlight", icon: "highlighter", label: "Highlighter", shortcut: "H" },
-  { id: "cloud", icon: "cloud", label: "Revision cloud" },
-  { id: "callout", icon: "callout", label: "Callout" },
-  { id: "text", icon: "textNote", label: "Text note" },
-];
-// highlighter inks — literal hex (SVG attrs; CSS vars don't resolve there)
-const HL_INKS = ["#ffd60a", "#ff9f0a", "#34c759", "#3fa9ff", "#ff6ea8"];
-const HL_SIZES = [["F", 8], ["M", 14], ["B", 22]];   // screen px at draw time
-const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
-
-// Flooring-first starter conditions seeded on a fresh workspace — line color +
-// hatch chosen to read like the real finish; waste % is a sensible default you
-// can change per condition (it's never auto-applied to the live readout, only
-// the Report). Delete any you don't need.
-// Each default also carries a couple of editable starter materials — quantities
-// derive deterministically from measured area/linear ÷ a coverage rate you set
-// (off the product data sheet). Delete/edit freely; they're just sensible seeds.
-// Per-material-kind coverage presets (adhesive trowel notches, mortar trowels)
-// and the grout-from-tile-geometry calculator live in lib/coverage.js —
-// vendor-neutral, generic rates; always verify against the product data sheet.
-
-const FLOORING_DEFAULTS = [
-  { tag: "CPT-1", color: "#2f7d54", hatch: "speckle", waste: 5,  mats: [{ name: "Adhesive", kind: "adhesive", per: 250, basis: "area", unit: "gal" }] },                  // Carpet tile
-  { tag: "BRD-1", color: "#be185d", hatch: "dots",    waste: 10, mats: [{ name: "Adhesive", kind: "adhesive", per: 120, basis: "area", unit: "gal" }] },                  // Broadloom carpet (roll goods)
-  { tag: "LVT-1", color: "#b8860b", hatch: "plank",   waste: 8,  mats: [{ name: "Adhesive", kind: "adhesive", per: 250, basis: "area", unit: "gal" }] },                  // Luxury vinyl plank/tile
-  { tag: "WD-1",  color: "#9a3412", hatch: "plank",   waste: 10, mats: [                                                                                                  // Unfinished 2.25″ solid red oak — glue-down + site-finished
-    { name: "Adhesive (wood, SMP)",     kind: "adhesive", per: 50,  basis: "area", unit: "gal", note: "1/4″×1/4″ V (wood)" },
-    { name: "Sealer (primer coat)",     per: 400, basis: "area", unit: "gal", note: "1 prime coat (~10 m²/L)" },
-    { name: "Polyurethane (2K finish)", per: 136, basis: "area", unit: "gal", note: "≈3 coats @ ~408 SF/gal/coat (2K 10:1)" },
-  ] },
-  { tag: "VCT-1", color: "#2563eb", hatch: "checker", waste: 5,  mats: [{ name: "Adhesive", kind: "adhesive", per: 350, basis: "area", unit: "gal" }] },                  // Vinyl composition tile
-  { tag: "SV-1",  color: "#0d9488", hatch: "solid",   waste: 10, mats: [{ name: "Adhesive", kind: "adhesive", per: 150, basis: "area", unit: "gal" }] },                  // Sheet vinyl
-  { tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste: 10, mats: [                                                                                                  // Ceramic / porcelain tile
-    { name: "Thinset mortar", kind: "mortar", per: 65, basis: "area", unit: "bag", note: '1/4″×3/8″×1/4″ sq' },
-    { name: "Grout", kind: "grout", per: 512, basis: "area", unit: "bag", grout: { ...GROUT_DEFAULTS }, note: '12×24×3/8″ @ 1/8″ · 25 lb' },
-  ] },
-  { tag: "RB-1",  color: "#475569", hatch: "horiz",   waste: 5,  mats: [{ name: "Cove base adhesive", kind: "adhesive", per: 40, basis: "linear", unit: "tube" }] },      // Rubber / resilient wall base (linear)
-  { tag: "TR-1",  color: "#c96442", hatch: "vert",    waste: 0,  mats: [] },                                                                                              // Transitions / reducers (linear)
-];
-function seedConditions() {
-  return FLOORING_DEFAULTS.map((d) => ({
-    id: uid("cnd"), finish_tag: d.tag, color: d.color, fill: d.color,
-    hatch: d.hatch, multiplier: 1, waste_pct: d.waste,
-    materials: (d.mats || []).map((m) => ({ id: uid("mat"), round: true, ...m })),
-  }));
-}
-
-// Inches → drawing-style fraction (0.375 → "3/8", 1.25 → "1 1/4"); falls back
-// to the decimal when the value isn't on the 1/32″ grid.
-function inFrac(v) {
-  const n32 = Math.round(v * 32);
-  if (!(n32 > 0) || Math.abs(v * 32 - n32) > 1e-6) return String(v);
-  let n = n32, d = 32;
-  while (n % 2 === 0 && d % 2 === 0) { n /= 2; d /= 2; }
-  const whole = Math.floor(n / d), rem = n - whole * d;
-  if (!rem) return String(whole);
-  return whole ? `${whole} ${rem}/${d}` : `${rem}/${d}`;
-}
-const groutNote = (g) => `${g.tileL}×${g.tileW}×${inFrac(g.tileT)}″ @ ${inFrac(g.joint)}″ · ${g.bagLbs} lb`;
-
-// Editable supporting-materials rows — the assembly behind a condition. Shared
-// by the top-bar editor and the Takeoffs side panel so the two never drift.
-function MaterialsEditor({ materials, onAdd, onUpdate, onRemove }) {
-  const ip = { padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
-  return (
-    <>
-      {(materials || []).map((m) => {
-        const kind = materialKind(m);
-        const presets = (m.basis || "area") === "area" ? MATERIAL_PRESETS[kind] : undefined;
-        const g = { ...GROUT_DEFAULTS, ...(m.grout || {}) };
-        // grout coverage derives from tile geometry — every param change re-derives
-        // per + writes the derivation into the note so the Report shows its work
-        const setGrout = (patch) => {
-          const grout = { ...g, ...patch };
-          onUpdate(m.id, { grout, per: Math.round(groutCoverageSfPerBag(grout)), note: groutNote(grout) });
-        };
-        const gi = (key, title) => (
-          <input type="number" min="0" step="any" value={g[key] || ""} title={title}
-            onChange={(e) => setGrout({ [key]: Math.max(0, parseFloat(e.target.value) || 0) })}
-            style={{ ...ip, width: 52 }} />
-        );
-        return (
-          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
-            <input value={m.name} onChange={(e) => onUpdate(m.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)" style={{ ...ip, width: 160 }} />
-            <span style={{ color: "var(--ink-muted)" }}>1</span>
-            <input value={m.unit} onChange={(e) => onUpdate(m.id, { unit: e.target.value })} placeholder="unit" style={{ ...ip, width: 60 }} />
-            <span style={{ color: "var(--ink-muted)" }}>per</span>
-            <input type="number" min="0" step="any" value={m.per || ""} onChange={(e) => onUpdate(m.id, { per: Math.max(0, parseFloat(e.target.value) || 0) })} placeholder="0" style={{ ...ip, width: 66 }} />
-            <select value={m.basis || "area"} onChange={(e) => onUpdate(m.id, { basis: e.target.value })} style={{ ...ip, background: "var(--paper-bright)" }}>
-              <option value="area">floor SF</option>
-              <option value="linear">linear LF</option>
-              <option value="count">each</option>
-            </select>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
-              <input type="checkbox" checked={m.round !== false} onChange={(e) => onUpdate(m.id, { round: e.target.checked })} />round up
-            </label>
-            {presets && (
-              <select value={presets.some((t) => t.label === m.note) ? m.note : ""}
-                onChange={(e) => { const t = presets.find((x) => x.label === e.target.value); if (t) onUpdate(m.id, { note: t.label, per: t.per }); }}
-                title="Coverage preset — trowel notch / spread rate. Generic industry-typical values; verify against the product data sheet."
-                style={{ ...ip, background: "var(--paper-bright)" }}>
-                <option value="">preset…</option>
-                {presets.map((t) => <option key={t.label} value={t.label}>{t.label} · {t.per} SF/{m.unit || "unit"}</option>)}
-              </select>
-            )}
-            <input value={m.note || ""} onChange={(e) => onUpdate(m.id, { note: e.target.value })} placeholder="note (coats, trowel…)" style={{ ...ip, width: 150 }} />
-            <button onClick={() => onRemove(m.id)} title="Remove this material"
-              style={{ padding: "2px 7px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
-            {kind === "grout" && (m.basis || "area") === "area" && (
-              <div style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", paddingLeft: 14, color: "var(--ink-muted)", fontSize: 12 }}>
-                <span>tile</span>
-                {gi("tileL", "Tile length (in)")}
-                <span>×</span>
-                {gi("tileW", "Tile width (in)")}
-                <span>× thick</span>
-                {gi("tileT", "Tile thickness (in)")}
-                <span>″ · joint</span>
-                <input type="number" min="0.03125" max="0.5" step="any" value={g.joint || ""} title="Joint width (in) — 1/32″ to 1/2″"
-                  onChange={(e) => setGrout({ joint: Math.min(0.5, Math.max(0.03125, parseFloat(e.target.value) || 0)) })}
-                  style={{ ...ip, width: 62 }} />
-                <span>″ · bag</span>
-                {gi("bagLbs", "Bag size (lbs)")}
-                <span>lb</span>
-              </div>
-            )}
-          </div>
-        );
-      })}
-      <button onClick={onAdd}
-        style={{ marginTop: 2, padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add material</button>
-    </>
-  );
-}
+// The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
+// live in components/TakeoffsPanel.jsx — the panel is their only surface now.
 
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
@@ -332,27 +113,75 @@ export default function TakeoffCanvas() {
   const [active, setActive] = useState("");      // active source PDF file name
   const [page, setPage] = useState(1);           // 1-based page within the active PDF
   const [pageCount, setPageCount] = useState(1); // pages in the active PDF
-  const [view, setView] = useState("canvas");    // "gallery" overlays the canvas (gallery-first on empty projects)
+  const [view, setView] = useState("canvas");    // "gallery"/"picker" overlay the canvas (gallery-first on empty projects)
+  // Cloud mode = the active store is a Drive-backed cloudStore (it has listFolder;
+  // localStore does not). In cloud mode an empty project shows the Drive file
+  // PICKER instead of the local drag-in prompt, so we don't auto-download every
+  // PDF in the folder (spec books, as-builts). Stable per mount (store is swapped
+  // in before the canvas mounts).
+  const cloudMode = typeof store.listFolder === "function";
+  // Reactive sign-in state: the "browse team projects" toolbar link is a
+  // convenience shortcut for someone ALREADY signed in — it must never appear
+  // while signed out, or it'd be a second OAuth entry point (a /projects
+  // sign-in wall) in the toolbar, breaking the pre-Drive local-first look.
+  const { user: googleUser } = useGoogleAuth();
+  // Client-side exit back to the project home (`/`) — main.jsx's gate cleanup
+  // restores the local store on the way out, so this navigation is safe.
+  const navigate = useNavigate();
+  // Two distinct exits out of a cloud project, both needed once every sheet is
+  // closed: "Close project" always works (it's just leaving `/?project=` for
+  // the local canvas — main.jsx's gate cleanup restores the local store), so
+  // it's the one guaranteed path out even on deployments with no Projects root
+  // configured. "Browse projects" additionally jumps straight to the team's
+  // project list at /projects, when the build names one.
+  const closeProject = () => navigate("/");
+  const browseProjects = projectHomeFolderId() ? () => navigate("/projects") : null;
   const [openTabs, setOpenTabs] = useState([]);   // sheetKeys open as tabs across the top
   const [galleryLabels, setGalleryLabels] = useState({}); // sheetKey → title-block number, all files
   const [pageLabels, setPageLabels] = useState({}); // { pageNum: "A003" } from the title block
   const [sheetGroup, setSheetGroup] = useState([]);   // sheetKeys shown side-by-side; [] = single-sheet mode
-  const [sheetLevels, setSheetLevels] = useState({}); // sheetKey → level label ("L1") — persisted; groups the gallery for multi-floor sets
+  const [sheetLevels, setSheetLevels] = useState({}); // sheetKey → level label ("L1") — persisted (additive `sheet_levels` key); groups the gallery for multi-floor sets
   const [lastGroup, setLastGroup] = useState([]);     // most recent side-by-side composition — "Regroup" restores it
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
-  const [hatchOpen, setHatchOpen] = useState(false);         // hatch picker popover (declutters the row)
-  const [zoneCheck, setZoneCheck] = useState(null);          // ephemeral zone-check region {key, pts (norm)} — never persisted
-  const [zoneExpand, setZoneExpand] = useState(null);        // zone panel: condition id with materials expanded
-  const [plays, setPlays] = useState(loadPlays);             // saved condition plays (this browser)
-  const [playsOpen, setPlaysOpen] = useState(false);         // plays picker popover
-  const [hatchHover, setHatchHover] = useState("");          // picker caption — hovered pattern name
-  const [matOpen, setMatOpen] = useState(false);             // supporting-materials editor panel
+  const [zoneCheck, setZoneCheck] = useState(null);   // ephemeral zone-check region {key, pts (norm)} — never persisted (buildPayload doesn't read it)
+  const [zoneExpand, setZoneExpand] = useState(null); // zone panel: condition id with materials expanded
+  // Shared reset for the two zone transients — every site that discards
+  // OTHER in-flight measurement state (sheet change, snapshot load, hydrate)
+  // must discard this too, or the results panel and glow can outlive the
+  // region/shapes they described. See the tool-change effect below for the
+  // matching `poly` (pending zone trace) reset, which has its own rule.
+  const resetZone = () => { setZoneCheck(null); setZoneExpand(null); };
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
-  const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout)
-  const [selectedMarkupId, setSelectedMarkupId] = useState(null); // a picked highlight stroke — Select tool; ⌫ deletes, drag moves
-  const [showMarkupPanel, setShowMarkupPanel] = useState(false);
-  const [showTakeoffs, setShowTakeoffs] = useState(false);    // side panel: takeoffs list (conditions + totals)
-  const [panelMatOpen, setPanelMatOpen] = useState(false);    // assemblies editor expanded inline under the active row in the Takeoffs panel
+  const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
+  // Docked LEFT panel — one at a time, never overlapping: null | "markup" | "stamp" | "rfi".
+  // The right-rail buttons switch tabs; the dock reflows the canvas (mirrors the
+  // docked Takeoffs panel on the right).
+  const [leftTab, setLeftTab] = useState(null);
+  const [showMarkups, setShowMarkups] = useState(true);       // markup SVG layer visibility (orthogonal to the export checkbox)
+  const [editor, setEditor] = useState(null);                 // inline on-canvas text editor { left, top, value, multiline, commit } (retires window.prompt; screen-space overlay, NOT an SVG child)
+  const [panelEditId, setPanelEditId] = useState(null);       // markup id whose text is being edited inline in the markup panel (off-screen fallback for the ✎ button)
+  // Stamp library (browser-global, meta store) — reusable annotation stamps
+  // dropped click-to-place (#40). armedStamp holds the stamp picked from the
+  // palette; while tool==="stamp" each canvas click instantiates it as normal,
+  // editable markups. Persist mirrors the template/material library pattern.
+  const [stampLib, setStampLib] = useState({ stamps: [], sets: [] });
+  const stampLibRef = useRef({ stamps: [], sets: [] });       // readable outside a render (persist merges)
+  const [armedStamp, setArmedStamp] = useState(null);         // stamp armed for click-to-place (tool==="stamp")
+  // Docked Takeoffs panel (right side, reflows the canvas): width + collapsed
+  // persist per user in localStorage as diffs against PANEL_DEFAULTS.
+  const [panelPrefs, setPanelPrefs] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || "{}");
+      return { ...PANEL_DEFAULTS, ...(p && typeof p === "object" && !Array.isArray(p) ? p : {}) };
+    } catch { return { ...PANEL_DEFAULTS }; }
+  });
+  // Panel VIEW state (tab, filter, collapsed groups, ⌘/⇧ multi-select) lives
+  // in the TakeoffsPanel component. Two hooks back into it from here:
+  const [panelEpoch, setPanelEpoch] = useState(0);   // bumped by hydrate — the panel clears the transients that described the replaced conditions
+  const panelSelectionRef = useRef(null);            // the panel registers "dismiss the bulk selection" here; activateCondition calls it
+  const [templates, setTemplates] = useState([]);             // condition template library (browser-global, meta store)
+  const templatesRef = useRef([]);                            // readable inside hydrate (seeding a fresh workspace)
+  const [matLib, setMatLib] = useState([]);                   // material library (browser-global; conditions COPY on attach + carry lib_id)
   const labeledFileRef = useRef("");             // which file we've already title-block-scanned
   const wantSheetRef = useRef(new URLSearchParams(window.location.search).get("sheet") || "");
   const [status, setStatus] = useState("loading");
@@ -363,9 +192,36 @@ export default function TakeoffCanvas() {
   const [tf, setTf] = useState({ x: 0, y: 0, scale: 1 }); // render mirror of tfRef
 
   const [scales, setScales] = useState({});
+  const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
+  // App chrome theme (light/dark tokens) — independent of the canvas ☾ invert
+  // above. lib/theme.js owns the DOM; this state just keeps the glyph current.
+  const [theme, setTheme] = useState(getTheme);
+  useEffect(() => onThemeChange(setTheme), []);
+  // diff-only prefs (cf. reportColumns): only keys that differ from the
+  // defaults persist, so a future default change reaches existing users
+  useEffect(() => {
+    try {
+      const diff = {};
+      for (const k of Object.keys(PANEL_DEFAULTS)) if (panelPrefs[k] !== PANEL_DEFAULTS[k]) diff[k] = panelPrefs[k];
+      localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(diff));
+    } catch { /* private mode */ }
+  }, [panelPrefs]);
+  const panelW = clampPanelW(Number(panelPrefs.w) || PANEL_DEFAULTS.w);
+  const takeoffsOpen = !panelPrefs.collapsed;
+  const toggleTakeoffs = () => setPanelPrefs((p) => ({ ...p, collapsed: !p.collapsed }));
+  // Panel resize lives INSIDE TakeoffsPanel (mid-drag width goes straight to
+  // its DOM node; the pref commits ONCE on release via setPanelPrefs). Each
+  // committed width change reflows the canvas container — coordinate math is
+  // safe (pointer→image reads the rect at event time; the stage transform is
+  // anchored top-left, so content stays put and we deliberately do NOT
+  // re-fit) — but the hi-res detail crop only re-renders on transform change,
+  // so the detail effect also keys on panelW/takeoffsOpen below, and mid-drag
+  // the panel holds the gesture window open through this callback (like wheel
+  // zoom) so the crop re-renders once per drag, on settle.
+  const holdPanelGesture = useCallback(() => { gestureUntilRef.current = performance.now() + GESTURE_MS; }, []);
   // negative view is baked into the canvas PIXELS (invertCanvasPixels), never a
   // CSS filter — track which canvases currently hold inverted pixels (only
   // canvases that finished a render get an entry), + darkMode readable from
@@ -379,27 +235,74 @@ export default function TakeoffCanvas() {
   const [pendingLen, setPendingLen] = useState("");
   const [check, setCheck] = useState([]);             // Check tool: 0–2 stage-px points along a printed dimension
   const [checkStated, setCheckStated] = useState(""); // what the drawing says that dimension is
-  const [scaleGuide, setScaleGuide] = useState(null); // ephemeral calibrated ruler {key, feet, px, label, at:[x,y]} — never persisted
+  const [scaleGuide, setScaleGuide] = useState(null); // ephemeral calibrated ruler {key, feet, px, label, at:[x,y]} — never persisted (buildPayload doesn't read it)
   const scaleGuideTimerRef = useRef(0);
-  const [units, setUnits] = useState(() => (localStorage.getItem("opentakeoff_units") === "metric" ? "metric" : "imperial"));
-  useEffect(() => { try { localStorage.setItem("opentakeoff_units", units); } catch { /* private mode */ } }, [units]);
+  const scaleGuidePreviewRef = useRef(false); // true while the visible guide is a hover PREVIEW of an unaccepted scale — the preview must die with the hover/menu; an accepted bar stays
+  // One-slot revert stash: the scale a quantity-changing rescale replaced
+  // ({key, upp, source}). An oops-hatch, not an undo history — ephemeral by
+  // design (never persisted): a mistyped recalibrate is caught within a menu
+  // click, not archaeologically.
+  const [prevScale, setPrevScale] = useState(null);
 
   const [conditions, setConditions] = useState([]);
+  const [conditionColumns, setConditionColumns] = useState([]);  // project-level custom-column vocabulary [{ id, name, values }] — assignments live on c.attrs
+  const [shapeLabels, setShapeLabels] = useState([]);  // project-level flat vocabulary of phase/area labels (#110) — assignment lives on shape.label
   const [activeCond, setActiveCond] = useState("");
+  const [activeLabel, setActiveLabel] = useState(null);   // session-only active phase/area label (#111) — new traces get it; NOT persisted (absent from buildPayload, reset on hydrate)
+  const [palette, setPalette] = useState([]);   // ordered condition ids pinned to the top-bar quick-access palette (≤ PALETTE_MAX)
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
+  const [ocSel, setOcSel] = useState(null);        // selected proposal vertex {ri, vi} — Delete removes just that point
+  const [ocHover, setOcHover] = useState(-1);      // proposal region under the cursor — handles reveal on hover
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
+  const [selVert, setSelVert] = useState(null);         // selected vertex index of the selected shape — Delete removes just that point
+  const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
+  const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
+  // selecting a shape clears any markup selection and vice-versa — one live
+  // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
+  const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
+  const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
+  const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
+  // One-Click fill sensitivity (0..1) — how eagerly a fill crosses a room's hatch;
+  // per-user pref, defaults to the calibrated Balanced preset.
+  const [fillSens, setFillSens] = useState(() => {
+    try { const v = parseFloat(localStorage.getItem("opentakeoff_fill_sens")); return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : SENS_BALANCED; } catch { return SENS_BALANCED; }
+  });
+  useEffect(() => { try { localStorage.setItem("opentakeoff_fill_sens", String(fillSens)); } catch { /* private mode */ } }, [fillSens]);
   const [saveState, setSaveState] = useState("idle");
-  const [commitMsg, setCommitMsg] = useState("");   // transient status line (misnamed for history; just the message bar)
+  // internal state is { text }, minted FRESH on every setCommitMsg call — a
+  // byte-identical message (e.g. two "Couldn't open X" in a row) still gets a
+  // new object identity, so the effect below (keyed on this object) restarts
+  // its clock instead of no-op'ing on an unchanged dep. setCommitMsg(text) is
+  // a thin, stable-shaped wrapper so the ~48 call sites below stay untouched.
+  const [commitMsgState, setCommitMsgState] = useState({ text: "" });
+  const commitMsg = commitMsgState.text;   // misnamed for history; just the message bar
+  const setCommitMsg = (text) => setCommitMsgState({ text });
+  // transient means transient: every message dismisses itself after ~6s (a
+  // repeat message restarts the clock — see above). Three things don't age
+  // out on a timer: the stale-tab lockout (STALE_TAB_MESSAGE — sticky until
+  // the user reloads; it's the only story this tab has left to tell), any
+  // other failure message (isDangerMsg — "Couldn't…"/"Commit failed…" — stays
+  // until the NEXT message replaces it, not a clock), and in-progress messages
+  // (the file's own "…" convention — "Reading files…", "Building the marked
+  // set…", ingestFiles' onProgress strings — which must not vanish mid-op;
+  // grep setCommitMsg to see every message and confirm the convention holds).
+  useEffect(() => {
+    const text = commitMsgState.text;
+    if (!text || isDangerMsg(text) || text.endsWith("…")) return;
+    const t = setTimeout(() => setCommitMsg(""), 6000);
+    return () => clearTimeout(t);
+  }, [commitMsgState]);
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
-  const [showRevisions, setShowRevisions] = useState(false);  // Revisions overlay (save snapshots + compare quantity deltas)
-  const [showAiSettings, setShowAiSettings] = useState(false); // bring-your-own-key AI settings modal
-  const [aiScaleBusy, setAiScaleBusy] = useState("");    // sheetKey with an AI scale-read in flight
+  const [showSnapshots, setShowSnapshots] = useState(false); // Snapshots modal (save / compare / restore)
+  const [importRows, setImportRows] = useState(null);        // Import-from-schedule approval rows (null = dialog closed)
+  const [scheduleAnchor, setScheduleAnchor] = useState(null); // first marquee corner for the "schedule" tool — ISOLATED from poly so it can never leak into a measure shape
   const [projectName, setProjectName] = useState("");   // optional label for the report header
+  const [clientInfo, setClientInfo] = useState({});      // per-project client/job fields for branded output; additive payload field
   const fileInputRef = useRef(null);                    // hidden <input type=file> for "Open PDF"
 
   const containerRef = useRef(null);
@@ -414,6 +317,7 @@ export default function TakeoffCanvas() {
   const renderTasksRef = useRef(new Map());  // sheetKey → pdf.js RenderTask
   const pdfDocsRef = useRef(new Map());      // file name → pdf.js loading task (doc cache)
   const renderSeqRef = useRef(0);            // monotonic token — stale render chains bail out
+  const scanBusyRef = useRef(false);         // a paid schedule OCR read is in flight — blocks re-fire from a rapid re-draw
   const panRef = useRef(null);
   const spaceRef = useRef(false);
   const crossVRef = useRef(null);
@@ -421,13 +325,7 @@ export default function TakeoffCanvas() {
   const rubberRef = useRef(null);
   const rectRef = useRef(null);
   const cloudRef = useRef(null);       // live cloud preview (first corner → cursor)
-  const hlRef = useRef(null);          // in-progress highlighter stroke {pts (stage px), key}
-  const hlPathRef = useRef(null);      // live highlighter preview path (imperative, WYSIWYG ink)
-  const [hlStyle, setHlStyle] = useState(() => {
-    try { return { color: HL_INKS[0], size: 14, tip: "chisel", ...JSON.parse(localStorage.getItem("opentakeoff_hl_style") || "{}") }; }
-    catch { return { color: HL_INKS[0], size: 14, tip: "chisel" }; }
-  });
-  useEffect(() => { try { localStorage.setItem("opentakeoff_hl_style", JSON.stringify(hlStyle)); } catch { /* private mode */ } }, [hlStyle]);
+  const highlightRef = useRef(null);   // live highlight-box preview (first corner → cursor; own translucent fill, NOT rectRef's condition fill)
   const snapRef = useRef(null);        // current snapped image point (or null)
   const snapGridsRef = useRef(new Map()); // sheetKey → {cell, map} spatial hash of vector endpoints
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
@@ -439,21 +337,64 @@ export default function TakeoffCanvas() {
   const angleRef = useRef(null);       // current angle-locked image point (or null) — the click commits it
   const aimMarkRef = useRef(null);     // four floating liquid-glass pickets thickening the crosshair crossing
   const aimChipRef = useRef(null);     // readout chip by the cursor (locked angle · live segment length)
-  const dragRef = useRef(null);        // {kind:'move'|'vertex', shapeId, vIndex?, start:[x,y], orig:verts_norm}
+  const dragRef = useRef(null);        // {kind:'move'|'vertex'|'markupMove', shapeId?/markupId?, vIndex?, start:[x,y], orig:verts_norm/markup coords, moved?}
+  const ocDragRef = useRef(null);      // One-Click proposal edit drag: {kind:'oc-vertex'|'oc-edge', ri, vi?/i?/j?, oa?, ob?, sx?, sy?} — poly is panel-LOCAL px
+  const ocHoverRef = useRef(-1);       // mirror of ocHover (region index under cursor) — compared per-move to avoid stale-closure churn
+  const editingRef = useRef(false);    // true while the inline text editor is open — read in moveCrosshair/onPointerDown/wheel (a REF, never per-mousemove state) to suppress the crosshair and freeze pan/zoom
+  const editorRef = useRef(null);      // mirror of the open editor object, so finishEditor can commit without a stale-closure race
+  const editorInputRef = useRef(null); // the live <input> element (uncontrolled — value read on commit)
   const lastPtrRef = useRef(null);     // last pointer CLIENT coords — paste targets the sheet under the cursor
   const pendingClickRef = useRef(null); // deferred draw click {p,cx,cy} — drag >5px converts to a pan
   const hoverRef = useRef(null);        // hover tooltip div (DOM-direct like the crosshair)
   const hoverIdRef = useRef("");        // shape id currently described by the tooltip
   const lastMeasureRef = useRef("area"); // last armed measure tool — shown on the Measure menu face
+  const prevToolRef = useRef("pan");   // previous armed tool — detects a LEAVE-zone transition so the shared `poly` array only clears when zone itself was left, not on every tool change
   const menuDepthRef = useRef(0);      // >0 while a toolbar menu is open (letter shortcuts pause)
+  // ONE stable open/close listener for every toolbar menu — ToolMenu re-fires
+  // its onOpenChange effect when the callback identity changes, so an inline
+  // arrow here would re-count an open menu on every canvas render
+  const onMenuDepth = useCallback((o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }, []);
   const thumbCacheRef = useRef(new Map()); // sheetKey → thumbnail dataURL — survives gallery close
   const legacyPinnedRef = useRef(null);    // old `pinned` page numbers awaiting their one-shot tab migration
   const tabInitRef = useRef(false);        // snap to the first restored tab exactly once
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
   const viewRef = useRef("canvas");        // mirror for the keyboard handlers
+  // live mirrors of tool/proposal — oneClickAt is an async function whose
+  // closure over `tool`/`proposal` goes stale across an `await` (the user can
+  // switch tools or start a proposal on another panel while a raster render is
+  // in flight); the post-await guards below read these refs, never the
+  // closed-over state, so a slow raster resolve can't act on a world that has
+  // since moved on.
+  const toolRef = useRef(tool);
+  const proposalRef = useRef(proposal);
   const hydrated = useRef(false);
-  const hydrationEcho = useRef(false);   // swallow the one autosave the load's own setStates trigger
-  const [loadError, setLoadError] = useState("");   // annotations load failed — autosave stays disarmed
+  // Autosave stays holstered until a user-originated edit. hydrate() flips every
+  // autosave dep to a fresh identity, so the effect fires once on the post-load
+  // render with no edit behind it; that lone run arms this and returns instead of
+  // writing — otherwise merely opening a shared ?project= link would CREATE
+  // annotations.json in the folder (see #68). Error paths that skip hydrate arm
+  // it directly (no echo to swallow). A snapshot Load reuses hydrate() too, but
+  // mid-session it runs with this already armed, so a restore saves — unchanged
+  // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
+  // and is not persisted — the #73 gap, which persists on the LEGACY cloud path.
+  // On the opted-in local-first path #73 is RETIRED: loadAnnotations returns local
+  // and never throws, so the mount always hydrates + arms, and a restore's setStates
+  // re-fire this effect with saves armed → the restored payload persists + pushes.)
+  const savesArmed = useRef(false);
+  // One-shot suppression for a background reconcile (Slice 5). A remote adopt (mount
+  // seed / 4c conflict resolution) re-hydrates via onRemoteUpdate mid-session, when
+  // saves are already armed — that hydrate would otherwise re-fire the autosave
+  // effect and push the just-adopted content back at synced_rev+1 (rev churn on a
+  // seed; a spurious conflict + loser-snapshot on an adopt). Set true right before
+  // the reconcile hydrate; the autosave effect swallows exactly the next run.
+  // INVARIANT (load-bearing): hydrate() must dirty ≥1 autosave dep so this flag is
+  // consumed on the very next commit and can't leak into a later REAL edit (it always
+  // does — setConditions/setShapes/setClientInfo mint fresh values unconditionally).
+  // And hydrate must not spawn a SECOND autosave-triggering commit that outlives the
+  // flag — normalizeLoadedGroups keeps the lastGroup-sync effect a no-op for exactly
+  // that reason. A future "skip setState if unchanged" optimization on either would
+  // reopen an escape; keep both guarantees.
+  const suppressNextSave = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -464,7 +405,6 @@ export default function TakeoffCanvas() {
 
   // page 1 keeps the bare file name (pre-paging takeoffs still load); pages 2+ → "name#page"
   const sheetKey = page > 1 ? `${active}#${page}` : active;
-  const keyForPage = (n) => (n > 1 ? `${active}#${n}` : active);
   // toggle a sheet in/out of the side-by-side group; first toggle from single
   // mode seeds the group with the sheet currently on screen
   const toggleInGroup = (key) => setSheetGroup((g) => {
@@ -516,12 +456,12 @@ export default function TakeoffCanvas() {
     if (!sheetGroup.length && key === sheetKey) { const nb = next[Math.min(Math.max(i, 0), next.length - 1)]; if (nb) goToSheet(nb); }
   }
   const tabLabel = (k) => {
-    const lvl = sheetLevels[k] ? `${sheetLevels[k]} · ` : "";
+    const lvl = sheetLevels[k] ? `${sheetLevels[k]} · ` : "";   // assigned floor/level rides every tab label
     if (galleryLabels[k]) return lvl + galleryLabels[k];
     const t = parseSheetKey(k);
-    if (t.file === active && pageLabels[t.page]) return pageLabels[t.page];
+    if (t.file === active && pageLabels[t.page]) return lvl + pageLabels[t.page];
     const base = t.file.replace(/\.pdf$/i, "");
-    return t.page > 1 ? `${base} · ${t.page}` : base;
+    return lvl + (t.page > 1 ? `${base} · ${t.page}` : base);
   };
 
   // ── panels: the ONE rendering model — single-sheet mode is a group of one ──
@@ -537,40 +477,37 @@ export default function TakeoffCanvas() {
     if (dims.w) _px += dims.w + PANEL_GAP;
     return p;
   });
-  const stage = panels.reduce((a, p) => ({ w: Math.max(a.w, p.xOffset + p.img.w), h: Math.max(a.h, p.img.h) }), { w: 0, h: 0 });
-  const panelByKey = (k) => panels.find((p) => p.key === k) || panels[0];
-  // never null: a click in a gap (or off the row) routes to the NEAREST panel,
-  // matching the old behavior of happily returning out-of-bounds image coords
-  const panelAt = (sx) => {
-    let best = panels[0], bd = Infinity;
-    for (const p of panels) {
-      if (sx >= p.xOffset && sx < p.xOffset + p.img.w) return p;
-      const d = sx < p.xOffset ? p.xOffset - sx : sx - (p.xOffset + p.img.w);
-      if (d < bd) { bd = d; best = p; }
-    }
-    return best;
-  };
+  // Pure panel-row math (stage extent, nearest-panel routing, the px→feet
+  // scale factors) lives in lib/panelGeometry.js; these thin wrappers bind the
+  // live panels/scales so every call site below reads unchanged.
+  const stage = panelGeom.stageExtent(panels);
+  const panelByKey = (k) => panelGeom.panelByKey(panels, k);
+  const panelAt = (sx) => panelGeom.panelAt(panels, sx);
   const panelKeySet = new Set(groupKeys);
-  const visibleShapes = shapes.filter((s) => panelKeySet.has(s.sheet_id));
+  // memoized: feeds the per-condition totals map the memoized TakeoffsPanel
+  // takes as a prop — identity must hold across canvas-only renders. Builds
+  // its own key set from sheetGroup/sheetKey (what groupKeys/panelKeySet above
+  // are themselves derived from) rather than depending on groupSig or the
+  // panelKeySet instance above — both are new on every render, so depending on
+  // either honestly would recompute every render regardless; these are the
+  // real, referentially-stable inputs.
+  const visibleShapes = useMemo(() => {
+    const keys = new Set(sheetGroup.length ? sheetGroup : [sheetKey]);
+    return shapes.filter((s) => keys.has(s.sheet_id));
+  }, [shapes, sheetGroup, sheetKey]);
+  const visibleMarkups = markups.filter((m) => panelKeySet.has(m.sheet_id));
   // scale is PER PAGE (plan sets are never one uniform scale) — set it once per
   // sheet and it's remembered. In group mode the scale dropdown and hints target
   // the FOCUSED panel (the one last clicked); single mode focuses the lone panel.
   const focusPanel = (focusKey && groupKeys.includes(focusKey) && panelByKey(focusKey)) || panels[0];
   const unitsPerPx = scales[focusPanel.key] ?? null;
   const labelFor = (p) => (p.file === active && pageLabels[p.page]) || (p.page > 1 ? `Sheet ${p.page}` : p.file);
-  // Stored scales are ALWAYS feet-per-pixel at the baseline RENDER_SCALE. A hi-res
-  // sheet is rastered at autoRenderScale, so its bitmap has factorFor× the baseline
-  // pixels — geometry must divide by that factor (uppFor) and calibration must multiply
-  // back to baseline, or a quantity would drift with the render resolution. Shape verts
-  // are normalized to the panel, so positions are scale-free; only the px→feet factor
-  // moves. factorFor reads the scale ACTUALLY rastered (renderScalesRef), so it always
-  // matches the bitmap currently on screen.
+  // Scale semantics (why geometry divides by factorFor and calibration
+  // multiplies back to baseline) are documented on the pure functions in
+  // lib/panelGeometry.js; these wrappers bind the live scales/renderScalesRef.
   const hiResOn = (key) => hiResKeys.includes(key);
-  const factorFor = (key) => (renderScalesRef.current.get(key) || RENDER_SCALE) / RENDER_SCALE;
-  const uppFor = (key) => {
-    const u = scales[key];
-    return u == null ? null : u / factorFor(key);
-  };
+  const factorFor = (key) => panelGeom.factorFor(renderScalesRef.current, key);
+  const uppFor = (key) => panelGeom.uppFor(scales, renderScalesRef.current, key);
   const toggleHiRes = () => {
     const k = focusPanel.key;
     setHiResKeys((arr) => {
@@ -610,6 +547,40 @@ export default function TakeoffCanvas() {
     setSheets(list);
     return list;
   }, []);
+  // Stable props for the Drive picker so its folder-load effect doesn't re-fire
+  // (and re-hit Drive) on every canvas re-render. `store` is a module binding
+  // read at call time, so [] deps are correct.
+  const pickerListFolder = useCallback((id) => store.listFolder(id), []);
+  const pickerAddSheets = useCallback((items) => store.addSheets(items), []);
+  // Reconcile the canvas after a PDF leaves the working set. For a non-empty
+  // result the [sheets] effect already prunes openTabs/sheetGroup, but it can't:
+  //   • fix `active` when the CLOSED pdf was the one on screen (it never resets
+  //     itself), so move to a surviving sheet; and
+  //   • prune anything when the set is now EMPTY — that effect early-returns on
+  //     `!sheets.length` (it must, to protect restored tabs during load), so the
+  //     last-pdf close would otherwise strand a tab pointing at a deleted file.
+  const reconcileAfterRemoval = useCallback((name, list) => {
+    if (!list.length) {
+      setOpenTabs([]); setSheetGroup([]); setLastGroup([]); setActive(""); setPage(1);
+      setView("gallery");
+      return;
+    }
+    if (name === active) { setActive(list[0].name); setPage(1); setSheetGroup([]); }
+  }, [active]);
+  // Close a PDF: drop it from the working set (cloud: manifest only, file stays
+  // in Drive; local: deletes the stored bytes), refresh, then reconcile the view.
+  // Shapes on the closed sheets persist in annotations and restore on re-add.
+  const closePdf = useCallback(async (name) => {
+    await store.removePdf(name);
+    reconcileAfterRemoval(name, await refreshSheets());
+  }, [refreshSheets, reconcileAfterRemoval]);
+  // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
+  // file, then drop it from the working set.
+  const removeFromProject = useCallback(async (name) => {
+    if (typeof store.removeFromProject !== "function") return;
+    await store.removeFromProject(name);
+    reconcileAfterRemoval(name, await refreshSheets());
+  }, [refreshSheets, reconcileAfterRemoval]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -638,51 +609,226 @@ export default function TakeoffCanvas() {
     }
     setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
   }
+  // The empty-project landing view (the Drive picker for an empty cloud project,
+  // else the gallery) depends on BOTH the sheet list and the annotations (open
+  // tabs), which load in two racing mount effects. These flags let whichever
+  // finishes LAST make the call exactly once — so the picker never flashes for a
+  // project that actually has sheets, and no redundant Drive listing fires.
+  const hasSheetsRef = useRef(false);
+  const sheetsLoadedRef = useRef(false);
+  const noTabsRef = useRef(false);
   useEffect(() => {
     let off = false;
     setStatus("loading");
     store.listSheets()
-      .then((list) => { if (off) return; setSheets(list); if (list.length) setActive(list[0].name); else { setStatus("empty"); setView("gallery"); } })
+      .then((list) => {
+        if (off) return;
+        hasSheetsRef.current = list.length > 0;
+        sheetsLoadedRef.current = true;
+        setSheets(list);
+        if (list.length) setActive(list[0].name);
+        else setStatus("empty");
+        // decide the landing only once the annotations effect has also reported
+        // no open tabs (see hydrate) — avoids a picker→gallery flash + wasted list
+        if (noTabsRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
+      })
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
-  }, []);
+  }, [cloudMode]);
+  // Keep hasSheetsRef current so a later re-hydration (a Snapshot Load after the
+  // working set changed) reads the LIVE sheet count, not the mount-time value.
+  // The mount sheets effect above also sets it synchronously for the initial
+  // landing decision (before this post-render effect runs).
+  useEffect(() => { hasSheetsRef.current = sheets.length > 0; }, [sheets]);
 
   // ── load saved annotations once per project ───────────────────────────────
+  // hydrate applies a saved payload to state — shared by the mount load and by
+  // Load in the Snapshots panel, so a restored snapshot walks the same
+  // defensive path as a page reload.
+  const hydrate = (a) => {
+    // Same cross-load-transient gap as the panel epoch bump below: a Snapshot
+    // Load runs in-place with the same sheet keys, so a surviving zoneCheck
+    // would immediately re-classify the RESTORED shape set against the
+    // pre-load polygon — "correct" math against the wrong region. Reset it
+    // unconditionally, mirroring the sheet_group/sheet_levels else-clear rule.
+    resetZone();
+    setProjectName(a.project_name || "");
+    // string fields only — a corrupted record must not put an object where
+    // the report masthead renders a React child
+    setClientInfo(Object.fromEntries(Object.entries(
+      a.client_info && typeof a.client_info === "object" && !Array.isArray(a.client_info) ? a.client_info : {}
+    ).filter(([, v]) => typeof v === "string")));
+    setConditionColumns(sanitizeConditionColumns(a.condition_columns));   // non-array/malformed → [] (unconditional set: snapshot load must not inherit pre-load columns)
+    setShapeLabels(sanitizeShapeLabels(a.shape_labels));   // same unconditional-set rule: a snapshot load must not inherit the replaced project's label vocabulary
+    setActiveLabel(null);   // active label is session-only — never carry one from the replaced project into a fresh/loaded one
+    const conds = sanitizeConditionAttrs(a.conditions || []);   // strips corrupt attrs values so every reader can trust them (the client_info precedent)
+    if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
+    else { const seeded = seedConditions(templatesRef.current); setConditions(seeded); setActiveCond(seeded[0].id); }   // library templates first, flooring defaults as fallback
+    // palette holds condition ids — de-dupe (a hand-edited/older payload could
+    // repeat one, which would collide React keys and double-map a hotkey), drop
+    // any that don't resolve in the loaded set, and cap defensively; a seeded
+    // fresh workspace starts with an empty palette
+    setPalette(Array.isArray(a.palette) && conds.length ? [...new Set(a.palette)].filter((id) => conds.some((c) => c.id === id)).slice(0, PALETTE_MAX) : []);
+    // panel transients reset with the conditions they described — a snapshot
+    // Load must not keep a checked set / range anchor / filter / collapsed
+    // groups aimed at the PRE-load list (bulk edits would misfire on ids that
+    // happen to survive). That state lives in the TakeoffsPanel now: bump its
+    // epoch and it clears them in place (panel tab + width survive, as they
+    // always did). On the mount load this is a no-op (fresh panel state).
+    setPanelEpoch((e) => e + 1);
+    setShapes(sanitizeShapeLabelsOnShapes(a.shapes || []));   // strip a corrupt shape.label at hydrate (identity-preserving); other shape fields untouched
+    // normalize hydrated markups: legacy workspaces may hold markups with no id
+    // (pre-dating the id field) — seed a stable id + default rfi_id so the new
+    // select / edit / delete / move / RFI-link flows (all keyed on m.id) work on them.
+    setMarkups(Array.isArray(a.markups) ? a.markups.map((m) => ({ ...m, id: m.id || uid("mk"), rfi_id: m.rfi_id || "" })) : []);
+    setRfis(Array.isArray(a.rfis) ? a.rfis : []);   // additive — old saves without rfis load as []
+    // additive `sheet_levels` key (multi-floor gallery grouping) — old payloads
+    // lack it and must clear any pre-load levels (the sheet_group else-clear
+    // rule: a snapshot load must not inherit the replaced project's levels).
+    // String labels only, mirroring the client_info string-fields gate.
+    // Extracted to sanitizeSheetLevels (lib/sheetLevels.js) so this gate has
+    // its own unit tests independent of the reducer.
+    setSheetLevels(sanitizeSheetLevels(a.sheet_levels));
+    // else-clear matters at runtime (snapshot load): a payload without groups/
+    // tabs must not inherit the pre-load ones — autosave would persist a hybrid.
+    // In group mode sheetGroup + lastGroup share ONE instance so the lastGroup-sync
+    // effect below is a reference-equal no-op — otherwise its follow-up commit would
+    // escape the one-shot save suppression and spuriously re-save (see normalizeLoadedGroups).
+    const { sheetGroup: grp, lastGroup: lgFinal } = normalizeLoadedGroups(a, MAX_GROUP);
+    setSheetGroup(grp);
+    setLastGroup(lgFinal);
+    // gallery-first: tabs restore directly; legacy pinned pages migrate once
+    // (over in the sheets effect, where file names are known); nothing open → gallery
+    const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
+    noTabsRef.current = false;   // accurate on every (re)hydrate; the no-tabs branch flips it true
+    if (tabs.length) setOpenTabs(tabs);
+    else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
+    // no tabs → the sheet chooser. Defer the picker-vs-gallery choice until the
+    // sheets effect has loaded the working set (coordinated via the refs) so an
+    // empty cloud project lands on the Drive picker without flashing the gallery.
+    else {
+      setOpenTabs([]);
+      noTabsRef.current = true;
+      if (sheetsLoadedRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
+    }
+    const sc = {};
+    const src = {};
+    for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
+      sc[s.sheet_id] = s.units_per_px;
+      // provenance is additive — old projects lack it (report shows "unknown").
+      // Any non-empty string passes through, not just today's known values: a
+      // whitelist would silently strip a future value on load and the next
+      // autosave would persist the loss. Display already falls back safely.
+      if (typeof s.scale_source === "string" && s.scale_source) src[s.sheet_id] = s.scale_source;
+    }
+    setScales(sc);
+    setScaleSources(src);
+  };
   useEffect(() => {
     let off = false;
-    store.loadAnnotations().then((a) => {
+    // templates load BEFORE annotations: hydrate's fresh-workspace seeding
+    // reads templatesRef, so the library must be in hand first
+    store.loadTemplates().catch(() => []).then((tpl) => {
+      if (!off) { templatesRef.current = tpl; setTemplates(tpl); }
+      return store.loadMaterialLibrary().catch(() => []);
+    }).then((ml) => {
+      if (!off) setMatLib(ml);
+      return store.loadAnnotations();
+    }).then((a) => {
       if (off) return;
-      setProjectName(a.project_name || "");
-      const conds = a.conditions || [];
-      if (conds.length) { setConditions(conds); setActiveCond(conds[0].id); }
-      else { const seeded = seedConditions(); setConditions(seeded); setActiveCond(seeded[0].id); }   // flooring-first defaults on a fresh workspace
-      setShapes(a.shapes || []);
-      setMarkups(Array.isArray(a.markups) ? a.markups : []);
-      const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
-      setSheetGroup(grp);
-      const lg = Array.isArray(a.last_group) ? a.last_group.slice(0, MAX_GROUP) : grp;
-      if (lg.length >= 2) setLastGroup(lg);
-      // gallery-first: tabs restore directly; legacy pinned pages migrate once
-      // (over in the sheets effect, where file names are known); nothing open → gallery
-      const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
-      if (tabs.length) setOpenTabs(tabs);
-      else if (Array.isArray(a.pinned) && a.pinned.length) legacyPinnedRef.current = a.pinned;
-      else setView("gallery");
-      const sc = {};
-      for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) sc[s.sheet_id] = s.units_per_px;
-      if (a.units === "metric" || a.units === "imperial") setUnits(a.units);
-      setScales(sc);
-      if (a.sheet_levels && typeof a.sheet_levels === "object") setSheetLevels(a.sheet_levels);
-      hydrationEcho.current = true;   // the setStates above fire the autosave effect once — that echo re-saves what was just loaded; skip it
+      hydrate(a);
       hydrated.current = true;
     }).catch((e) => {
-      // Do NOT arm autosave on a failed load: the in-memory state is empty, so
-      // the first edit would overwrite the intact saved takeoff with nothing.
-      // Leave it disarmed and say so — a reload retries the read.
-      setLoadError(String((e && e.message) || e || "unknown error"));
+      // stale-tab failure: leave autosave DISARMED (hydrated stays false). If a
+      // blocked tab recovered here with hydrated=true, its still-empty defaults
+      // would autosave straight over the other tab's real data. The reload
+      // message is the whole story for this tab.
+      if (isStaleTabError(e)) { setCommitMsg(STALE_TAB_MESSAGE); return; }
+      // Cloud project whose saved takeoff couldn't be read (Drive error / unreadable
+      // annotations): same rule as a stale tab — leave autosave DISARMED so empty
+      // defaults can't overwrite the real project in Drive. (cloudStore tags these.)
+      if (e?.name === "CloudLoadError") { setCommitMsg(e.message || "Couldn't load this project from Drive — reload to retry."); return; }
+      // hydrate never ran here, so there is no echo render to swallow — arm
+      // directly so the user's first edit saves without being eaten.
+      hydrated.current = true;
+      savesArmed.current = true;
     });
     return () => { off = true; };
+    // run-once mount load — hydrate is intentionally not a dep (re-running would
+    // re-hydrate over live edits); the cloudMode/ref it now reads are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Stamp library — independent of hydrate (it seeds no project state), so it
+  // loads on its own. A truly empty library gets the flooring defaults, then
+  // persists them once so the seeded set is exportable and survives reloads
+  // (the seedConditions precedent, but written back because the library is the
+  // asset itself, not a per-project derivation). Re-read on tab focus like the
+  // other browser-global records.
+  useEffect(() => {
+    let off = false;
+    store.loadStampLibrary().catch(() => ({ stamps: [], sets: [] })).then((raw) => {
+      if (off) return;
+      const seeded = seedStampLibrary(raw);
+      const wasEmpty = !(raw?.stamps || []).length;
+      stampLibRef.current = seeded; setStampLib(seeded);
+      if (wasEmpty && seeded.stamps.length) store.saveStampLibrary(seeded).catch(() => { /* seed persists on next edit */ });
+    });
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      store.loadStampLibrary().then((lib) => {
+        if (JSON.stringify(lib) === JSON.stringify(stampLibRef.current)) return;
+        // another tab edited the library — adopt it, INCLUDING an intentional
+        // delete-all (an empty library must propagate, not leave stale stamps).
+        // The store is shared per-origin, so a persisted empty is a real edit; the
+        // first-mount seed self-heals any transient pre-save empty on next focus.
+        stampLibRef.current = lib; setStampLib(lib);
+        // a cross-tab edit may have removed the armed stamp — don't keep a dangling ref
+        setArmedStamp((a) => (a && lib.stamps.some((s) => s.id === a.id) ? a : null));
+      }).catch(() => { /* keep what we have */ });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { off = true; document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+
+  // library freshness: BOTH browser-global records — the condition template
+  // library AND the material library (each sanitized at load, same as the
+  // mount effect above) — may have been edited by another tab since our mount
+  // load; re-read each on tab focus. Safe to swap in wholesale because every
+  // library mutation persists immediately (nothing unsaved lives only in this
+  // tab's state). Skip the setState when the freshly loaded list is
+  // byte-identical to what we're already holding (a cheap JSON signature
+  // compare) — TakeoffsPanel is memoized on these arrays' identity, and an
+  // unconditional set would defeat that memo on every tab focus even when
+  // nothing actually changed. This NARROWS the multi-tab last-write-wins
+  // window on both records; it doesn't close it.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      store.loadTemplates().then((tpl) => {
+        if (JSON.stringify(tpl) === JSON.stringify(templatesRef.current)) return;
+        templatesRef.current = tpl; setTemplates(tpl);
+      }).catch(() => { /* keep what we have */ });
+      store.loadMaterialLibrary().then((ml) => {
+        setMatLib((cur) => (JSON.stringify(ml) === JSON.stringify(cur) ? cur : ml));
+      }).catch(() => { /* keep what we have */ });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  // leaving the stamp tool disarms the pending stamp — a stray click under a
+  // measure/select tool must never drop a stamp
+  useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
+  // A One-Click proposal is only actionable while One-Click is armed (Enter
+  // already requires it) — discard it on tool switch, like the stamp above.
+  // Also keeps Create out of the ACTION slot while Finish occupies it, so the
+  // slot's reserved width always fits its content (issue #61).
+  useEffect(() => { if (tool !== "oneclick") setProposal(null); }, [tool]);
+  // Proposal gone (created, discarded, sheet changed) ⇒ drop any handle selection/hover.
+  useEffect(() => { if (!proposal) { setOcSel(null); ocHoverRef.current = -1; setOcHover(-1); } }, [proposal]);
+  // Switching to a different shape (or clearing the selection) drops the vertex pick.
+  useEffect(() => { setSelVert(null); }, [selectedId]);
 
   // remember every live composition so Regroup works after ANY exit from group
   // mode (Ungroup button, tab click, gallery View) — not just the last Ungroup
@@ -716,10 +862,12 @@ export default function TakeoffCanvas() {
     tabInitRef.current = true;
     goToSheet(openTabs[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openTabs, sheetLevels, sheets]);
+  }, [openTabs, sheets]);
 
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { viewRef.current = view; }, [view]);
+  useEffect(() => { toolRef.current = tool; }, [tool]);
+  useEffect(() => { proposalRef.current = proposal; }, [proposal]);
 
   // one pdf.js document per file, cached for the life of the project view —
   // the canvas render AND the gallery thumbnails share this cache
@@ -760,7 +908,7 @@ export default function TakeoffCanvas() {
     if (!active) return;
     const seq = ++renderSeqRef.current;
     const stale = () => seq !== renderSeqRef.current;
-    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setCheck([]); setCheckStated(""); setScaleGuide(null); setSelectedId(null); setProposal(null);
+    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null); selectShape(null); setProposal(null); resetZone();
     for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } }
     renderTasksRef.current.clear();
     snapGridsRef.current.clear();
@@ -823,7 +971,17 @@ export default function TakeoffCanvas() {
           // raster-fallback trigger signals: how much of the sheet is placed
           // image, and whether the vector linework is dense enough to bound rooms
           sheetStatsRef.current.set(m.key, { segCount: segs.length >> 2, imageFrac: Math.min(1, imageArea / (m.w * m.h)) });
-        }).catch(() => {});
+        }).catch(() => {
+          if (stale()) return;
+          // A rejected op-list (corrupt embedded JBIG2/CCITT — exactly the class of
+          // scanned PDFs this feature serves) must not leave stats permanently
+          // unset: with no sentinel, rasterEligible and vectorViable both read
+          // false forever and oneClickAt is stuck on the vector branch showing
+          // "try again in a second" for the sheet's whole lifetime. A sentinel that
+          // reads as image-dominant/segment-empty lets the raster fallback engage
+          // instead (rasterEligible true, vectorViable false).
+          sheetStatsRef.current.set(m.key, { segCount: 0, imageFrac: 1 });
+        });
         // read the drawn scale note off this panel's page text (best-effort)
         m.pageObj.getTextContent().then((tc) => {
           if (stale()) return;
@@ -867,6 +1025,11 @@ export default function TakeoffCanvas() {
         })();
       }
     })().catch((e) => { if (stale() || e?.name === "RenderingCancelledException") return; setErr(String(e.message || e)); setStatus("error"); });
+    // cleanup MUST read the LIVE refs, not a mount-time copy: bumping the current
+    // renderSeqRef invalidates in-flight renders, and cancelling the current
+    // renderTasksRef set is the whole point. Copying to a variable (the rule's
+    // suggestion) would cancel the stale mount-time set and leak the live one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { renderSeqRef.current++; for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupSig, hiResKeys.join(" ")]);
@@ -946,8 +1109,10 @@ export default function TakeoffCanvas() {
       if (detailKeyRef.current === renderKey) detailKeyRef.current = "";   // let the next tick retry this crop
       if (e?.name !== "RenderingCancelledException") console.error("[detail] render failed:", e);
     });
+    // panelW/takeoffsOpen: docking or resizing the Takeoffs panel changes the
+    // container rect without a transform change — re-run so the crop resyncs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tf, groupSig, status, focusKey]);
+  }, [tf, groupSig, status, focusKey, panelW, takeoffsOpen]);
 
   // the doc cache holds whole PDFs in the worker — tear it down when the
   // project view unmounts or the project changes
@@ -964,37 +1129,115 @@ export default function TakeoffCanvas() {
     if (hit) { setPage(parseInt(hit[0], 10)); wantSheetRef.current = ""; }
   }, [pageLabels]);
 
+  // fly-to phase 2: a pending fly-to whose sheet just finished opening (its panel
+  // now has a real bitmap) gets centered here — never on the same tick openSheets
+  // was called (dims are still {0,0} then).
+  useEffect(() => {
+    const m = pendingFlyRef.current;
+    if (!m) return;
+    // drop a stale pending fly-to: the target sheet failed to render, or the markup
+    // was deleted — either way it will never complete, so don't let it fire later.
+    if (status === "error" || !markups.some((x) => x.id === m.id)) { pendingFlyRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(m.sheet_id)) return;
+    const sp = panels.find((p) => p.key === m.sheet_id);
+    // once the panel bitmap exists, center (or give up if the markup has no anchor)
+    // and clear the ref regardless, so an unanchored markup can't get stuck pending.
+    if (sp && sp.img.w) { centerOnMarkup(m); pendingFlyRef.current = null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status]);
+
   // ── autosave (debounced) ──────────────────────────────────────────────────
+  // buildPayload is the single serializer — autosave and snapshots must write
+  // identical records for the same state (byte-stability matters downstream).
+  const buildPayload = () => {
+    // palette holds condition ids; drop any that no longer resolve (defensive —
+    // delete already prunes) and omit the key entirely when nothing survives,
+    // mirroring the condition_columns omit-when-empty convention.
+    const pinned = palette.filter((id) => conditions.some((c) => c.id === id));
+    return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
+  };
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
     if (!hydrated.current) return;
-    // the load's own setStates land here once (React batches them into one
-    // effect run) — saving that run would just re-write what was read and
-    // flash "Saving…" on every open
-    if (hydrationEcho.current) { hydrationEcho.current = false; return; }
-    const payload = { project_name: projectName, units, sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px })), conditions, shapes, markups, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, sheet_levels: sheetLevels };
+    // Swallow the hydration echo: the first run after hydrate() carries no user
+    // edit (only the fresh-identity setState from loading). Arm and skip it so a
+    // link-open reads without writing; every later run is a real edit and saves.
+    if (!savesArmed.current) { savesArmed.current = true; return; }
+    // Swallow a reconcile re-hydrate's echo (see suppressNextSave): the adopted
+    // content is already canonical locally and on Drive at its own rev — re-pushing
+    // it would churn revs (seed) or spuriously conflict + loser-snapshot (adopt).
+    if (suppressNextSave.current) { suppressNextSave.current = false; return; }
+    const payload = buildPayload();
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
     const t = setTimeout(() => {
-      store.saveAnnotations(payload).then(() => setSaveState("saved")).catch(() => setSaveState("idle"));
+      store.saveAnnotations(payload).then(() => setSaveState("saved")).catch((e) => {
+        if (isStaleTabError(e)) setCommitMsg(STALE_TAB_MESSAGE);
+        setSaveState("idle");
+      });
     }, 700);
     return () => clearTimeout(t);
-  }, [shapes, conditions, scales, markups, sheetGroup, lastGroup, openTabs, projectName]);
+    // buildPayload is intentionally omitted: this dep list IS the exact set of
+    // state it serializes, so listing buildPayload (a new identity each render)
+    // would fire a save on every render instead of only on a real change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, rfis, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
   // tab close while a save is in flight — so the tail of a tracing session is never lost.
   useEffect(() => {
+    // Pin the store this canvas mounted against: on a client-side exit from a
+    // cloud project, React runs the PARENT (ProjectGate) cleanup first, which
+    // resets the live `store` binding to localStore — flushing through the live
+    // binding here would write the cloud project's annotations into the local
+    // store. In-life saves keep the live binding (it never swaps mid-mount).
+    const mountStore = store;
     const onBeforeUnload = (e) => { if (saveStateRef.current === "saving") { e.preventDefault(); e.returnValue = ""; } };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
       if (hydrated.current && saveStateRef.current === "saving" && saveDataRef.current) {
-        store.saveAnnotations(saveDataRef.current).catch(() => {});   // best-effort flush
+        mountStore.saveAnnotations(saveDataRef.current).catch(() => {});   // best-effort flush
       }
     };
   }, []);
+
+  // ── Local-first sync bridge (Slice 5) ──────────────────────────────────────
+  // On the opted-in path the active store carries a non-enumerable `syncBridge`
+  // (main.jsx). Register the canvas's reconcile handlers into it so the plain-JS
+  // reconciler can re-hydrate the canvas and read in-flight state. On the legacy
+  // cloud path (and anonymous local) there is no bridge → these are no-ops, so the
+  // flag-off behavior is byte-identical. Handlers are nulled on unmount so a late
+  // reconcile never setState()s an unmounted tree.
+  useEffect(() => {
+    const bridge = store.syncBridge;
+    if (!bridge) return;
+    // A remote adopt (mount seed, or a 4c conflict resolution) hands us the winning
+    // annotations to render. Suppress the resulting autosave echo, then hydrate via
+    // the same state-application path as mount + snapshot restore. hydrate is stable
+    // (it only calls setters + reads refs), so capturing it once is safe.
+    bridge.onRemoteUpdate = (data) => { suppressNextSave.current = true; hydrate(data || {}); };
+    return () => { bridge.onRemoteUpdate = null; };
+    // hydrate is stable for a given mount (only setters + refs + the pinned store's
+    // cloudMode), so capture it once. Listing it would re-register every render —
+    // opening a null window where an arriving reconcile is dropped — for no gain.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Expose current in-flight state to the reconciler's defer-gate (the store's
+  // maybeFlush declines to adopt-over-local while this returns true). Re-registered
+  // whenever that state changes so the store always reads a fresh predicate. The
+  // full defer/queue-collapse/saveDataRef-invalidation behavior is Slice 5b.
+  useEffect(() => {
+    const bridge = store.syncBridge;
+    if (!bridge) return;
+    bridge.isBusy = () => (
+      poly.length > 0 || calib.length > 0 || check.length > 0 ||
+      !!proposal || !!scaleGuide || !!prevScale || saveStateRef.current === "saving"
+    );
+    return () => { bridge.isBusy = null; };
+  }, [poly, calib, check, proposal, scaleGuide, prevScale]);
 
   function fitToView(w, h) {
     const el = containerRef.current;
@@ -1010,13 +1253,16 @@ export default function TakeoffCanvas() {
     return [(cx - r.left - t.x) / t.scale, (cy - r.top - t.y) / t.scale];
   }, []);
 
-  function zoomAround(cx, cy, factor) {
+  // memoized so the wheel-zoom effect can list it as a dep and still bind its
+  // listener once — a plain function would give a new identity each render and
+  // re-subscribe the (passive:false) wheel handler on every render.
+  const zoomAround = useCallback((cx, cy, factor) => {
     const t = tfRef.current;
     const next = clamp(t.scale * factor);
     const k = next / t.scale;
     tfRef.current = { scale: next, x: cx - (cx - t.x) * k, y: cy - (cy - t.y) * k };
     applyTf(); scheduleSync();
-  }
+  }, [applyTf, scheduleSync]);
 
   // wheel: zoom toward the cursor — plain scroll wheel and trackpad pinch alike.
   // A mouse notch is one big discrete delta; gliding it over a few frames keeps
@@ -1040,6 +1286,7 @@ export default function TakeoffCanvas() {
       }
     };
     const onWheel = (e) => {
+      if (editingRef.current) return;   // freeze pan/zoom while the inline editor is pinned to its anchor
       e.preventDefault();
       gestureUntilRef.current = performance.now() + GESTURE_MS;  // detail view waits for wheel quiet
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
@@ -1061,7 +1308,7 @@ export default function TakeoffCanvas() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => { el.removeEventListener("wheel", onWheel); if (raf) cancelAnimationFrame(raf); };
-  }, [applyTf, scheduleSync]);
+  }, [applyTf, scheduleSync, zoomAround]);
 
   // Space = temporary pan (any tool)
   useEffect(() => {
@@ -1081,7 +1328,7 @@ export default function TakeoffCanvas() {
       if (menuDepthRef.current > 0) return;
       if (e.key === "Enter") {
         if (tool === "oneclick" && proposal?.regions.length) { e.preventDefault(); createProposal(); return; }
-        const ok = ((tool === "area" || tool === "deduct" || tool === "zone") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
+        const ok = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
         if (ok) { e.preventDefault(); finishShape(); }
         return;
       }
@@ -1089,7 +1336,7 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (lower === "g") { setView("gallery"); return; }
       if (e.key === "D" && e.shiftKey) { setTool("deduct-rect"); return; }
-      const map = { p: "pan", v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", h: "highlight", k: "check" };
+      const map = { p: "pan", v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check" };
       const t = map[lower];
       if (t) setTool(t);
     };
@@ -1101,16 +1348,27 @@ export default function TakeoffCanvas() {
   // remember the last armed measure tool — the Measure menu face shows it
   useEffect(() => { if (MEASURE_TOOLS.some((t) => t.id === tool)) lastMeasureRef.current = tool; }, [tool]);
 
-  // Number keys 1–9 switch the active condition (material) fast.
+  // Number keys 1–9 switch the active condition (material) fast — through
+  // activateCondition with reassign:false: a digit press has no visual
+  // reassign affordance (unlike the panel row / strip button), so it must
+  // never silently move a selected shape's quantities. It still dismisses a
+  // live bulk selection, same as every activation surface. When the palette is
+  // curated the digits follow PALETTE ORDER (the cobalt badges on the chips);
+  // an un-pinned workspace falls back to condition-array order, so the shortcut
+  // works out of the box before anyone pins anything.
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;   // let ⌘/Ctrl+1..9 (native tab switch) through — mirror the letter handler
+      if (menuDepthRef.current > 0) return;              // a toolbar menu is open; digits are paused like the letter shortcuts
       const n = parseInt(e.key, 10);
-      if (n >= 1 && n <= 9 && conditions[n - 1]) { setActiveCond(conditions[n - 1].id); }
+      if (n < 1 || n > 9) return;
+      const id = palette.length ? palette[n - 1] : conditions[n - 1]?.id;
+      if (id) activateCondition(id, { reassign: false });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [conditions]);
+  }, [conditions, palette, tool, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Undo a wrong click: Backspace/Delete (or Cmd/Ctrl+Z) removes the last placed
   // point; Escape cancels the whole in-progress shape.
@@ -1121,12 +1379,19 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
-        if (selectedMarkupId) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); return; }
-        if (poly.length) { setPoly((q) => q.slice(0, -1)); setCalib((c) => c.slice(0, -1)); }
+        if (poly.length) { setPoly((q) => q.slice(0, -1)); }
+        else if (ocSel && proposal) { deleteSelectedOcVertex(); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
+        else if (selVert != null && selectedId) { deleteSelectedShapeVertex(); }
         else if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); }
-        else { setCalib((c) => c.slice(0, -1)); setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); setSelectedId(null); setSelectedMarkupId(null); setMarkupDraft(null); setProposal(null); setZoneCheck(null); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; }
+        else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
+        // pop ONLY the armed tool's pending points — calibrate and check both
+        // keep two-click state (calib points even render while another tool is
+        // armed), and an unguarded pop used to silently cross-slice the other
+        // tool's points, on-screen or hidden
+        else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
+        else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
+      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1134,11 +1399,41 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, selectedMarkupId, poly, proposal, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tool, selectedId, selVert, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The typed "drawing says" value belongs to ONE completed two-point check.
+  // The moment the measurement is no longer complete — third-click restart,
+  // Backspace below two points — the stale value must not grade the NEXT span:
+  // it would render an instant confident verdict against the previous
+  // dimension's number and leave "Recalibrate to this" armed with it.
+  useEffect(() => { if (check.length < 2 && checkStated) setCheckStated(""); }, [check.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the check tool discards the whole check: rendering is gated on
+  // tool === "check", so surviving state would sit invisible and resurface —
+  // stale points AND stale stated value — whenever K is pressed again.
+  useEffect(() => { if (tool !== "check" && (check.length || checkStated)) { setCheck([]); setCheckStated(""); } }, [tool]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving the zone tool clears the zone the same way — the outline and its
+  // readout are a reading of the armed tool, never surviving state. The
+  // in-progress trace itself must go too: `poly` is the SAME shared array
+  // area/deduct/linear/surface commit from, so without this, a mid-trace
+  // switch away from zone (a single-letter shortcut while zone has none of
+  // its own, or the Zone button re-arming "select") leaves real zone points
+  // sitting in `poly` for the NEXT tool's Enter/double-click to commit as a
+  // persisted, priced shape — the ephemeral tool's own "nothing is saved"
+  // contract broken. Only clear `poly` when the PREVIOUS tool was zone
+  // (prevToolRef), not on every tool change — poly is shared, and switching
+  // e.g. area → linear must not discard a legitimate in-progress trace.
+  useEffect(() => {
+    if (tool !== "zone") resetZone();
+    if (prevToolRef.current === "zone" && tool !== "zone") setPoly([]);
+    prevToolRef.current = tool;
+  }, [tool]);
 
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
     if (status !== "ready") return;
+    // inline editor open: the blur that follows this click commits it; swallow the
+    // canvas interaction so pan/zoom stays frozen and no stray point is placed
+    if (editingRef.current) return;
     // Pan WITHOUT leaving the draw tool: middle-drag, right-drag, Space-drag, or Pan tool.
     if (tool === "pan" || e.button === 1 || e.button === 2 || spaceRef.current) {
       panRef.current = { sx: e.clientX, sy: e.clientY, ox: tfRef.current.x, oy: tfRef.current.y };
@@ -1147,28 +1442,23 @@ export default function TakeoffCanvas() {
       return;
     }
     if (e.button !== 0) return;   // only left-click places points
-    const p = (snapOn && snapRef.current) ? snapRef.current
-      : (angleOn && angleRef.current) ? angleRef.current
+    // snapRef/angleRef are drawing-tool aids maintained by moveCrosshair, which
+    // bails for the Select tool (:1577) — so in Select they'd be STALE. Select
+    // does its own endpoint snap (ocSnap) on drop, so it always uses the raw
+    // cursor here; otherwise a stale ref freezes the drag or jumps it on grab.
+    // schedule (marquee) wants the raw cursor like select — snapping a corner to
+    // a vector vertex would shift the box off the schedule and misread the region
+    const rawCursor = tool === "select" || tool === "schedule";
+    const p = (!rawCursor && snapOn && snapRef.current) ? snapRef.current
+      : (!rawCursor && angleOn && angleRef.current) ? angleRef.current
         : toImage(e.clientX, e.clientY);
     const fp = panelAt(p[0]);
     if (fp.key !== focusKey) setFocusKey(fp.key);
-    if (tool === "highlight") {
-      // ink is freehand: raw coords (no snap/angle), drag paints — press-drag pan is
-      // intentionally unavailable while armed (space/middle/right-drag still pan)
-      const raw = toImage(e.clientX, e.clientY);
-      hlRef.current = { pts: [raw], key: panelAt(raw[0]).key };
-      if (hlPathRef.current) {
-        const el = hlPathRef.current;
-        const w = hlStyle.size / tfRef.current.scale;
-        el.setAttribute("d", "");
-        if (hlStyle.tip === "chisel") { el.setAttribute("fill", hlStyle.color); el.setAttribute("fill-opacity", darkModeRef.current ? 0.42 : 0.32); el.setAttribute("stroke", "none"); }
-        else { el.setAttribute("fill", "none"); el.setAttribute("stroke", hlStyle.color); el.setAttribute("stroke-opacity", darkModeRef.current ? 0.42 : 0.32); el.setAttribute("stroke-width", w); el.setAttribute("stroke-linecap", "round"); el.setAttribute("stroke-linejoin", "round"); }
-        el.style.display = "block";
-      }
-      e.currentTarget.setPointerCapture(e.pointerId);
-      return;
-    }
     if (tool === "select") { selectAt(p, e); return; }
+    // One-Click proposal handles: a press on a corner/edge grip starts an EDIT drag
+    // (select+move a vertex, move a whole edge, or Shift-click to insert a point) —
+    // it must win here, before the deferred add-a-region click below.
+    if (tool === "oneclick" && proposal && oneClickHandleAt(e)) return;
     // every point-placing tool DEFERS to pointer-up: hold-and-drag (mouse left
     // or one-finger trackpad press) pans mid-measurement instead of placing
     pendingClickRef.current = { p, cx: e.clientX, cy: e.clientY };
@@ -1186,90 +1476,201 @@ export default function TakeoffCanvas() {
       if (poly.length === 0) setPoly([p]);
       else { const a = poly[0]; commitPoly([[a[0], a[1]], [p[0], a[1]], [p[0], p[1]], [a[0], p[1]]], tool === "deduct-rect"); setPoly([]); }
     }
-    else if (tool === "cloud" || tool === "callout" || tool === "text") placeMarkup(p);
+    else if (tool === "schedule") {
+      // two-click marquee, isolated state: first click drops the anchor, second reads the box
+      if (!scheduleAnchor) setScheduleAnchor(p);
+      else { importScheduleFromRect(scheduleAnchor, p); setScheduleAnchor(null); setTool("select"); }
+    }
+    else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
+    else if (tool === "stamp") placeStamp(p);
+  }
+  // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
+  // hitShape can't test them — this is a purpose-built bbox/point test in the
+  // markup's OWN panel frame. p is stage px. Labels are screen-constant, so their
+  // extent divides by the current scale.
+  function hitMarkup(m, p, thr) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    const W = sp.img.w, H = sp.img.h, ox = sp.xOffset;
+    const X = p[0], Y = p[1], sc = tfRef.current.scale;
+    if (m.type === "cloud" && m.rect) {
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      // a cloud renders hollow (fill="none"), so hit only its border band — a shape
+      // (or vertex) enclosed by the cloud must stay clickable through the interior.
+      const inX = X >= x0 - thr && X <= x1 + thr, inY = Y >= y0 - thr && Y <= y1 + thr;
+      const onV = inX && (Math.abs(Y - y0) <= thr || Math.abs(Y - y1) <= thr);
+      const onH = inY && (Math.abs(X - x0) <= thr || Math.abs(X - x1) <= thr);
+      return onV || onH;
+    }
+    if (m.type === "callout" && m.at) {
+      const ax = m.at[0] * W + ox, ay = m.at[1] * H;
+      const lw = ((m.text?.length || 1) * 7 + 14) / sc;
+      if (X >= ax - thr && X <= ax + lw && Y >= ay - 18 / sc - thr && Y <= ay + thr) return true;
+      if (m.target) {
+        const tx = m.target[0] * W + ox, ty = m.target[1] * H;
+        if (Math.hypot(X - tx, Y - ty) < thr * 2) return true;
+        if (distToSeg(X, Y, tx, ty, ax, ay) < thr) return true;
+      }
+      return false;
+    }
+    if (m.type === "text" && m.at) {
+      const ax = m.at[0] * W + ox, ay = m.at[1] * H;
+      const lw = ((m.text?.length || 1) * 7 + 14) / sc;
+      return X >= ax - thr && X <= ax + lw && Y >= ay - 16 / sc - thr && Y <= ay + thr;
+    }
+    if (m.type === "highlight" && m.rect) {
+      // a highlight is FILLED and meant to be grabbed — hit its interior (with a
+      // small margin) so it selects; precedence in selectAt keeps other markups
+      // under it clickable.
+      const [[a0, b0], [a1, b1]] = m.rect;
+      const x0 = Math.min(a0, a1) * W + ox, x1 = Math.max(a0, a1) * W + ox;
+      const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
+      return X >= x0 - thr && X <= x1 + thr && Y >= y0 - thr && Y <= y1 + thr;
+    }
+    if (m.type === "arrow" && m.from && m.to) {
+      // a stamp-placed leader — hit its shaft (endpoint tolerance folds into the band)
+      const fx = m.from[0] * W + ox, fy = m.from[1] * H, tx = m.to[0] * W + ox, ty = m.to[1] * H;
+      return distToSeg(X, Y, fx, fy, tx, ty) < thr * 1.5;
+    }
+    if (m.type === "bubble" && m.at) {
+      // a filled circle — hit its disc; r is normalized to sheet WIDTH
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H, rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * W;
+      return Math.hypot(X - cx, Y - cy) < rad + thr;
+    }
+    if (m.type === "svg" && m.at && Array.isArray(m.vb)) {
+      // a vector symbol — hit its placed bbox (same uniform scale off the LONGER
+      // viewBox extent the renderer uses, so hit size == render size).
+      const { bw, bh } = svgPlacedBox(m.vb, m.w, W);
+      const cx = m.at[0] * W + ox, cy = m.at[1] * H;
+      return X >= cx - bw / 2 - thr && X <= cx + bw / 2 + thr && Y >= cy - bh / 2 - thr && Y <= cy + bh / 2 + thr;
+    }
+    return false;
   }
   // Select tool: pick a shape (or a vertex of the selected one) and start dragging
   // it. Every shape hit-tests in ITS panel's local frame (stage x minus xOffset).
   function selectAt(p, e) {
     const thr = 8 / tfRef.current.scale;
-    if (selectedId) {
-      const sel = shapes.find((s) => s.id === selectedId);
-      const sp = sel && panelKeySet.has(sel.sheet_id) ? panelByKey(sel.sheet_id) : null;
-      if (sel && sp && sel.measure_role !== "count") {
-        const pts = sel.verts_norm.map(([nx, ny]) => [nx * sp.img.w + sp.xOffset, ny * sp.img.h]);
-        const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
-        for (let i = 0; i < pts.length; i++) {
-          if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) < thr * 1.6) {
-            if (e.altKey) {
-              // ⌥-click removes the point (a polygon keeps ≥3, a run keeps ≥2)
-              const min = closed ? 3 : 2;
-              if (sel.verts_norm.length > min) {
-                setShapes((ss) => ss.map((s) => {
-                  if (s.id !== sel.id) return s;
-                  const vn = s.verts_norm.filter((_, j) => j !== i);
-                  return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
-                }));
-              } else setCommitMsg(closed ? "A shape needs at least 3 points." : "A run needs at least 2 points.");
-              return;
-            }
-            dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i };
-            e.currentTarget.setPointerCapture(e.pointerId); return;
-          }
+    const sel = selectedId ? shapes.find((s) => s.id === selectedId) : null;
+    const selSp = sel && panelKeySet.has(sel.sheet_id) ? panelByKey(sel.sheet_id) : null;
+    setSelVert(null);   // default: this press clears the vertex pick (overridden below on a corner/insert hit)
+    // 1. Handles of the ALREADY-selected shape win first, so a shape (or vertex)
+    //    enclosed by a markup — e.g. a revision cloud drawn around a room — stays
+    //    editable rather than being shielded by the markup's hit area. Same edit
+    //    model as One-Click proposals: click a corner to select it (Delete removes
+    //    just it), drag a corner to move it, drag an edge grip to move the whole
+    //    line (both endpoints), Shift-click an edge to insert a new anchor point.
+    if (sel && selSp && sel.measure_role !== "count") {
+      const pts = sel.verts_norm.map(([nx, ny]) => [nx * selSp.img.w + selSp.xOffset, ny * selSp.img.h]);
+      const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
+      for (let i = 0; i < pts.length; i++) {
+        if (Math.hypot(pts[i][0] - p[0], pts[i][1] - p[1]) < thr * 1.6) {
+          setSelVert(i);   // select this corner + arm its move drag
+          dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i };
+          e.currentTarget.setPointerCapture(e.pointerId); return;
         }
-        // midpoint handles: click an edge's midpoint to INSERT a new lever point
-        // and drag it away in the same gesture
-        const edges = closed ? pts.length : pts.length - 1;
-        for (let i = 0; i < edges; i++) {
-          const a = pts[i], b = pts[(i + 1) % pts.length];
-          if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
-            const nv = [(p[0] - sp.xOffset) / sp.img.w, p[1] / sp.img.h];
+      }
+      // edge grips: drag moves the WHOLE line (both endpoints); Shift-click drops a
+      // new anchor point there and drags it out in the same gesture.
+      const edges = closed ? pts.length : pts.length - 1;
+      for (let i = 0; i < edges; i++) {
+        const j = (i + 1) % pts.length;
+        const a = pts[i], b = pts[j];
+        if (Math.hypot((a[0] + b[0]) / 2 - p[0], (a[1] + b[1]) / 2 - p[1]) < thr * 1.4) {
+          if (e.shiftKey) {
+            // insert at the EXACT edge midpoint (like One-Click's oneClickHandleAt),
+            // not the click point — click imprecision can't kink the edge before drag
+            const va = sel.verts_norm[i], vb = sel.verts_norm[j];
+            const nv = [(va[0] + vb[0]) / 2, (va[1] + vb[1]) / 2];
             setShapes((ss) => ss.map((s) => {
               if (s.id !== sel.id) return s;
               const vn = [...s.verts_norm.slice(0, i + 1), nv, ...s.verts_norm.slice(i + 1)];
               return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
             }));
+            setSelVert(i + 1);
             dragRef.current = { kind: "vertex", shapeId: selectedId, vIndex: i + 1 };
-            e.currentTarget.setPointerCapture(e.pointerId); return;
+          } else {
+            dragRef.current = { kind: "edge", shapeId: selectedId, i, j, oaN: [...sel.verts_norm[i]], obN: [...sel.verts_norm[j]], start: p };
           }
+          e.currentTarget.setPointerCapture(e.pointerId); return;
         }
       }
-      if (sel && sp && hitShape(sel, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr)) {
-        dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
-        e.currentTarget.setPointerCapture(e.pointerId); return;
+    }
+    // 2. markups render ON TOP of shapes (:2137 > :2093), so a markup hit wins over a
+    //    plain shape click — but NOT over the selected shape's handles above.
+    //    When the markup layer is hidden (showMarkups false), skip the search
+    //    entirely — you can't select/delete/fly-to an invisible markup.
+    if (showMarkups) {
+      const rev = [...visibleMarkups].reverse();
+      // a NON-highlight markup hit beats a highlight at the same point (test
+      // highlights last), so a linked cloud/callout under a highlight stays
+      // clickable; a highlight still wins over a plain shape (it shields it).
+      const mHit = rev.find((m) => m.type !== "highlight" && hitMarkup(m, p, thr))
+                || rev.find((m) => m.type === "highlight" && hitMarkup(m, p, thr));
+      if (mHit) {
+        selectMarkup(mHit.id);
+        // arm a move drag — snapshot the markup's current normalized coords (all four
+        // shapes: cloud/highlight rect, callout at+target, text at). The move stays a
+        // no-op until it passes the threshold in onPointerMove, so a pure click (or the
+        // first click of a double-click re-edit) never nudges the markup.
+        const orig = (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
+          : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
+            : mHit.type === "arrow" ? { from: mHit.from, to: mHit.to }
+              : { at: mHit.at };   // text + bubble
+        // raw start (markups don't snap/angle-lock; matches the raw tracking point in
+        // onPointerMove so the delta can't be contaminated by a stale snap/angle ref)
+        dragRef.current = { kind: "markupMove", markupId: mHit.id, sheetId: mHit.sheet_id, start: toImage(e.clientX, e.clientY), orig, moved: false };
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
       }
     }
+    // 3. move the selected shape if its body (not a handle) was hit
+    if (sel && selSp && hitShape(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
+      dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm };
+      e.currentTarget.setPointerCapture(e.pointerId); return;
+    }
+    // 4. otherwise pick a shape (or clear the selection)
     const hit = [...visibleShapes].reverse().find((s) => {
       const sp = panelByKey(s.sheet_id);
       return hitShape(s, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr);
     });
-    setSelectedId(hit ? hit.id : null);
-    if (hit) { setSelectedMarkupId(null); dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm }; e.currentTarget.setPointerCapture(e.pointerId); return; }
-    // no takeoff hit — highlighter ink is pickable too (delete/move like any markup)
-    const mkHit = [...markups].reverse().find((m) => {
-      if (m.type !== "highlight" || !panelKeySet.has(m.sheet_id) || (m.pts || []).length < 2) return false;
-      const mp = panelByKey(m.sheet_id);
-      const px = p[0] - mp.xOffset, py = p[1];
-      const w = (m.w || 0.01) * mp.img.w;
-      const reach = Math.max(w / 2, thr);
-      const ip = m.pts.map(([nx, ny]) => [nx * mp.img.w, ny * mp.img.h]);
-      for (let i = 1; i < ip.length; i++) if (distToSeg(px, py, ip[i - 1][0], ip[i - 1][1], ip[i][0], ip[i][1]) < reach) return true;
-      return false;
-    });
-    setSelectedMarkupId(mkHit ? mkHit.id : null);
-    if (mkHit) { dragRef.current = { kind: "markup", markupId: mkHit.id, start: p, orig: mkHit.pts.map((v) => [...v]) }; e.currentTarget.setPointerCapture(e.pointerId); }
+    selectShape(hit ? hit.id : null);
+    if (hit) { dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm }; e.currentTarget.setPointerCapture(e.pointerId); }
+  }
+  // Delete just the selected corner (Delete/⌫), keeping a polygon ≥3 / a run ≥2.
+  // At the floor we deselect so the NEXT ⌫ falls through to deleting the whole
+  // shape — mirrors the One-Click proposal behavior.
+  function deleteSelectedShapeVertex() {
+    const sel = shapes.find((s) => s.id === selectedId);
+    if (!sel || selVert == null) { setSelVert(null); return; }
+    const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
+    const min = closed ? 3 : 2;
+    if (sel.verts_norm.length <= min) {
+      setCommitMsg(closed ? "A shape needs at least 3 points — ⌫ again deletes the whole shape." : "A run needs at least 2 points — ⌫ again deletes the whole run.");
+      setSelVert(null); return;
+    }
+    setShapes((ss) => ss.map((s) => {
+      if (s.id !== selectedId) return s;
+      const vn = s.verts_norm.filter((_, j) => j !== selVert);
+      return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
+    }));
+    setSelVert(null);
   }
   // Geometry from the shape's OWN sheet: its panel's pixel dims × that sheet's
   // scale. This is what makes cross-sheet paste and group-mode edits honest.
-  function recomputeShape(s) {
+  // uppOverride: pass the NEW effective upp when re-pricing right after a
+  // setScales — `scales` in this render's closure is still the old map.
+  function recomputeShape(s, uppOverride) {
     const sp = panelByKey(s.sheet_id);
     const pts = s.verts_norm.map(([nx, ny]) => [nx * sp.img.w, ny * sp.img.h]);
-    const u = uppFor(s.sheet_id) || 0;
+    const u = uppOverride ?? (uppFor(s.sheet_id) || 0);
     if (s.measure_role === "count") return { count: 1 };
     if (s.measure_role === "surface_area") {
       // the wall keeps the height it was DRAWN at; the condition H is only the
       // default for new traces (and the fallback for legacy shapes without one).
-      // An explicit override wins outright — even 0 — so a zeroed wall can't
-      // silently recompute at the condition height.
+      // An explicit override wins outright — even 0 (a zero-height wall is a
+      // deliberate statement, not an invitation to fall back to the condition).
       const h = s.height_override === true
         ? Number(s.height_ft) || 0
         : Number(s.height_ft) || Number(condById[s.condition_id]?.height_ft) || 0;
@@ -1285,9 +1686,8 @@ export default function TakeoffCanvas() {
     return { area_sf: +(met.area * u * u).toFixed(2), perimeter_lf: +(met.perim * u).toFixed(2) };
   }
   function moveCrosshair(e) {
+    if (editingRef.current) return;   // inline editor open — no aim crosshair (ref check, never per-mousemove state)
     if (tool === "pan" || tool === "select" || status !== "ready" || !containerRef.current) return;
-    const r = containerRef.current.getBoundingClientRect();
-
     // snap-to-vector: nearest PDF endpoint within threshold becomes the active
     // point — looked up in the hovered panel's grid, in that panel's local frame
     let cur = toImage(e.clientX, e.clientY);
@@ -1305,8 +1705,8 @@ export default function TakeoffCanvas() {
       }
     }
 
-    // rubber-band preview: last point → cur (area/deduct); rect preview: corner → cur
-    const drawing = (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface");
+    // rubber-band preview: last point → cur (area/deduct/zone); rect preview: corner → cur
+    const drawing = (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone");
 
     // polar tracking: endpoint snap wins (osnap beats polar); otherwise pull the
     // rubber band onto the 45° family. ⇧ forces the lock at any angle. The click
@@ -1360,37 +1760,20 @@ export default function TakeoffCanvas() {
     }
     if (aimChipRef.current) {
       const chip = aimChipRef.current;
-      let txt = "", over = false;
+      let txt = "";
       if (tool === "check" && check.length === 1) {
-        // live length to the cursor while picking the second end of the dimension.
-        // No CARPET_ROLL_FT amber here — a dimension string is not a seam plan.
+        // live length to the cursor while picking the second end of the dimension
         const u = uppFor(panelAt(check[0][0]).key);
-        if (u) txt = fmtCheckLen(Math.hypot(cur[0] - check[0][0], cur[1] - check[0][1]) * u, units) + (lock ? ` · ${lock.deg}°` : "");
-      } else if ((tool === "rect" || tool === "deduct-rect") && poly.length === 1 && liveUpp) {
-        // rectangle: live W × H + area (SF and SY imperial — carpet is bought in SY)
-        const a = poly[0];
-        const w = Math.abs(cur[0] - a[0]) * liveUpp, h = Math.abs(cur[1] - a[1]) * liveUpp;
-        const sf = w * h;
-        txt = `${fmtCheckLen(w, units)} × ${fmtCheckLen(h, units)} · ${num(areaVal(sf, units))} ${areaUnit(units)}${units === "metric" ? "" : ` · ${num(sf / 9)} SY`}`;
-        over = w >= CARPET_ROLL_FT - 0.02 || h >= CARPET_ROLL_FT - 0.02;
-      } else if (drawing && anchor && liveUpp) {
-        // line/polyline: live segment length, ALWAYS (not just under the 45° lock)
-        const len = Math.hypot(cur[0] - anchor[0], cur[1] - anchor[1]) * liveUpp;
-        txt = lock ? `${lock.deg}° · ${fmtCheckLen(len, units)}` : fmtCheckLen(len, units);
-        over = len >= CARPET_ROLL_FT - 0.02;
-      } else if (lock) {
-        txt = `${lock.deg}°`;
-      } else if (snapRef.current) txt = "snap";
+        if (u) txt = fmtCheckLen(Math.hypot(cur[0] - check[0][0], cur[1] - check[0][1]) * u, UNITS) + (lock ? ` · ${lock.deg}°` : "");
+      }
+      if (!txt) {
+        if (lock) {
+          txt = `${lock.deg}°`;
+          if (anchor && liveUpp) txt += ` · ${num(Math.hypot(cur[0] - anchor[0], cur[1] - anchor[1]) * liveUpp)}′`;
+        } else if (snapRef.current) txt = "snap";
+      }
       if (txt) {
         if (chip.__t !== txt) { chip.textContent = txt; chip.__t = txt; }
-        // 12 ft roll-width cue — the chip goes amber when a run reaches roll width (a seam falls here)
-        const os = over ? "1" : "";
-        if (chip.__over !== os) {
-          chip.__over = os;
-          chip.style.background = over ? "var(--c-warning)" : "var(--paper-bright)";
-          chip.style.color = over ? "var(--paper-bright)" : "var(--ink)";
-          chip.style.borderColor = over ? "var(--c-warning)" : "var(--ink)";
-        }
         chip.style.transform = `translate3d(${ex + 14}px, ${ey + 18}px, 0)`;
         chip.style.display = "block";
       } else chip.style.display = "none";
@@ -1405,8 +1788,9 @@ export default function TakeoffCanvas() {
       } else rubberRef.current.style.display = "none";
     }
     if (rectRef.current) {
-      if (!panRef.current && (tool === "rect" || tool === "deduct-rect") && poly.length === 1) {
-        const a = poly[0];
+      const schedDraw = tool === "schedule" && scheduleAnchor;
+      if (!panRef.current && ((tool === "rect" || tool === "deduct-rect") && poly.length === 1 || schedDraw)) {
+        const a = schedDraw ? scheduleAnchor : poly[0];
         rectRef.current.setAttribute("x", Math.min(a[0], cur[0])); rectRef.current.setAttribute("y", Math.min(a[1], cur[1]));
         rectRef.current.setAttribute("width", Math.abs(cur[0] - a[0])); rectRef.current.setAttribute("height", Math.abs(cur[1] - a[1]));
         rectRef.current.style.display = "block";
@@ -1419,10 +1803,20 @@ export default function TakeoffCanvas() {
         cloudRef.current.style.display = "block";
       } else cloudRef.current.style.display = "none";
     }
+    // live highlight preview: a translucent box, first corner → cursor (its own
+    // ref, NOT rectRef which carries the active condition fill)
+    if (highlightRef.current) {
+      if (!panRef.current && tool === "highlight" && markupDraft) {
+        highlightRef.current.setAttribute("x", Math.min(markupDraft[0], cur[0]));
+        highlightRef.current.setAttribute("y", Math.min(markupDraft[1], cur[1]));
+        highlightRef.current.setAttribute("width", Math.abs(cur[0] - markupDraft[0]));
+        highlightRef.current.setAttribute("height", Math.abs(cur[1] - markupDraft[1]));
+        highlightRef.current.style.display = "block";
+      } else highlightRef.current.style.display = "none";
+    }
   }
   function hideCrosshair() {
-    for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
-    if (hlRef.current == null && hlPathRef.current) hlPathRef.current.style.display = "none";
+    for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, highlightRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
     if (hoverRef.current) hoverRef.current.style.display = "none";
     hoverIdRef.current = "";
     angleRef.current = null;
@@ -1431,16 +1825,16 @@ export default function TakeoffCanvas() {
     const tag = condById[s.condition_id]?.finish_tag || "?";
     const a = s.computed?.area_sf || 0, lf = s.computed?.perimeter_lf || 0;
     if (s.measure_role === "count") return `${tag} · ${num(s.computed?.count || 1, 0)} EA`;
-    if (s.measure_role === "deduct") return `${tag} · −${fa(a)} deduct`;
+    if (s.measure_role === "deduct") return `${tag} · −${num(a)} SF deduct`;
     if (s.measure_role === "surface_area") {
-      // mirror recomputeShape: an explicit override reads as its own value, even 0
+      // same height semantics as recomputeShape: an override wins outright (even 0)
       const h = s.height_override === true
-        ? s.height_ft
-        : (s.height_ft || condById[s.condition_id]?.height_ft);
-      return `${tag} · ${fa(a)} wall (${fl(lf)} × ${num(Number(h) || 0, 2)}′)`;
+        ? Number(s.height_ft) || 0
+        : Number(s.height_ft) || Number(condById[s.condition_id]?.height_ft) || 0;
+      return `${tag} · ${num(a)} SF wall (${num(lf)} LF × ${num(h, 2)}′)`;
     }
-    if (s.measure_role === "linear") return `${tag} · ${fl(lf)}${a > 0 ? ` · ${fa(a)} border` : ""}`;
-    return `${tag} · ${faSY(a)}`;
+    if (s.measure_role === "linear") return `${tag} · ${num(lf)} LF${a > 0 ? ` · ${num(a)} SF border` : ""}`;
+    return `${tag} · ${num(a)} SF · ${num(a / 9)} SY`;
   }
   // STACK-style hover readout: small, follows the cursor, gone on hover-off
   function updateHover(e) {
@@ -1462,20 +1856,6 @@ export default function TakeoffCanvas() {
   }
   function onPointerMove(e) {
     lastPtrRef.current = [e.clientX, e.clientY];   // paste targets the sheet under the cursor
-    if (hlRef.current) {
-      // paint: distance-thin at capture, live preview via DOM (no React render per move)
-      const st = hlRef.current;
-      const q = toImage(e.clientX, e.clientY);
-      const last = st.pts[st.pts.length - 1];
-      if (Math.hypot(q[0] - last[0], q[1] - last[1]) >= 2.5 / tfRef.current.scale && st.pts.length < 4000) st.pts.push(q);
-      if (hlPathRef.current) {
-        const w = hlStyle.size / tfRef.current.scale;
-        hlPathRef.current.setAttribute("d", hlStyle.tip === "chisel"
-          ? (st.pts.length > 1 ? "M" + chiselRibbon(st.pts, w, 45).map((v) => v.join(",")).join(" L") + " Z" : "")
-          : strokePathD(st.pts));
-      }
-      return;
-    }
     moveCrosshair(e);                 // full-page aim guide (draw modes), always tracks hover
     // a held draw-click that moves becomes a pan (point placement waits for up)
     if (pendingClickRef.current && !panRef.current) {
@@ -1487,23 +1867,37 @@ export default function TakeoffCanvas() {
       }
     }
     updateHover(e);
+    // One-Click proposal editing: dragging a corner/edge grip, else revealing
+    // handles on the region under the cursor. Both work in panel-LOCAL px.
+    if (ocDragRef.current) { ocDragMove(e); return; }
+    if (tool === "oneclick" && proposal && !panRef.current && !pendingClickRef.current) ocHoverUpdate(e);
     if (dragRef.current) {
       const d = dragRef.current;
-      const p = (snapOn && snapRef.current) ? snapRef.current : toImage(e.clientX, e.clientY);
+      // dragRef is armed only by selectAt (Select tool), where snapRef is stale
+      // (moveCrosshair bails for Select) — track the RAW cursor; vertex/edge
+      // drags apply their own endpoint snap (ocSnap), and a body move is free.
+      const p = toImage(e.clientX, e.clientY);
       if (d.kind === "vertex") {
         setShapes((ss) => ss.map((s) => {
           if (s.id !== d.shapeId) return s;
           const sp = panelByKey(s.sheet_id);
-          const vn = s.verts_norm.map((v, i) => (i === d.vIndex ? [(p[0] - sp.xOffset) / sp.img.w, p[1] / sp.img.h] : v));
+          const [slx, sly] = ocSnap(sp.key, p[0] - sp.xOffset, p[1], !!s.origin?.raster_traced);   // snap the corner to true endpoints (never on a raster-traced shape — see ocSnap)
+          const vn = s.verts_norm.map((v, i) => (i === d.vIndex ? [slx / sp.img.w, sly / sp.img.h] : v));
           return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
         }));
-      } else if (d.kind === "markup") {
-        const mk = markups.find((m) => m.id === d.markupId);
-        const mp = mk && panelByKey(mk.sheet_id);
-        if (mp) {
-          const dx = (p[0] - d.start[0]) / mp.img.w, dy = (p[1] - d.start[1]) / mp.img.h;
-          updateMarkup(d.markupId, { pts: d.orig.map(([nx, ny]) => [nx + dx, ny + dy]) });
-        }
+      } else if (d.kind === "edge") {
+        setShapes((ss) => ss.map((s) => {
+          if (s.id !== d.shapeId) return s;
+          // translate BOTH endpoints of the line by the drag delta; each end snaps
+          // to the linework independently (normalized → local px → snap → normalized)
+          const sp = panelByKey(s.sheet_id);
+          const dx = (p[0] - d.start[0]) / sp.img.w, dy = (p[1] - d.start[1]) / sp.img.h;
+          const rt = !!s.origin?.raster_traced;
+          const snapN = (nx, ny) => { const [lx, ly] = ocSnap(sp.key, nx * sp.img.w, ny * sp.img.h, rt); return [lx / sp.img.w, ly / sp.img.h]; };
+          const na = snapN(d.oaN[0] + dx, d.oaN[1] + dy), nb = snapN(d.obN[0] + dx, d.obN[1] + dy);
+          const vn = s.verts_norm.map((v, i) => (i === d.i ? na : i === d.j ? nb : v));
+          return { ...s, verts_norm: vn, computed: recomputeShape({ ...s, verts_norm: vn }) };
+        }));
       } else if (d.kind === "move") {
         setShapes((ss) => ss.map((s) => {
           if (s.id !== d.shapeId) return s;
@@ -1512,6 +1906,29 @@ export default function TakeoffCanvas() {
           const sp = panelByKey(s.sheet_id);
           const dx = (p[0] - d.start[0]) / sp.img.w, dy = (p[1] - d.start[1]) / sp.img.h;
           return { ...s, verts_norm: d.orig.map(([nx, ny]) => [nx + dx, ny + dy]) };
+        }));
+      } else if (d.kind === "markupMove") {
+        // raw cursor point — markups aren't snapped/angle-locked, and this matches the
+        // raw d.start so the delta can't jump from a stale snap/angle ref.
+        const mp = toImage(e.clientX, e.clientY);
+        // dblclick-safe: stay inert until the pointer travels past the ~5px pan
+        // threshold, so a click / first click of a double-click never moves it
+        const sc = tfRef.current.scale;
+        if (!d.moved && Math.hypot(mp[0] - d.start[0], mp[1] - d.start[1]) < 5 / sc) return;
+        d.moved = true;
+        const sp = panelByKey(d.sheetId);
+        if (!sp || !sp.img.w) return;
+        // start and mp are both stage px, so xOffset cancels in the delta; normalize
+        // by the markup's OWN panel dims. Live setMarkups each move (mirrors the shape
+        // `move` pattern; NOT commit-on-release). Persistence is automatic.
+        const dx = (mp[0] - d.start[0]) / sp.img.w, dy = (mp[1] - d.start[1]) / sp.img.h;
+        const o = d.orig;
+        setMarkups((ms) => ms.map((m) => {
+          if (m.id !== d.markupId) return m;
+          if (o.rect) return { ...m, rect: [[o.rect[0][0] + dx, o.rect[0][1] + dy], [o.rect[1][0] + dx, o.rect[1][1] + dy]] };
+          if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
+          if (o.from) return { ...m, from: [o.from[0] + dx, o.from[1] + dy], to: [o.to[0] + dx, o.to[1] + dy] };
+          return { ...m, at: [o.at[0] + dx, o.at[1] + dy] };   // text + bubble
         }));
       }
       return;
@@ -1529,22 +1946,6 @@ export default function TakeoffCanvas() {
     });
   }
   function onPointerUp(e) {
-    if (hlRef.current) {
-      const st = hlRef.current;
-      hlRef.current = null;
-      if (hlPathRef.current) hlPathRef.current.style.display = "none";
-      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
-      if (st.pts.length >= 2) {
-        const tp = panelByKey(st.key) || panelAt(st.pts[0][0]);
-        const pts = thinStroke(st.pts, 2.5 / tfRef.current.scale)
-          .map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]);
-        // width as a FRACTION of panel width — the stroke scales with the plan like ink,
-        // and survives raster-budget changes (screen px ÷ scale ÷ panel width at draw time)
-        addMarkup({ type: "highlight", pts, color: hlStyle.color,
-                    w: (hlStyle.size / tfRef.current.scale) / tp.img.w, tip: hlStyle.tip }, tp.key);
-      }
-      return;
-    }
     if (pendingClickRef.current) {
       const { p } = pendingClickRef.current;
       pendingClickRef.current = null;
@@ -1552,6 +1953,7 @@ export default function TakeoffCanvas() {
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
       return;
     }
+    if (ocDragRef.current) { ocDragRef.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
     if (dragRef.current) { dragRef.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
     if (panRef.current) {
       panRef.current = null;
@@ -1562,17 +1964,21 @@ export default function TakeoffCanvas() {
   }
 
   // Calibrated ruler bar — shows for a few seconds whenever a scale is accepted
-  // (dropdown, plan-note chip, calibration, check-tool recalibrate) so a grossly
-  // wrong scale is visually obvious against known elements (a door is ~3′).
-  // Takes the NEW upp as an argument — never read `scales` right after setScales
-  // (stale closure). Ephemeral: never persisted, dismissed by the next action.
-  function showScaleGuide(key, uppStored, label) {
+  // (scale menu standard pick, the plan-says item, calibration, check-tool
+  // recalibrate) so a grossly wrong scale is visually obvious against known
+  // elements (a door is ~3′). Takes the NEW upp as an argument — never read
+  // `scales` right after setScales (stale closure). Ephemeral: never persisted,
+  // dismissed by the next action. `preview` marks a HOVER preview of a scale
+  // that was never accepted — it must additionally die with the hover/menu
+  // (clearPreviewGuide), while an accepted bar rides out its 8 s.
+  function showScaleGuide(key, uppStored, label, preview = false) {
     const p = panelByKey(key);
     if (!p?.img.w || !containerRef.current) return;
+    scaleGuidePreviewRef.current = preview;
     const uppBitmap = uppStored / factorFor(key);   // feet per bitmap px, matches uppFor math
     const z = tfRef.current.scale;
     // round guide length picked so the bar is legible (≥160 screen px) at the current zoom
-    const CAND = units === "metric" ? [1, 2, 5, 10, 20, 50, 100].map((m) => m / M_PER_FT) : [2, 5, 10, 20, 50, 100, 200];
+    const CAND = UNITS === "metric" ? [1, 2, 5, 10, 20, 50, 100].map((m) => m / M_PER_FT) : [2, 5, 10, 20, 50, 100, 200];
     const feet = CAND.find((f) => (f / uppBitmap) * z >= 160) ?? CAND[CAND.length - 1];
     const r = containerRef.current.getBoundingClientRect();
     const t = tfRef.current;
@@ -1582,55 +1988,65 @@ export default function TakeoffCanvas() {
     clearTimeout(scaleGuideTimerRef.current);
     scaleGuideTimerRef.current = setTimeout(() => setScaleGuide(null), 8000);
   }
-  useEffect(() => { setScaleGuide(null); }, [tool, groupSig]);
+  useEffect(() => { setScaleGuide(null); scaleGuidePreviewRef.current = false; }, [tool, groupSig]);
   useEffect(() => () => clearTimeout(scaleGuideTimerRef.current), []);
+  // Kill a hover-preview guide (and only a preview — an accepted bar stays).
+  // Fired on hover-out of the plan-says item AND whenever the scale menu
+  // closes (item click, Escape, outside click — the item button unmounts
+  // without a mouseleave, so hover-out alone can't be trusted). Stable
+  // identity: it feeds the menu's onOpenChange effect via onScaleMenuDepth.
+  const clearPreviewGuide = useCallback(() => {
+    if (!scaleGuidePreviewRef.current) return;
+    scaleGuidePreviewRef.current = false;
+    clearTimeout(scaleGuideTimerRef.current);
+    setScaleGuide(null);
+  }, []);
+  const onScaleMenuDepth = useCallback((o) => { onMenuDepth(o); if (!o) clearPreviewGuide(); }, [onMenuDepth, clearPreviewGuide]);
 
-  // Snapshot of the title-block region — the SAME region detectScale treats as
-  // authoritative (sheets.ts: x > 0.55W, y > 0.5H) — for the AI scale read.
-  // Cropped from the base panel raster, downscaled to a vision-friendly size.
-  // JPEG has no alpha, so white-fill first; and dark mode bakes an inversion
-  // into the panel pixels, so the CROP (never the on-screen canvas) is flipped
-  // back to normal print before encoding.
-  function captureTitleBlock(key) {
-    const cv = panelCanvasRefs.current.get(key);
-    if (!cv || !cv.width) return null;
-    const sx = Math.floor(cv.width * 0.55), sy = Math.floor(cv.height * 0.5);
-    const sw = cv.width - sx, sh = cv.height - sy;
-    const cap = 1568;
-    const k = Math.min(1, cap / Math.max(sw, sh));
-    const off = document.createElement("canvas");
-    off.width = Math.round(sw * k); off.height = Math.round(sh * k);
-    const ctx = off.getContext("2d");
-    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, off.width, off.height);
-    ctx.drawImage(cv, sx, sy, sw, sh, 0, 0, off.width, off.height);
-    if (canvasInvertedRef.current.get(cv)) invertCanvasPixels(off);
-    let url = off.toDataURL("image/jpeg", 0.8);
-    if (url.length > 4_000_000) url = off.toDataURL("image/jpeg", 0.6);
-    return url;
-  }
-  // One snapshot of the title block → the user's own vision endpoint → the
-  // reply maps through scaleFromLabel (same boundary-guarded matcher as the
-  // text path) → the EXISTING detectedScales suggestion flow. Never
-  // auto-applied — the human still clicks "use", and the guide bar shows.
-  async function readScaleWithAi() {
-    const key = focusPanel.key;
-    const img = captureTitleBlock(key);
-    if (!img) { setCommitMsg("Nothing rendered to read yet."); return; }
-    setAiScaleBusy(key);
-    try {
-      const text = await visionQuery({ imageDataUrl: img, prompt: scaleReadPrompt(STANDARD_SCALES.map((s) => s.label)) });
-      const det = scaleFromLabel(text);
-      if (det) setDetectedScales((d) => ({ ...d, [key]: { ...det, ai: true } }));
-      else setCommitMsg(`AI couldn't read a scale off ${labelFor(panelByKey(key))} — calibrate against a known dimension instead.`);
-    } catch (e) {
-      setCommitMsg(`AI read failed: ${e.message || e}`);
-    } finally {
-      setAiScaleBusy("");
+  // Every user-facing scale acceptance goes through here: store the new scale
+  // AND re-price the committed shapes on that sheet. `computed` is priced at
+  // draw time, so without this a rescale left every existing SF/LF at the old
+  // scale (the same staleness pasteClipboard calls "the legacy bug") — glaring
+  // now that the check tool's one-tap recalibrate makes late rescales routine.
+  // Hydrate bypasses this on purpose: saved computed matches the saved scale.
+  function rescaleSheet(key, upp) {
+    // stash the scale this rescale replaces, but only when it actually changes
+    // committed quantities (sheet had a scale, the scale moved, shapes exist on
+    // it) — that's the case worth a one-step revert (the Scale menu surfaces it)
+    const prior = scales[key];
+    if (prior === upp) return; // re-picking the active scale — no reprice churn, no stash (mirrors the MCP guard)
+    if (prior != null && shapes.some((sh) => sh.sheet_id === key)) {
+      setPrevScale({ key, upp: prior, source: scaleSources[key] || "standard" });
     }
+    setScales((s) => ({ ...s, [key]: upp }));
+    // STRICT panel lookup — the panelByKey wrapper falls back to panels[0], so
+    // it can't detect an off-canvas sheet: a future off-canvas caller would
+    // silently re-price that sheet's shapes against the wrong panel's bitmap
+    // dims (and factorFor of a never-rastered key). Off-canvas the scale is
+    // still stored above; the shapes keep their (now old-scale) computed until
+    // a caller reprices them on canvas — wrong-but-visible beats silently-wrong.
+    const sp = panels.find((p) => p.key === key);
+    if (!sp?.img?.w) return; // sheet not on canvas — can't re-price without its bitmap dims
+    const uEff = upp / factorFor(key);
+    // count shapes keep their computed: EA has no upp dependency at all, and
+    // recomputeShape's count branch would clobber a hand-edited / hydrated
+    // fractional count (supported data — see totals.js accumulateRole) to 1
+    setShapes((ss) => ss.map((sh) => (sh.sheet_id === key && sh.measure_role !== "count" ? { ...sh, computed: recomputeShape(sh, uEff) } : sh)));
+  }
+
+  // Revert the last quantity-changing rescale (the one-slot stash above): runs
+  // the same rescaleSheet back — which re-stashes the scale being replaced, so
+  // a revert is itself revertible (a two-way toggle, not a history).
+  function revertScale() {
+    const pv = prevScale;
+    if (!pv) return;
+    rescaleSheet(pv.key, pv.upp);
+    setScaleSources((s) => ({ ...s, [pv.key]: pv.source }));
+    showScaleGuide(pv.key, pv.upp, STANDARD_SCALES.find((x) => Math.abs(x.upp - pv.upp) < 1e-9)?.label || pv.source);
   }
 
   function applyCalibration() {
-    const feet = calInputToFeet(parseFloat(pendingLen), units);
+    const feet = parseFloat(pendingLen);
     if (!(feet > 0) || calib.length !== 2) return;
     const pa = panelAt(calib[0][0]), pb = panelAt(calib[1][0]);
     if (pa.key !== pb.key) {
@@ -1641,7 +2057,8 @@ export default function TakeoffCanvas() {
     if (px <= 0) return;
     // store at BASELINE resolution — the auto hi-res raster has factorFor× denser pixels
     const toBase = factorFor(pa.key);
-    setScales((s) => ({ ...s, [pa.key]: (feet / px) * toBase })); // per page — remembered for this sheet
+    rescaleSheet(pa.key, (feet / px) * toBase); // per page — remembered for this sheet
+    setScaleSources((s) => ({ ...s, [pa.key]: "calibrated" }));
     showScaleGuide(pa.key, (feet / px) * toBase, "calibrated");
     setCalib([]); setPendingLen("");
   }
@@ -1649,13 +2066,15 @@ export default function TakeoffCanvas() {
   // Check tool's one-tap recalibrate: the measured span IS a calibration line —
   // same math as applyCalibration, sourced from the check points + stated value.
   function recalibrateFromCheck() {
-    const feet = parseLenInput(checkStated, units);
+    const feet = parseLenInput(checkStated, UNITS);
     if (!(feet > 0) || check.length !== 2) return;
     const pa = panelAt(check[0][0]);
+    if (panelAt(check[1][0])?.key !== pa?.key) return; // cross-panel span — the UI hides the button, but keep the function safe standalone
     const px = Math.hypot(check[1][0] - check[0][0], check[1][1] - check[0][1]);
     if (px <= 0) return;
     const toBase = factorFor(pa.key);
-    setScales((s) => ({ ...s, [pa.key]: (feet / px) * toBase }));
+    rescaleSheet(pa.key, (feet / px) * toBase);
+    setScaleSources((s) => ({ ...s, [pa.key]: "calibrated" }));
     showScaleGuide(pa.key, (feet / px) * toBase, "calibrated");
     setCheck([]); setCheckStated("");
   }
@@ -1674,6 +2093,8 @@ export default function TakeoffCanvas() {
       measure_role: asDeduct ? "deduct" : "floor_area",
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { area_sf: +(met.area * upp * upp).toFixed(2), perimeter_lf: +(met.perim * upp).toFixed(2) },
+      ...(activeLabel ? { label: activeLabel } : {}),
+      origin: { method: "manual" },
     }]);
   }
   function commitLinear(points) {
@@ -1688,6 +2109,8 @@ export default function TakeoffCanvas() {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "linear",
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { perimeter_lf: +LF.toFixed(2), area_sf: tIn > 0 ? +((LF * tIn) / 12).toFixed(2) : 0 },
+      ...(activeLabel ? { label: activeLabel } : {}),
+      origin: { method: "manual" },
     }]);
   }
   // Surface Area — trace the wall run in plan; SF = traced LF × the condition's
@@ -1699,12 +2122,14 @@ export default function TakeoffCanvas() {
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
     if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
     const h = Number(aCond?.height_ft) || 0;
-    if (!(h > 0)) { setCommitMsg(`Set a height for ${aCond?.finish_tag || "this condition"} (H in the condition bar) — Surface Area = traced LF × height.`); return; }
+    if (!(h > 0)) { setCommitMsg(`Set a height for ${aCond?.finish_tag || "this condition"} (H in the condition editor) — Surface Area = traced LF × height.`); return; }
     const LF = openLen(points) * upp;
     setShapes((s) => [...s, {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "surface_area", height_ft: h,
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { area_sf: +(LF * h).toFixed(2), perimeter_lf: +LF.toFixed(2) },
+      ...(activeLabel ? { label: activeLabel } : {}),
+      origin: { method: "manual" },
     }]);
   }
   function commitCount(p) {
@@ -1712,7 +2137,7 @@ export default function TakeoffCanvas() {
     const tp = panelAt(p[0]);
     setShapes((s) => [...s, {
       id: uid("shp"), sheet_id: tp.key, condition_id: activeCond, measure_role: "count",
-      verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 },
+      verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 }, ...(activeLabel ? { label: activeLabel } : {}), origin: { method: "manual" },
     }]);
   }
 
@@ -1748,15 +2173,35 @@ export default function TakeoffCanvas() {
       const rs = renderScalesRef.current.get(key) || RENDER_SCALE;
       const ws = Math.min(1, MASK_MAX_DIM / Math.max(dims.w, dims.h, 1));
       const mw = Math.max(2, Math.ceil(dims.w * ws)), mh = Math.max(2, Math.ceil(dims.h * ws));
+      // distinct namespace from the panel's own renderTasksRef entry (keyed by
+      // `key` alone) so registering this task can't clobber — or get clobbered
+      // by — the panel's primary render; group-switch cleanup cancels both.
+      const taskKey = `${key}:raster`;
       pr = (async () => {
         const cv = document.createElement("canvas");
         cv.width = mw; cv.height = mh;
         const ctx = cv.getContext("2d", { willReadFrequently: true });
-        await pageObj.render({ canvasContext: ctx, viewport: pageObj.getViewport({ scale: rs * ws }), background: "#ffffff" }).promise;
+        if (!ctx) throw new Error("2d canvas context unavailable"); // caught below like any other render failure — clear message over a cryptic null-deref
+        const rt = pageObj.render({ canvasContext: ctx, viewport: pageObj.getViewport({ scale: rs * ws }), background: "#ffffff" });
+        renderTasksRef.current.set(taskKey, rt);
+        try {
+          await rt.promise;
+        } finally {
+          renderTasksRef.current.delete(taskKey);
+        }
         const px = ctx.getImageData(0, 0, mw, mh);
         cv.width = cv.height = 0;   // drop the backing store
         return buildRasterMask(px.data, mw, mh, ws);
-      })().catch(() => null);
+      })().catch(() => {
+        // A rejection here (pdf.js render failure — worker restart, a lazily-
+        // fetched embedded image erroring; getImageData allocation failure
+        // under memory pressure; a buildRasterMask throw) must NOT be cached
+        // as a resolved-null forever — that would make every future click on
+        // this sheet show the permanent failure message even though a retry
+        // would succeed. Evict so the next ensureRasterMask call rebuilds.
+        rasterMaskCacheRef.current.delete(key);
+        return null;
+      });
       rasterMaskCacheRef.current.set(key, pr);
     }
     return pr;
@@ -1779,19 +2224,58 @@ export default function TakeoffCanvas() {
     if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
-    setProposal((prev) => {
-      const regions = prev && prev.key === tp.key ? prev.regions : [];
-      if (regions.some((r) => r.kind === (negative ? "neg" : "pos") && pointInPoly(local[0], local[1], r.poly))) {
-        setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
-        return prev;
-      }
-      if (negative && !regions.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) {
-        setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
-        return prev;
-      }
-      setCommitMsg("");
-      return { key: tp.key, regions: [...regions, { kind: negative ? "neg" : "pos", seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+    // Decide accept/dup/carve-reject INSIDE the functional updater, against
+    // its own authoritative `prev` — not proposalRef, which only catches up
+    // on the next render's passive-effect flush (a macrotask). proposeRegion
+    // can resume after an await (the raster path shares a cached
+    // ensureRasterMask promise across concurrent clicks on the same panel),
+    // and two continuations on that shared promise resume as back-to-back
+    // MICROTASK reactions with no render/effect flush able to run in
+    // between — so a second click's dedup check would read proposalRef from
+    // BEFORE the first click's setProposal landed and wrongly pass.
+    //
+    // setCommitMsg still must not be called from inside the updater itself
+    // — React may invoke it more than once (StrictMode double-invoke, or a
+    // discarded concurrent render), and firing a message from inside one
+    // would announce a decision that never lands. So the verdict is stashed
+    // in this scope-local `outcome` var (a plain reassignment, not a
+    // setState call) and acted on AFTER setProposal returns.
+    //
+    // That read is wrapped in flushSync rather than just trusted to be
+    // synchronous: React's "run the updater eagerly, at dispatch time" fast
+    // path is an internal bail-out optimization, not a public guarantee, and
+    // it does NOT reliably apply here — proposeRegion's raster call always
+    // resumes from a promise continuation (after `await ensureRasterMask`),
+    // never a discrete DOM event, so React defers the updater to the next
+    // render instead of running it inline (confirmed against the real
+    // shared-promise race in this file: `outcome` read back as undefined
+    // every time, in both dev and a production build, with or without a
+    // second racing click). flushSync forces that render to happen, and
+    // this updater to run, before setProposal returns, so `outcome` is
+    // always populated by the time it's read below — for the ordinary
+    // single-click case AND for two clicks racing the same shared promise
+    // (the second call's setProposal, and its read of `outcome`, still runs
+    // strictly after the first call's flushSync has fully committed).
+    let outcome;
+    flushSync(() => {
+      setProposal((prev) => {
+        const rs = prev && prev.key === tp.key ? prev.regions : [];
+        const kind = negative ? "neg" : "pos";
+        if (rs.some((r) => r.kind === kind && pointInPoly(local[0], local[1], r.poly))) {
+          outcome = "dup";
+          return prev;
+        }
+        if (negative && !rs.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) {
+          outcome = "needsPos";
+          return prev;
+        }
+        outcome = "added";
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+      });
     });
+    if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
+    else if (outcome === "needsPos") setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
+    else setCommitMsg("");
   }
   async function oneClickAt(p, negative) {
     const tp = panelAt(p[0]);
@@ -1800,11 +2284,12 @@ export default function TakeoffCanvas() {
     if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
     if (proposal && proposal.key !== tp.key) { setCommitMsg(`Finish the selection on ${labelFor(panelByKey(proposal.key))} first — ⏎ creates it, Esc discards.`); return; }
     const local = [p[0] - tp.xOffset, p[1]];
-    // Trigger policy: vector is exact and always wins where it works. The raster
-    // path engages only where vectors can't bound the room — a scan wrapper
-    // (big placed image, near-zero linework) runs raster PRIMARY; a mixed sheet
-    // (big image UNDER real linework) retries on pixels only after the vector
-    // flood fails. A pure-vector sheet never touches pixels.
+    // Trigger policy: vector is exact and always wins where it works — including
+    // the fork's hatch escalation (fillSens), which runs untouched here. The
+    // raster path engages only where vectors can't bound the room — a scan
+    // wrapper (big placed image, near-zero linework) runs raster PRIMARY; a
+    // mixed sheet (big image UNDER real linework) retries on pixels only after
+    // the vector flood fails. A pure-vector sheet never touches pixels.
     const stats = sheetStatsRef.current.get(tp.key);
     const rasterEligible = !!stats && stats.imageFrac >= RASTER_MIN_IMG_FRAC;
     const vectorViable = !!stats && stats.segCount >= RASTER_MIN_SEGS;
@@ -1812,7 +2297,7 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(tp.key);
       if (!mo && !rasterEligible) { setCommitMsg("Still reading this sheet's linework — try again in a second."); return; }
       if (mo) {
-        const f = floodRegion(mo, local[0], local[1]);
+        const f = floodRegion(mo, local[0], local[1], fillSens);
         if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
@@ -1825,8 +2310,19 @@ export default function TakeoffCanvas() {
     setCommitMsg("Reading the scan…");
     const seq = renderSeqRef.current;
     const rmo = await ensureRasterMask(tp.key);
-    if (seq !== renderSeqRef.current) return;   // sheet group changed mid-render
+    if (seq !== renderSeqRef.current) { setCommitMsg(""); return; }   // sheet group changed mid-render — the new sheet must not be left showing a stale "Reading the scan…" ("…" messages never auto-expire, see commitMsg's 6s-timer effect
+    // The raster render can take real time on a large scan; the user may have
+    // switched tools or started a DIFFERENT panel's proposal while it was in
+    // flight. renderSeq alone only catches a sheet-GROUP change — re-validate
+    // against the LIVE tool/proposal (refs, not the closed-over `tool`/
+    // `proposal` — this is an async continuation resuming after other renders)
+    // so a late raster result can never silently replace another panel's
+    // in-progress proposal or paint a ghost selection in the wrong tool.
+    if (toolRef.current !== "oneclick" || (proposalRef.current && proposalRef.current.key !== tp.key)) { setCommitMsg(""); return; }
     if (!rmo) { setCommitMsg("Couldn't read this scan — trace it with Area (A)."); return; }
+    // The raster mask is single-tier (softCount 0), so floodRegion's hatch
+    // escalation — and with it the Fill sensitivity knob — is structurally
+    // inert on scans; no sensitivity is passed.
     const f = floodRegion(rmo, local[0], local[1]);
     if (f.status !== "ok") {
       setCommitMsg(f.status === "leak"
@@ -1844,6 +2340,7 @@ export default function TakeoffCanvas() {
       measure_role: r.kind === "neg" ? "deduct" : "floor_area",
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
       computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
+      ...(activeLabel ? { label: activeLabel } : {}),
       // the provenance receipt: machine-proposed, human-reviewed at the Create gate
       origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}) },
     }));
@@ -1853,18 +2350,170 @@ export default function TakeoffCanvas() {
     setProposal(null);
   }
 
+  // ── One-Click proposal geometry editing — correct a fill BEFORE Create ──────
+  // A proposal region's `poly` is panel-LOCAL px (image space of proposal.key,
+  // no xOffset — same frame the preview draws in). These reuse the existing
+  // recompute idiom (ringArea × upp², closedMetrics) and the endpoint snap grid,
+  // so a corrected corner lands on the plan's true linework just like a hand
+  // trace. Nothing here commits a takeoff — that's still the Create (⏎) gate.
+  const ocMetrics = (poly, key) => {
+    const upp = uppFor(key) || 0;
+    return { area_sf: +(ringArea(poly) * upp * upp).toFixed(2), perim_lf: +(closedMetrics(poly).perim * upp).toFixed(2) };
+  };
+  // `bypass` (true for a raster region/shape) skips nearestSnap entirely — on a
+  // scan wrapper the snap grid holds only the placed-image/clip-rect corners
+  // and title-block linework (extractVectorGeometry's few real points, not the
+  // scan ink), so snapping a dragged raster corner onto it yanks the point
+  // onto geometry unrelated to the room being edited. Same rationale
+  // proposeRegion already applies to the initial trace — the handles must not
+  // reintroduce it.
+  const ocSnap = (key, x, y, bypass) => {
+    if (bypass) return [x, y];
+    const grid = snapGridsRef.current.get(key);
+    const hit = grid ? nearestSnap(grid, x, y, 8 / tfRef.current.scale) : null;
+    return hit ? [hit[0], hit[1]] : [x, y];
+  };
+  // Press on a corner (select + arm move), an edge grip (arm whole-line move),
+  // or Shift on an edge (insert a new anchor, arm its move). Returns true if the
+  // press was consumed. Hit-tests against RAW cursor px (not the snap/angle-
+  // adjusted point) so grabbing a handle is never nudged by an unrelated snap.
+  function oneClickHandleAt(e) {
+    if (tool !== "oneclick" || !proposal) return false;
+    // ⌥ is reserved for carving a cutout (oneClickAt) — never let a handle grab
+    // swallow it, or an ⌥-click near a room's own corner/edge could never carve.
+    if (e.altKey) return false;
+    const tp = panelByKey(proposal.key);
+    if (!tp || !tp.img.w) return false;
+    const raw = toImage(e.clientX, e.clientY);
+    const lx = raw[0] - tp.xOffset, ly = raw[1];
+    const thr = 8 / tfRef.current.scale;
+    const regions = proposal.regions;
+    for (let ri = 0; ri < regions.length; ri++) {          // corners win over edges
+      const poly = regions[ri].poly;
+      for (let i = 0; i < poly.length; i++) {
+        if (Math.hypot(poly[i][0] - lx, poly[i][1] - ly) < thr * 1.6) {
+          setOcSel({ ri, vi: i });
+          ocDragRef.current = { kind: "oc-vertex", ri, vi: i };
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return true;
+        }
+      }
+    }
+    for (let ri = 0; ri < regions.length; ri++) {          // edge midpoints
+      const poly = regions[ri].poly;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        if (Math.hypot(mx - lx, my - ly) < thr * 1.5) {
+          if (e.shiftKey) {                                  // insert a new anchor, then drag it
+            setProposal((pr) => {
+              if (!pr) return pr;
+              const rgs = pr.regions.map((r, idx) => {
+                if (idx !== ri) return r;
+                const np = [...r.poly.slice(0, i + 1), [mx, my], ...r.poly.slice(i + 1)];
+                return { ...r, poly: np, ...ocMetrics(np, pr.key) };
+              });
+              return { ...pr, regions: rgs };
+            });
+            setOcSel({ ri, vi: i + 1 });
+            ocDragRef.current = { kind: "oc-vertex", ri, vi: i + 1 };
+          } else {                                           // move BOTH endpoints of this line
+            ocDragRef.current = { kind: "oc-edge", ri, i, j: (i + 1) % poly.length, oa: a.slice(), ob: b.slice(), sx: lx, sy: ly };
+          }
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  // Live drag: a corner follows the (snapped) cursor; an edge translates both its
+  // endpoints by the drag delta, each end snapping independently to the linework.
+  function ocDragMove(e) {
+    const d = ocDragRef.current;
+    const tp = panelByKey(proposal?.key);
+    if (!proposal || !tp || !tp.img.w) { ocDragRef.current = null; return; }
+    const raw = toImage(e.clientX, e.clientY);
+    const lx = raw[0] - tp.xOffset, ly = raw[1];
+    setProposal((pr) => {
+      if (!pr) return pr;
+      const regions = pr.regions.map((r, ri) => {
+        if (ri !== d.ri) return r;
+        let poly;
+        if (d.kind === "oc-vertex") {
+          const np = ocSnap(pr.key, lx, ly, r.rt);
+          poly = r.poly.map((v, i) => (i === d.vi ? np : v));
+        } else {
+          const dx = lx - d.sx, dy = ly - d.sy;
+          const na = ocSnap(pr.key, d.oa[0] + dx, d.oa[1] + dy, r.rt);
+          const nb = ocSnap(pr.key, d.ob[0] + dx, d.ob[1] + dy, r.rt);
+          poly = r.poly.map((v, i) => (i === d.i ? na : i === d.j ? nb : v));
+        }
+        return { ...r, poly, ...ocMetrics(poly, pr.key) };
+      });
+      return { ...pr, regions };
+    });
+  }
+  // Reveal handles on the region under the cursor (inside it, or near a corner /
+  // edge grip so you can grab a corner to pull it outward). Ref-compared so we
+  // only re-render when the hovered region actually changes.
+  function ocHoverUpdate(e) {
+    const tp = panelByKey(proposal.key);
+    let hov = -1;
+    if (tp && tp.img.w) {
+      const raw = toImage(e.clientX, e.clientY);
+      const lx = raw[0] - tp.xOffset, ly = raw[1];
+      const near = 14 / tfRef.current.scale;
+      for (let ri = 0; ri < proposal.regions.length && hov < 0; ri++) {
+        const poly = proposal.regions[ri].poly;
+        if (pointInPoly(lx, ly, poly)) { hov = ri; break; }
+        for (let i = 0; i < poly.length; i++) {
+          const a = poly[i], b = poly[(i + 1) % poly.length];
+          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+          if (Math.hypot(a[0] - lx, a[1] - ly) < near || Math.hypot(mx - lx, my - ly) < near) { hov = ri; break; }
+        }
+      }
+    }
+    if (hov !== ocHoverRef.current) { ocHoverRef.current = hov; setOcHover(hov); }
+  }
+  // Delete just the selected corner (Delete/⌫), keeping a region ≥ 3 points —
+  // never collapses the whole space (use ⌫ with nothing selected for that).
+  function deleteSelectedOcVertex() {
+    if (!ocSel || !proposal) return;
+    const r = proposal.regions[ocSel.ri];
+    if (!r) { setOcSel(null); return; }
+    // Can't thin a triangle further. Deselect so the NEXT ⌫ falls through to the
+    // remove-last-region branch — otherwise the ocSel guard keeps re-firing this
+    // message and the space can never be dropped without an Esc first.
+    if (r.poly.length <= 3) { setOcSel(null); setCommitMsg("A space needs at least 3 points — ⌫ again drops the whole space."); return; }
+    setProposal((pr) => {
+      if (!pr) return pr;
+      const regions = pr.regions.map((rr, ri) => {
+        if (ri !== ocSel.ri) return rr;
+        const np = rr.poly.filter((_, i) => i !== ocSel.vi);
+        return { ...rr, poly: np, ...ocMetrics(np, pr.key) };
+      });
+      return { ...pr, regions };
+    });
+    setOcSel(null);
+  }
+
   // ── copy / paste / duplicate — "draw once, drop it again", same sheet or the
   // one under the cursor. The clipboard carries verts + provenance, never the old
   // computed numbers: every paste recomputes against the TARGET panel's dims and
   // that sheet's scale (this also fixes the legacy bug where pasting after a
   // rescale kept the stale SF).
   const clipRef = useRef([]);
+  const cloneOrigin = (o) => (o ? { origin: { ...o, ...(o.seed_norm ? { seed_norm: [...o.seed_norm] } : {}) } } : {});
+  // the clipboard payload for one shape: verts deep-copied, provenance kept,
+  // `from` remembers the source sheet so paste knows same-sheet vs cross-sheet
+  const clipEntry = (sel) => ({ condition_id: sel.condition_id, measure_role: sel.measure_role,
+                                verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id, height_ft: sel.height_ft,
+                                ...(sel.height_override ? { height_override: true } : {}), ...(sel.label ? { label: sel.label } : {}), ...cloneOrigin(sel.origin) });
   function copySelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to copy."); return; }
-    clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                         verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id,
-                         height_ft: sel.height_ft, height_override: sel.height_override === true }];
+    clipRef.current = [clipEntry(sel)];
     setCommitMsg("Copied — ⌘V pastes onto the sheet under your cursor.");
   }
   function pasteClipboard(offset = 0.03) {
@@ -1878,24 +2527,19 @@ export default function TakeoffCanvas() {
       cross = cross || !same;
       // same sheet: nudge so the copy is visible; other sheet: same relative spot
       const vn = c.verts_norm.map(([x, y]) => (same ? [Math.min(0.999, x + offset), Math.min(0.999, y + offset)] : [x, y]));
-      // height_ft spreads on != null (not truthiness): an explicit 0-ft override
-      // must survive the paste, and the override flag rides with its value.
-      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn,
-                  ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
-                  ...(c.height_override ? { height_override: true } : {}) };
+      // != null, not truthy: an overridden height of 0 must survive the paste
+      const s = { id: uid("shp"), sheet_id: tp.key, condition_id: c.condition_id, measure_role: c.measure_role, verts_norm: vn, ...(c.height_ft != null ? { height_ft: c.height_ft } : {}), ...(c.height_override ? { height_override: true } : {}), ...(c.label ? { label: c.label } : {}), ...cloneOrigin(c.origin) };
       return { ...s, computed: recomputeShape(s) };
     });
     setShapes((s) => [...s, ...made]);
-    setSelectedId(made[made.length - 1].id);
+    selectShape(made[made.length - 1].id);
     setTool("select");
     setCommitMsg(`Pasted ${made.length} takeoff${made.length === 1 ? "" : "s"}${cross ? ` onto ${labelFor(tp)}` : ""} — drag to position.`);
   }
   function duplicateSelected() {
     const sel = shapes.find((s) => s.id === selectedId);
     if (!sel) { setCommitMsg("Select a takeoff to duplicate."); return; }
-    clipRef.current = [{ condition_id: sel.condition_id, measure_role: sel.measure_role,
-                        verts_norm: sel.verts_norm.map((v) => [...v]), from: sel.sheet_id,
-                        height_ft: sel.height_ft, height_override: sel.height_override === true }];
+    clipRef.current = [clipEntry(sel)];
     pasteClipboard();
   }
   // ── markup (cloud / callout / text) — annotations, not measurements ─────────
@@ -1903,21 +2547,32 @@ export default function TakeoffCanvas() {
   // belongs to the panel of its FIRST click and normalizes against that panel.
   function addMarkup(m, key) {
     setMarkups((ms) => [...ms, { id: uid("mk"), sheet_id: key, rfi_id: "", ...m }]);
-    if (m.type !== "highlight") setShowMarkupPanel(true);   // ink flows stroke after stroke
+    // Drawing a markup by hand surfaces the Markups tab. But a STAMP places several
+    // markups via addMarkup — don't yank the user off the Stamps tab mid-placement
+    // (keep the current tab, or open Markups only if nothing's open).
+    setLeftTab((t) => (tool === "stamp" ? (t ?? "markup") : "markup"));
   }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
   // (lib/markedset.js). Exports in the CURRENT view: dark canvas → dark PDF.
-  async function exportMarkedSet() {
+  // includeMarkups (from the ReportPanel checkbox, default true) is ORTHOGONAL to
+  // the canvas layer-hide (showMarkups): only this flag drops markups from the
+  // PDF. Off → pass []; the RFI-only export still works (empty-guard unaffected).
+  async function exportMarkedSet(includeMarkups = true) {
     try {
       setCommitMsg("Building the marked set…");
-      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...markups.map((m) => m.sheet_id)])];
+      const exportMarkups = includeMarkups ? markups : [];
+      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...exportMarkups.map((m) => m.sheet_id)])];
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
-      }).sort((a, b) => (a.file === b.file ? a.page - b.page : a.file.localeCompare(b.file)));
+      }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
+      // branding mode decides the cover identity + wordmark + parent credit;
+      // resolved per-project (folderId "" ⇒ the single browser-only setting)
+      const brand = resolveBranding({ ...(await loadBrandingSelection(projectIdFromUrl())), profiles: loadProfiles().profiles });
       const { bytes, filename } = await buildMarkedSetPdf({
-        projectName, dark: darkMode, units, sheets: sheetMeta, shapes, markups, conditions,
+        projectName, clientInfo, company: brand.company, credit: brand.credit, coverTitle: brand.coverTitle,
+        dark: darkMode, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
@@ -1928,38 +2583,293 @@ export default function TakeoffCanvas() {
     }
   }
 
+  // ── inline text editor — a screen-space <input> overlay (retires window.prompt).
+  // An HTML input can't live in the zoom/pan-transformed SVG group, so it is
+  // absolutely positioned in CONTAINER px, converting the anchor (stage px) through
+  // tfRef. Pan/zoom is frozen while editing (onPointerDown / onWheel bail on
+  // editingRef) so the overlay stays pinned to its anchor; the crosshair is
+  // suppressed via the same ref inside moveCrosshair. Keys are handled on the
+  // input's OWN onKeyDown/onBlur — the global window keydown returns early for
+  // INPUT targets, so it never interferes.
+  function markupAnchorStage(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return null;
+    let nx, ny;
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
+    else if (m.type === "arrow" && m.from && m.to) { nx = (m.from[0] + m.to[0]) / 2; ny = (m.from[1] + m.to[1]) / 2; }
+    else if (m.at) { nx = m.at[0]; ny = m.at[1]; }   // text + bubble + callout
+    else return null;
+    return [nx * sp.img.w + sp.xOffset, ny * sp.img.h];
+  }
+  function openTextEditor({ anchorStage, value = "", multiline = false, commit }) {
+    const el = containerRef.current;
+    if (!el) return;
+    const t = tfRef.current;
+    hideCrosshair();                 // the OS cursor / aim crosshair steps aside while you type
+    editingRef.current = true;
+    const ed = { left: anchorStage[0] * t.scale + t.x, top: anchorStage[1] * t.scale + t.y, value, multiline, commit };
+    editorRef.current = ed;
+    setEditor(ed);
+  }
+  // commit=true → run the editor's commit with the current input text; either way
+  // tear down. Guarded on editingRef so the blur that fires when we unmount the
+  // focused input (after Enter/Esc) is a harmless no-op — no double commit.
+  function finishEditor(commit) {
+    if (!editingRef.current) return;
+    editingRef.current = false;
+    const ed = editorRef.current;
+    const val = editorInputRef.current ? editorInputRef.current.value : (ed ? ed.value : "");
+    editorRef.current = null;
+    setEditor(null);
+    if (commit && ed && ed.commit) ed.commit(val);
+  }
+  // defense-in-depth: editingRef locks pan/zoom/crosshair while the overlay is up.
+  // If the input ever unmounts by a route other than finishEditor, this keeps the
+  // ref from stranding true and freezing the canvas.
+  useEffect(() => { if (!editor) editingRef.current = false; }, [editor]);
+  // double-click a markup (Select tool) to edit its text in place — find the target
+  // via toImage + hitMarkup (non-highlight beats highlight, mirroring selectAt) and
+  // open the overlay at its anchor.
+  function editMarkupAt(e) {
+    if (!showMarkups) return;
+    const p = toImage(e.clientX, e.clientY);
+    const thr = 8 / tfRef.current.scale;
+    const rev = [...visibleMarkups].reverse();
+    const m = rev.find((mm) => mm.type !== "highlight" && hitMarkup(mm, p, thr))
+      || rev.find((mm) => mm.type === "highlight" && hitMarkup(mm, p, thr));
+    if (!m) return;
+    // an svg symbol carries no text — select it, but don't open a dead-end editor
+    if (m.type === "svg") { selectMarkup(m.id); return; }
+    const anchor = markupAnchorStage(m);
+    if (!anchor) return;
+    selectMarkup(m.id);
+    openTextEditor({ anchorStage: anchor, value: m.text || "", commit: (t) => updateMarkup(m.id, { text: (t || "").trim() }) });
+  }
+
   function placeMarkup(p) {
     const tp = panelAt(p[0]);
     const norm = (q, panel) => [(q[0] - panel.xOffset) / panel.img.w, q[1] / panel.img.h];
     if (tool === "text") {
-      const t = window.prompt("Text note:");
-      if (t && t.trim()) addMarkup({ type: "text", at: norm(p, tp), text: t.trim() }, tp.key);
+      // empty text is not committed (preserves the old `if (t && t.trim())` reject)
+      openTextEditor({ anchorStage: p, commit: (t) => { const tx = (t || "").trim(); if (tx) addMarkup({ type: "text", at: norm(p, tp), text: tx }, tp.key); } });
     } else if (tool === "cloud") {
       if (!markupDraft) { setMarkupDraft(p); }
       else {
-        const note = window.prompt("Cloud note (optional):") || "";
         const dp = panelAt(markupDraft[0]);
-        addMarkup({ type: "cloud", rect: [norm(markupDraft, dp), norm(p, dp)], text: note.trim() }, dp.key);
+        const rect = [norm(markupDraft, dp), norm(p, dp)];
+        setMarkupDraft(null);
+        // create the cloud NOW (like highlight) so Esc/cancel in the note editor
+        // keeps the drawn box — only the optional note is discarded, not the geometry
+        const id = uid("mk");
+        addMarkup({ id, type: "cloud", rect, text: "" }, dp.key);
+        openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(id, { text: (t || "").trim() }) });
+      }
+    } else if (tool === "highlight") {
+      // two-corner like the cloud, but no note prompt — a highlight is a pure
+      // translucent box you drop over an area; text/color/line_style come later.
+      if (!markupDraft) { setMarkupDraft(p); }
+      else {
+        const dp = panelAt(markupDraft[0]);
+        addMarkup({ type: "highlight", rect: [norm(markupDraft, dp), norm(p, dp)], text: "" }, dp.key);
         setMarkupDraft(null);
       }
     } else if (tool === "callout") {
       if (!markupDraft) { setMarkupDraft(p); }   // first click = the thing you're pointing at
       else {
-        const t = window.prompt("Callout text:");
         const dp = panelAt(markupDraft[0]);
-        if (t && t.trim()) addMarkup({ type: "callout", target: norm(markupDraft, dp), at: norm(p, dp), text: t.trim() }, dp.key);
+        const target = norm(markupDraft, dp), at = norm(p, dp);
         setMarkupDraft(null);
+        // empty callout text is not committed (preserves the old reject)
+        openTextEditor({ anchorStage: p, commit: (t) => { const tx = (t || "").trim(); if (tx) addMarkup({ type: "callout", target, at, text: tx }, dp.key); } });
       }
     }
   }
   function updateMarkup(mid, patch) { setMarkups((ms) => ms.map((m) => (m.id === mid ? { ...m, ...patch } : m))); }
   function deleteMarkup(mid) { setMarkups((ms) => ms.filter((m) => m.id !== mid)); }
 
+  // ── stamps — reusable annotations dropped click-to-place (#40). The library
+  // is browser-global (persists across projects); placed instances are NORMAL
+  // markups. Persist mirrors persistTemplates: ref + state + fire-and-forget
+  // save, sanitized at the store boundary.
+  const persistStampLib = (next) => {
+    stampLibRef.current = next; setStampLib(next);
+    store.saveStampLibrary(next).catch((e) => setCommitMsg(`Couldn't save the stamp library: ${e.message || e}`));
+  };
+  // Arm a stamp for placement: switch to the stamp tool and hold it in
+  // armedStamp. Repeated clicks place multiple copies until you pick another
+  // tool or press Escape.
+  const armStamp = (stamp) => { setArmedStamp(stamp); setTool("stamp"); setMarkupDraft(null); };
+  // Instantiate the armed stamp at the click point — every element becomes a
+  // normal markup on the clicked panel's sheet. A `_prompt` element (a bubble
+  // whose number you fill in) opens the text editor on the placed instance.
+  function placeStamp(p) {
+    if (!armedStamp) return;
+    const tp = panelAt(p[0]);
+    const cx = (p[0] - tp.xOffset) / tp.img.w, cy = p[1] / tp.img.h;
+    const instances = instantiateStamp(armedStamp, [cx, cy]);
+    if (!instances.length) { setCommitMsg("This stamp has no placeable elements."); return; }
+    let promptId = null;
+    for (const inst of instances) {
+      const { _prompt, ...m } = inst;
+      const id = uid("mk");
+      addMarkup({ ...m, id }, tp.key);
+      if (_prompt && !promptId) promptId = id;
+    }
+    setCommitMsg(`Placed “${armedStamp.name}”.`);
+    if (promptId) openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(promptId, { text: (t || "").trim() }) });
+  }
+  // Save the selected markup as a single-element stamp (the palette's define
+  // flow). markupToStampElement re-expresses its coords as anchor-relative
+  // offsets so the stamp is position independent.
+  function saveMarkupAsStamp(m) {
+    const el = markupToStampElement(m);
+    if (!el) { setCommitMsg("This markup can't be saved as a stamp."); return; }
+    const name = (window.prompt("Name this stamp:", (m.text || el.type).trim() || "Stamp") || "").trim();
+    if (!name) return;
+    const stamp = { id: uid("stmp"), name, elements: [el] };
+    persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, stamp] });
+    setCommitMsg(`Saved stamp “${name}”.`);
+    setLeftTab("stamp");
+  }
+  const deleteStamp = (id) => {
+    const lib = stampLibRef.current;
+    persistStampLib({
+      stamps: lib.stamps.filter((s) => s.id !== id),
+      sets: lib.sets.map((set) => ({ ...set, stampIds: set.stampIds.filter((sid) => sid !== id) })),
+    });
+    if (armedStamp?.id === id) setArmedStamp(null);
+  };
+  const renameStamp = (id, name) => {
+    const nm = (name || "").trim();
+    if (!nm) return;
+    persistStampLib({ ...stampLibRef.current, stamps: stampLibRef.current.stamps.map((s) => (s.id === id ? { ...s, name: nm } : s)) });
+  };
+  // Export the whole library as JSON (a crew shares one standard set); import
+  // MERGES a file's stamps/sets in, replacing same-id entries so a re-import is
+  // idempotent. The store sanitizes on save, so a malformed file can't wedge us.
+  function exportStamps() {
+    const data = JSON.stringify({ schema: "opentakeoff.stamp_library.v1", ...stampLibRef.current }, null, 2);
+    downloadBytes("opentakeoff-stamps.json", new TextEncoder().encode(data), "application/json");
+  }
+  async function importStamps(file) {
+    try {
+      const parsed = JSON.parse(await file.text());
+      const cur = stampLibRef.current;
+      const inStamps = Array.isArray(parsed?.stamps) ? parsed.stamps : [];
+      const inSets = Array.isArray(parsed?.sets) ? parsed.sets : [];
+      const inIds = new Set(inStamps.map((s) => s?.id));
+      const inSetIds = new Set(inSets.map((s) => s?.id));
+      const merged = {
+        stamps: [...cur.stamps.filter((s) => !inIds.has(s.id)), ...inStamps],
+        sets: [...cur.sets.filter((s) => !inSetIds.has(s.id)), ...inSets],
+      };
+      persistStampLib(merged);   // persistStampLib → store sanitizes, dropping any malformed items
+      setCommitMsg(`Imported ${inStamps.length} stamp${inStamps.length === 1 ? "" : "s"}.`);
+      setLeftTab("stamp");
+    } catch (e) {
+      setCommitMsg(`Couldn't import stamps: ${e.message || e}`);
+    }
+  }
+  // Import a real .svg FILE as a stamp: the browser's DOMParser extracts the
+  // drawable primitives (extractSvgPrimitives, with the security gate), then the
+  // pure svgToStamp bakes them into vector-path elements. A new stamp is minted
+  // and added to the library — mirroring saveMarkupAsStamp.
+  async function importSvgStamp(file) {
+    try {
+      const text = await file.text();
+      const base = (file.name || "Imported SVG").replace(/\.svg$/i, "");
+      const extracted = extractSvgPrimitives(text, { name: base });
+      const stamp = extracted && svgToStamp(extracted);
+      if (!stamp || !stamp.elements.length) { setCommitMsg("Couldn't read that SVG — no drawable vector shapes found."); return; }
+      persistStampLib({ ...stampLibRef.current, stamps: [...stampLibRef.current.stamps, { id: uid("stmp"), name: stamp.name, elements: stamp.elements }] });
+      setCommitMsg(`Imported “${stamp.name}” as a stamp.`);
+      setLeftTab("stamp");
+    } catch (e) {
+      setCommitMsg(`Couldn't import SVG: ${e.message || e}`);
+    }
+  }
+
+  // ── RFI register — the dormant markup.rfi_id hook made real. One RFI ↔ many
+  // markups (markup.rfi_id === rfi.id); linked markups are DERIVED, never stored
+  // twice. rfi.js stays PURE — every date is stamped HERE, at the event, so no
+  // renderer computes an RFI field with new Date().
+  function raiseRfi(markup) {
+    if (!markup) return;
+    const id = uid("rfi");
+    const number = nextRfiNumber(rfis);
+    const rec = {
+      id, number, subject: (markup.text || "").trim(), question: "", status: "open",
+      to: "", priority: "normal", cost_impact: false, schedule_impact: false,
+      date: new Date().toISOString().slice(0, 10), response: "", response_date: "",
+      sheet_id: markup.sheet_id,
+    };
+    setRfis((rs) => [...rs, rec]);
+    updateMarkup(markup.id, { rfi_id: id });
+    setLeftTab("rfi");
+    setCommitMsg(`Raised ${number}.`);
+  }
+  const linkRfi = (markup, rfiId) => { if (markup && rfiId) updateMarkup(markup.id, { rfi_id: rfiId }); };
+  const unlinkRfi = (markup) => { if (markup) updateMarkup(markup.id, { rfi_id: "" }); };
+  // hard delete: drop the record AND clear the dangling pointer on every linked
+  // markup (void is a status; delete removes — both must leave no orphan link)
+  function deleteRfi(id) {
+    setRfis((rs) => rs.filter((r) => r.id !== id));
+    setMarkups((ms) => ms.map((m) => (m.rfi_id === id ? { ...m, rfi_id: "" } : m)));
+  }
+  // parent-owned update path: the status→response_date auto-stamp lives HERE (not
+  // in the view) so the date is data, stamped once on the transition into Answered.
+  function updateRfi(id, patch) {
+    setRfis((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, ...patch };
+      if (patch.status && next.status === "answered" && r.status !== "answered" && !next.response_date) {
+        next.response_date = new Date().toISOString().slice(0, 10);
+      }
+      return next;
+    }));
+  }
+
+  // Fly to a linked markup from the register. Two-phase because openSheets only
+  // fires state setters and a sheet's bitmap dims load async: if the target sheet
+  // isn't open, stash it in pendingFlyRef + openSheets, and the effect below
+  // centers once the panel has non-zero img.w. If already open, center inline.
+  function centerOnMarkup(m) {
+    const sp = panelByKey(m.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    let anchor;
+    if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
+    else if (m.type === "callout") anchor = m.at || m.target;
+    else if (m.type === "arrow" && m.from && m.to) anchor = [(m.from[0] + m.to[0]) / 2, (m.from[1] + m.to[1]) / 2];
+    else anchor = m.at;   // text + bubble
+    if (!anchor) return false;
+    const el = containerRef.current;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const scale = tfRef.current.scale;
+    const sx = anchor[0] * sp.img.w + sp.xOffset, sy = anchor[1] * sp.img.h;
+    setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    selectMarkup(m.id);
+    return true;
+  }
+  function flyToMarkup(m) {
+    if (!m) return;
+    setShowMarkups(true);   // flying to a markup reveals the layer, so you never land on an invisible selection
+    if (!panelKeySet.has(m.sheet_id)) { pendingFlyRef.current = m; openSheets([m.sheet_id], false); return; }
+    // open already, but its bitmap may still be mid-render (img.w === 0) — if the
+    // inline center can't run yet, hand off to the phase-2 effect below.
+    if (!centerOnMarkup(m)) pendingFlyRef.current = m;
+  }
+
   function finishShape() {
     if (tool === "zone") {
       // ephemeral: classify, show, never save. Belongs to the panel of its first point.
-      if (poly.length >= 3) {
-        const tp = panelAt(poly[0][0]);
+      // Cross-panel span — the UI hides the Finish affordance (finishOk), but
+      // keep the function safe standalone (Enter is still wired to it): a
+      // point on a different panel than poly[0] would normalize to nx/ny
+      // outside [0..1] for THAT panel, drawing a region that visually spans
+      // a sheet it can never actually count shapes on.
+      const tp = poly.length ? panelAt(poly[0][0]) : null;
+      if (poly.length >= 3 && tp && poly.every((p) => panelAt(p[0]).key === tp.key)) {
         setZoneCheck({ key: tp.key, pts: poly.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]) });
         setZoneExpand(null);
       }
@@ -1970,6 +2880,30 @@ export default function TakeoffCanvas() {
   }
   function deleteSelected() { if (selectedId) { setShapes((ss) => ss.filter((s) => s.id !== selectedId)); setSelectedId(null); } }
   function reassignSelected(condId) { if (selectedId) setShapes((ss) => ss.map((s) => (s.id === selectedId ? { ...s, condition_id: condId } : s))); }
+  function reassignSelectedLabel(value) { if (selectedId) setShapes((ss) => assignShapeLabel(ss, selectedId, value)); }   // Select-tool single-shape re-label (#111) — value "" / null clears it
+
+  // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
+  // the panel's ⌖ / double-click navigation. Fit zoom is capped so a lone
+  // count marker doesn't slam the view to maximum magnification.
+  function locateCondition(id) {
+    const el = containerRef.current;
+    if (!el) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, found = false;
+    for (const s of visibleShapes) {
+      if (s.condition_id !== id) continue;
+      const sp = panelByKey(s.sheet_id);
+      for (const [nx, ny] of s.verts_norm) {
+        const x = nx * sp.img.w + sp.xOffset, y = ny * sp.img.h;
+        x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+        found = true;
+      }
+    }
+    if (!found) { setCommitMsg(`No takeoffs for ${condById[id]?.finish_tag || "this condition"} on the open sheet${groupKeys.length > 1 ? "s" : ""} yet.`); return; }
+    const r = el.getBoundingClientRect();
+    const w = Math.max(x1 - x0, 1), h = Math.max(y1 - y0, 1), pad = 90;
+    const scale = clamp(Math.min((r.width - pad) / w, (r.height - pad) / h, 1.5));
+    setTfNow({ x: (r.width - w * scale) / 2 - x0 * scale, y: (r.height - h * scale) / 2 - y0 * scale, scale });
+  }
 
   function addCondition() {
     const tag = (window.prompt("Finish tag for this condition (e.g. LVT-1):") || "").trim();
@@ -1985,33 +2919,201 @@ export default function TakeoffCanvas() {
       waste_pct: 0,         // flooring waste allowance (manual) — applied in the Report
       materials: [],        // supporting materials (adhesive, grout, …) with coverage rates
     };
-    setConditions((cs) => [...cs, c]); setActiveCond(c.id);
+    setConditions((cs) => [...cs, c]);
+    activateCondition(c.id, { reassign: false });   // no reassign affordance on +condition; still dismisses a live bulk selection
+  }
+
+  // ── Import from schedule ────────────────────────────────────────────────────
+  // Read the marqueed box and open the approval dialog. Two paths, ONE contract
+  // (ScheduleRow[] → the same dialog):
+  //   • vector plans: the page text layer inside the box IS the extraction —
+  //     no OCR, open to everyone (parseSchedule);
+  //   • scanned plans: the box has no text tokens, so we rasterize it and hand
+  //     the PNG to the optional AI backend (/ai/parse-schedule). That path is
+  //     login-gated (see importScheduleFromScan).
+  // Corners a,b are stage px (raw cursor, snapping exempted at pointer-down).
+  async function importScheduleFromRect(a, b) {
+    if (status !== "ready") { setCommitMsg("Sheet still loading — try again in a moment."); return; }
+    const panel = panelAt(a[0]);
+    if (panelAt(b[0]).key !== panel.key) { setCommitMsg("Draw the box within a single sheet, around its schedule table."); return; }
+    const pageObj = pageObjsRef.current.get(panel.key);
+    if (!pageObj) { setCommitMsg("Open a sheet first."); return; }
+    const rs = renderScalesRef.current.get(panel.key) || RENDER_SCALE;
+    const rect = { x0: a[0] - panel.xOffset, y0: a[1], x1: b[0] - panel.xOffset, y1: b[1] };
+    const seq = renderSeqRef.current;                 // a sheet switch mid-await must not pop a dialog for a page you left
+    let tokens;
+    try {
+      const vp = pageObj.getViewport({ scale: rs });
+      const tc = await pageObj.getTextContent();
+      if (seq !== renderSeqRef.current) return;
+      tokens = extractRegionText(tc, vp, rect);
+    } catch { setCommitMsg("Couldn't read that region."); return; }
+    // Vector-vs-scan decision. Tokens present ⇒ TRY the text layer first (a real
+    // vector schedule parses straight from it, no OCR cost). But token presence
+    // isn't proof of a vector page: scanned plans often carry a stray text layer
+    // (embedded OCR, a title block, dimension text) that lands in the marquee yet
+    // holds no schedule. So a token-bearing box that parses to NOTHING is not a
+    // dead end — fall through to the AI scan path when it's reachable, exactly as
+    // a truly text-less raster page would.
+    if (tokens.length) {
+      const rows = parseSchedule(tokens);
+      if (rows.length) { setImportRows(rows); return; }
+      // Parsed nothing. If the scan reader isn't reachable — not configured, not
+      // signed in, or the account is outside the org domain — the only actionable
+      // advice is to re-drag around the table header. Don't fire a paid OCR call
+      // and don't claim the page is scanned.
+      if (!isGoogleConfigured() || !isSignedIn() || !isAllowedDomain()) {
+        setCommitMsg("No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header).");
+        return;
+      }
+      // else: the reader is available — let it read the pixels below.
+    }
+    await importScheduleFromScan(pageObj, rs, rect, seq, tokens.length);
+  }
+
+  // Scan/OCR fallback for a raster page: rasterize the marqueed region and POST
+  // it to the optional AI backend, then feed the returned rows into the SAME
+  // approval dialog. LOGIN-GATED — only a Google-configured deployment with a
+  // signed-in user reaches the network (no API key ever lives in client code).
+  // tokenCount is the region's text-token count at the routing site: 0 ⇒ a true
+  // raster page (no text layer, AI is the only reader); >0 ⇒ the fallthrough from a
+  // token-bearing box whose vector parse found nothing. We report WHICH happened
+  // (#104) but never claim the >0 case is a "fixable parser gap": scanned plans
+  // routinely carry a stray text layer (title block, dimension text, embedded OCR)
+  // that lands in the marquee yet holds no schedule, so a token-bearing box that
+  // parses to nothing is just as likely a genuine scan as a defeated vector table.
+  async function importScheduleFromScan(pageObj, rs, rect, seq, tokenCount) {
+    const hadTokens = tokenCount > 0;
+    if (!isGoogleConfigured()) {
+      setCommitMsg("No schedule found — this looks like a scanned page (no text layer). Importing from scanned plans needs the AI backend.");
+      return;
+    }
+    if (!isSignedIn()) { setCommitMsg("Sign in to import from scanned plans."); return; }
+    // Org-only: a signed-in account outside the configured domain must not reach
+    // the paid reader (the server 403s it too — this just avoids the round-trip).
+    if (!isAllowedDomain()) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
+    // A paid read is already in flight — a rapid re-draw of the marquee must not
+    // fire a second Gemini call. Surface it (the first call may not have printed
+    // "Reading…" yet) so the redraw doesn't look ignored. Clears in finally below.
+    if (scanBusyRef.current) { setCommitMsg("Still reading the last schedule — one moment."); return; }
+    scanBusyRef.current = true;
+    try {
+      let png;
+      try { png = await rasterizeRegion(pageObj, rs, rect); }
+      catch { setCommitMsg("Couldn't read that region."); return; }
+      if (seq !== renderSeqRef.current) return;
+      // The token is what actually authorizes the paid read — the server verifies
+      // it before spending. A missing/expired token here means re-consent, not a
+      // silent public call.
+      let token;
+      try { token = await getAccessToken(); }
+      catch { setCommitMsg("Sign in again to import from scanned plans."); return; }
+      if (seq !== renderSeqRef.current) return;
+      setCommitMsg("Reading the scanned schedule…");
+      // #104: record WHY the paid reader was reached, right before the call fires
+      // (rasterize + token succeeded), so the log correlates 1:1 with paid reads.
+      // no-text-layer = truly raster (AI-only); text-present-unparsed = tokens were
+      // in the box but the vector parser produced nothing (NOT asserted as a parser
+      // bug — a stray-text scan is indistinguishable from a defeated vector table).
+      console.info("[schedule-import] using AI reader", {
+        reason: hadTokens ? "text-present-unparsed" : "no-text-layer",
+        tokenCount,
+      });
+      try {
+        // A cold serverless start + slow vision call can overrun Netlify's sync cap
+        // and return a 504 gateway page; the warm retry succeeds (#102). One retry
+        // only, and only on 504 — real errors (401/403/501/5xx JSON) fall through
+        // to the handling below on the first response.
+        const res = await postScanWithRetry(
+          () => fetch(SCAN_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            // client_hd stamps this build's VITE_GOOGLE_HD so the server can warn if
+            // it has drifted from the runtime ALLOWED_HD (the client org-gate would
+            // then be silently no-op'ing). Diagnostic only — the server's authoritative
+            // token + ALLOWED_HD gate ignores it.
+            body: JSON.stringify({ image_b64: png.b64, width: png.width, height: png.height, client_hd: orgDomainHint() }),
+          }),
+          { onRetry: () => setCommitMsg("The reader was warming up — retrying…") },
+        );
+        if (seq !== renderSeqRef.current) return;
+        if (res.status === 401 || res.status === 403) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
+        if (res.status === 501) { setCommitMsg("Importing from scanned plans isn't enabled on this deployment."); return; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const rows = normalizeScanRows(await res.json());
+        if (!rows.length) {
+          setCommitMsg(hadTokens
+            ? "No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header)."
+            : "No schedule found in that scanned region — the reader returned nothing.");
+          return;
+        }
+        // #104: say why the AI reader ran — honest about the token-bearing case (we
+        // read the pixels; we do NOT claim the vector parser has a bug).
+        setCommitMsg(hadTokens
+          ? `Read ${rows.length} finish${rows.length === 1 ? "" : "es"} from the image — the box had text but we couldn't read it as a table.`
+          : `Read ${rows.length} finish${rows.length === 1 ? "" : "es"} — scanned page (no text layer).`);
+        setImportRows(rows);
+      } catch { setCommitMsg("Couldn't reach the schedule reader — try again in a moment."); }
+    } finally {
+      scanBusyRef.current = false;
+    }
+  }
+
+  // Render just the marqueed region (rs-viewport px, the space rect lives in) to
+  // an offscreen canvas and return its PNG as base64 + pixel dims. Mirrors the
+  // detail-view offscreen render: shift the region's top-left to (0,0) and clamp
+  // to the single-canvas caps so a huge marquee can't exceed the backing store —
+  // AND to SCAN_MAX_DIM (scanRasterScale), the server's per-side cap, so a
+  // near-full-sheet marquee downscales to fit instead of being rejected with a
+  // 400 "invalid image dimensions". Downscales only as far as the cap, so a
+  // tighter box still goes at full resolution (better read on small schedule text).
+  async function rasterizeRegion(pageObj, rs, rect) {
+    const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
+    const regW = Math.max(1, Math.abs(rect.x1 - rect.x0)), regH = Math.max(1, Math.abs(rect.y1 - rect.y0));
+    const factor = Math.min(1, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)), scanRasterScale(regW, regH));
+    const bw = Math.max(1, Math.round(regW * factor)), bh = Math.max(1, Math.round(regH * factor));
+    const vp = pageObj.getViewport({ scale: rs * factor });
+    const canvas = document.createElement("canvas");
+    canvas.width = bw; canvas.height = bh;
+    await pageObj.render({
+      canvasContext: canvas.getContext("2d"),
+      viewport: vp,
+      transform: [1, 0, 0, 1, -x0 * factor, -y0 * factor],
+    }).promise;
+    const dataUrl = canvas.toDataURL("image/png");
+    return { b64: dataUrl.split(",")[1] || "", width: bw, height: bh };
+  }
+
+  // Approved rows → conditions. Category drives color/hatch/waste (rowToSeed);
+  // product spec (mfr/style/color/size) rides a plain `spec` field — NOT custom
+  // columns (would hijack a user column and pollute its grouping vocabulary) and
+  // NOT materials[] (those are coverage buy-list items, no coverage rate here).
+  // Existing codes are skipped (shown "in use" in the dialog).
+  function createFromSchedule(selected) {
+    const existing = new Set(conditions.map((c) => normalizeTag(c.finish_tag)));
+    const made = [];
+    let idx = conditions.length;
+    for (const row of selected) {
+      const tag = normalizeTag(row.finish_tag);
+      if (existing.has(tag)) continue;
+      const seed = rowToSeed({ ...row, finish_tag: tag }, idx++, PALETTE);
+      const hasSpec = Object.values(seed.spec).some(Boolean);
+      made.push({
+        id: uid("cnd"), finish_tag: seed.finish_tag, color: seed.color, fill: seed.color,
+        hatch: seed.hatch, multiplier: 1, waste_pct: seed.waste_pct, materials: [],
+        ...(hasSpec ? { spec: seed.spec } : {}),
+      });
+      existing.add(tag);
+    }
+    setImportRows(null);
+    if (!made.length) { setCommitMsg("Those finishes already exist as conditions."); return; }
+    setConditions((cs) => [...cs, ...made]);
+    activateCondition(made[0].id, { reassign: false });
+    setCommitMsg(`Created ${made.length} condition${made.length === 1 ? "" : "s"} from the schedule.`);
   }
   const updateCond = (patch) => setConditions((cs) => cs.map((c) => (c.id === activeCond ? { ...c, ...patch } : c)));
 
   // delete a condition entirely (and its takeoffs); pick a new active one
-  function saveActiveAsPlay() {
-    if (!aCond) return;
-    const name = window.prompt("Save this condition (appearance + waste + materials) as a reusable play.\nName:", aCond.finish_tag || "");
-    if (!name || !name.trim()) return;
-    const next = upsertPlay(plays, playFromCondition(name.trim(), aCond, () => uid("play")));
-    setPlays(next); savePlays(next);
-    setCommitMsg(`Play “${name.trim()}” saved — apply it from Plays ▾ on any project in this browser.`);
-  }
-  function applyPlay(play) {
-    const tag = (window.prompt("Finish tag for this condition:", play.finish_tag || play.name || "") || "").trim();
-    if (!tag) return;
-    const c = conditionFromPlay(play, tag, () => uid("cnd"), () => uid("mat"));
-    if (!c.color) c.color = PALETTE[conditions.length % PALETTE.length];
-    if (!c.fill) c.fill = c.color;
-    setConditions((cs) => [...cs, c]); setActiveCond(c.id); setPlaysOpen(false);
-    setCommitMsg(`Applied play “${play.name}” as ${tag} — measure it.`);
-  }
-  function deletePlayByName(name) {
-    if (!window.confirm(`Delete the play “${name}”?`)) return;
-    const next = plays.filter((pl) => pl.name !== name);
-    setPlays(next); savePlays(next);
-  }
   function deleteCondition(id) {
     const c = condById[id];
     if (!c) return;
@@ -2020,13 +3122,57 @@ export default function TakeoffCanvas() {
     const next = conditions.filter((x) => x.id !== id);
     if (owned.length) setShapes((ss) => ss.filter((s) => s.condition_id !== id));
     setConditions(next);
+    unpinFromPalette(id);   // a deleted condition can't stay pinned in the palette
     if (activeCond === id) setActiveCond(next[0]?.id || "");
+    // no bulk-selection pruning needed here: the panel derives liveness from
+    // the conditions prop (liveChecked = conditions ∩ checked), so a deleted
+    // id left in its checked set is inert by construction
     setCommitMsg(`Deleted ${c.finish_tag}${owned.length ? ` and ${owned.length} takeoff${owned.length === 1 ? "" : "s"}` : ""}.`);
   }
 
+  // custom columns: project-scoped vocabulary editing + per-condition assignment.
+  // Snapshot-compare asymmetry, accepted: the diff (COND_FIELDS quantities) is
+  // blind to attrs/definition changes, yet Load restores them — an assignments-
+  // only change diffs as "unchanged". Known, not a bug.
+  const assignAttr = (colId, v) => {
+    // hydrate sanitizes attrs (sanitizeConditionAttrs), so spreading is safe;
+    // an absent attrs spreads to {}
+    const attrs = { ...aCond?.attrs };
+    if (v) attrs[colId] = v; else delete attrs[colId];   // Unassigned = key absent, never ""
+    updateCond({ attrs });
+  };
+  const addColumn = () => setConditionColumns((cols) => [...cols, { id: uid("col"), name: "", values: [] }]);
+  const renameColumn = (colId, name) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, name } : cc)));   // id stays — assignments follow automatically
+  const addColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId && !cc.values.includes(v) ? { ...cc, values: [...cc.values, v] } : cc)));
+  const removeColumnValue = (colId, v) => setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.filter((x) => x !== v) } : cc)));   // assigned conditions keep the string — selects show "(removed)"
+  const renameColumnVal = (colId, oldV) => {
+    const newV = (window.prompt("Rename value:", oldV) || "").trim();
+    if (!newV || newV === oldV) return;
+    // rename into an existing value = merge (values are unique — they key the chips and the select options)
+    setConditionColumns((cols) => cols.map((cc) => (cc.id === colId ? { ...cc, values: cc.values.includes(newV) ? cc.values.filter((x) => x !== oldV) : cc.values.map((x) => (x === oldV ? newV : x)) } : cc)));
+    setConditions((cs) => renameColumnValue(cs, colId, oldV, newV));   // assignments follow the vocabulary
+  };
+  const deleteColumn = (colId) => {
+    const cc = conditionColumns.find((c) => c.id === colId);
+    if (!window.confirm(`Delete column "${columnLabel(cc)}" for the whole project? Conditions keep their values but they're no longer shown or exported.`)) return;
+    setConditionColumns((cols) => cols.filter((c) => c.id !== colId));   // orphaned attrs[colId] stay behind — harmless, nothing iterates raw attrs
+  };
+
+  // shape-label vocabulary (#110): a flat project-level list; each shape carries
+  // at most one, on shape.label. Mirrors the column-value family above.
+  const addLabel = (v) => setShapeLabels((ls) => (ls.includes(v) ? ls : [...ls, v]));
+  const removeLabel = (v) => setShapeLabels((ls) => ls.filter((x) => x !== v));   // labeled shapes keep the string — it falls into an ad-hoc report group, nothing disappears from totals
+  const renameLabel = (oldV) => {
+    const newV = (window.prompt("Rename label:", oldV) || "").trim();
+    if (!newV || newV === oldV) return;
+    // rename into an existing value = merge (labels are unique — they key the chips and the report's group headers)
+    setShapeLabels((ls) => (ls.includes(newV) ? ls.filter((x) => x !== oldV) : ls.map((x) => (x === oldV ? newV : x))));
+    setShapes((sh) => renameShapeLabel(sh, oldV, newV));   // assignments follow the vocabulary
+  };
+
   // supporting-materials editing (operates on the active condition)
   const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
-  const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? { ...m, ...patch } : m)) });
+  const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? matEditPatch(m, patch) : m)) });   // NAME edits re-classify a geometry-less line's kind
   const removeMaterial = (mid) => updateCond({ materials: (aCond?.materials || []).filter((m) => m.id !== mid) });
   // Height/Thickness are LIVE parameters (Kreo-style): changing them re-flows
   // every dependent shape on this condition — wall SF tracks the tile height.
@@ -2049,6 +3195,10 @@ export default function TakeoffCanvas() {
 
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   const aCond = condById[activeCond];
+  // resolve pinned ids to live conditions for the top-bar palette (a stale id
+  // renders nothing — the persisted list is pruned on save/delete, this is the
+  // render-time guard)
+  const paletteConds = palette.map((id) => condById[id]).filter(Boolean);
   const activeColor = aCond?.color || "#c96442";
   // Pattern id encodes the appearance so a hatch/color change yields a NEW paint
   // server — otherwise browsers keep painting the cached old pattern (the "it
@@ -2072,17 +3222,30 @@ export default function TakeoffCanvas() {
   const liveUpp = poly.length ? uppFor(panelAt(poly[0][0]).key) : uppFor(focusPanel.key);
   const liveArea = liveUpp ? mm.area * liveUpp * liveUpp : null;
   const livePerim = liveUpp ? mm.perim * liveUpp : null;
+  // A zone trace with points on more than one panel (side-by-side group mode,
+  // a gap click routing to the neighboring panel): finishShape normalizes
+  // every point against the FIRST point's panel, so a second-panel point
+  // would land at nx > 1 — outside that panel's own [0..1] space — and the
+  // overlay would still draw the dashed region exactly where traced,
+  // visually enclosing rooms on the second sheet that shapesInZone (filtered
+  // to a single sheet_id) can never count. Reject it outright — mirrors the
+  // check tool's checkCross guard, the same hazard on a 2-point span.
+  const zoneTraceCross = tool === "zone" && poly.length >= 1 && poly.some((p) => panelAt(p[0]).key !== panelAt(poly[0][0]).key);
   const condMult = aCond?.multiplier || 1;
   // HUD + Takeoffs panel are sheet-scoped ("this sheet"): they total the
   // VISIBLE shapes through the same conditionTotals rules the Report uses —
-  // one source of role math, two scopes.
-  const visRows = conditionTotals(conditions, visibleShapes);
-  const zoneRows = zoneCheck
-    ? conditionTotals(conditions, shapesInZone(shapes, zoneCheck)).filter((r) => r.shape_count > 0)
-    : null;
-  const zoneIds = zoneCheck ? new Set(shapesInZone(shapes, zoneCheck).map((sh) => sh.id)) : null;
-  useEffect(() => { if (tool !== "zone") { setZoneCheck(null); setZoneExpand(null); } }, [tool]);
-  const visRowById = new Map(visRows.map((r) => [r.id, r]));
+  // one source of role math, two scopes. Memoized: visRowById is a prop of the
+  // memoized panel, so its identity must only change when the totals can.
+  const visRows = useMemo(() => conditionTotals(conditions, visibleShapes), [conditions, visibleShapes]);
+  const visRowById = useMemo(() => new Map(visRows.map((r) => [r.id, r])), [visRows]);
+  // Zone check: the SAME conditionTotals rules on the shapes whose center point
+  // sits inside the traced zone (lib/zone.js) — third scope of the one role math.
+  const zoneShapes = useMemo(() => (zoneCheck ? shapesInZone(shapes, zoneCheck) : null), [shapes, zoneCheck]);
+  const zoneRows = useMemo(
+    () => (zoneShapes ? conditionTotals(conditions, zoneShapes).filter((r) => r.shape_count > 0) : null),
+    [conditions, zoneShapes]
+  );
+  const zoneIds = useMemo(() => (zoneShapes ? new Set(zoneShapes.map((sh) => sh.id)) : null), [zoneShapes]);
   const condRow = visRowById.get(activeCond);
   const condTotal = condRow?.floor_sf || 0;
   const lfTotal = condRow?.lf || 0;
@@ -2090,12 +3253,9 @@ export default function TakeoffCanvas() {
   const wallTotal = condRow?.wall_sf || 0;
   const borderTotal = condRow?.border_sf || 0;
   // display-only Kreo-style derived metric: floor-area perimeters × the condition height
+  const condH = Number(aCond?.height_ft) || 0; // the live-readout JSX below still reads this
   const vertTotal = verticalWallSf(visibleShapes, activeCond, aCond?.height_ft, condMult);
   const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
-  // unit-system display edge: internal math is always feet (lib/units.ts)
-  const fa = (sf, d = 1) => `${num(areaVal(sf, units), d)} ${areaUnit(units)}`;
-  const fl = (lf, d = 1) => `${num(lenVal(lf, units), d)} ${lenUnit(units)}`;
-  const faSY = (sf) => (units === "metric" ? fa(sf) : `${num(sf)} SF · ${num(sf / 9)} SY`);
   const stdValue = unitsPerPx ? (STANDARD_SCALES.find((s) => Math.abs(s.upp - unitsPerPx) < 1e-9)?.label || "") : "";
   // Check tool: measured span at the current scale vs what the drawing says
   const checkPanel = check.length ? panelAt(check[0][0]) : null;
@@ -2103,7 +3263,7 @@ export default function TakeoffCanvas() {
   const checkCross = check.length === 2 && panelAt(check[1][0]).key !== checkPanel.key;
   const checkPx = check.length === 2 && !checkCross ? Math.hypot(check[1][0] - check[0][0], check[1][1] - check[0][1]) : 0;
   const checkFeet = checkUpp && checkPx ? checkPx * checkUpp : null;
-  const checkStatedFeet = parseLenInput(checkStated, units);
+  const checkStatedFeet = parseLenInput(checkStated, UNITS);
   const checkErrPct = checkFeet && checkStatedFeet > 0 ? ((checkFeet - checkStatedFeet) / checkStatedFeet) * 100 : null;
 
   const markupCount = markups.filter((m) => panelKeySet.has(m.sheet_id)).length;
@@ -2125,15 +3285,8 @@ export default function TakeoffCanvas() {
   };
   const measureActive = MEASURE_TOOLS.some((t) => t.id === tool);
   const faceTool = MEASURE_TOOLS.find((t) => t.id === (measureActive ? tool : lastMeasureRef.current)) || MEASURE_TOOLS[0];
-  const finishOk = ((tool === "area" || tool === "deduct" || tool === "zone") && poly.length >= 3) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
+  const finishOk = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
 
-  // compact icon button — chrome on the brand tokens; active = cobalt
-  const iconBtn = (key, iconName, label, hint, showLabel = true) => (
-    <button key={key} onClick={() => { setTool(key); if (MARKUP_IDS.includes(key)) setMarkupDraft(null); }} title={hint || label}
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === key ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === key ? "var(--cobalt)" : "transparent", color: tool === key ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-      <Icon name={iconName} size={15} />{showLabel ? label : null}
-    </button>
-  );
   // panel-toggle for the right-edge rail — square like the zoom cluster, count as a
   // tiny mono line under the icon. Lives on the canvas, costs the toolbar zero rows.
   const panelBtn = (onClick, iconName, label, isOn, count) => (
@@ -2144,214 +3297,620 @@ export default function TakeoffCanvas() {
   );
   const vRule = <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)", margin: "0 3px" }} />;
 
-  // ?hatchqa — density-tuning wall: every pattern at three scales in two palette
-  // colors, real components, dark-aware. Unreachable from the UI; kept for retunes.
-  if (new URLSearchParams(window.location.search).has("hatchqa")) {
-    const qaColors = [PALETTE[0], PALETTE[2]];
+  // The panel's condition-list VIEW (search / natural sort / grouping / the
+  // ⌘/⇧ multi-select) lives in components/TakeoffsPanel.jsx.
+
+  // one activation path — the panel row, the compact strip, the 1–9 hotkeys,
+  // +condition, and Library Apply all funnel here so the reassign-in-Select
+  // and clear-multi-select semantics can never drift between surfaces. Only
+  // surfaces with a VISIBLE reassign affordance (the panel row and the strip
+  // button — both show the "reassign selected shape" hint once a shape is
+  // selected) actually reassign; { reassign: false } is for keyboard/
+  // programmatic activations (hotkeys, +condition, Library Apply) that offer
+  // no such affordance — a digit press or an Apply click must never silently
+  // move a selected shape's quantities. EVERY activation surface, reassigning
+  // or not, dismisses a live bulk selection.
+  const activateCondition = (id, { reassign = true } = {}) => {
+    if (reassign && tool === "select" && selectedId) reassignSelected(id);
+    setActiveCond(id);
+    panelSelectionRef.current?.();   // plain activation dismisses a live bulk selection (panel view state)
+  };
+  // The label analogue (#111): with a shape selected in Select mode this re-labels
+  // it (mirroring activateCondition's reassign-on-activate); otherwise it just sets
+  // the active label for subsequent traces. value "" / null = No label / clear.
+  const activateLabel = (value) => {
+    if (tool === "select" && selectedId) reassignSelectedLabel(value);
+    setActiveLabel(value);
+  };
+
+  // ── top-bar quick-access palette (pinned conditions) ──────────────────────
+  // A palette chip is a shortcut, not a new activation path: single-click routes
+  // through activateCondition (same reassign/clear-selection semantics as the
+  // strip and panel row); double-click opens the docked Takeoffs panel on that
+  // condition — the "don't open the sidebar unless double-clicked" contract.
+  const pinToPalette = (id) => {
+    if (palette.includes(id)) return;   // already pinned — silent no-op (dropping a chip back on the band)
+    if (palette.length >= PALETTE_MAX) { setCommitMsg(`Palette is full (${PALETTE_MAX}) — unpin one first.`); return; }
+    setPalette((p) => (p.includes(id) || p.length >= PALETTE_MAX ? p : [...p, id]));
+  };
+  const unpinFromPalette = (id) => setPalette((p) => p.filter((x) => x !== id));
+  // togglePin: the panel row's pushpin — pin if absent (respecting the cap),
+  // unpin if already pinned. movePalette: drag one chip onto another to reorder
+  // it to the target index (splice out, splice back in), which also renumbers
+  // the 1–9 hotkeys since they follow palette order.
+  const togglePin = (id) => setPalette((p) => (p.includes(id) ? p.filter((x) => x !== id) : (p.length >= PALETTE_MAX ? p : [...p, id])));
+  const movePalette = (id, toIndex) => setPalette((p) => {
+    const from = p.indexOf(id);
+    if (from < 0 || toIndex < 0 || toIndex >= p.length || from === toIndex) return p;
+    const next = p.slice();
+    next.splice(from, 1);
+    next.splice(toIndex, 0, id);
+    return next;
+  });
+  const openConditionInPanel = (id) => {
+    setPanelPrefs((p) => (p.collapsed ? { ...p, collapsed: false } : p));   // reveal the docked panel; no-op if already open
+    activateCondition(id);   // highlight the row (reassigns a selected shape iff Select is armed, like every activation surface)
+    // scroll the docked row into view AFTER the uncollapse paints — two rAFs so
+    // the panel has mounted its list (the row carries data-cond-id)
+    // CSS.escape the id — hydrate accepts hand-edited/older payloads, so an id
+    // with quotes/brackets must not break the attribute selector
+    requestAnimationFrame(() => requestAnimationFrame(() => document.querySelector(`[data-cond-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" })));
+  };
+
+  // Bulk mutations — the multi-selection is TakeoffsPanel view state; every
+  // callback takes the LIVE id set the panel computed (conditions ∩ checked),
+  // so counts and names here can never claim rows the list already lost.
+  const bulkWasteConditions = (ids, v) => {
+    setConditions((cs) => cs.map((c) => (ids.has(c.id) ? { ...c, waste_pct: v } : c)));
+    setCommitMsg(`Waste set to ${v}% on ${ids.size} condition${ids.size === 1 ? "" : "s"}.`);
+  };
+  const bulkColorConditions = (ids, color) => setConditions((cs) => cs.map((c) => (ids.has(c.id) ? { ...c, color } : c)));
+  // returns whether the delete went through — the panel clears its selection only then
+  const bulkDeleteConditions = (ids) => {
+    const live = conditions.filter((c) => ids.has(c.id));
+    if (!live.length) return false;
+    const owned = shapes.filter((s) => ids.has(s.condition_id)).length;
+    // name what dies while the list still reads at a glance (≤5); count beyond
+    const what = live.length <= 5 ? live.map((c) => c.finish_tag).join(", ") : `${live.length} conditions`;
+    if (!window.confirm(`Delete ${what}${owned ? ` and their ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}? This can't be undone.`)) return false;
+    setConditions((cs) => cs.filter((c) => !ids.has(c.id)));
+    if (owned) setShapes((ss) => ss.filter((s) => !ids.has(s.condition_id)));
+    setPalette((p) => p.filter((id) => !ids.has(id)));   // deleted conditions can't stay pinned
+    if (ids.has(activeCond)) setActiveCond(conditions.find((c) => !ids.has(c.id))?.id || "");
+    setCommitMsg(`Deleted ${live.length} condition${live.length === 1 ? "" : "s"}${owned ? ` and ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}.`);
+    return true;
+  };
+
+  // ── condition template library ops (browser-global; store meta key) ───────
+  const persistTemplates = (next) => {
+    templatesRef.current = next; setTemplates(next);
+    store.saveTemplates(next).catch((e) => setCommitMsg(`Couldn't save the library: ${e.message || e}`));
+  };
+  const condToTemplate = (c) => ({
+    finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
+    waste_pct: c.waste_pct || 0,
+    ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
+    ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
+    materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
+  });
+  const saveActiveAsTemplate = () => {
+    if (!aCond) return;
+    const tpl = condToTemplate(aCond);
+    const at = templates.findIndex((t) => t.finish_tag === tpl.finish_tag);
+    if (at >= 0 && !window.confirm(`A “${tpl.finish_tag}” template is already in the library — replace it?`)) return;
+    persistTemplates(at >= 0 ? templates.map((t, i) => (i === at ? tpl : t)) : [...templates, tpl]);
+    setCommitMsg(`Saved ${tpl.finish_tag} to the library.`);
+  };
+  const applyTemplate = (t) => {
+    const c = instantiateTemplate(t);
+    setConditions((cs) => [...cs, c]);
+    // reassign:false — Library Apply has no visual reassign affordance, but it
+    // still dismisses a live bulk selection like every other activation surface
+    activateCondition(c.id, { reassign: false });
+    // the panel switches itself back to the Takeoffs tab (its Apply handler)
+    setCommitMsg(`Added ${c.finish_tag} from the library.`);
+  };
+  // idx addresses the template BY POSITION (the panel's plain templates.map
+  // index — it doesn't filter/sort). The focus-refresh above now skips the
+  // setState when the loaded library is unchanged, which closes off the
+  // common way idx would go stale mid-session; a same-length edit landing
+  // from another tab in the sub-second window between render and click can
+  // still retarget these by position — accepted residual risk, not fully
+  // closed. Guard the deref so a stale idx (list shrank out from under us)
+  // reports rather than throwing.
+  const renameTemplate = (idx) => {
+    const t = templates[idx];
+    if (!t) { setCommitMsg("The library changed in another tab — try again."); return; }
+    const tag = (window.prompt("Template tag:", t.finish_tag) || "").trim();
+    if (!tag || tag === t.finish_tag) return;
+    persistTemplates(templates.map((x, i) => (i === idx ? { ...x, finish_tag: tag } : x)));
+  };
+  const deleteTemplate = (idx) => {
+    const t = templates[idx];
+    if (!t) { setCommitMsg("The library changed in another tab — try again."); return; }
+    if (!window.confirm(`Remove the ${t.finish_tag} template from the library? Existing conditions are unaffected.`)) return;
+    persistTemplates(templates.filter((_, i) => i !== idx));
+  };
+
+  // ── material library ops (#47: copy-on-attach with a live link) ───────────
+  // Conditions always own fully materialized material lines; lib_id is an
+  // ADDITIVE link. Nothing here can affect totals, exports, or old snapshots
+  // unless the user explicitly pushes an update.
+  // memoized: both derivations feed the memoized TakeoffsPanel as props, so
+  // they must hold identity across canvas-only renders (tf mirror, crosshair)
+  const matLibById = useMemo(() => Object.fromEntries(matLib.map((m) => [m.id, m])), [matLib]);
+  const persistMatLib = (next) => {
+    setMatLib(next);
+    store.saveMaterialLibrary(next).catch((e) => setCommitMsg(`Couldn't save the material library: ${e.message || e}`));
+  };
+  // libFields / matFieldOverridden / the push+revert patch builders live in
+  // lib/materials.js (pure, tested): they carry kind and the grout tile
+  // geometry through every library copy, deep-copying grout at each point.
+  const attachLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm || !aCond) return;
+    updateCond({ materials: [...(aCond.materials || []), { id: uid("mat"), ...libFields(lm), lib_id: lm.id }] });
+  };
+  const promoteMaterial = (m) => {
+    if (!m.name) { setCommitMsg("Name the material before saving it to the library."); return; }
+    const entry = { id: uid("lib"), ...libFields(m) };
+    persistMatLib([...matLib, entry]);
+    updateMaterial(m.id, { lib_id: entry.id });
+    setCommitMsg(`Saved ${m.name} to the material library.`);
+  };
+  const revertMatField = (m, f) => {
+    const lm = matLibById[m.lib_id];
+    if (lm) updateMaterial(m.id, libRevertPatch(m, lm, f));   // grout-derived per/note revert together with the geometry
+  };
+  const updateLibMaterial = (id, patch) => persistMatLib(matLib.map((x) => (x.id === id ? libEntryPatch(x, patch) : x)));   // hand-editing per/note detaches a grout entry's geometry
+  // one pass per conditions change, not per library row — the Materials tab reads this per row
+  const linkedCountById = useMemo(() => {
+    const by = {};
+    for (const c of conditions) for (const m of c.materials || []) if (m.lib_id) by[m.lib_id] = (by[m.lib_id] || 0) + 1;
+    return by;
+  }, [conditions]);
+  const linkedCount = (libId) => linkedCountById[libId] || 0;
+  const pushLibUpdate = (libId) => {
+    const lm = matLibById[libId];
+    if (!lm) return;
+    const n = linkedCount(libId);
+    if (!n) { setCommitMsg("No condition lines link this material yet."); return; }
+    if (!window.confirm(`Update ${n} linked line${n === 1 ? "" : "s"} across conditions to the library values? Overrides on those lines are replaced.`)) return;
+    setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => (m.lib_id === libId ? libPushPatch(m, lm) : m)) })));
+    setCommitMsg(`Updated ${n} linked line${n === 1 ? "" : "s"} from the library.`);
+  };
+  const deleteLibMaterial = (libId) => {
+    const lm = matLibById[libId];
+    const n = linkedCount(libId);
+    if (!window.confirm(`Remove ${lm?.name || "this material"} from the library?${n ? (n === 1 ? " 1 linked line keeps its values — only the link is removed." : ` ${n} linked lines keep their values — only the links are removed.`) : ""}`)) return;
+    persistMatLib(matLib.filter((x) => x.id !== libId));
+    if (n) setConditions((cs) => cs.map((c) => ({ ...c, materials: (c.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    // condition templates carry lib_id too (so applying re-links to a live
+    // entry) — detach them here as well, or a deleted entry would leave
+    // dangling links inside saved templates
+    if (templates.some((t) => (t.materials || []).some((m) => m.lib_id === libId))) {
+      persistTemplates(templates.map((t) => ({ ...t, materials: (t.materials || []).map((m) => { if (m.lib_id !== libId) return m; const { lib_id: _l, ...rest } = m; return rest; }) })));
+    }
+  };
+  const addLibMaterial = () => persistMatLib([...matLib, { id: uid("lib"), name: "", unit: "", per: 0, basis: "area", round: true, note: "" }]);
+
+  // ── TakeoffsPanel wiring ───────────────────────────────────────────────────
+  // The docked panel is memoized (React.memo) so canvas-only renders — the
+  // ~11Hz tf mirror during pan/zoom, crosshair/status churn — skip its whole
+  // subtree. That only works if its props hold identity, and the handlers
+  // above close over fresh state every render; so the panel gets STABLE
+  // forwarders (minted once) that read the current handler through this ref
+  // at call time. Add a handler here and it's automatically stable.
+  const panelHandlersRef = useRef(null);
+  panelHandlersRef.current = {
+    onActivate: activateCondition, onLocate: locateCondition,
+    onAddCondition: addCondition, onDeleteCondition: deleteCondition,
+    onUpdateCond: updateCond, onSetCondParam: setCondParam, onAssignAttr: assignAttr,
+    onAddMaterial: addMaterial, onUpdateMaterial: updateMaterial, onRemoveMaterial: removeMaterial,
+    onBulkWaste: bulkWasteConditions, onBulkColor: bulkColorConditions, onBulkDelete: bulkDeleteConditions,
+    onSaveTemplate: saveActiveAsTemplate, onApplyTemplate: applyTemplate,
+    onRenameTemplate: renameTemplate, onDeleteTemplate: deleteTemplate,
+    onAddColumn: addColumn, onRenameColumn: renameColumn, onDeleteColumn: deleteColumn,
+    onAddColumnValue: addColumnValue, onRemoveColumnValue: removeColumnValue, onRenameColumnValue: renameColumnVal,
+    onAddLabel: addLabel, onRenameLabel: renameLabel, onRemoveLabel: removeLabel,
+    onAttachLibMaterial: attachLibMaterial, onPromoteMaterial: promoteMaterial, onRevertMatField: revertMatField,
+    onUpdateLibMaterial: updateLibMaterial, onPushLibUpdate: pushLibUpdate,
+    onDeleteLibMaterial: deleteLibMaterial, onAddLibMaterial: addLibMaterial,
+    matFieldOverridden,   // pure helper, not an event handler — the forwarder returns its result
+    onToggleCollapse: toggleTakeoffs, onTogglePin: togglePin,
+    // these three are ALREADY stable on their own (setState identity, and
+    // holdPanelGesture is a useCallback with an empty dep array) — routed
+    // through the registry anyway so the memo contract has exactly ONE
+    // convention to audit, not "stable via the registry, except these three"
+    onPanelPrefs: setPanelPrefs, onSetActive: setActiveCond, onHoldGesture: holdPanelGesture,
+  };
+  const [panelHandlers] = useState(() => {
+    const stable = {};
+    for (const k of Object.keys(panelHandlersRef.current)) stable[k] = (...a) => panelHandlersRef.current[k](...a);
+    return stable;
+  });
+
+  // ── two-deck toolbar (issue #61) ───────────────────────────────────────────
+  // drafting-style group caption floated above a deck-2 cluster
+  const cluster = (cap, children, style) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 7, position: "relative", paddingTop: 2, ...style }}>
+      <span style={{ position: "absolute", top: -13, left: 1, fontFamily: "var(--f-mono)", fontSize: 8, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: "var(--ink-muted)", whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{cap}</span>
+      {children}
+    </span>
+  );
+  // MODE segmented control — shared border, ink-filled active (cobalt stays
+  // reserved for the armed DRAW face so only one control ever claims it)
+  const segBtn = (key, iconName, hint, last = false) => (
+    <button key={key} type="button" onClick={() => setTool(key)} title={hint}
+      style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: "none", borderRight: last ? "none" : "1px solid var(--ink-faint)", background: tool === key ? "var(--ink)" : "transparent", color: tool === key ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", lineHeight: 1 }}>
+      <Icon name={iconName} size={15} />
+    </button>
+  );
+
+  // deck-1 sheet-nav chip — ONE home for "which sheet am I on": pages, files,
+  // group/ungroup and the gallery all live in its dropdown. Ungroup/Regroup
+  // are sheet-set operations, so they move in here instead of appearing
+  // mid-row and shifting everything after them.
+  // assigned floor/level rides the sheet chip + page entries (sheet key: page 1 is the bare file name)
+  const levelOfPage = (n) => sheetLevels[n > 1 ? `${active}#${n}` : active] || "";
+  const sheetChipLabel = sheetGroup.length
+    ? `${sheetGroup.length} sheets side-by-side`
+    : `${levelOfPage(page) ? `${levelOfPage(page)} · ` : ""}${pageLabels[page] || (pageCount > 1 ? `Sheet ${page}` : active)}${pageCount > 1 ? ` · ${page}/${pageCount}` : ""}`;
+  const sheetMenuItems = [];
+  if (!sheetGroup.length && pageCount > 1) {
+    sheetMenuItems.push({ section: "Sheets in this set" });
+    for (let n = 1; n <= pageCount; n++) sheetMenuItems.push({ id: `pg-${n}`, label: `${levelOfPage(n) ? `${levelOfPage(n)} · ` : ""}${pageLabels[n] || `Sheet ${n}`}`, shortcut: `${n}/${pageCount}`, active: n === page, onSelect: () => setPage(n) });
+  }
+  if (!sheetGroup.length && sheets.length > 1) {
+    sheetMenuItems.push({ section: "Files" });
+    for (const s of sheets) sheetMenuItems.push({ id: `f-${s.name}`, label: s.name, active: s.name === active, onSelect: () => { setActive(s.name); setPage(1); } });
+  }
+  if (sheetMenuItems.length && (sheetGroup.length || lastGroup.length >= 2)) sheetMenuItems.push("divider");
+  if (sheetGroup.length) sheetMenuItems.push({ id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
+  if (!sheetGroup.length && lastGroup.length >= 2) sheetMenuItems.push({ id: "regroup", label: `Regroup (${lastGroup.length})`, title: `Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`, onSelect: regroup });
+  if (sheetMenuItems.length) sheetMenuItems.push("divider");
+  sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
+
+  // deck-2 scale chip — the four scale controls collapsed to one status face:
+  // red dashed = unset ("you can't trace yet"), green = set, warning = the
+  // plan notes a different scale than the one you picked
+  const scaleDet = detectedScales[focusPanel.key];
+  const scaleMismatch = !!(unitsPerPx && stdValue && scaleDet && Math.abs(scaleDet.upp - unitsPerPx) > 1e-9);
+  const scaleFace = !unitsPerPx ? "Set scale…" : `${scaleMismatch ? "≠" : "✓"} ${stdValue || "custom"}`;
+  const scaleFaceStyle = !unitsPerPx
+    ? { border: "1px dashed var(--c-danger)", color: "var(--c-danger)" }
+    : scaleMismatch
+      ? { border: "1px solid var(--c-warning)", color: "var(--c-warning)" }
+      : { border: "1px solid var(--c-positive)", color: "var(--c-positive)" };
+  const scaleTitle = scaleMismatch
+    ? `You set ${stdValue}, but the plan notes ${scaleDet.label} on ${labelFor(focusPanel)} — double-check before tracing.`
+    : `Set the scale for ${labelFor(focusPanel)} — remembered per sheet${groupKeys.length > 1 ? " (targets the sheet you last clicked)" : ""}`;
+  const scaleItems = [];
+  // one-step revert after a rescale that changed committed quantities on this
+  // sheet — the oops-hatch for a mistyped recalibrate (ephemeral, one slot)
+  if (prevScale && prevScale.key === focusPanel.key && scales[focusPanel.key] !== prevScale.upp) {
+    const wasLabel = STANDARD_SCALES.find((x) => Math.abs(x.upp - prevScale.upp) < 1e-9)?.label
+      || (prevScale.source === "calibrated" ? "calibrated" : "custom");
+    scaleItems.push({
+      id: "revert-scale", icon: "undo",
+      label: `Revert scale (was ${wasLabel})`,
+      title: `Put ${labelFor(focusPanel)} back on the scale the last rescale replaced and re-price its takeoffs. One step, kept only until the sheet view changes — reverting is itself revertible.`,
+      onSelect: revertScale,
+    });
+    scaleItems.push("divider");
+  }
+  if (scaleDet) {
+    scaleItems.push({ section: "From the plan" });
+    scaleItems.push({
+      id: "use-detected", icon: "target", tint: "var(--c-positive)",
+      label: `Plan says ${scaleDet.label}${scaleDet.multi ? " ±" : ""} — use it`,
+      title: `The plan notes ${scaleDet.label} on ${labelFor(focusPanel)}${scaleDet.multi ? " — this sheet shows several scales (details are often larger); confirm against a known dimension" : ""}. Hover previews a calibrated guide bar on the sheet so you can sanity-check it.`,
+      onSelect: () => { rescaleSheet(focusPanel.key, scaleDet.upp); setScaleSources((s) => ({ ...s, [focusPanel.key]: "detected" })); showScaleGuide(focusPanel.key, scaleDet.upp, scaleDet.label); },
+      // hover previews the guide bar behind the open menu — only while the
+      // sheet is still UNSCALED (upstream's gate: on a scaled sheet the bar
+      // would advertise a scale the sheet is not using, on the very affordance
+      // whose job is sanity-checking bar length). The preview dies on hover-out
+      // AND on menu close however it happens (onScaleMenuDepth below) — an
+      // ACCEPTED bar (onSelect) is not a preview and rides out its 8 s.
+      onHover: (on) => { if (on) { if (!scales[focusPanel.key]) showScaleGuide(focusPanel.key, scaleDet.upp, scaleDet.label, true); } else clearPreviewGuide(); },
+    });
+  }
+  scaleItems.push({ section: "Standard" });
+  for (const s of STANDARD_SCALES) scaleItems.push({ id: s.label, label: s.label, active: stdValue === s.label, onSelect: () => { rescaleSheet(focusPanel.key, s.upp); setScaleSources((sc) => ({ ...sc, [focusPanel.key]: "standard" })); showScaleGuide(focusPanel.key, s.upp, s.label); } });
+  scaleItems.push("divider");
+  scaleItems.push({ id: "calibrate", icon: "calibrate", label: "Calibrate two points…", title: "Calibrate — click two points of a known dimension", active: tool === "calibrate", onSelect: () => setTool("calibrate") });
+  scaleItems.push({ id: "check", icon: "check", label: "Check a dimension…", shortcut: "K", title: "Check a dimension (K) — click both ends of a printed dimension string; compares the measured length against what the drawing says", active: tool === "check", onSelect: () => setTool("check") });
+  scaleItems.push({ note: "Remembered per sheet." });
+
+  // One-Click fill sensitivity — lives in the render menu now, so arming
+  // One-Click never reshapes the toolbar. Detents at Strict / Balanced /
+  // Aggressive; the slider still tunes 0–100% freely, snapping to a notch when
+  // released near one. Detents come from oneclick's canonical presets so UI
+  // and flood math can't drift if a preset is ever retuned.
+  const fillRow = (() => {
+    const NOTCHES = [SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE];
+    const label = fillSens === SENS_STRICT ? "Strict" : fillSens === SENS_BALANCED ? "Balanced" : fillSens === SENS_AGGRESSIVE ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
+    const snap = (v) => { for (const n of NOTCHES) if (Math.abs(v - n) <= 0.06) return n; return v; };
     return (
-      <div style={{ padding: 20, background: darkMode ? "#14120e" : "var(--paper-bright)", minHeight: "100vh", overflow: "auto" }}>
-        <button onClick={() => setDarkMode((v) => !v)} style={{ marginBottom: 14, padding: "4px 12px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 12 }}>☾ toggle dark</button>
-        {HATCHES.map((h) => (
-          <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 10 }}>
-            <span style={{ width: 120, fontFamily: "var(--f-mono)", fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", color: darkMode ? "#c9c2b2" : "var(--ink-muted)" }}>{h.label}</span>
-            {qaColors.map((col) => (
-              <svg key={col} width={392} height={64} style={{ border: "1px solid var(--ink-faint)", background: darkMode ? "#1c1914" : "#fff" }}>
-                <defs>
-                  <HatchPattern id={`qa-${h.id}-${col.slice(1)}`} type={h.id} line={col} fill={col} dark={darkMode} />
-                </defs>
-                {[[0.5, 0], [1, 132], [3, 264]].map(([sc, x]) => (
-                  <g key={sc} transform={`translate(${x},0) scale(${sc})`}>
-                    <rect width={128 / sc} height={64 / sc} fill={`url(#qa-${h.id}-${col.slice(1)})`} />
-                  </g>
-                ))}
-              </svg>
-            ))}
-          </div>
-        ))}
+      <div title={"One-Click fill sensitivity — how far a fill reaches past a room's hatch pattern.\nStrict: stop at the linework (original behavior).\nBalanced: recover hatch-lined rooms to the walls (default).\nAggressive: cross more pattern and tolerate more growth.\nLower it if fills spill; raise it if hatched rooms come up short.\nScanned sheets trace from pixels — sensitivity doesn't apply there."}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-soft)" }}>Fill</span>
+        <input name="fill-sensitivity" type="range" min={SENS_STRICT} max={SENS_AGGRESSIVE} step={0.01} value={fillSens} list="fill-sens-notches"
+          onChange={(e) => setFillSens(snap(parseFloat(e.target.value)))}
+          style={{ flex: 1, accentColor: "var(--cobalt)", cursor: "pointer" }} />
+        <datalist id="fill-sens-notches"><option value={SENS_STRICT} /><option value={SENS_BALANCED} /><option value={SENS_AGGRESSIVE} /></datalist>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: "var(--cobalt)", minWidth: 58 }}>{label}</span>
       </div>
     );
-  }
+  })();
 
   return (
+    // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
     <div
+      className="app-shell"
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer?.files); }}
       style={{ position: "relative", display: "flex", flexDirection: "column", height: "100vh" }}>
-      {/* toolbar — open/sheets | modes | tool menus | scale | actions | panels */}
-      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "8px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+      {/* toolbar — two fixed decks (issue #61). Deck 1 = things you do to the
+          PROJECT (open, navigate, export, account); deck 2 = things you do to
+          the SHEET (arm tools, toggle aids, set scale). Neither row wraps, and
+          conditional UI renders only into deck 2's reserved ACTION slot, so no
+          control ever changes position. */}
+      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "6px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-shadow)", whiteSpace: "nowrap" }}>
         <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
-        <input ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
+        {/* team cloud mode: always a way to leave this project, plus a way to
+            browse the rest of the team's projects when the build names a root
+            — fixed presence for the whole session (cloudMode is set before the
+            canvas mounts), so neither ever shifts deck-1 mid-work */}
+        {cloudMode && (
+          <button type="button" onClick={closeProject} title="Close this project and return to the local canvas"
+            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5, lineHeight: 1 }}>
+            Close project
+          </button>
+        )}
+        {cloudMode && browseProjects && (
+          <button type="button" onClick={browseProjects} title="Back to your team's projects"
+            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5, lineHeight: 1 }}>
+            Projects
+          </button>
+        )}
+        <input name="sheet-file" ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed" multiple style={{ display: "none" }}
           onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
         <button type="button" onClick={() => fileInputRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set (or just drag them onto the canvas)"
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
           <Icon name="plus" size={14} />Open</button>
         <button type="button" onClick={() => setView("gallery")}
-          title="Plan set — the visual gallery; open one or several sheets (G)"
+          title={`Plan set — the visual gallery; open one or several sheets (G)${sheetGroup.length ? ` · ${sheetGroup.length} side-by-side now` : ""}`}
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${sheetGroup.length ? "var(--cobalt)" : "var(--ink-faint)"}`, background: sheetGroup.length ? "var(--cobalt)" : "transparent", color: sheetGroup.length ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="sheets" size={15} />Sheets{sheetGroup.length ? ` (${sheetGroup.length})` : ""}
+          <Icon name="sheets" size={15} />Sheets
         </button>
-        {sheetGroup.length > 0 && (
-          <button type="button" onClick={ungroup} title="Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups"
-            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5 }}>Ungroup</button>
-        )}
-        {!sheetGroup.length && lastGroup.length >= 2 && (
-          <button type="button" onClick={regroup} title={`Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`}
-            style={{ padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12.5 }}>Regroup ({lastGroup.length})</button>
-        )}
-        {sheets.length > 1 && !sheetGroup.length && (
-          <select value={active} onChange={(e) => { setActive(e.target.value); setPage(1); }} style={{ padding: 6, border: "1px solid var(--ink-faint)", background: "transparent", maxWidth: 220, fontSize: 12 }}>
-            {sheets.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-          </select>
-        )}
-        {!sheetGroup.length && pageCount > 1 && (
+        {sheets.length > 0 && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer" }}><Icon name="chevronLeft" size={12} /></button>
-            <select value={page} onChange={(e) => setPage(parseInt(e.target.value, 10))} style={{ padding: "5px 6px", border: "1px solid var(--ink-faint)", background: "transparent", fontFamily: "var(--f-mono,monospace)", fontSize: 12 }}>
-              {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => { const k = n > 1 ? `${active}#${n}` : active; const lvl = sheetLevels[k] ? `${sheetLevels[k]} · ` : ""; return <option key={n} value={n}>{pageLabels[n] ? `${lvl}${pageLabels[n]}  ·  ${n}/${pageCount}` : `${lvl}Sheet ${n} / ${pageCount}`}</option>; })}
-            </select>
-            <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page >= pageCount} style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer" }}><Icon name="chevronRight" size={12} /></button>
+            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!!sheetGroup.length || page <= 1} title="Previous sheet"
+              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page <= 1) ? 0.4 : 1 }}><Icon name="chevronLeft" size={12} /></button>
+            <ToolMenu
+              title="Sheet — the sheets in this set, files, grouping, and the gallery"
+              onOpenChange={onMenuDepth}
+              face={<span style={{ display: "inline-block", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sheetChipLabel}</span>}
+              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 400, padding: "6px 8px" }}
+              menuStyle={{ minWidth: 260, maxHeight: "min(480px, 60vh)", overflowY: "auto" }}
+              items={sheetMenuItems}
+            />
+            <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={!!sheetGroup.length || page >= pageCount} title="Next sheet"
+              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page >= pageCount) ? 0.4 : 1 }}><Icon name="chevronRight" size={12} /></button>
+          </span>
+        )}
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: "var(--ink-muted)", minWidth: 44, fontFamily: "var(--f-mono)" }}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
+        <button onClick={toggleTheme} title="App theme — light / dark chrome (sheets unaffected; use ☾ on the canvas to invert the print)"
+          aria-label="App theme — light / dark chrome" aria-pressed={theme === "dark"}
+          style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontSize: 14, lineHeight: 1 }}>
+          {theme === "dark" ? "◐" : "◑"}
+        </button>
+        <button onClick={() => { setScheduleAnchor(null); setTool((t) => (t === "schedule" ? "select" : "schedule")); }}
+          title="Import from schedule — arm, then drag a box around the finish/material schedule to create conditions (two clicks: corner, corner)"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "schedule" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "schedule" ? "var(--cobalt)" : "transparent", color: tool === "schedule" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+          <Icon name="rectTool" size={15} />Schedule
+        </button>
+        <button onClick={() => setShowSnapshots((v) => !v)} title="Snapshots — save the takeoff as-is, then compare or restore it after an addendum"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${showSnapshots ? "var(--cobalt)" : "var(--ink-faint)"}`, background: showSnapshots ? "var(--cobalt)" : "transparent", color: showSnapshots ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+          <Icon name="document" size={15} />Snapshots
+        </button>
+        <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
+          style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
+        {/* Deliberately subtle, not a button: local-first app, cloud mode is an
+            opt-in extra. Only when ALREADY signed in (never a sign-in entry
+            point in the toolbar — that lives solely on the landing link), no
+            cloud project is open, and the build names a Projects root. */}
+        {!cloudMode && googleUser && isGoogleConfigured() && projectHomeFolderId() && (
+          <Link to="/projects" style={{ fontSize: 11.5, color: "var(--ink-muted)", whiteSpace: "nowrap" }}>
+            browse team projects
+          </Link>
+        )}
+        <AccountChip note={cloudMode ? "Synced to Google Drive" : "Local workspace"} onOpenChange={onMenuDepth} />
+      </div>
+
+      {/* deck 2 — the work bar: drafting-style captions above each cluster */}
+      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "20px 14px 8px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", whiteSpace: "nowrap" }}>
+        {cluster("Mode",
+          <span style={{ display: "inline-flex", border: "1px solid var(--ink-faint)" }}>
+            {segBtn("pan", "pan", "Pan (P) — or hold right-click / Space mid-measure")}
+            {segBtn("select", "select", "Select (V) — pick a takeoff, drag points", true)}
           </span>
         )}
         {vRule}
-        {iconBtn("pan", "pan", "", "Pan (P) — or hold right-click / Space mid-measure", false)}
-        {iconBtn("select", "select", "", "Select (V) — pick a takeoff, drag points", false)}
-        <ToolMenu
-          title="Measure — the face shows the armed tool"
-          active={measureActive}
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<><Icon name={faceTool.icon} size={15} /><span style={{ opacity: measureActive ? 1 : 0.6 }}>{faceTool.label}</span></>}
-          items={MEASURE_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => setTool(t.id) }))}
-        />
-        <ToolMenu
-          title="Eraser — subtract voids/columns from the takeoff (counts negative)"
-          active={tool === "deduct"} accent="danger"
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<><Icon name="deduct" size={15} /><span>Eraser</span></>}
-          items={CUT_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, tint: "var(--c-danger)", onSelect: () => setTool(t.id) }))}
-        />
-        <span style={{ position: "relative", display: "inline-flex" }}>
+        {cluster("Draw", <>
+          <ToolMenu
+            title="Measure — the face shows the armed tool"
+            active={measureActive}
+            onOpenChange={onMenuDepth}
+            face={<><Icon name={faceTool.icon} size={15} /><span style={{ opacity: measureActive ? 1 : 0.6 }}>{faceTool.label}</span></>}
+            items={MEASURE_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => setTool(t.id) }))}
+          />
+          <ToolMenu
+            title="Cut Out — subtract voids/columns (counts negative)"
+            active={tool === "deduct"} accent="danger"
+            onOpenChange={onMenuDepth}
+            face={<><Icon name="deduct" size={15} /><span>Cut Out</span></>}
+            items={CUT_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, tint: "var(--c-danger)", onSelect: () => setTool(t.id) }))}
+          />
           <ToolMenu
             title="Markup — annotations, not measurements"
             active={MARKUP_IDS.includes(tool)}
-            onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
+            onOpenChange={onMenuDepth}
             face={<><Icon name="markup" size={15} /><span>Markup</span></>}
-            items={MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } }))}
+            items={MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } }))}
           />
-          {/* highlighter style popover — visible while the tool is armed (hatch-picker chrome) */}
-          {tool === "highlight" && (
-            <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 7 }}>
-              <div style={{ display: "flex", gap: 6 }} title="Ink">
-                {HL_INKS.map((c) => (
-                  <button key={c} onClick={() => setHlStyle((st) => ({ ...st, color: c }))}
-                    style={{ width: 16, height: 16, padding: 0, background: c, border: hlStyle.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />
-                ))}
-              </div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {HL_SIZES.map(([lbl, px]) => (
-                  <button key={lbl} onClick={() => setHlStyle((st) => ({ ...st, size: px }))} title={`${lbl === "F" ? "Fine" : lbl === "M" ? "Medium" : "Broad"} tip`}
-                    style={{ width: 22, height: 20, padding: 0, fontFamily: "var(--f-mono)", fontSize: 10, cursor: "pointer", border: hlStyle.size === px ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: hlStyle.size === px ? "var(--ink)" : "transparent", color: hlStyle.size === px ? "var(--paper-bright)" : "var(--ink)" }}>{lbl}</button>
-                ))}
-                <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)" }} />
-                {[["chisel", "M4 16 L14 6 L18 10 L8 20 Z"], ["round", "M5 17 Q12 3 19 13"]].map(([tip, d]) => (
-                  <button key={tip} onClick={() => setHlStyle((st) => ({ ...st, tip }))} title={`${tip} tip`}
-                    style={{ width: 24, height: 20, padding: 1, cursor: "pointer", border: hlStyle.tip === tip ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: "transparent" }}>
-                    <svg viewBox="0 0 24 24" width="18" height="14">{tip === "chisel"
-                      ? <path d={d} fill="currentColor" stroke="none" />
-                      : <path d={d} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />}</svg>
+          <ToolMenu
+            title="Edit takeoffs"
+            onOpenChange={onMenuDepth}
+            face={<span>Edit</span>}
+            items={[
+              { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
+              { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
+              { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
+              "divider",
+              { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
+              { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: () => setPoly((q) => q.slice(0, -1)) },
+              { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
+              "divider",
+              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
+            ]}
+          />
+        </>)}
+        {vRule}
+        {cluster("Aids", <>
+          <button onClick={() => setTool((t) => (t === "zone" ? "select" : "zone"))}
+            title="Zone check — trace a region (an apartment, a wing) to read every condition's quantities inside it, materials included. Nothing is saved; the outline clears when you leave the tool."
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "zone" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "zone" ? "var(--cobalt)" : "transparent", color: tool === "zone" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="zone" size={15} />Zone
+          </button>
+          <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="snap" size={15} />Snap
+          </button>
+          <button onClick={() => setAngleOn((v) => !v)} title="45°/90° angle guides — the next segment locks to the 45° family as you draw (hold ⇧ to force the lock at any angle)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${angleOn ? "var(--cobalt)" : "var(--ink-faint)"}`, background: angleOn ? "var(--cobalt)" : "transparent", color: angleOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="angle" size={15} />45°
+          </button>
+          <ToolMenu
+            title="Render & fill settings — Hi-Res and One-Click fill sensitivity"
+            onOpenChange={onMenuDepth}
+            face={<Icon name="sliders" size={15} />}
+            menuStyle={{ minWidth: 252 }}
+            items={[
+              {
+                id: "hires", icon: "hiRes", label: "Hi-Res render (this sheet)", checked: hiResOn(focusPanel.key), stayOpen: true, onSelect: toggleHiRes,
+                title: `Hi-Res rendering for ${labelFor(focusPanel)} — the sheet re-rasters at an auto quality budget (~28MP), so memory stays bounded even side-by-side; crisper when zoomed in. Saved per sheet, per user. Quantities are unaffected.`,
+              },
+              "divider",
+              { id: "fill", custom: fillRow },
+            ]}
+          />
+        </>)}
+        {/* The caption always shows the ACTIVE label (+ the cobalt highlight keyed
+            on it) so what a new trace will get is never hidden — even in Select
+            mode, where the dropdown VALUE instead shows the selected shape's label
+            so changing it reliably re-labels that shape (a value-always-active
+            select couldn't reassign to the already-active label — onChange wouldn't fire). */}
+        {shapeLabels.length > 0 && cluster(
+          tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape` : (activeLabel ? `Label · ${activeLabel}` : "Label"),
+          <select
+            value={tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
+            onChange={(e) => activateLabel(e.target.value || null)}
+            title="Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."
+            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel ? "var(--cobalt)" : "transparent", color: activeLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
+            <option value="">No label</option>
+            {shapeLabels.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        )}
+        <div style={{ flex: 1 }} />
+        {cluster(`Scale — ${labelFor(focusPanel)}`,
+          <ToolMenu
+            title={scaleTitle}
+            onOpenChange={onScaleMenuDepth}
+            face={<span>{scaleFace}</span>}
+            faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 11.5, ...scaleFaceStyle }}
+            menuStyle={{ minWidth: 250 }}
+            items={scaleItems}
+          />
+        )}
+        {cluster("Action",
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 150 }}>
+            {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : "opposite corner"}…</span>}
+            {finishOk && (
+              <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
+            )}
+            {proposal?.regions.length > 0 && (
+              <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* quick-access condition palette — its own slim band under the toolbar
+          (like the sheet-tabs / conditions-strip rows), not crammed into the
+          already-wrapping top bar. A curated ≤9 pinned conditions for one-click
+          activation without opening the panel: drag a condition here from the
+          Takeoffs panel (or the strip) to pin it, or use a row's pushpin. Each
+          chip carries its 1–9 hotkey badge (cobalt); single-click activates
+          (reassigning a selected shape, like every activation surface),
+          double-click opens the docked panel scrolled to that row, the pushpin
+          unpins, and dragging one chip onto another reorders (which renumbers
+          the hotkeys). Below the chips, the active condition's appearance editor
+          — the same one the docked panel row renders — so line/fill/hatch/height
+          are editable without opening the sidebar. Shown once there's a
+          condition to pin, so the drop zone is discoverable. */}
+      {conditions.length > 0 && (
+        <div
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; } }}
+          onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(CONDITION_DND_MIME); if (id) pinToPalette(id); }}
+          style={{ padding: "5px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span title="Quick-access conditions — drag a condition here (or use a row's pushpin) to pin it, up to 9. Press 1–9 to activate by this order; click a chip to activate; double-click to open the panel."
+              style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--ink-muted)" }}>Conditions</span>
+            {paletteConds.length === 0 ? (
+              <span style={{ fontSize: 11.5, color: "var(--ink-muted)", fontStyle: "italic", padding: "3px 8px", border: "1px dashed var(--ink-faint)" }}>drag conditions here (or pin a row) for 1-9 one-click access</span>
+            ) : paletteConds.map((c) => {
+              const on = c.id === activeCond;
+              const reassign = tool === "select" && selectedId;
+              const idx = palette.indexOf(c.id);   // palette position → the 1–9 hotkey number
+              return (
+                <span key={c.id} style={{ display: "inline-flex", alignItems: "center" }}
+                  onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"; } }}
+                  onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const dragId = e.dataTransfer.getData(CONDITION_DND_MIME); if (dragId) { if (palette.includes(dragId)) movePalette(dragId, idx); else pinToPalette(dragId); } }}>
+                  <button type="button" draggable
+                    onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copyMove"; }}
+                    onClick={() => activateCondition(c.id)}
+                    onDoubleClick={() => openConditionInPanel(c.id)}
+                    title={reassign ? `Reassign the selected takeoff to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 5px", border: on ? `2px solid ${c.color}` : (reassign ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5, lineHeight: 1 }}>
+                    {idx < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px" }}>{idx + 1}</span>}
+                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
                   </button>
-                ))}
-              </div>
+                  <button type="button" onClick={() => unpinFromPalette(c.id)} title={`Unpin ${c.finish_tag} from the palette`}
+                    style={{ border: "none", background: "none", cursor: "pointer", color: "var(--cobalt)", padding: "0 3px", lineHeight: 0, display: "inline-flex" }}>
+                    <Icon name="pin" size={12} />
+                  </button>
+                </span>
+              );
+            })}
+            {paletteConds.length >= PALETTE_MAX && (
+              <span style={{ fontSize: 10.5, color: "var(--ink-muted)", fontStyle: "italic" }}>full ({PALETTE_MAX})</span>
+            )}
+            {/* add a condition without opening the (now-collapsed) sidebar */}
+            <button type="button" onClick={addCondition} title="Add a new condition"
+              style={{ padding: "3px 9px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--ink-muted)" }}>+ condition</button>
+          </div>
+          {/* the active condition's appearance editor, restored to the top bar —
+              same component the docked panel row renders (one source of truth) */}
+          {aCond && (
+            <div style={{ marginTop: 5, paddingTop: 5, borderTop: "1px solid var(--ink-faint)" }}>
+              <ConditionAppearanceEditor cond={aCond} onUpdateCond={updateCond} onSetCondParam={setCondParam} onAssignAttr={assignAttr} conditionColumns={conditionColumns} layout="row" />
             </div>
           )}
-        </span>
-        <ToolMenu
-          title="Edit takeoffs"
-          onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
-          face={<span>Edit</span>}
-          items={[
-            { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
-            { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
-            { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
-            "divider",
-            { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
-            { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: () => setPoly((q) => q.slice(0, -1)) },
-            { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
-            "divider",
-            { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
-          ]}
-        />
-        {iconBtn("zone", "zone", "Zone", "Zone check — trace a region (an apartment, a wing) to read every condition's quantities inside it, materials included. Nothing is saved; the outline clears when you leave the tool.")}
-        <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="snap" size={15} />{snapOn ? "Snap ✓" : "Snap"}
-        </button>
-        <button onClick={() => setAngleOn((v) => !v)} title="45°/90° angle guides — the next segment locks to the 45° family as you draw (hold ⇧ to force the lock at any angle)"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${angleOn ? "var(--cobalt)" : "var(--ink-faint)"}`, background: angleOn ? "var(--cobalt)" : "transparent", color: angleOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="angle" size={15} />{angleOn ? "45° ✓" : "45°"}
-        </button>
-        {vRule}
-        {/* scale group: standard dropdown + plan-note chip + calibrate */}
-        <button onClick={() => setUnits((u) => (u === "metric" ? "imperial" : "metric"))}
-          title={units === "metric" ? "Metric display (m² / m) — click for imperial. Calibrate in meters; 1:50-style scales in the list." : "Imperial display (SF / LF) — click for metric (m² / m, calibrate in meters, 1:50-style scales)."}
-          style={{ padding: "6px 10px", border: `1px solid ${units === "metric" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: units === "metric" ? "var(--cobalt)" : "transparent", color: units === "metric" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11 }}>
-          {units === "metric" ? "m" : "ft"}
-        </button>
-        <select value={stdValue} onChange={(e) => { const f = STANDARD_SCALES.find((s) => s.label === e.target.value); if (f) { setScales((s) => ({ ...s, [focusPanel.key]: f.upp })); showScaleGuide(focusPanel.key, f.upp, f.label); } }}
-          title={`Set the scale for ${labelFor(focusPanel)} — remembered per sheet${groupKeys.length > 1 ? " (targets the sheet you last clicked)" : ""}`}
-          style={{ padding: 6, border: unitsPerPx ? "1px solid var(--c-positive)" : "1px solid var(--ink-faint)", background: "transparent", color: unitsPerPx ? "var(--c-positive)" : "var(--c-danger)", fontSize: 12 }}>
-          <option value="">{unitsPerPx ? `scale set${stdValue ? "" : " · custom"} ✓` : `Set scale for ${labelFor(focusPanel)}…`}</option>
-          {STANDARD_SCALES.map((s) => <option key={s.label} value={s.label}>{s.label}</option>)}
-        </select>
-        {(() => {
-          const det = detectedScales[focusPanel.key];
-          if (!det) {
-            // the text regex found nothing (scans, rotated notes, image title
-            // blocks) — offer the AI read, but only when the user configured one
-            if (!unitsPerPx && isAiConfigured() && status === "ready") return (
-              <button type="button" disabled={aiScaleBusy === focusPanel.key} onClick={readScaleWithAi}
-                title={`No scale note found in this sheet's text. Sends one snapshot of the title block (bottom-right of ${labelFor(focusPanel)}) to your configured AI endpoint and suggests what it reads. Nothing is sent until you click; you still confirm the result.`}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", border: "1px dashed var(--ink-muted)", background: "transparent", color: "var(--ink-muted)", cursor: aiScaleBusy === focusPanel.key ? "default" : "pointer", fontSize: 11.5, fontWeight: 600, lineHeight: 1 }}>
-                <Icon name="target" size={13} />{aiScaleBusy === focusPanel.key ? "reading…" : "read scale with AI"}
-              </button>
-            );
-            return null;
-          }
-          if (!unitsPerPx) return (
-            <button type="button" onClick={() => { setScales((s) => ({ ...s, [focusPanel.key]: det.upp })); showScaleGuide(focusPanel.key, det.upp, det.label); }}
-              onMouseEnter={() => showScaleGuide(focusPanel.key, det.upp, det.label)}
-              onMouseLeave={() => { if (!scales[focusPanel.key]) { clearTimeout(scaleGuideTimerRef.current); setScaleGuide(null); } }}
-              title={`${det.ai ? `Your AI endpoint read ${det.label} off the title block of ${labelFor(focusPanel)}` : `The plan notes ${det.label} on ${labelFor(focusPanel)}`}${det.multi ? " — this sheet shows several scales (details are often larger); confirm against a known dimension" : ""}. Click to use it — a calibrated guide bar shows on the sheet so you can sanity-check it.`}
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", border: "1px dashed var(--c-positive)", background: "transparent", color: "var(--c-positive)", cursor: "pointer", fontSize: 11.5, fontWeight: 600, lineHeight: 1 }}>
-              <Icon name="target" size={13} />{det.ai ? "AI read" : "plan says"} {det.label}{det.multi ? " ±" : ""} — use
-            </button>
-          );
-          if (stdValue && Math.abs(det.upp - unitsPerPx) > 1e-9) return (
-            <span title={`You set ${stdValue}, but the plan notes ${det.label} on ${labelFor(focusPanel)} — double-check before tracing.`}
-              style={{ fontSize: 11, color: "var(--c-danger)", fontWeight: 700 }}>≠ plan says {det.label}</span>
-          );
-          return null;
-        })()}
-        {iconBtn("calibrate", "calibrate", "", "Calibrate — click two points of a known dimension", false)}
-        {iconBtn("check", "check", "", "Check a dimension (K) — click both ends of a printed dimension string; compares the measured length against what the drawing says", false)}
-        <button type="button" onClick={toggleHiRes}
-          title={`Hi-Res rendering for ${labelFor(focusPanel)} — the sheet re-rasters at an auto quality budget (~28MP), so memory stays bounded even side-by-side; crisper when zoomed in. Saved per sheet, per user. Quantities are unaffected.`}
-          style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: `1px solid ${hiResOn(focusPanel.key) ? "var(--cobalt)" : "var(--ink-faint)"}`, background: hiResOn(focusPanel.key) ? "var(--cobalt)" : "transparent", color: hiResOn(focusPanel.key) ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", lineHeight: 1 }}>
-          <Icon name="hiRes" size={15} />
-        </button>
-        <div style={{ flex: 1 }} />
-        {markupDraft && (tool === "cloud" || tool === "callout") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "cloud" ? "opposite corner" : "label spot"}…</span>}
-        {finishOk && (
-          <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
-        )}
-        {proposal?.regions.length > 0 && (
-          <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
-        )}
-        <span style={{ fontSize: 11, color: "var(--ink-muted)", minWidth: 44, fontFamily: "var(--f-mono)" }}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
-        <button onClick={() => setShowAiSettings(true)} title="AI — optional, bring your own key. Nothing is sent unless you ask."
-          style={{ padding: "6px 10px", border: `1px solid ${isAiConfigured() ? "var(--cobalt)" : "var(--ink-faint)"}`, background: "transparent", color: isAiConfigured() ? "var(--cobalt)" : "var(--ink-muted)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11 }}>AI</button>
-        <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
-          style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--ink-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
-      </div>
+        </div>
+      )}
 
       {/* open-sheet tabs — what you opened from the gallery; click to view,
           ⊞ to side-by-side, ✕ to close; the dropdown lists every open sheet */}
@@ -2373,7 +3932,7 @@ export default function TakeoffCanvas() {
           {openTabs.length > 1 && (
             <ToolMenu
               title="Jump to an open sheet"
-              onOpenChange={(o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }}
+              onOpenChange={onMenuDepth}
               face={<span style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>{openTabs.length} open</span>}
               items={openTabs.map((k) => ({ id: k, icon: "document", label: tabLabel(k), active: sheetGroup.length ? sheetGroup.includes(k) : k === sheetKey, onSelect: () => goToSheet(k) }))}
             />
@@ -2381,133 +3940,38 @@ export default function TakeoffCanvas() {
         </div>
       )}
 
-      {/* conditions palette */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
-        <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-muted)" }}>Conditions</span>
-        {conditions.map((c, i) => {
-          const on = c.id === activeCond;
-          return (
-            <button key={c.id} onClick={() => { if (tool === "select" && selectedId) reassignSelected(c.id); setActiveCond(c.id); }} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (i < 9 ? `Press ${i + 1}` : "")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed #1f3fc7" : "1px solid var(--ink-faint)"), background: on ? "#fff" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
-              {i < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", borderRadius: 3, padding: "0 3px" }}>{i + 1}</span>}
-              <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
-            </button>
-          );
-        })}
-        <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
-        <span style={{ fontSize: 10.5, color: "var(--ink-faint)", marginLeft: 4 }}>⌫ undo point · Esc cancel · scroll = zoom · pan mid-measure: just press-and-drag (click without dragging places the point)</span>
-        {commitMsg && <span style={{ marginLeft: "auto", fontSize: 12, color: commitMsg.startsWith("Commit failed") ? "#b03a26" : "var(--c-positive)" }}>{commitMsg}</span>}
-      </div>
-
-      {/* appearance editor for the active condition */}
-      {aCond && (
-        <div style={{ display: "flex", gap: 14, alignItems: "center", padding: "6px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11 }}>
-          <input value={aCond.finish_tag} onChange={(e) => updateCond({ finish_tag: e.target.value })}
-            title="Rename this condition / finish tag"
-            style={{ width: 88, padding: "3px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontFamily: "var(--f-mono)", fontWeight: 700, fontSize: 12, color: "var(--ink)" }} />
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ color: "var(--ink-muted)" }}>Line</span>
-            {PALETTE.map((p) => <button key={p} title={p} onClick={() => updateCond({ color: p })} style={{ width: 16, height: 16, borderRadius: 4, background: p, border: aCond.color === p ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ color: "var(--ink-muted)" }}>Fill</span>
-            <button title="No fill" onClick={() => updateCond({ fill: NO_FILL })} style={{ width: 16, height: 16, borderRadius: 4, background: "var(--paper-bright)", border: aCond.fill === NO_FILL ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 9, lineHeight: "12px", color: "#b03a26" }}>⦸</button>
-            {PALETTE.map((p) => <button key={p} title={p} onClick={() => updateCond({ fill: p })} style={{ width: 16, height: 16, borderRadius: 4, background: p, opacity: 0.55, border: aCond.fill === p ? "2px solid #0e1a2e" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4, position: "relative" }}>
-            <span style={{ color: "var(--ink-muted)" }}>Hatch</span>
-            <button onClick={() => setHatchOpen((v) => !v)} title="Choose a hatch pattern"
-              style={{ display: "flex", alignItems: "center", gap: 5, padding: "2px 7px 2px 2px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", lineHeight: 0 }}>
-              <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={aCond.hatch || "solid"} line={aCond.color} fill={aCond.fill} /></span>
-              <span style={{ fontSize: 10.5, color: "var(--ink-muted)", lineHeight: 1 }}>{(HATCHES.find((h) => h.id === (aCond.hatch || "solid")) || {}).label || "Solid"} ▾</span>
-            </button>
-            {hatchOpen && (
-              <div style={{ position: "absolute", top: 26, left: 36, zIndex: 30, padding: 10, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, auto)", gap: 6 }}>
-                  {HATCHES.map((h) => {
-                    const on = (aCond.hatch || "solid") === h.id;
-                    return <button key={h.id} title={h.label} onClick={() => { updateCond({ hatch: h.id }); setHatchOpen(false); }} onMouseEnter={() => setHatchHover(h.label)} onMouseLeave={() => setHatchHover("")}
-                      style={{ padding: 2, borderRadius: 0, border: on ? "2px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", lineHeight: 0 }}><HatchSwatch type={h.id} line={aCond.color} fill={aCond.fill} /></button>;
-                  })}
-                </div>
-                <div style={{ marginTop: 8, fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--ink-muted)", minHeight: 11 }}>
-                  {hatchHover || (HATCHES.find((h) => h.id === (aCond.hatch || "solid")) || {}).label || ""}
-                </div>
-              </div>
-            )}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Multiply this condition by N identical units (measure one, ×N)">
-            <span style={{ color: "var(--ink-muted)" }}>×</span>
-            <input type="number" min="1" step="1" value={aCond.multiplier || 1}
-              onChange={(e) => updateCond({ multiplier: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-              style={{ width: 46, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Waste % — a flooring allowance added on top of the measured quantity in the Report. You choose it per condition (e.g. ~8% straight-lay LVP, ~15% diagonal, ~20% herringbone).">
-            <span style={{ color: "var(--ink-muted)" }}>Waste</span>
-            <input type="number" min="0" step="1" value={aCond.waste_pct ?? 0}
-              onChange={(e) => updateCond({ waste_pct: Math.max(0, parseFloat(e.target.value) || 0) })}
-              style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-            <span style={{ color: "var(--ink-muted)" }}>%</span>
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Height (ft) — the default for NEW wall traces (SF = LF × H) and the vertical-SF display on floor areas. Walls keep the height they were drawn at — select a wall to change just that one.">
-            <Icon name="height" size={13} /><span style={{ color: "var(--ink-muted)" }}>H</span>
-            <input type="number" min="0" step="0.25" value={aCond.height_ft ?? ""} placeholder="ft"
-              onChange={(e) => setCondParam("height_ft", e.target.value)}
-              style={{ width: 54, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Thickness (in) — a Linear run with thickness also computes border/feature-strip SF = LF × T/12. Changing it re-flows existing linear runs.">
-            <Icon name="thickness" size={13} /><span style={{ color: "var(--ink-muted)" }}>T</span>
-            <input type="number" min="0" step="0.25" value={aCond.thickness_in ?? ""} placeholder="in"
-              onChange={(e) => setCondParam("thickness_in", e.target.value)}
-              style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-          </span>
-          <div style={{ flex: 1, minWidth: 8 }} />
-          <button onClick={() => setMatOpen((v) => !v)} title="Supporting materials (adhesive, grout, thinset…) — order quantities derive from coverage rates you set"
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOpen ? "var(--ink)" : "transparent", color: matOpen ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="product" size={12} />Materials{aCond.materials?.length ? ` (${aCond.materials.length})` : ""}
-          </button>
-          <span style={{ position: "relative", display: "inline-flex", gap: 6 }}>
-            <button onClick={saveActiveAsPlay} title="Save this condition + its materials & waste as a reusable play (stored in this browser)"
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "var(--ink)" }}>⭑ Save play</button>
-            <button onClick={() => setPlaysOpen((v) => !v)} title="Apply a saved play (condition + materials + waste) as a new condition"
-              style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: playsOpen ? "1px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: playsOpen ? "var(--paper-bright)" : "transparent", cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "var(--ink)" }}>Plays{plays.length ? ` · ${plays.length}` : ""} ▾</button>
-            {playsOpen && (
-              <div style={{ position: "absolute", top: 26, right: 0, zIndex: 30, minWidth: 250, maxHeight: 320, overflow: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)" }}>
-                {plays.length === 0 ? (
-                  <div style={{ padding: "9px 11px", color: "var(--ink-muted)", fontSize: 11.5 }}>No plays yet — tune a condition's materials + waste, then <b>⭑ Save play</b>.</div>
-                ) : plays.map((pl) => (
-                  <div key={pl.name} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderTop: "1px solid var(--ink-faint)" }}>
-                    <button onClick={() => applyPlay(pl)} title="Apply this play as a new condition"
-                      style={{ flex: 1, minWidth: 0, textAlign: "left", border: "none", background: "none", cursor: "pointer", fontSize: 12, color: "var(--ink)" }}>
-                      <b>{pl.name}</b> <span style={{ color: "var(--ink-muted)" }}>· {(pl.materials?.length || 0)} mat{pl.waste_pct ? ` · ${pl.waste_pct}%` : ""}</span>
-                    </button>
-                    <button onClick={() => deletePlayByName(pl.name)} title="Delete this play" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26", fontSize: 13, lineHeight: 1 }}>×</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </span>
-          <button onClick={() => deleteCondition(aCond.id)} title="Delete this condition (and its takeoffs)"
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
-            <Icon name="close" size={11} />Delete
-          </button>
-        </div>
-      )}
-      {aCond && matOpen && (
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-cream)", fontSize: 11.5 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <strong style={{ fontFamily: "var(--f-display)", fontSize: 12.5, color: "var(--ink)" }}>Supporting materials — {aCond.finish_tag}</strong>
-            <span style={{ color: "var(--ink-muted)" }}>order qty = measured ÷ coverage, rounded up. Coverage comes off the product data sheet.</span>
-          </div>
-          <MaterialsEditor materials={aCond.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
+      {/* compact conditions strip — OPTIONAL small-project mode. The docked
+          Takeoffs panel is the primary conditions surface; the strip renders
+          the same state (activate/reassign, hotkey badges, + condition) for
+          users who want max panel-collapse and one-click switching. Toggled
+          from the panel header, persisted with the panel prefs. */}
+      {panelPrefs.strip && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+          <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-muted)" }}>Conditions</span>
+          {conditions.map((c, i) => {
+            const on = c.id === activeCond;
+            // the 1–9 badge follows the same rule as the hotkeys: palette order
+            // when curated, condition order (fallback) when nothing is pinned
+            const pinnedPal = palette.length > 0;
+            const hIdx = pinnedPal ? palette.indexOf(c.id) : i;
+            const hot = hIdx >= 0 && hIdx < 9;
+            return (
+              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
+                {hot && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinnedPal ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinnedPal ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px" }}>{hIdx + 1}</span>}
+                <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
+              </button>
+            );
+          })}
+          <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
         </div>
       )}
 
       {/* calibration prompt */}
       {tool === "calibrate" && (
-        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid #f0d9c0", fontSize: 14 }}>
+        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
           {calib.length < 2 ? <span>Custom scale: click two points along a known dimension ({calib.length}/2). Tip: use the longest dimension. (Or just pick a standard scale above.)</span> : (
             <span>Real length:{" "}
-              <input type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder={units === "metric" ? "meters" : "feet"} autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
+              <input name="calibration-length" type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder="feet" autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> ft
               <button onClick={applyCalibration} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Apply</button>
               <button onClick={() => setCalib([])} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
             </span>
@@ -2518,24 +3982,33 @@ export default function TakeoffCanvas() {
       {/* check-a-dimension prompt — read-only twin of calibrate: measure a printed
           dimension at the current scale, compare with what the drawing says */}
       {tool === "check" && (
-        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid #f0d9c0", fontSize: 14 }}>
+        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
           {check.length < 2 ? (
             <span>Check a dimension: click both ends of a printed dimension ({check.length}/2). The measured length shows here — compare it with what the drawing says.</span>
           ) : checkCross ? (
             <span style={{ color: "var(--c-danger)" }}>Check on one sheet — those two clicks landed on different sheets. <button onClick={() => { setCheck([]); setCheckStated(""); }} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button></span>
           ) : !checkUpp ? (
             <span style={{ color: "var(--c-danger)" }}>No scale set for {labelFor(checkPanel)} — pick a standard scale or calibrate first, then check it here.</span>
+          ) : checkPx <= 0 ? (
+            <span style={{ color: "var(--c-danger)" }}>Those two clicks landed on the same point — click the two <b>ends</b> of a printed dimension.</span>
           ) : (
             <span>
-              measures <b style={{ fontFamily: "var(--f-mono)" }}>{fmtCheckLen(checkFeet, units)}</b> at {stdValue || "custom scale"} · drawing says{" "}
-              <input value={checkStated} onChange={(e) => setCheckStated(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} placeholder={units === "metric" ? "meters" : `feet (12'6 ok)`} style={{ width: 100, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
-              {checkErrPct != null && (
-                <b style={{ marginLeft: 8, color: Math.abs(checkErrPct) <= 1 ? "var(--c-positive)" : Math.abs(checkErrPct) <= 5 ? "var(--c-warning)" : "var(--c-danger)" }}>
-                  {Math.abs(checkErrPct) <= 1 ? `matches — scale checks out (${checkErrPct >= 0 ? "+" : ""}${checkErrPct.toFixed(1)}%)`
-                    : Math.abs(checkErrPct) <= 5 ? `off by ${checkErrPct >= 0 ? "+" : ""}${checkErrPct.toFixed(1)}% — re-check or recalibrate`
-                    : `off by ${checkErrPct >= 0 ? "+" : ""}${checkErrPct.toFixed(1)}% — wrong scale; recalibrate`}
-                </b>
-              )}
+              measures <b style={{ fontFamily: "var(--f-mono)" }}>{fmtCheckLen(checkFeet, UNITS)}</b> at {stdValue || "custom scale"} · drawing says{" "}
+              <input name="check-stated-length" value={checkStated} onChange={(e) => setCheckStated(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} placeholder={UNITS === "metric" ? "meters" : `feet (12'6, 6" ok)`} autoFocus style={{ width: 100, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {UNITS === "metric" ? "m" : "ft"}
+              {checkErrPct != null && (() => {
+                // checkVerdict grades the ROUNDED value the chip displays (and
+                // normalizes -0), so color and number can never contradict —
+                // see units.ts for the ≤1/≤5 tie-break rationale
+                const v = checkVerdict(checkErrPct);
+                const pct = `${v.shown >= 0 ? "+" : ""}${v.shown.toFixed(1)}%`;
+                return (
+                  <b style={{ marginLeft: 8, color: v.grade === "match" ? "var(--c-positive)" : v.grade === "close" ? "var(--c-warning)" : "var(--c-danger)" }}>
+                    {v.grade === "match" ? `matches — scale checks out (${pct})`
+                      : v.grade === "close" ? `off by ${pct} — re-check or recalibrate`
+                      : `off by ${pct} — wrong scale; recalibrate`}
+                  </b>
+                );
+              })()}
               {checkStatedFeet > 0 && (
                 <button onClick={recalibrateFromCheck} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Recalibrate to this</button>
               )}
@@ -2547,10 +4020,141 @@ export default function TakeoffCanvas() {
 
       {/* canvas + issue desk */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+       {/* docked LEFT panel — one of Markups/Stamps/RFIs at a time. Reflows the
+           canvas (a flex sibling), mirroring the docked Takeoffs panel on the right. */}
+       {leftTab && (
+         <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflow: "hidden", minHeight: 0 }}>
+           {/* tab strip */}
+           <div style={{ display: "flex", alignItems: "stretch", background: "var(--cobalt)", color: "var(--accent-contrast)" }}>
+             {[{ id: "markup", label: "Markups", n: markupCount }, { id: "stamp", label: "Stamps", n: stampLib.stamps.length }, { id: "rfi", label: "RFIs", n: rfis.length }].map((t) => (
+               <button key={t.id} onClick={() => setLeftTab(t.id)} title={t.label}
+                 style={{ flex: 1, padding: "9px 6px", border: "none", borderBottom: leftTab === t.id ? "2px solid var(--accent-contrast)" : "2px solid transparent", background: leftTab === t.id ? "rgba(255,255,255,.18)" : "transparent", color: "var(--accent-contrast)", cursor: "pointer", fontWeight: leftTab === t.id ? 700 : 500, fontSize: 12 }}>
+                 {t.label}{t.n ? ` · ${t.n}` : ""}
+               </button>
+             ))}
+             <button onClick={() => setLeftTab(null)} title="Close panel" style={{ padding: "0 12px", border: "none", background: "transparent", color: "var(--accent-contrast)", fontSize: 16, cursor: "pointer" }}>×</button>
+           </div>
+           {/* body of the active tab */}
+           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+             {leftTab === "markup" && (
+               <div>
+                 {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
+                     (can't select/delete/fly-to an invisible markup); orthogonal to the
+                     marked-set export, which still includes markups. */}
+                 <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
+                   <button
+                     onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
+                     title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
+                     style={{ background: "transparent", border: "1px solid var(--ink-faint)", color: "var(--ink)", fontSize: 11, cursor: "pointer", padding: "2px 7px" }}>
+                     {showMarkups ? "Hide layer" : "Show layer"}
+                   </button>
+                 </div>
+                 <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
+                   Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
+                 </div>
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
+                   <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
+                 )}
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
+                   <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                     <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                       <span style={{ fontSize: 10, fontWeight: 700, color: "var(--cobalt)", textTransform: "uppercase" }}>{m.type}</span>
+                       {/* inline edit — the panel's fallback for the canvas overlay, since a
+                           markup here may be off-screen or on another sheet (no click point).
+                           Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
+                       {panelEditId === m.id ? (
+                         <input name="markup-text" autoComplete="off" autoFocus defaultValue={m.text || ""}
+                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
+                           onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
+                           style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid var(--cobalt)", borderRadius: 0, outline: "none" }} />
+                       ) : (
+                         <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : (m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
+                       )}
+                       {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
+                       <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--c-danger)" }}>🗑</button>
+                     </div>
+                     {/* appearance — per-markup color (reuse PALETTE) + line style; both
+                         additive: unset color falls back to the cobalt(linked)/amber default,
+                         unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
+                     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
+                       <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
+                       {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+                       <select name="markup-line-style" value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                       </select>
+                       {/* line weight — a multiplier over the element's base stroke width (default
+                           ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
+                       <select name="markup-weight" value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
+                       </select>
+                       {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
+                       {m.type === "cloud" && (
+                         <>
+                           <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
+                           <input name="markup-rev" type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
+                             onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
+                             title="Revision number for the △ delta (blank = none)"
+                             style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
+                         </>
+                       )}
+                     </div>
+                     {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
+                     {(() => {
+                       const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                       return (
+                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                           {linked ? (
+                             <>
+                               <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "var(--cobalt)" }}>⬢ {String(linked.number ?? "")}</span>
+                               <button onClick={() => { setLeftTab("rfi"); }} style={{ ...ctrl, color: "var(--cobalt)" }} title="Open the RFI register">Open</button>
+                               <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
+                             </>
+                           ) : (
+                             <>
+                               <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "var(--cobalt)", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
+                               {rfis.length > 0 && (
+                                 <select name="link-rfi" value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
+                                   title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
+                                   <option value="">Link existing…</option>
+                                   {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
+                                 </select>
+                               )}
+                             </>
+                           )}
+                         </div>
+                       );
+                     })()}
+                   </div>
+                 ))}
+               </div>
+             )}
+             {leftTab === "stamp" && (
+               <StampPanel
+                 docked
+                 library={stampLib} armedStamp={armedStamp}
+                 selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
+                 onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
+                 onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setLeftTab(null)}
+               />
+             )}
+             {leftTab === "rfi" && (
+               <RfiPanel
+                 docked
+                 rfis={rfis} markups={markups}
+                 onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
+                 sheetLabel={(k) => tabLabel(k)} onClose={() => setLeftTab(null)}
+               />
+             )}
+           </div>
+         </div>
+       )}
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
-          onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
-          onDoubleClick={() => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); }}
+          onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
+          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
@@ -2571,6 +4175,17 @@ export default function TakeoffCanvas() {
           <div ref={aimChipRef} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", display: "none", zIndex: 6, padding: "2px 8px", background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-1)", fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", willChange: "transform" }} />
           {/* hover readout — what takeoff is under the cursor (DOM-direct) */}
           <div ref={hoverRef} style={{ position: "absolute", display: "none", pointerEvents: "none", zIndex: 8, background: "var(--paper-bright)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-1)", padding: "4px 8px", fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink)", whiteSpace: "nowrap" }} />
+          {/* inline on-canvas text editor — a screen-space overlay pinned to its anchor
+              (pan/zoom is frozen while open). Enter commits, Esc cancels, blur commits;
+              all on the input's OWN handlers so the global keydown (which returns early
+              for INPUT) never interferes. cursor:text overrides the stage's cursor:none. */}
+          {editor && (
+            <input name="inline-editor" autoComplete="off" ref={editorInputRef} autoFocus defaultValue={editor.value}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); finishEditor(true); } else if (e.key === "Escape") { e.preventDefault(); finishEditor(false); } }}
+              onBlur={() => finishEditor(true)}
+              placeholder="Type, Enter to place · Esc cancels"
+              style={{ position: "absolute", left: editor.left, top: editor.top, zIndex: 9, minWidth: 160, padding: "3px 6px", font: "13px var(--f-body, sans-serif)", color: "var(--ink)", background: "var(--paper-bright)", border: "1px solid var(--cobalt)", boxShadow: "0 2px 10px rgba(0,0,0,.18)", borderRadius: 0, cursor: "text", outline: "none" }} />
+          )}
           <div ref={stageRef} style={{ position: "absolute", transformOrigin: "0 0", willChange: "transform", width: stage.w || undefined, height: stage.h || undefined }}>
             {panels.map((p) => (
               <canvas key={p.key} ref={(el) => { if (el) panelCanvasRefs.current.set(p.key, el); else panelCanvasRefs.current.delete(p.key); }}
@@ -2610,10 +4225,12 @@ export default function TakeoffCanvas() {
                         return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4.5 : 3.5) / z} strokeDasharray={`${10 / z} ${3 / z} ${2 / z} ${3 / z}`} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       if (s.measure_role === "linear") {
-                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeLinecap="round" strokeLinejoin="round" />;
+                        // line_style governs linear outlines (surface_area keeps its dash-dot identity above)
+                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       const ded = s.measure_role === "deduct";
-                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : "0"} />;
+                      // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
+                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
                     {/* vertex handles for the selected shape (drag to reshape) */}
                     {selectedId && (() => {
@@ -2621,61 +4238,177 @@ export default function TakeoffCanvas() {
                       if (!sel || sel.measure_role === "count") return null;
                       const qs = dn(sel.verts_norm);
                       const closed = sel.measure_role !== "linear" && sel.measure_role !== "surface_area";
-                      const hs = 4.5 / tf.scale, ms = 3 / tf.scale;
+                      const s = tf.scale;
+                      const grip = darkMode ? "#0b0e14" : "#faf6ea";
                       const edges = closed ? qs.length : qs.length - 1;
                       return (
                         <g>
+                          {/* edge grips — drag moves the whole line; Shift-click inserts a point */}
                           {Array.from({ length: edges }, (_, i) => {
                             const a = qs[i], b = qs[(i + 1) % qs.length];
-                            return <rect key={"m" + i} x={(a[0] + b[0]) / 2 - ms} y={(a[1] + b[1]) / 2 - ms} width={ms * 2} height={ms * 2} fill="#f4efe0" stroke="#1f3fc7" strokeWidth={1.4 / tf.scale} strokeDasharray={`${2 / tf.scale} ${1.5 / tf.scale}`} />;
+                            const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+                            const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+                            const ew = 14 / s, eh = 6 / s;
+                            return <rect key={"m" + i} x={mx - ew / 2} y={my - eh / 2} width={ew} height={eh} rx={eh / 2}
+                              transform={`rotate(${ang} ${mx} ${my})`} fill={grip} stroke="#1f3fc7" strokeWidth={1.6 / s} />;
                           })}
-                          {qs.map((q, i) => <rect key={"h" + i} x={q[0] - hs} y={q[1] - hs} width={hs * 2} height={hs * 2} fill="#fff" stroke="#1f3fc7" strokeWidth={2 / tf.scale} />)}
+                          {/* corner handles — click selects (Delete removes just that point), drag moves */}
+                          {qs.map(([x, y], i) => {
+                            const isSel = selVert === i;
+                            const sz = (isSel ? 6.5 : 5.5) / s;
+                            return <g key={"h" + i}>
+                              {isSel && <circle cx={x} cy={y} r={9 / s} fill="none" stroke="#1f3fc7" strokeWidth={1.2 / s} opacity={0.5} />}
+                              <path d={`M${x},${y - sz} L${x + sz},${y} L${x},${y + sz} L${x - sz},${y} Z`}
+                                fill={isSel ? grip : "#1f3fc7"} stroke={isSel ? "#1f3fc7" : "#fff"} strokeWidth={(isSel ? 2 : 1.4) / s} />
+                            </g>;
+                          })}
                         </g>
                       );
                     })()}
-                    {/* markup layer — clouds / callouts / text notes on this panel */}
-                    {markups.filter((m) => m.sheet_id === p.key).map((m) => {
-                      const mk = m.rfi_id ? "#1f3fc7" : "#c47a10";
+                    {/* markup layer — highlights / clouds / callouts / text notes on this
+                        panel. Highlights draw FIRST (behind) so their translucent fill never
+                        dims the linework above. A selected markup wears a CONTRASTING halo
+                        (white outer ring + cobalt inner). Per-markup color drives the STROKE/
+                        FILL (dark-boosted on the dark canvas); RFI linkage is an unconditional
+                        ⬢/number badge, independent of the note text. Layer hides via showMarkups. */}
+                    {showMarkups && markups.filter((m) => m.sheet_id === p.key)
+                      .slice().sort((a, b) => (a.type === "highlight" ? 0 : 1) - (b.type === "highlight" ? 0 : 1))
+                      .map((m) => {
+                      const z = tf.scale;
+                      const base = m.color || (m.rfi_id ? "#1f3fc7" : "#c47a10");
+                      const mk = darkMode ? boostForDark(base) : base;   // literal — SVG attrs don't resolve CSS vars
+                      const dash = dashArrayFor(m.line_style || "solid", z);
+                      const w = clampWeight(m.weight);   // stroke-width multiplier over each element's base, default ×1
+                      const selM = m.id === selectedMarkupId;
+                      // linkage badge — unconditional for any linked markup (a note-less
+                      // recolored cloud still reads as linked); kept in cobalt for legibility
+                      // regardless of the user's color, pinned clear of the halo.
+                      const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                      const badgeCol = darkMode ? boostForDark("#1f3fc7") : "#1f3fc7";
+                      const badge = (bx, by) => (m.rfi_id ? (
+                        <text x={bx} y={by} fill={badgeCol} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{"⬢"}{linked && linked.number != null && linked.number !== "" ? " " + linked.number : ""}</text>
+                      ) : null);
+                      // revision-delta △n — a small numbered triangle at a cloud corner,
+                      // clear of the halo, the top-left RFI badge, and the centered note.
+                      // Absent/zero m.rev → nothing (legacy clouds render unchanged).
+                      // the triangle backing is ALWAYS white, so stroke/number it in the
+                      // UN-boosted color (mk's dark boost is tuned to contrast the dark
+                      // canvas, and would wash out on white).
+                      const revTri = (rx, ry) => (Number.isFinite(m.rev) && m.rev > 0 ? (
+                        <g style={{ pointerEvents: "none" }}>
+                          <path d={`M${rx},${ry - 9 / z} L${rx + 8 / z},${ry + 6 / z} L${rx - 8 / z},${ry + 6 / z} Z`} fill="#fff" stroke={base} strokeWidth={1.4 / z} />
+                          <text x={rx} y={ry + 2.5 / z} fill={base} fontSize={9 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central">{m.rev}</text>
+                        </g>
+                      ) : null);
+                      // halo ring widths scale with weight so a heavy stroke never overruns them
+                      const halo = (x0, y0, x1, y1) => (selM ? (
+                        <>
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#fff" strokeWidth={(5 * w) / z} />
+                          <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={(2 * w) / z} />
+                        </>
+                      ) : null);
                       if (m.type === "highlight") {
-                        const ip = (m.pts || []).map(([nx, ny]) => [nx * p.img.w, ny * p.img.h]);
-                        if (ip.length < 2) return null;
-                        const w = (m.w || 0.01) * p.img.w, o = darkMode ? 0.42 : 0.32;
-                        const sel = m.id === selectedMarkupId;
-                        const ink = m.tip === "chisel"
-                          ? <path d={"M" + chiselRibbon(ip, w, 45).map((q) => q.join(",")).join(" L") + " Z"} fill={m.color || "#ffd60a"} fillOpacity={o} />
-                          : <path d={strokePathD(ip)} fill="none" stroke={m.color || "#ffd60a"} strokeOpacity={o} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" />;
+                        const [c0, c1] = m.rect;
+                        const hx0 = Math.min(c0[0], c1[0]) * p.img.w, hy0 = Math.min(c0[1], c1[1]) * p.img.h;
+                        const hx1 = Math.max(c0[0], c1[0]) * p.img.w, hy1 = Math.max(c0[1], c1[1]) * p.img.h;
+                        const pad = (5 * w) / z;
                         return (
                           <g key={m.id}>
-                            {sel && <path d={strokePathD(ip)} fill="none" stroke="#1f3fc7" strokeOpacity={0.55} strokeWidth={w + 5 / tf.scale} strokeLinecap="round" strokeLinejoin="round" />}
-                            {ink}
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <rect x={hx0} y={hy0} width={hx1 - hx0} height={hy1 - hy0} fill={mk} fillOpacity={0.18} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={(hx0 + hx1) / 2} y={(hy0 + hy1) / 2} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(hx0, hy0 - pad - 9 / z)}
                           </g>
                         );
                       }
                       if (m.type === "cloud") {
                         const [c0, c1] = m.rect;
+                        const pad = (5 * w) / z;
+                        const bx0 = Math.min(c0[0], c1[0]) * p.img.w - pad, by0 = Math.min(c0[1], c1[1]) * p.img.h - pad;
+                        const bx1 = Math.max(c0[0], c1[0]) * p.img.w + pad, by1 = Math.max(c0[1], c1[1]) * p.img.h + pad;
                         return (
                           <g key={m.id}>
-                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={2 / tf.scale} />
-                            {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / tf.scale} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>}
+                            {halo(bx0, by0, bx1, by1)}
+                            <path d={cloudPath(c0[0] * p.img.w, c0[1] * p.img.h, c1[0] * p.img.w, c1[1] * p.img.h)} fill="none" stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={(c0[0] + c1[0]) / 2 * p.img.w} y={(c0[1] + c1[1]) / 2 * p.img.h} fill={mk} fontSize={13 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(bx0, by0 - 9 / z)}
+                            {revTri(bx1, by0 - 9 / z)}
                           </g>
                         );
                       }
                       if (m.type === "callout") {
                         const [tx, ty] = m.target, [ax, ay] = m.at;
+                        const lw = ((m.text?.length || 1) * 7 + 10) / z;
                         return (
                           <g key={m.id}>
-                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={2 / tf.scale} />
-                            <path d={starPath(tx * p.img.w, ty * p.img.h, 4 / tf.scale)} fill={mk} />
-                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / tf.scale} width={(m.text.length * 7 + 10) / tf.scale} height={20 / tf.scale} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
-                            <text x={(ax * p.img.w) + 5 / tf.scale} y={(ay * p.img.h) - 2 / tf.scale} fill="#0e1a2e" fontSize={12 / tf.scale}>{m.rfi_id ? "⬢ " : ""}{m.text}</text>
+                            {halo(ax * p.img.w - 4 / z, ay * p.img.h - 18 / z, ax * p.img.w + lw + 4 / z, ay * p.img.h + 4 / z)}
+                            <line x1={tx * p.img.w} y1={ty * p.img.h} x2={ax * p.img.w} y2={ay * p.img.h} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {/* arrowhead at the target end — replaces the old vertex star */}
+                            <path d={arrowheadPath(ax * p.img.w, ay * p.img.h, tx * p.img.w, ty * p.img.h, 9 / z)} fill={mk} />
+                            <rect x={ax * p.img.w} y={ay * p.img.h - 16 / z} width={lw} height={20 / z} fill="rgba(255,255,255,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
+                            <text x={(ax * p.img.w) + 5 / z} y={(ay * p.img.h) - 2 / z} fill="#0e1a2e" fontSize={12 / z}>{m.text}</text>
+                            {badge(ax * p.img.w, ay * p.img.h - 24 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "arrow") {
+                        const [fx, fy] = [m.from[0] * p.img.w, m.from[1] * p.img.h];
+                        const [tx, ty] = [m.to[0] * p.img.w, m.to[1] * p.img.h];
+                        const midx = (fx + tx) / 2, midy = (fy + ty) / 2;
+                        const hx0 = Math.min(fx, tx), hy0 = Math.min(fy, ty), hx1 = Math.max(fx, tx), hy1 = Math.max(fy, ty);
+                        const pad = (6 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <line x1={fx} y1={fy} x2={tx} y2={ty} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} strokeLinecap="round" />
+                            {/* filled arrowhead at the `to` end */}
+                            <path d={arrowheadPath(fx, fy, tx, ty, 11 / z)} fill={mk} />
+                            {m.text && <text x={midx} y={midy - 6 / z} fill={mk} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(hx0, hy0 - pad - 9 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "bubble") {
+                        const cx = m.at[0] * p.img.w, cy = m.at[1] * p.img.h;
+                        const rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * p.img.w;
+                        const pad = (5 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(cx - rad - pad, cy - rad - pad, cx + rad + pad, cy + rad + pad)}
+                            <circle cx={cx} cy={cy} r={rad} fill={darkMode ? "rgba(12,15,20,.85)" : "rgba(255,255,255,.85)"} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            {m.text && <text x={cx} y={cy} fill={mk} fontSize={Math.min(13, rad * z * 0.9) / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{m.text}</text>}
+                            {badge(cx + rad, cy - rad - 4 / z)}
+                          </g>
+                        );
+                      }
+                      if (m.type === "svg" && m.path && Array.isArray(m.vb)) {
+                        // a vector symbol (imported .svg or saved-as-stamp art). The
+                        // path is baked local→image px through a uniform scale off the
+                        // LONGER viewBox extent so it never distorts and a one-axis
+                        // symbol can't blow up; stroke/fill are the symbol's OWN color
+                        // (dark-boosted), not the linkage tint.
+                        const { s: sx, bw, bh } = svgPlacedBox(m.vb, m.w, p.img.w);
+                        if (!(sx > 0)) return null;
+                        const x0 = m.at[0] * p.img.w - bw / 2, y0 = m.at[1] * p.img.h - bh / 2;
+                        const d = transformPath(m.path, (lx, ly) => [x0 + lx * sx, y0 + ly * sx]);
+                        const fillOn = m.fill && m.fill !== "none";
+                        const fcol = fillOn ? (darkMode ? boostForDark(m.fill) : m.fill) : "none";
+                        return (
+                          <g key={m.id}>
+                            {halo(x0, y0, x0 + bw, y0 + bh)}
+                            <path d={d} fill={fcol} fillOpacity={fillOn ? 0.9 : undefined} stroke={mk} strokeWidth={(1.6 * w) / z} strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+                            {badge(x0, y0 - 9 / z)}
                           </g>
                         );
                       }
                       const [x, y] = m.at;
+                      const lw = ((m.text?.length || 1) * 7 + 10) / z;
                       return (
                         <g key={m.id}>
-                          <rect x={x * p.img.w - 3 / tf.scale} y={y * p.img.h - 14 / tf.scale} width={(m.text.length * 7 + 10) / tf.scale} height={20 / tf.scale} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={1 / tf.scale} rx={3 / tf.scale} />
-                          <text x={x * p.img.w + 2 / tf.scale} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / tf.scale} fontWeight="600">{m.rfi_id ? "⬢ " : ""}{m.text}</text>
+                          {halo(x * p.img.w - 5 / z, y * p.img.h - 16 / z, x * p.img.w + lw + 3 / z, y * p.img.h + 6 / z)}
+                          <rect x={x * p.img.w - 3 / z} y={y * p.img.h - 14 / z} width={lw} height={20 / z} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
+                          <text x={x * p.img.w + 2 / z} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / z} fontWeight="600">{m.text}</text>
+                          {badge(x * p.img.w, y * p.img.h - 22 / z)}
                         </g>
                       );
                     })}
@@ -2685,24 +4418,61 @@ export default function TakeoffCanvas() {
                         <polygon points={zoneCheck.pts.map(([nx, ny]) => `${nx * p.img.w},${ny * p.img.h}`).join(" ")}
                           fill="rgba(31,63,199,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale}
                           strokeDasharray={`${7 / tf.scale} ${5 / tf.scale}`} />
-                        {zoneIds && shapes.filter((sh) => zoneIds.has(sh.id) && sh.sheet_id === p.key).map((sh) => (
-                          (sh.verts_norm || []).length >= 2
-                            ? <polyline key={"zc" + sh.id} points={sh.verts_norm.map(([nx, ny]) => `${nx * p.img.w},${ny * p.img.h}`).join(" ")}
-                                fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={3.5 / tf.scale} strokeLinejoin="round" />
-                            : <circle key={"zc" + sh.id} cx={(sh.verts_norm?.[0]?.[0] || 0) * p.img.w} cy={(sh.verts_norm?.[0]?.[1] || 0) * p.img.h}
-                                r={7 / tf.scale} fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={2.5 / tf.scale} />
-                        ))}
+                        {zoneIds && pShapes.filter((sh) => zoneIds.has(sh.id)).map((sh) => {
+                          const vs = sh.verts_norm || [];
+                          if (vs.length < 2) {
+                            return <circle key={"zc" + sh.id} cx={(vs[0]?.[0] || 0) * p.img.w} cy={(vs[0]?.[1] || 0) * p.img.h}
+                              r={7 / tf.scale} fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={2.5 / tf.scale} />;
+                          }
+                          // Closed roles (floor_area/deduct) get a <polygon> like the
+                          // main shape renderer — a <polyline> never draws the
+                          // closing edge back to the first vertex, so a 4-vertex
+                          // room's glow was missing 25% of its outline. linear/
+                          // surface_area are genuinely open runs, so they keep
+                          // <polyline>, also matching the main renderer.
+                          const closed = sh.measure_role !== "linear" && sh.measure_role !== "surface_area";
+                          const pts = vs.map(([nx, ny]) => `${nx * p.img.w},${ny * p.img.h}`).join(" ");
+                          return closed
+                            ? <polygon key={"zc" + sh.id} points={pts} fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={3.5 / tf.scale} strokeLinejoin="round" />
+                            : <polyline key={"zc" + sh.id} points={pts} fill="none" stroke="#1f3fc7" strokeOpacity={0.45} strokeWidth={3.5 / tf.scale} strokeLinejoin="round" />;
+                        })}
                       </g>
                     )}
-                    {/* One-Click proposal preview — dashed cobalt selection, red dashed carve */}
-                    {proposal && proposal.key === p.key && proposal.regions.map((r, i) => (
+                    {/* One-Click proposal preview — dashed cobalt selection, red dashed carve.
+                        Handles (corner diamonds + edge grips) rise on the hovered/selected
+                        region: drag a corner, drag an edge to move the whole line, Shift-click
+                        an edge to add a point, select a corner + Delete to remove it. */}
+                    {proposal && proposal.key === p.key && proposal.regions.map((r, i) => {
+                      const col = r.kind === "neg" ? "#b03a26" : "#1f3fc7";
+                      const s = tf.scale;
+                      const grip = darkMode ? "#0b0e14" : "#faf6ea";
+                      const show = i === ocHover || (ocSel && ocSel.ri === i);
+                      return (
                       <g key={"oc" + i}>
                         <polygon points={r.poly.map((q) => q.join(",")).join(" ")}
                           fill={r.kind === "neg" ? "rgba(176,58,38,.18)" : "rgba(31,63,199,.10)"}
-                          stroke={r.kind === "neg" ? "#b03a26" : "#1f3fc7"} strokeWidth={2.5 / tf.scale} strokeDasharray={`${7 / tf.scale} ${4 / tf.scale}`} />
-                        <path d={starPath(r.seed[0], r.seed[1], 5 / tf.scale)} fill={r.kind === "neg" ? "#b03a26" : "#1f3fc7"} stroke="#fff" strokeWidth={1 / tf.scale} />
+                          stroke={col} strokeWidth={2.5 / s} strokeDasharray={`${7 / s} ${4 / s}`} />
+                        <path d={starPath(r.seed[0], r.seed[1], 5 / s)} fill={col} stroke="#fff" strokeWidth={1 / s} />
+                        {show && r.poly.map((a, k) => {
+                          const b = r.poly[(k + 1) % r.poly.length];
+                          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+                          const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+                          const w = 14 / s, h = 6 / s;
+                          return <rect key={"e" + k} x={mx - w / 2} y={my - h / 2} width={w} height={h} rx={h / 2}
+                            transform={`rotate(${ang} ${mx} ${my})`} fill={grip} stroke={col} strokeWidth={1.6 / s} />;
+                        })}
+                        {show && r.poly.map(([x, y], k) => {
+                          const isSel = ocSel && ocSel.ri === i && ocSel.vi === k;
+                          const sz = (isSel ? 6.5 : 5.5) / s;
+                          return <g key={"v" + k}>
+                            {isSel && <circle cx={x} cy={y} r={9 / s} fill="none" stroke={col} strokeWidth={1.2 / s} opacity={0.5} />}
+                            <path d={`M${x},${y - sz} L${x + sz},${y} L${x},${y + sz} L${x - sz},${y} Z`}
+                              fill={isSel ? grip : col} stroke={isSel ? col : "#fff"} strokeWidth={(isSel ? 2 : 1.4) / s} />
+                          </g>;
+                        })}
                       </g>
-                    ))}
+                      );
+                    })}
                   </g>
                 );
               })}
@@ -2712,7 +4482,7 @@ export default function TakeoffCanvas() {
               <line ref={rubberRef} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={1.5 / tf.scale} strokeOpacity={0.85} strokeLinecap="round" style={{ display: "none" }} />
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               <path ref={cloudRef} fill="rgba(37,99,235,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale} strokeDasharray={`${5 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
-              <path ref={hlPathRef} style={{ display: "none" }} />
+              <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               {poly.length >= 2 && (tool === "linear" || tool === "surface"
                 ? <polyline points={poly.map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
                 : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : tool === "zone" ? "rgba(31,63,199,.06)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} strokeDasharray={tool === "zone" ? `${7 / tf.scale} ${5 / tf.scale}` : undefined} />)}
@@ -2735,7 +4505,7 @@ export default function TakeoffCanvas() {
                   {checkFeet != null && (
                     <text x={(check[0][0] + check[1][0]) / 2} y={(check[0][1] + check[1][1]) / 2 - 8 / tf.scale}
                       fontSize={12.5 / tf.scale} fontWeight={700} fill="#1f3fc7" textAnchor="middle"
-                      stroke="#fff" strokeWidth={3 / tf.scale} paintOrder="stroke">{fmtCheckLen(checkFeet, units)}</text>
+                      stroke="#fff" strokeWidth={3 / tf.scale} paintOrder="stroke">{fmtCheckLen(checkFeet, UNITS)}</text>
                   )}
                 </>
               )}
@@ -2745,12 +4515,14 @@ export default function TakeoffCanvas() {
               {scaleGuide && panelKeySet.has(scaleGuide.key) && (() => {
                 const [gx, gy] = scaleGuide.at;
                 const z = tf.scale;
-                const unitPx = scaleGuide.px / (units === "metric" ? scaleGuide.feet * M_PER_FT : scaleGuide.feet); // one ft (or 1 m) in px
+                const unitPx = scaleGuide.px / (UNITS === "metric" ? scaleGuide.feet * M_PER_FT : scaleGuide.feet); // one ft (or 1 m) in px
                 const step = unitPx * z >= 6 ? 1 : unitPx * z * 5 >= 6 ? 5 : 0;
-                const nUnits = units === "metric" ? Math.round(scaleGuide.feet * M_PER_FT) : scaleGuide.feet;
+                const nUnits = UNITS === "metric" ? Math.round(scaleGuide.feet * M_PER_FT) : scaleGuide.feet;
                 const ticks = step ? Array.from({ length: Math.floor(nUnits / step) + 1 }, (_, i) => i * step) : [0, nUnits];
-                const lbl = units === "metric" ? `${nUnits} m at ${scaleGuide.label}` : `${scaleGuide.feet}′ at ${scaleGuide.label}`;
-                const cap = units === "metric" ? "a door is about 0.9 m — if this bar looks wildly off, the scale is wrong" : "a door opening is about 3′ — if this bar looks wildly off, the scale is wrong";
+                // "at 1/8″ = 1′-0″" reads right for a scale string; a source word ("calibrated", "custom") reads better parenthesized
+                const scaleTxt = /[=:]/.test(scaleGuide.label) ? `at ${scaleGuide.label}` : `(${scaleGuide.label})`;
+                const lbl = UNITS === "metric" ? `${nUnits} m ${scaleTxt}` : `${scaleGuide.feet}′ ${scaleTxt}`;
+                const cap = UNITS === "metric" ? "a door is about 0.9 m — if this bar looks wildly off, the scale is wrong" : "a door opening is about 3′ — if this bar looks wildly off, the scale is wrong";
                 return (
                   <g style={{ pointerEvents: "none" }}>
                     <line x1={gx} y1={gy} x2={gx + scaleGuide.px} y2={gy} stroke="#fff" strokeWidth={7 / z} strokeLinecap="round" />
@@ -2778,30 +4550,35 @@ export default function TakeoffCanvas() {
               {status === "loading" && "Loading sheets…"}
               {status === "rendering" && "Rendering sheet…"}
               {status === "empty" && "No PDFs yet — click “Open PDF” or drag a plan onto the canvas."}
-              {status === "error" && <span style={{ color: "#b03a26" }}>Error: {err}</span>}
+              {status === "error" && <span style={{ color: "var(--c-danger)" }}>Error: {err}</span>}
             </div>
           )}
 
-          {/* zoom buttons. Left presses stop here: the container's onPointerDown
-              treats any left press as a deferred canvas click (pendingClickRef +
-              pointer capture), so a press on these buttons ALSO fired the armed
-              tool at the button's coordinates — with One-Click armed, a zoom
-              click could select a giant region through the button. Right/middle/
-              Space presses still bubble so a pan can start on top of the stack;
-              dblclick stops too so rapid zoom clicks can't finishShape(). */}
-          <div onPointerDown={(e) => { if (e.button === 0 && !spaceRef.current) e.stopPropagation(); }}
-            onDoubleClick={(e) => e.stopPropagation()}
+          {/* zoom buttons — stop left presses here: the container's onPointerDown
+              setPointerCapture()s every left press, which retargets the pointerup
+              and the composed click never reaches these buttons. Right/middle/
+              Space presses still bubble so a pan can start on top of the stack,
+              and dblclick is stopped so rapid zoom clicks can't finishShape() */}
+          <div onPointerDown={(e) => { if (e.button === 0 && !spaceRef.current) e.stopPropagation(); }} onDoubleClick={(e) => e.stopPropagation()}
             style={{ position: "absolute", left: 14, bottom: 14, display: "flex", flexDirection: "column", gap: 6 }}>
             {[["+", 1.25], ["−", 0.8]].map(([lbl, f]) => (
               <button key={lbl} onClick={() => { const r = containerRef.current.getBoundingClientRect(); zoomAround(r.width / 2, r.height / 2, f); }}
                 style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 18, fontWeight: 700 }}>{lbl}</button>
             ))}
             <button onClick={() => stage.w && fitToView(stage.w, stage.h)} title="Fit" style={{ width: 34, height: 34, borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 12 }}>fit</button>
-            <button onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Light view" : "Dark view (negative print)"}
+            <button onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Sheet back to positive print" : "Invert sheet — negative print (affects marked-set export)"}
               style={{ width: 34, height: 34, borderRadius: 0, border: `1px solid ${darkMode ? "var(--cobalt)" : "var(--ink-faint)"}`, background: darkMode ? "var(--cobalt)" : "var(--paper-bright)", color: darkMode ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontSize: 13 }}>
               {darkMode ? "☀" : "☾"}</button>
           </div>
         </div>
+
+        {/* status line — the transient message bar (was the right end of the old
+            conditions bar): floats bottom-center over the canvas, never blocks input */}
+        {commitMsg && (
+          <div style={{ position: "absolute", left: "50%", bottom: 14, transform: "translateX(-50%)", maxWidth: "70%", zIndex: 6, pointerEvents: "none", padding: "6px 12px", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-1)", fontSize: 12, color: isDangerMsg(commitMsg) ? "var(--c-danger)" : "var(--c-positive)" }}>
+            {commitMsg}
+          </div>
+        )}
 
         {/* live readout — top-right. Height is capped short of the panel rail's centered
             band (same right:14 column) so populated totals never cover the rail buttons. */}
@@ -2813,9 +4590,10 @@ export default function TakeoffCanvas() {
             const sf = pos.reduce((n, r) => n + r.area_sf, 0) - neg.reduce((n, r) => n + r.area_sf, 0);
             return (
               <>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#1f3fc7" }}>{num(areaVal(sf, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} selected</span></div>
-                <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""}{units === "metric" ? "" : ` · ${num(sf / 9)} SY`}</div>
-                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(sf)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF selected</span></div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{pos.length} space{pos.length === 1 ? "" : "s"}{neg.length ? ` − ${neg.length} cutout${neg.length === 1 ? "" : "s"}` : ""} · {num(sf / 9)} SY</div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>{ocSel ? "drag to move · Delete drops this point · Esc deselects" : "hover a fill to edit: drag a corner or edge · shift-click an edge adds a point"}</div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>click adds a space · ⌥-click carves a cutout · ⏎ Create · ⌫ undo · Esc cancel</div>
                 {proposal.regions.some((r) => r.rt) && (
                   <div style={{ fontSize: 11.5, color: "var(--c-warning)", marginTop: 4 }}>Traced from scan pixels — verify edges before Create.</div>
                 )}
@@ -2826,21 +4604,25 @@ export default function TakeoffCanvas() {
               const liveLF = openLen(poly) * liveUpp;
               return condH > 0 ? (
                 <>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "#0e1a2e" }}>{num(areaVal(liveLF * condH, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} wall</span></div>
-                  <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{fl(liveLF)} × {num(condH, 2)} ft</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>{num(liveLF * condH)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF wall</span></div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{num(liveLF)} LF × {num(condH, 2)} ft</div>
                 </>
-              ) : <div style={{ fontSize: 12.5, color: "#b03a26" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition bar</div>;
+              ) : <div style={{ fontSize: 12.5, color: "var(--c-danger)" }}>Set a height for {aCond?.finish_tag || "this condition"} — H in the condition editor</div>;
             })()
           ) : tool === "zone" && poly.length >= 1 ? (
-            <>
-              {liveArea != null && poly.length >= 3 && <div style={{ fontSize: 22, fontWeight: 700, color: "#1f3fc7" }}>{num(areaVal(liveArea, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)} in zone</span></div>}
-              <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>⏎, double-click, or the Finish button closes the zone and lists everything inside · Esc cancels</div>
-            </>
+            zoneTraceCross ? (
+              <span style={{ color: "var(--c-danger)", fontSize: 12.5 }}>Zone on one sheet — that point landed on a different sheet. Finish is disabled; Esc or Undo last point to fix it.</span>
+            ) : (
+              <>
+                {liveArea != null && poly.length >= 3 && <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF in zone</span></div>}
+                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>⏎, double-click, or the Finish button closes the zone and lists everything inside · Esc cancels</div>
+              </>
+            )
           ) : liveArea != null && poly.length >= 3 ? (
             <>
-              <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "#b03a26" : "#0e1a2e" }}>{tool === "deduct" ? "−" : ""}{num(areaVal(liveArea, units))} <span style={{ fontSize: 13, fontWeight: 600 }}>{areaUnit(units)}</span></div>
-              <div style={{ fontSize: 12.5, color: "#5b544a", marginTop: 2 }}>{units === "metric" ? `${fl(livePerim)} perim` : `${num(liveArea / 9)} SY  ·  ${num(livePerim)} LF perim`}</div>
-              {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {fa(livePerim * condH)} vert{units === "metric" ? "" : ` · ${num((liveArea * condH) / 27)} CY`}</div>}
+              <div style={{ fontSize: 22, fontWeight: 700, color: tool === "deduct" ? "var(--c-danger)" : "var(--ink)" }}>{tool === "deduct" ? "−" : ""}{num(liveArea)} <span style={{ fontSize: 13, fontWeight: 600 }}>SF</span></div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{num(liveArea / 9)} SY &nbsp;·&nbsp; {num(livePerim)} LF perim</div>
+              {condH > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }}>@H {num(condH, 2)}′: {num(livePerim * condH)} SF vert · {num((liveArea * condH) / 27)} CY</div>}
             </>
           ) : (
             <div style={{ fontSize: 12.5, opacity: 0.6 }}>{!unitsPerPx ? "Set scale first" : tool === "zone" ? "Trace a region (an apartment, a wing) — ⏎ closes it and lists every condition inside" : !activeCond ? "Pick a condition" : tool === "oneclick" ? "Click inside a room — it selects itself" : tool === "surface" ? "Trace the wall run" : "Click to trace an area"}</div>
@@ -2849,51 +4631,58 @@ export default function TakeoffCanvas() {
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }} title="Height for THIS wall only — full-height tile here, 4-ft wainscot there, same condition. ↺ returns to the condition height.">
               <Icon name="height" size={12} />
               <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>this wall</span>
-              <input type="number" min="0" step="0.25" value={selShape.height_ft ?? ""}
+              <input name="shape-height-ft" type="number" min="0" step="0.25" value={selShape.height_ft ?? ""}
                 onChange={(e) => setShapeHeight(e.target.value)}
                 style={{ width: 56, padding: "2px 5px", border: "1px solid var(--ink-faint)", fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>ft → {fa(selShape.computed?.area_sf || 0)}</span>
+              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>ft → {num(selShape.computed?.area_sf || 0)} SF</span>
               {condH > 0 && Number(selShape.height_ft) !== condH && (
                 <button onClick={clearShapeHeight} title="Set this wall to the condition height" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0 }}>↺</button>
               )}
             </div>
           )}
-          <div style={{ height: 1, background: "#eee6d8", margin: "8px 0" }} />
+          <div style={{ height: 1, background: "var(--divider-soft)", margin: "8px 0" }} />
           <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, opacity: 0.5 }}>{aCond?.finish_tag || "—"} total ({condRow?.shape_count || 0}{condMult > 1 ? ` ×${condMult}` : ""})</div>
-          {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(condTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)}</span> {units === "imperial" && <span style={{ fontSize: 12, fontWeight: 500, color: "#5b544a" }}>· {num(condTotal / 9)} SY</span>}</div>}
-          {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(wallTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)} wall</span></div>}
-          {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(areaVal(borderTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{areaUnit(units)} border</span></div>}
-          {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lenVal(lfTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{lenUnit(units)}</span></div>}
+          {condTotal !== 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(condTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF</span> <span style={{ fontSize: 12, fontWeight: 500, color: "var(--ink-secondary)" }}>· {num(condTotal / 9)} SY</span></div>}
+          {wallTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(wallTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF wall</span></div>}
+          {borderTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(borderTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>SF border</span></div>}
+          {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lfTotal)} <span style={{ fontSize: 12, fontWeight: 600 }}>LF</span></div>}
           {countTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(countTotal, 0)} <span style={{ fontSize: 12, fontWeight: 600 }}>EA</span></div>}
-          {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{fa(vertTotal)} vert (perim × H)</div>}
+          {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{num(vertTotal)} SF vert (perim × H)</div>}
           {condTotal === 0 && lfTotal === 0 && countTotal === 0 && wallTotal === 0 && borderTotal === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginTop: 2 }}>—</div>}
           <div style={{ fontSize: 10.5, opacity: 0.45, marginTop: 6 }}>{visibleShapes.length} shapes on {groupKeys.length > 1 ? `${groupKeys.length} sheets` : "sheet"} · zoom {(tf.scale * 100).toFixed(0)}%</div>
         </div>
 
-        {/* zone check results — ephemeral, clears with the tool/outline */}
+        {/* zone check results — ephemeral, clears with the tool/outline. Docked at
+            right:56 so it never covers the panel rail (right:14, 34px wide), and
+            anchored to the BOTTOM (not top:14 like the original) so it stacks
+            vertically with the live readout instead of sitting on top of it —
+            the live readout (right:14, top:14, zIndex 6) shows the SAME zone's
+            live "SF in zone" figure for the NEXT trace while this panel is open,
+            and a top:14 placement here covered all but a ~42px sliver of it. */}
         {zoneRows && (
-          <div style={{ position: "absolute", right: 56, top: 14, width: 300, maxHeight: "calc(100% - 28px)", overflowY: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
+          <div style={{ position: "absolute", right: 56, bottom: 14, width: 300, maxHeight: "calc(100% - 28px)", overflowY: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)" }}>
               <b style={{ fontSize: 12.5 }}>Zone check</b>
               <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--ink-muted)" }}>nothing saved</span>
-              <button onClick={() => setZoneCheck(null)} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "var(--ink)" }}>×</button>
+              <button onClick={resetZone} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", fontSize: 15, lineHeight: 1, color: "var(--ink)" }}>×</button>
             </div>
             {zoneRows.length === 0 && (
               <div style={{ padding: "10px 12px", color: "var(--ink-muted)", fontSize: 11.5 }}>No takeoffs inside this zone on this sheet.</div>
             )}
             {zoneRows.map((zr) => {
               const parts = [];
-              if (zr.floor_sf) parts.push(fa(zr.floor_sf));
-              if (zr.wall_sf) parts.push(`${fa(zr.wall_sf)} wall`);
-              if (zr.border_sf) parts.push(`${fa(zr.border_sf)} border`);
-              if (zr.lf) parts.push(fl(zr.lf));
+              if (zr.floor_sf) parts.push(`${num(zr.floor_sf)} SF`);
+              if (zr.wall_sf) parts.push(`${num(zr.wall_sf)} SF wall`);
+              if (zr.border_sf) parts.push(`${num(zr.border_sf)} SF border`);
+              if (zr.lf) parts.push(`${num(zr.lf)} LF`);
               if (zr.ea) parts.push(`${num(zr.ea, 0)} EA`);
               const open = zoneExpand === zr.id;
               return (
                 <div key={zr.id} style={{ padding: "8px 12px", borderBottom: "1px solid var(--ink-faint)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <HatchSwatch type={zr.hatch || "solid"} line={zr.color} fill={zr.fill} />
+                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={zr.hatch || "solid"} line={zr.color} fill={zr.fill} /></span>
                     <b style={{ fontFamily: "var(--f-mono)", fontSize: 11.5 }}>{zr.finish_tag || "—"}</b>
+                    {zr.multiplier > 1 && <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>×{zr.multiplier}</span>}
                     <span style={{ marginLeft: "auto", fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink)" }}>{parts.join(" · ") || "—"}</span>
                   </div>
                   {zr.materials.length > 0 && (
@@ -2903,7 +4692,7 @@ export default function TakeoffCanvas() {
                     </button>
                   )}
                   {open && zr.materials.map((m, i) => (
-                    <div key={i} style={{ display: "flex", gap: 8, marginTop: 3, marginLeft: 12, fontSize: 11, color: "var(--ink-soft)" }}>
+                    <div key={i} style={{ display: "flex", gap: 8, marginTop: 3, marginLeft: 12, fontSize: 11, color: "var(--ink-secondary)" }}>
                       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
                       <span style={{ fontFamily: "var(--f-mono)" }}>{num(m.qty)} {m.unit}</span>
                     </div>
@@ -2911,107 +4700,80 @@ export default function TakeoffCanvas() {
                 </div>
               );
             })}
-            <div style={{ padding: "7px 12px", fontSize: 10, color: "var(--ink-muted)" }}>Shapes counted by their center point · same sheet only · counted shapes glow cobalt.</div>
+            <div style={{ padding: "7px 12px", fontSize: 10, color: "var(--ink-muted)" }}>
+              Shapes counted by their center point · same sheet only · counted shapes glow cobalt.
+              {zoneRows.some((r) => (r.multiplier || 1) > 1) && <> Rows marked ×N already have the condition's multiplier applied — the same convention as the Report's Groups section, not its base-quantity by-sheet rows.</>}
+              {/* A deduct classifies by its OWN center, independent of its positive
+                  area's center (same rule the Report's by-sheet "negative slices"
+                  note already documents for a cross-sheet split) — a zone edge
+                  can split a deduct from the shape it cuts, producing a negative
+                  row here. Flag it rather than guess a pairing: the deduct/positive
+                  link is never stored, only inferred by overlap, and geometric
+                  containment pairing would guess wrong for nested/overlapping
+                  positives. */}
+              {zoneRows.some((r) => r.total_sf < 0 || r.floor_sf < 0) && <> A negative row means a deduct here counted but its positive area's center fell outside the zone (or vice-versa) — the zone edge split a deduct from its shape.</>}
+            </div>
           </div>
         )}
 
         {/* panel rail — markup/takeoffs toggles on the right edge (zoom-cluster
-            style). Moved out of the toolbar so it never wraps a third row; z above the
-            takeoffs panel (which docks at right:56) so a lit toggle also closes it. */}
+            style). Moved out of the toolbar so it never wraps a third row. The
+            takeoffs toggle mirrors the DOCKED panel's collapsed pref — the rail
+            rides the canvas edge, so it stays visible either way. */}
         <div style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 8 }}>
-          {panelBtn(() => setShowMarkupPanel((v) => !v), "markup", "Markups on these sheets (clouds, callouts, notes)", showMarkupPanel, markupCount)}
-          {panelBtn(() => setShowTakeoffs((v) => !v), "takeoffs", "Takeoffs — conditions + running totals", showTakeoffs, visibleShapes.length)}
-          {panelBtn(() => setShowRevisions(true), "revisions", "Revisions — save the takeoff at each bid revision, compare what moved", showRevisions)}
+          {panelBtn(() => setLeftTab((t) => (t === "markup" ? null : "markup")), "markup", "Markups on these sheets (clouds, callouts, notes)", leftTab === "markup", markupCount)}
+          {panelBtn(() => setLeftTab((t) => (t === "stamp" ? null : "stamp")), "stamp", "Stamps — reusable annotations dropped click-to-place", leftTab === "stamp", stampLib.stamps.length)}
+          {panelBtn(() => setLeftTab((t) => (t === "rfi" ? null : "rfi")), "rfi", "RFI register — raise, track, and export Requests For Information", leftTab === "rfi", rfis.length)}
+          {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
         </div>
 
-        {/* markup panel — manage clouds/callouts/text + link or create RFIs (top-left, clear of HUD/FABs) */}
-        {showMarkupPanel && (
-          <div style={{ position: "absolute", left: 14, top: 14, width: 320, maxHeight: "calc(100% - 28px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid #1f3fc7", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", zIndex: 7, fontSize: 12.5 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "#1f3fc7", color: "#fff", borderRadius: 0 }}>
-              <strong>Markups · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <button onClick={() => setShowMarkupPanel(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-            </div>
-            <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
-              Pick <b>☁ Cloud</b>, <b>💬 Callout</b>, or <b>T Text</b> above, then click the plan to annotate it.
-            </div>
-            {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
-              <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
-            )}
-            {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
-              <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "#1f3fc7", textTransform: "uppercase" }}>{m.type}</span>
-                  <span style={{ flex: 1, color: "var(--ink)" }}>{m.text || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>}</span>
-                  <button onClick={() => { const t = window.prompt("Edit text:", m.text || ""); if (t != null) updateMarkup(m.id, { text: t.trim() }); }} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>
-                  <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "#b03a26" }}>🗑</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Takeoffs side panel — every condition on this sheet with its running totals.
-            "Takeoffs on the side": click a row to make it active, ⧉ to copy its shape. */}
-        {showTakeoffs && (
-          <div style={{ position: "absolute", right: 56, top: 118, width: panelMatOpen ? 420 : 300, maxHeight: "calc(100% - 132px)", overflow: "auto", background: "var(--paper-bright)", border: "1px solid var(--ink)", borderRadius: 0, boxShadow: "var(--shadow-2)", zIndex: 7, fontSize: 12.5 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", background: "var(--ink)", color: "var(--paper-cream)", borderRadius: 0 }}>
-              <strong>Takeoffs · {groupKeys.length > 1 ? "these sheets" : "this sheet"}</strong>
-              <button onClick={() => setShowTakeoffs(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 16, cursor: "pointer" }}>×</button>
-            </div>
-            {conditions.length === 0 && <div style={{ padding: "12px", color: "var(--ink-muted)" }}>No conditions yet — add one and start tracing.</div>}
-            {conditions.map((c) => {
-              const row = visRowById.get(c.id);
-              const mult = c.multiplier || 1;
-              const sf = row?.floor_sf || 0, lf = row?.lf || 0, ea = row?.ea || 0, wsf = row?.wall_sf || 0;
-              const shapeCount = row?.shape_count || 0;
-              const on = c.id === activeCond;
-              const matOn = on && panelMatOpen;
-              return (
-                <div key={c.id} style={{ borderTop: "1px solid var(--ink-faint)", background: on ? "#f3f8f4" : "transparent", borderLeft: on ? `3px solid ${c.color}` : "3px solid transparent" }}>
-                  <div onClick={() => setActiveCond(c.id)} title="Make this the active condition"
-                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer" }}>
-                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
-                      <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
-                        {sf ? fa(sf) : ""}{wsf ? `${sf ? " · " : ""}${fa(wsf)} wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${fl(lf)}` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
-                      </div>
-                    </div>
-                    <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
-                    <button onClick={(e) => { e.stopPropagation(); setActiveCond(c.id); setPanelMatOpen((v) => (on ? !v : true)); }}
-                      title="Assemblies — supporting materials for this condition"
-                      style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: matOn ? "var(--ink)" : "transparent", color: matOn ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>
-                      <Icon name="product" size={11} />{c.materials?.length ? c.materials.length : ""}
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); deleteCondition(c.id); }} title="Delete this condition (and its takeoffs)"
-                      style={{ flexShrink: 0, padding: "2px 6px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "#b03a26", cursor: "pointer", fontSize: 12 }}>✕</button>
-                  </div>
-                  {matOn && (
-                    <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
-                      <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Assemblies — order qty = measured ÷ coverage, rounded up.</div>
-                      <MaterialsEditor materials={c.materials} onAdd={addMaterial} onUpdate={updateMaterial} onRemove={removeMaterial} />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            <div style={{ padding: "8px 12px", borderTop: "1px solid var(--ink-faint)", color: "var(--ink-muted)", fontSize: 10.5 }}>
-              Select a shape on the plan, then ⧉ Copy / ⎘ Paste (⌘C / ⌘V) — it lands on the sheet under your cursor.
-            </div>
-          </div>
-        )}
        </div>
+
+        {/* Takeoffs panel — DOCKED in the layout row (reflows the canvas, not an
+            overlay): every condition with its running totals, plus the Library,
+            Materials, and Columns tabs. Extracted to components/TakeoffsPanel.jsx and
+            ALWAYS mounted (it renders null while collapsed) so its view state —
+            tab, filter, multi-select — survives a collapse/expand round-trip
+            exactly as it did as canvas state. Collapse/expand keeps the current
+            transform — the stage is anchored top-left, so a re-fit would be a
+            jarring jump. */}
+        <TakeoffsPanel
+          open={takeoffsOpen}
+          width={panelW}
+          multiSheet={groupKeys.length > 1}
+          conditions={conditions}
+          activeCond={activeCond}
+          visRowById={visRowById}
+          conditionColumns={conditionColumns}
+          shapeLabels={shapeLabels}
+          templates={templates}
+          palette={palette}
+          matLib={matLib}
+          matLibById={matLibById}
+          linkedCountById={linkedCountById}
+          panelPrefs={panelPrefs}
+          reassigning={tool === "select" && !!selectedId}
+          epoch={panelEpoch}
+          clearSelectionRef={panelSelectionRef}
+          {...panelHandlers}
+        />
       </div>
 
-      {/* gallery-first plan-set view — overlays the mounted canvas */}
-      {view === "gallery" && (
-        <SheetGallery
+      {/* Unified plan navigator — one surface for the plan-set gallery AND the
+          Drive folder browser. Presents as a modal over the dimmed canvas when a
+          sheet is open behind it, or full-screen (onboarding) when nothing is. */}
+      {(view === "gallery" || view === "picker") && (
+        <PlanNavigator
+          canClose={openTabs.length > 0}
+          onExit={() => setView("canvas")}
+          initialMode={view === "picker" ? "browse" : "plan"}
+          cloudMode={cloudMode}
           sheets={sheets} getDoc={docFor} scales={scales} detectedScales={detectedScales}
           shapes={shapes} labels={galleryLabels}
           onLabel={(k, lbl) => setGalleryLabels((m) => (m[k] === lbl ? m : { ...m, [k]: lbl }))}
           onDetect={(k, det) => setDetectedScales((d) => (d[k]?.label === det.label ? d : { ...d, [k]: det }))}
           thumbCacheRef={thumbCacheRef} busyRef={statusRef}
-          openTabs={openTabs} onOpen={openSheets} onClose={() => setView("canvas")} canClose={openTabs.length > 0}
+          openTabs={openTabs} onOpen={openSheets}
           onAddFiles={handleFiles}
           levels={sheetLevels}
           onAssignLevel={(keys, label) => setSheetLevels((m) => {
@@ -3019,49 +4781,59 @@ export default function TakeoffCanvas() {
             for (const k of keys) { if (label) next[k] = label; else delete next[k]; }
             return next;
           })}
+          onClosePdf={closePdf}
+          onRemoveFromProject={cloudMode ? removeFromProject : undefined}
+          onCloseProject={cloudMode ? closeProject : undefined}
+          onBrowseProjects={cloudMode ? browseProjects : undefined}
+          listFolder={cloudMode ? pickerListFolder : undefined}
+          addSheets={pickerAddSheets}
+          onAdded={async () => { await refreshSheets(); setStatus("ready"); }}
         />
       )}
 
-      {loadError && (
-        <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 60, display: "flex", alignItems: "center", gap: 12, maxWidth: 640, padding: "10px 14px", background: "var(--paper-bright)", border: "1px solid var(--c-danger)", boxShadow: "var(--shadow-2)", fontSize: 12.5, color: "var(--ink)" }}>
-          <span>
-            <strong style={{ color: "var(--c-danger)" }}>Couldn't load this project's saved takeoff</strong> ({loadError}).
-            Autosave is paused so nothing overwrites your saved work — reload the tab to retry.
-          </span>
-          <button className="btn-ghost" onClick={() => window.location.reload()} style={{ whiteSpace: "nowrap" }}>Reload</button>
-        </div>
+      {importRows && (
+        <ImportSchedulePanel
+          rows={importRows}
+          existing={new Set(conditions.map((c) => normalizeTag(c.finish_tag)))}
+          palette={PALETTE} startIndex={conditions.length}
+          onCreate={createFromSchedule}
+          onClose={() => setImportRows(null)}
+        />
       )}
 
       {showReport && (
         <ReportPanel
           projectName={projectName} onProjectName={setProjectName}
-          conditions={conditions} shapes={shapes} units={units}
+          clientInfo={clientInfo} onClientInfo={setClientInfo}
+          conditions={conditions} shapes={shapes} markups={markups} rfis={rfis}
+          conditionColumns={conditionColumns} shapeLabels={shapeLabels}
+          scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown" }))}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
           onClose={() => setShowReport(false)}
         />
       )}
 
-      {showRevisions && (
-        <RevisionsPanel
-          current={{ project_name: projectName, units, conditions, shapes, markups }}
-          units={units}
-          onRestore={(p) => {
-            // swap in the revision's takeoff state; sheets/tabs/scales stay as
-            // they are (shapes on since-removed sheets are harmless — they only
-            // render on their own sheet). Autosave persists the swap.
-            const conds = p.conditions || [];
-            setConditions(conds);
-            setActiveCond(conds[0]?.id || null);
-            setShapes(p.shapes || []);
-            setMarkups(Array.isArray(p.markups) ? p.markups : []);
-            setSelectedId(null); setSelectedMarkupId(null); setProposal(null); setPoly([]);
-          }}
-          onClose={() => setShowRevisions(false)}
-        />
-      )}
-
-      {showAiSettings && <AiSettings onClose={() => setShowAiSettings(false)} />}
+      <SnapshotPanel
+        open={showSnapshots} onClose={() => setShowSnapshots(false)}
+        buildPayload={buildPayload} currentLabel={projectName}
+        sheetLabel={(k) => tabLabel(k)}
+        onLoadSnapshot={(payload) => {
+          // a runtime load (unlike mount) can interrupt work in flight — an
+          // unfinished trace/calibration/proposal must not commit into the
+          // restored takeoff under a reset activeCond. The check tool and the
+          // rescale stash are in that class too: a surviving prevScale would
+          // let "Revert scale" re-price the RESTORED takeoff against a scale
+          // stashed from the discarded timeline. Zone is in the same class —
+          // a surviving zoneCheck would re-classify the RESTORED shape set
+          // against the pre-load polygon (hydrate() also resets it, but this
+          // caller-side reset covers the pending in-progress trace too).
+          setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
+          setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null);
+          resetZone();
+          hydrate(payload || {});
+        }}
+      />
     </div>
   );
 }

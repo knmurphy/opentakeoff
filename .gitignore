@@ -27,3 +27,12 @@ server/.venv/
 .vscode/
 .idea/
 *.log
+
+# Agent/browser session artifacts (Playwright MCP traces, verification screenshots)
+.playwright-mcp/
+/*.png
+.claude/
+
+# node_modules symlinks too — the dir patterns above match only real directories,
+# which is how a worktree convenience symlink once got committed
+**/node_modules

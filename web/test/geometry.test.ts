@@ -5,8 +5,10 @@ import assert from "node:assert/strict";
 import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
-  type Point,
+  SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE,
+  type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
+import { cloudBezier, cloudPath, arrowheadPath } from "../src/lib/geometry.js";
 
 // a closed square room, as flat boundary segments in image px
 function squareSegs(x0: number, y0: number, x1: number, y1: number): number[] {
@@ -184,6 +186,158 @@ test("hatch: a hatched room with a real door gap still refuses (no faked region)
   assert.notEqual(f.status, "ok");
 });
 
+// ── grow-but-verify escalation (issue #32) ─────────────────────────────────
+// The moderate band — a strict "ok" fill bounded ~40% by hatch — is where real
+// hatch-lined rooms sit (measured max soft-bounded fraction ~0.63). The old gate
+// only escalated at ≥0.70, so it never fired there. These masks are hand-built
+// so softFrac and the walls-only growth are exact, pinning the DECISION gate:
+// two rooms split by a SOFT (hatch) divider, differing only in the neighbor's
+// size, so removing the divider grows the fill modestly vs. balloons it.
+//   cell bits: 1 = hard (wall), 2 = soft (hatch); ws = 1 so seed px == mask px.
+//   lw / rw are the interior widths of the left / right rooms (in cells).
+function twoRoomMask(lw: number, rw: number, H: number): { mo: MaskObj; seed: [number, number] } {
+  const MW = 140, MH = 90, OX = 4, OY = 4;             // block floats in a large canvas
+  const mask = new Uint8Array(MW * MH);                //   so the 30% leak cap isn't what's under test
+  const set = (x: number, y: number, v: number) => { mask[y * MW + x] |= v; };
+  const bw = lw + rw + 2;                              // span: |wall| lw |divider| rw |wall|
+  for (let x = 0; x <= bw; x++) { set(OX + x, OY, 1); set(OX + x, OY + H + 1, 1); }
+  for (let y = 0; y <= H + 1; y++) { set(OX, OY + y, 1); set(OX + bw, OY + y, 1); }
+  const divX = OX + 1 + lw;                            // SOFT vertical divider between the rooms
+  for (let y = 1; y <= H; y++) set(divX, OY + y, 2);
+  let softCount = 0; for (const c of mask) if (c & 2) softCount++;
+  return { mo: { mask, mw: MW, mh: MH, ws: 1, softCount }, seed: [OX + 1 + (lw >> 1), OY + 1 + (H >> 1)] };
+}
+
+test("escalation: a moderately hatch-bounded room recovers past the divider (growth within cap)", () => {
+  // strict fills the 8-wide left room (softFrac ≈ 0.43 — below the old 0.70 gate,
+  // so the pre-#32 code left it short); walls-only reaches the neighbor's far wall,
+  // growing the area only modestly (well under HATCH_GROWTH_MAX = 2.5×) ⇒ accepted,
+  // flagged hatchFiltered.
+  const { mo, seed } = twoRoomMask(8, 6, 48);
+  const strict = floodRegion({ ...mo, softCount: 0 }, seed[0], seed[1]); // softCount 0 disables escalation
+  assert.equal(strict.status, "ok");
+  const f = floodRegion(mo, seed[0], seed[1]);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok" || strict.status !== "ok") return;
+  assert.equal(f.hatchFiltered, true, "moderate hatch band should escalate");
+  assert.ok(f.count > strict.count, `escalated fill is larger than strict (${strict.count} → ${f.count})`);
+});
+
+test("escalation: a runaway escalation (balloons past the cap) is discarded — strict stands", () => {
+  // Same left room and softFrac, but the neighbor is far larger (40 wide): removing
+  // the divider grows the fill several-fold, over HATCH_GROWTH_MAX, so the strict
+  // fill is kept and the result is NOT flagged hatchFiltered.
+  const { mo, seed } = twoRoomMask(8, 40, 48);
+  const strict = floodRegion({ ...mo, softCount: 0 }, seed[0], seed[1]);
+  const f = floodRegion(mo, seed[0], seed[1]);
+  assert.equal(f.status, "ok"); assert.equal(strict.status, "ok"); // both must land, else the guard below would skip the real checks
+  if (f.status !== "ok" || strict.status !== "ok") return;
+  assert.ok(!f.hatchFiltered, "a ballooning walls-only escalation must be rejected");
+  assert.equal(f.count, strict.count, "the strict fill is preserved unchanged");
+});
+
+test("escalation: Strict sensitivity empties the moderate band — the room that Balanced recovers stays strict", () => {
+  // The recover fixture (softFrac ≈ 0.43) escalates at Balanced; at SENS_STRICT the
+  // moderate band collapses (escalateFrac == HATCH_BOUND_FRAC) so it must NOT.
+  const { mo, seed } = twoRoomMask(8, 6, 48);
+  const balanced = floodRegion(mo, seed[0], seed[1], SENS_BALANCED);
+  const strict = floodRegion(mo, seed[0], seed[1], SENS_STRICT);
+  assert.equal(balanced.status, "ok"); assert.equal(strict.status, "ok");
+  if (balanced.status !== "ok" || strict.status !== "ok") return;
+  assert.equal(balanced.hatchFiltered, true, "Balanced escalates the moderate-band room");
+  assert.ok(!strict.hatchFiltered, "Strict leaves it as the strict fill");
+  assert.ok(strict.count < balanced.count, "Strict is the smaller (pre-escalation) region");
+});
+
+test("escalation: Aggressive sensitivity accepts a larger growth that Balanced rejects", () => {
+  // Growth ≈ 2.8× — over the Balanced cap (2.5), under the Aggressive cap (4.0).
+  const { mo, seed } = twoRoomMask(6, 10, 48);
+  const balanced = floodRegion(mo, seed[0], seed[1], SENS_BALANCED);
+  const aggressive = floodRegion(mo, seed[0], seed[1], SENS_AGGRESSIVE);
+  assert.equal(balanced.status, "ok"); assert.equal(aggressive.status, "ok");
+  if (balanced.status !== "ok" || aggressive.status !== "ok") return;
+  assert.ok(!balanced.hatchFiltered, "Balanced rejects the ~2.8× growth");
+  assert.equal(aggressive.hatchFiltered, true, "Aggressive accepts it");
+  assert.ok(aggressive.count > balanced.count, "Aggressive recovers the larger region");
+});
+
+// ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
+test("cloudBezier: closed loop of cubic segments, more segments for a longer perimeter", () => {
+  const small = cloudBezier(0, 0, 100, 60);
+  const big = cloudBezier(0, 0, 400, 300);
+  // each segment is [c1, c2, end], each a point
+  for (const seg of small.segments) {
+    assert.equal(seg.length, 3, "a segment is c1, c2, end");
+    for (const p of seg) assert.equal(p.length, 2, "each control/end is an [x,y] point");
+  }
+  // closed: the last endpoint returns to the start corner (within fp tolerance)
+  const last = small.segments[small.segments.length - 1][2];
+  assert.ok(Math.hypot(last[0] - small.start[0], last[1] - small.start[1]) < 1e-6, "path closes");
+  // a corner-only degenerate box still yields the four base scallops
+  assert.ok(small.segments.length >= 4, `>=4 scallops, got ${small.segments.length}`);
+  assert.ok(big.segments.length > small.segments.length, "longer perimeter → more scallops");
+});
+
+test("cloudBezier: control points stay within the scallop-padded bbox", () => {
+  const { start, segments } = cloudBezier(50, 50, 250, 170);   // r = clamp((200+120)/22)=14.5
+  const PAD = 32;   // scallops bulge outward by ~r; padding must contain them
+  const pts: number[][] = [start];
+  for (const [c1, c2, end] of segments) { pts.push(c1, c2, end); }
+  for (const [x, y] of pts) {
+    assert.ok(x >= 50 - PAD && x <= 250 + PAD, `x ${x} within padded bbox`);
+    assert.ok(y >= 50 - PAD && y <= 170 + PAD, `y ${y} within padded bbox`);
+  }
+});
+
+test("cloudBezier: normalizes corner order (x1<x0, y1<y0 gives the same outline)", () => {
+  const a = cloudBezier(0, 0, 120, 80);
+  const b = cloudBezier(120, 80, 0, 0);
+  assert.deepEqual(a.start, b.start, "start pinned to min corner regardless of input order");
+  assert.equal(a.segments.length, b.segments.length, "same scallop count either way");
+});
+
+// the ONE property that makes it a revision cloud: scallops bulge OUTWARD, not
+// inward. Endpoints chain by construction (so the closure/bbox tests can't catch
+// a flipped sweep), so pin the sweep direction explicitly on a control point.
+test("cloudBezier: scallops bulge outward (sweep direction pinned)", () => {
+  const { segments } = cloudBezier(0, 0, 200, 200);
+  // a top-edge scallop (both x-coords strictly inside 0..200, y near the top edge)
+  // must have a control point ABOVE the top edge (y < 0); a bottom-edge scallop
+  // must have one BELOW (y > 200). Inward/flat scallops would fail both.
+  const anyAbove = segments.some(([c1, c2]) => (c1[1] < -1 || c2[1] < -1) && c1[0] > 1 && c1[0] < 199);
+  const anyBelow = segments.some(([c1, c2]) => (c1[1] > 201 || c2[1] > 201) && c1[0] > 1 && c1[0] < 199);
+  assert.ok(anyAbove, "top-edge scallops bulge above the box");
+  assert.ok(anyBelow, "bottom-edge scallops bulge below the box");
+});
+
+// guard against canvas↔PDF drift: cloudBezier (PDF) must have exactly one cubic
+// per SVG `A` arc emitted by cloudPath (canvas) for the same box.
+test("cloudBezier segment count matches cloudPath arc count (no canvas/PDF drift)", () => {
+  for (const box of [[0, 0, 100, 60], [50, 50, 250, 170], [0, 0, 400, 90]] as const) {
+    const arcs = (cloudPath(...box).match(/A/g) || []).length;
+    assert.equal(cloudBezier(...box).segments.length, arcs, `segment count == arc count for ${box}`);
+  }
+});
+
+// a zero-size cloud must not produce NaN control points (the closure test compares
+// endpoints, which are exact by construction, so it can't catch NaN).
+test("arrowheadPath: a zero-length leader (from==tip) yields a valid non-degenerate triangle", () => {
+  const d = arrowheadPath(100, 100, 100, 100, 6);   // from == tip
+  const pts = d.match(/-?\d+(\.\d+)?/g)!.map(Number);
+  // 3 points × 2 coords = 6 numbers; they must not all coincide (a zero-area triangle)
+  assert.equal(pts.length, 6, "M x y L x y L x y Z → six numbers");
+  const allSame = pts[0] === pts[2] && pts[2] === pts[4] && pts[1] === pts[3] && pts[3] === pts[5];
+  assert.ok(!allSame, "degenerate leader still produces a real (up-pointing) arrowhead, not a zero-area triangle");
+});
+
+test("cloudBezier: degenerate zero-size box yields finite points", () => {
+  const { start, segments } = cloudBezier(50, 50, 50, 50);
+  assert.ok(Number.isFinite(start[0]) && Number.isFinite(start[1]), "start finite");
+  for (const seg of segments) for (const [x, y] of seg) {
+    assert.ok(Number.isFinite(x) && Number.isFinite(y), "control/end finite");
+  }
+});
+
 test("classifyHatchSegs: extremal rows hard, wide member hard, curve exempt, clip soft", () => {
   const segs: number[] = [];
   for (let x = 100; x <= 700; x += 4) segs.push(x, 100, x, 500);
@@ -253,7 +407,8 @@ test("extractVectorGeometry: imageArea sums |det CTM| at image paint ops", () =>
   };
   const identity = [1, 0, 0, 1, 0, 0];
   // image placed by a 100×50 CTM → 5000 px²; a second one inside a form XObject
-  // whose matrix scales 2× each axis → 40×40 → 1600 px²; form pops cleanly after.
+  // whose OWN matrix scales the unit square down to 0.4×0.8 (100×0.004 by
+  // 50×0.016) → |det| = 0.32 px²; form pops cleanly after, back to +5000.
   const opList = {
     fnArray: [
       OPS.transform, OPS.paintImageXObject,
@@ -284,4 +439,63 @@ test("extractVectorGeometry: imageArea is 0 when no image ops exist", () => {
   };
   const g = extractVectorGeometry(opList as any, [1, 0, 0, 1, 0, 0], OPS);
   assert.equal(g.imageArea, 0);
+});
+
+test("extractVectorGeometry: imageArea for the repeat/group image ops reads placement from the op's own args (Finding 7)", () => {
+  // pdf.js FOLDS a run of identical/near-identical image placements into ONE
+  // op — paintImageXObjectRepeat, paintImageMaskXObjectRepeat,
+  // paintImageMaskXObjectGroup, paintInlineImageXObjectGroup — and does NOT
+  // emit a per-instance `transform` op ahead of it, so the ambient CTM at
+  // that point is just the viewport transform. Placement instead lives in
+  // the op's own args (scaleX/scaleY/positions, or a transform per element).
+  const OPS: Record<string, number> = {
+    save: 1, restore: 2, transform: 3, constructPath: 4, setLineWidth: 5, setGState: 6,
+    moveTo: 10, lineTo: 11, curveTo: 12, curveTo2: 13, curveTo3: 14, closePath: 15, rectangle: 16,
+    stroke: 20, fill: 22, eoFill: 23, endPath: 28, clip: 29, eoClip: 30,
+    paintFormXObjectBegin: 40, paintFormXObjectEnd: 41,
+    paintImageXObject: 85, paintInlineImageXObject: 86, paintImageMaskXObject: 87,
+    paintImageXObjectRepeat: 88, paintImageMaskXObjectRepeat: 89,
+    paintImageMaskXObjectGroup: 90, paintInlineImageXObjectGroup: 91,
+  };
+  const identity = [1, 0, 0, 1, 0, 0];
+  const opList = {
+    fnArray: [
+      OPS.paintImageXObjectRepeat,
+      OPS.paintImageMaskXObjectRepeat,
+      OPS.paintImageMaskXObjectGroup,
+      OPS.paintInlineImageXObjectGroup,
+    ],
+    argsArray: [
+      ["img1", 10, 5, new Float32Array([0, 0, 10, 0])],                            // 2 instances × |10×5| = 100
+      ["mask1", 4, 0, 0, 3, new Float32Array([0, 0, 5, 5, 10, 10])],                // 3 instances × |4×3| = 36
+      [[{ transform: [2, 0, 0, 2, 0, 0] }, { transform: [1, 0, 0, 1, 5, 5] }]],     // 4 + 1 = 5
+      ["img2", [{ transform: [3, 0, 0, 1, 0, 0] }, { transform: [1, 0, 0, 4, 2, 2] }]], // 3 + 4 = 7
+    ],
+  };
+  const g = extractVectorGeometry(opList as any, identity, OPS);
+  assert.ok(Math.abs(g.imageArea - (100 + 36 + 5 + 7)) < 1e-9, `imageArea ${g.imageArea}`);
+  assert.equal(g.segs.length, 0, "image ops emit no segments");
+});
+
+test("extractVectorGeometry: a folded *Repeat op's area still scales with the ambient CTM", () => {
+  const OPS: Record<string, number> = {
+    save: 1, restore: 2, transform: 3, constructPath: 4, setLineWidth: 5, setGState: 6,
+    moveTo: 10, lineTo: 11, curveTo: 12, curveTo2: 13, curveTo3: 14, closePath: 15, rectangle: 16,
+    stroke: 20, fill: 22, eoFill: 23, endPath: 28, clip: 29, eoClip: 30,
+    paintFormXObjectBegin: 40, paintFormXObjectEnd: 41,
+    paintImageXObjectRepeat: 88,
+  };
+  // ambient viewport CTM scales 2× each axis (|det| = 4). Pre-fix, the code
+  // used |det m| ALONE and ignored the op's own scaleX/scaleY/positions —
+  // i.e. it would have read 4 px² here regardless of instance count/size,
+  // instead of the real 4 × |6×2| × 2 = 96.
+  const opList = {
+    fnArray: [OPS.transform, OPS.paintImageXObjectRepeat],
+    argsArray: [
+      [2, 0, 0, 2, 0, 0],
+      ["img", 6, 2, new Float32Array([0, 0, 20, 0])],
+    ],
+  };
+  const g = extractVectorGeometry(opList as any, [1, 0, 0, 1, 0, 0], OPS);
+  assert.ok(Math.abs(g.imageArea - 96) < 1e-9, `imageArea ${g.imageArea}`);
 });

@@ -6,11 +6,42 @@ OpenTakeoff is a **client-only React app**: a PDF construction-takeoff canvas fo
 
 ```bash
 cd web
+nvm use          # Node pinned by web/.nvmrc (CI reads the same file)
 npm install
 npm run dev      # http://localhost:5173 — hot reload
 npm test         # node:test over the pure geometry + totals math (test/*.test.ts)
 npm run build    # → web/dist/ (static output; this is what Netlify deploys)
+npm run check    # typecheck + lint + test + build — exactly what CI runs; green here ⇒ green CI
 ```
+
+## Shipping — the required steps, every change
+
+`main` is protected on GitHub (PRs only, green `web` check, branch up to date,
+no force-pushes — admins included) and a local pre-commit hook rejects commits
+made on `main`. **Merging to `main` deploys to production**
+(<https://takeoff.345flooring.com>) via `.github/workflows/deploy.yml`, which
+re-runs `npm run check` and publishes `web/dist` to Netlify with `--no-build`
+— Netlify never builds anything itself.
+
+> **Production is <https://takeoff.345flooring.com> — nothing else.**
+> <https://opentakeoff.netlify.app> is the *parent repo's*
+> (Kentucky-ai/opentakeoff) demo deployment; the inherited README badge and
+> links still point there, but this fork does not serve it. Verify deploys
+> against takeoff.345flooring.com only.
+
+So:
+
+1. **Branch first** — never commit on `main`: `git checkout -b <topic>`.
+2. **`npm run check` before pushing** (in `web/`). It is exactly what CI runs,
+   on the same Node (`web/.nvmrc`) — green here means green CI.
+3. **Open a PR** and wait for the `web` check to pass. Don't merge red or
+   pending.
+4. **Squash-merge with branch delete**
+   (`gh pr merge <n> --squash --delete-branch`), then
+   `git checkout main && git pull --ff-only` and delete the local branch
+   (`git branch -D <topic>` — squash merges need `-D`).
+5. **Remember a merge is a deploy.** Don't merge work you haven't verified in
+   the running app.
 
 The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.test.ts`); the canvas itself is verified by hand — **Vite does not flag undefined identifiers in JSX**, so grep for your new identifiers after editing and load the app once before you call it done. The bundled sample plan (`web/public/demo/`, wired to the "Load sample plan" button) is the fastest end-to-end check: load it, press `A`, trace a room, open Report.
 
@@ -42,7 +73,7 @@ The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.tes
 ## Conventions
 
 - **SVG presentation attributes take literal colors** (CSS vars don't resolve there): cobalt `#1f3fc7`, danger `#b03a26`, positive `#1f6b4a`. DOM/HTML chrome may use `var(--…)` from `tokens.css`.
-- Condition palettes (`COLORS`, `PALETTE` in `TakeoffCanvas.jsx`) are **user data** — don't re-theme them.
+- Condition palettes (`PALETTE` in `web/src/components/hatches.jsx`, the seeded condition colors in `FLOORING_DEFAULTS` in `web/src/lib/canvasConstants.js`, and the mirrored copies in `mcp/src/session.ts`) are **user data** — don't re-theme them.
 - Waste applies only in the report (order quantities), never to live measured numbers.
 - Keyboard shortcuts are single letters registered on `window` (see `docs/USER_GUIDE.md` §2); toolbar menus pause them via `menuDepthRef`.
 - Brand voice: paper/ink/cobalt, drafting-table language. No vendor mimicry.
