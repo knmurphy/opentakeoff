@@ -49,12 +49,20 @@ export const CUT_TOOLS = [
   { id: "deduct-rect", icon: "deductRect", label: "Deduct rectangle", shortcut: "⇧D" },
 ];
 export const MARKUP_TOOLS = [
+  { id: "highlighter", icon: "highlighter", label: "Highlighter", shortcut: "H" },
   { id: "cloud", icon: "cloud", label: "Revision cloud" },
   { id: "callout", icon: "callout", label: "Callout" },
   { id: "text", icon: "textNote", label: "Text note" },
   { id: "highlight", icon: "highlight", label: "Highlight box" },
 ];
 export const MARKUP_IDS = MARKUP_TOOLS.map((t) => t.id);
+// highlighter inks — literal hex (SVG attrs; CSS vars don't resolve there).
+// The freehand TOOL is "highlighter" (the two-corner "highlight" box above is
+// its own tool); its strokes persist as type:"highlight" + pts, the same
+// record the pre-fork canvas wrote, so old saved strokes render unchanged —
+// every reader discriminates on pts (stroke) vs rect (box).
+export const HL_INKS = ["#ffd60a", "#ff9f0a", "#34c759", "#3fa9ff", "#ff6ea8"];
+export const HL_SIZES = [["F", 8], ["M", 14], ["B", 22]];   // screen px at draw time
 
 // Flooring-first starter conditions seeded on a fresh workspace — line color +
 // hatch chosen to read like the real finish; waste % is a sensible default you

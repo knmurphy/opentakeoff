@@ -33,6 +33,7 @@ export const icons = {
   callout: (s) => <I size={s}><circle cx="6" cy="17" r="1.1" fill="currentColor" /><line x1="6.8" y1="16.2" x2="13" y2="10" /><rect x="13" y="5.5" width="8" height="6" /></I>,
   textNote: (s) => <I size={s}><path d="M5 5 H 19 M5 5 V 7.5 M19 5 V 7.5 M12 5 V 19 M9.5 19 H 14.5" /></I>,
   highlight: (s) => <I size={s}><rect x="4" y="7" width="16" height="10" /><line x1="7" y1="12" x2="17" y2="12" /></I>,
+  highlighter: (s) => <I size={s}><path d="M5 21 L8.5 17.5 M8.5 17.5 L6.8 14 L14 6.8 L17.2 10 L10 17.2 Z M14 6.8 L15.8 5 L19 8.2 L17.2 10" /></I>,
   copy: (s) => <I size={s}><rect x="8" y="8" width="12" height="12" /><path d="M16 8 V 4 H 4 V 16 H 8" /></I>,
   paste: (s) => <I size={s}><rect x="5" y="5" width="14" height="16" /><rect x="9" y="3" width="6" height="4" /><line x1="9" y1="12" x2="15" y2="12" /><line x1="9" y1="16" x2="15" y2="16" /></I>,
   duplicate: (s) => <I size={s}><rect x="8" y="8" width="12" height="12" /><path d="M16 8 V 4 H 4 V 16 H 8" /><path d="M12 14 H 16 M14 12 V 16" /></I>,

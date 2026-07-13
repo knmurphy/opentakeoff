@@ -19,7 +19,7 @@
 // nothing until used and the app stays zero-install.
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
-import { pointInPoly, starPath, arrowheadPath, cloudBezier } from "./geometry.js";
+import { pointInPoly, starPath, arrowheadPath, cloudBezier, chiselRibbon } from "./geometry.js";
 import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
@@ -154,7 +154,7 @@ function invertPixels(cv) {
 }
 
 export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, coverTitle = "Marked Set" }) {
-  const { PDFDocument, StandardFonts, rgb, degrees } = await import("pdf-lib");
+  const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle } = await import("pdf-lib");
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   // resolve a linked markup's RFI number for the on-sheet marker (ASCII, WinAnsi-safe)
   const rfiNum = new Map((rfis || []).map((r) => [r.id, r.number]));
@@ -396,6 +396,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     }
     const ptScale = Math.hypot(...(() => { const p0 = toPage(0, 0), p1 = toPage(1, 0); return [p1[0] - p0[0], p1[1] - p0[1]]; })());
     const svgPath = (pts) => pts.map(([x, y], i) => { const [px, py] = toPage(x, y); return `${i ? "L" : "M"}${px},${-py}`; }).join(" ") + " Z";
+    const svgOpenPath = (pts) => pts.map(([x, y], i) => { const [px, py] = toPage(x, y); return `${i ? "L" : "M"}${px},${-py}`; }).join(" ");
     const line = (x1, y1, x2, y2, colorRgb, w, opacity = 1, dash) => {
       const [sx, sy] = toPage(x1, y1), [ex, ey] = toPage(x2, y2);
       pg.drawLine({ start: { x: sx, y: sy }, end: { x: ex, y: ey }, thickness: w, color: colorRgb, opacity, ...(dash ? { dashArray: dash } : {}) });
@@ -464,7 +465,22 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const mcol = rgb(...hex(dark ? boostForDark(mbase) : mbase));
       const mdash = pdfDashFor(m.line_style || "solid");
       const mw = clampWeight(m.weight);   // stroke-width multiplier (markups only), default ×1
-      if (m.type === "highlight" && m.rect) {
+      if (m.type === "highlight" && (m.pts || []).length >= 2) {
+        // freehand highlighter stroke — ink stays its own color in both export
+        // modes (a highlight IS its hue); width is stored as a fraction of sheet
+        // width → image px → page points. Weight (×) multiplies like the canvas.
+        const ipts = m.pts.map(([nx, ny]) => [nx * W, ny * H]);
+        const inkCol = rgb(...hex(m.color || "#ffd60a"));
+        const wImg = (m.w || 0.01) * W * mw;
+        if (m.tip === "chisel") {
+          pg.drawSvgPath(svgPath(chiselRibbon(ipts, wImg, 45)), { x: 0, y: 0, color: inkCol, opacity: 0.35 });
+        } else {
+          pg.drawSvgPath(svgOpenPath(ipts), {
+            x: 0, y: 0, borderColor: inkCol, borderWidth: wImg * ptScale, borderOpacity: 0.35,
+            ...(LineCapStyle ? { borderLineCap: LineCapStyle.Round } : {}),   // butt caps if the pin drops the export
+          });
+        }
+      } else if (m.type === "highlight" && m.rect) {
         const [[nx0, ny0], [nx1, ny1]] = m.rect;
         const r = [[nx0 * W, ny0 * H], [nx1 * W, ny0 * H], [nx1 * W, ny1 * H], [nx0 * W, ny1 * H]];
         pg.drawSvgPath(svgPath(r), { x: 0, y: 0, color: mcol, opacity: 0.18 + alphaBoost / 2, borderColor: mcol, borderWidth: 1 * mw, borderOpacity: 0.9, ...(mdash ? { borderDashArray: mdash } : {}) });

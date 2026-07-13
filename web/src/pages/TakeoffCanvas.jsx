@@ -43,7 +43,7 @@ import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel, sha
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadProfiles } from "../lib/identity.js";
 import { resolveBranding, loadBrandingSelection } from "../lib/branding.js";
-import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
+import { starPath, cloudPath, thinStroke, strokePathD, chiselRibbon, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
 import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch, matEditPatch } from "../lib/materials.js";
@@ -61,7 +61,7 @@ import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 import {
   PANEL_GAP, MAX_CANVAS_DIM, MAX_CANVAS_AREA,
   DETAIL_ENGAGE, DETAIL_MARGIN, SYNC_MS, GESTURE_MS, SNAP_CELL,
-  MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS,
+  MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, HL_INKS, HL_SIZES,
 } from "../lib/canvasConstants.js";
 import { autoRenderScale, invertCanvasPixels, uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
 import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit } from "../lib/units";
@@ -333,6 +333,13 @@ export default function TakeoffCanvas() {
   const rectRef = useRef(null);
   const cloudRef = useRef(null);       // live cloud preview (first corner → cursor)
   const highlightRef = useRef(null);   // live highlight-box preview (first corner → cursor; own translucent fill, NOT rectRef's condition fill)
+  const hlRef = useRef(null);          // in-progress highlighter stroke {pts (stage px), key}
+  const hlPathRef = useRef(null);      // live highlighter preview path (imperative, WYSIWYG ink)
+  const [hlStyle, setHlStyle] = useState(() => {
+    try { return { color: HL_INKS[0], size: 14, tip: "chisel", ...JSON.parse(localStorage.getItem("opentakeoff_hl_style") || "{}") }; }
+    catch { return { color: HL_INKS[0], size: 14, tip: "chisel" }; }
+  });
+  useEffect(() => { try { localStorage.setItem("opentakeoff_hl_style", JSON.stringify(hlStyle)); } catch { /* private mode */ } }, [hlStyle]);
   const snapRef = useRef(null);        // current snapped image point (or null)
   const snapGridsRef = useRef(new Map()); // sheetKey → {cell, map} spatial hash of vector endpoints
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
@@ -1365,7 +1372,7 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (lower === "g") { setView("gallery"); return; }
       if (e.key === "D" && e.shiftKey) { setTool("deduct-rect"); return; }
-      const map = { p: "pan", v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check" };
+      const map = { p: "pan", v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter" };
       const t = map[lower];
       if (t) setTool(t);
     };
@@ -1420,7 +1427,7 @@ export default function TakeoffCanvas() {
         // tool's points, on-screen or hidden
         else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
         else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); } }
+      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") { e.preventDefault(); setPoly((q) => (q.length ? q.slice(0, -1) : q)); }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
       else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
@@ -1483,6 +1490,22 @@ export default function TakeoffCanvas() {
         : toImage(e.clientX, e.clientY);
     const fp = panelAt(p[0]);
     if (fp.key !== focusKey) setFocusKey(fp.key);
+    if (tool === "highlighter") {
+      // ink is freehand: raw coords (no snap/angle), drag paints — press-drag pan is
+      // intentionally unavailable while armed (space/middle/right-drag still pan)
+      const raw = toImage(e.clientX, e.clientY);
+      hlRef.current = { pts: [raw], key: panelAt(raw[0]).key };
+      if (hlPathRef.current) {
+        const el = hlPathRef.current;
+        const w = hlStyle.size / tfRef.current.scale;
+        el.setAttribute("d", "");
+        if (hlStyle.tip === "chisel") { el.setAttribute("fill", hlStyle.color); el.setAttribute("fill-opacity", darkModeRef.current ? 0.42 : 0.32); el.setAttribute("stroke", "none"); }
+        else { el.setAttribute("fill", "none"); el.setAttribute("stroke", hlStyle.color); el.setAttribute("stroke-opacity", darkModeRef.current ? 0.42 : 0.32); el.setAttribute("stroke-width", w); el.setAttribute("stroke-linecap", "round"); el.setAttribute("stroke-linejoin", "round"); }
+        el.style.display = "block";
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     if (tool === "select") { selectAt(p, e); return; }
     // One-Click proposal handles: a press on a corner/edge grip starts an EDIT drag
     // (select+move a vertex, move a whole edge, or Shift-click to insert a point) —
@@ -1548,6 +1571,17 @@ export default function TakeoffCanvas() {
       const ax = m.at[0] * W + ox, ay = m.at[1] * H;
       const lw = ((m.text?.length || 1) * 7 + 14) / sc;
       return X >= ax - thr && X <= ax + lw && Y >= ay - 16 / sc - thr && Y <= ay + thr;
+    }
+    if (m.type === "highlight" && Array.isArray(m.pts)) {
+      // a freehand highlighter stroke — hit the ink band itself (reach = half the
+      // stroke width, floored at the shared threshold), never a bounding box, so a
+      // stroke over a room shields only what it actually covers.
+      if (m.pts.length < 2) return false;
+      const w = (m.w || 0.01) * W;
+      const reach = Math.max(w / 2, thr);
+      const ip = m.pts.map(([nx, ny]) => [nx * W + ox, ny * H]);
+      for (let i = 1; i < ip.length; i++) if (distToSeg(X, Y, ip[i - 1][0], ip[i - 1][1], ip[i][0], ip[i][1]) < reach) return true;
+      return false;
     }
     if (m.type === "highlight" && m.rect) {
       // a highlight is FILLED and meant to be grabbed — hit its interior (with a
@@ -1643,7 +1677,8 @@ export default function TakeoffCanvas() {
         // shapes: cloud/highlight rect, callout at+target, text at). The move stays a
         // no-op until it passes the threshold in onPointerMove, so a pure click (or the
         // first click of a double-click re-edit) never nudges the markup.
-        const orig = (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
+        const orig = (mHit.type === "highlight" && Array.isArray(mHit.pts)) ? { pts: mHit.pts.map((v) => [...v]) }
+          : (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
           : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
             : mHit.type === "arrow" ? { from: mHit.from, to: mHit.to }
               : { at: mHit.at };   // text + bubble
@@ -1863,6 +1898,7 @@ export default function TakeoffCanvas() {
   }
   function hideCrosshair() {
     for (const ref of [crossVRef, crossHRef, rubberRef, rectRef, cloudRef, highlightRef, snapMarkRef, aimMarkRef, aimChipRef]) if (ref.current) ref.current.style.display = "none";
+    if (hlRef.current == null && hlPathRef.current) hlPathRef.current.style.display = "none";
     if (hoverRef.current) hoverRef.current.style.display = "none";
     hoverIdRef.current = "";
     angleRef.current = null;
@@ -1902,6 +1938,20 @@ export default function TakeoffCanvas() {
   }
   function onPointerMove(e) {
     lastPtrRef.current = [e.clientX, e.clientY];   // paste targets the sheet under the cursor
+    if (hlRef.current) {
+      // paint: distance-thin at capture, live preview via DOM (no React render per move)
+      const st = hlRef.current;
+      const q = toImage(e.clientX, e.clientY);
+      const last = st.pts[st.pts.length - 1];
+      if (Math.hypot(q[0] - last[0], q[1] - last[1]) >= 2.5 / tfRef.current.scale && st.pts.length < 4000) st.pts.push(q);
+      if (hlPathRef.current) {
+        const w = hlStyle.size / tfRef.current.scale;
+        hlPathRef.current.setAttribute("d", hlStyle.tip === "chisel"
+          ? (st.pts.length > 1 ? "M" + chiselRibbon(st.pts, w, 45).map((v) => v.join(",")).join(" L") + " Z" : "")
+          : strokePathD(st.pts));
+      }
+      return;
+    }
     moveCrosshair(e);                 // full-page aim guide (draw modes), always tracks hover
     // a held draw-click that moves becomes a pan (point placement waits for up)
     if (pendingClickRef.current && !panRef.current) {
@@ -1971,6 +2021,7 @@ export default function TakeoffCanvas() {
         const o = d.orig;
         setMarkups((ms) => ms.map((m) => {
           if (m.id !== d.markupId) return m;
+          if (o.pts) return { ...m, pts: o.pts.map(([nx, ny]) => [nx + dx, ny + dy]) };   // highlighter stroke
           if (o.rect) return { ...m, rect: [[o.rect[0][0] + dx, o.rect[0][1] + dy], [o.rect[1][0] + dx, o.rect[1][1] + dy]] };
           if (o.target) return { ...m, at: [o.at[0] + dx, o.at[1] + dy], target: [o.target[0] + dx, o.target[1] + dy] };
           if (o.from) return { ...m, from: [o.from[0] + dx, o.from[1] + dy], to: [o.to[0] + dx, o.to[1] + dy] };
@@ -1992,6 +2043,22 @@ export default function TakeoffCanvas() {
     });
   }
   function onPointerUp(e) {
+    if (hlRef.current) {
+      const st = hlRef.current;
+      hlRef.current = null;
+      if (hlPathRef.current) hlPathRef.current.style.display = "none";
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
+      if (st.pts.length >= 2) {
+        const tp = panelByKey(st.key) || panelAt(st.pts[0][0]);
+        const pts = thinStroke(st.pts, 2.5 / tfRef.current.scale)
+          .map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]);
+        // width as a FRACTION of panel width — the stroke scales with the plan like ink,
+        // and survives raster-budget changes (screen px ÷ scale ÷ panel width at draw time)
+        addMarkup({ type: "highlight", pts, color: hlStyle.color,
+                    w: (hlStyle.size / tfRef.current.scale) / tp.img.w, tip: hlStyle.tip }, tp.key);
+      }
+      return;
+    }
     if (pendingClickRef.current) {
       const { p } = pendingClickRef.current;
       pendingClickRef.current = null;
@@ -2595,7 +2662,9 @@ export default function TakeoffCanvas() {
     setMarkups((ms) => [...ms, { id: uid("mk"), sheet_id: key, rfi_id: "", ...m }]);
     // Drawing a markup by hand surfaces the Markups tab. But a STAMP places several
     // markups via addMarkup — don't yank the user off the Stamps tab mid-placement
-    // (keep the current tab, or open Markups only if nothing's open).
+    // (keep the current tab, or open Markups only if nothing's open). Highlighter
+    // ink flows stroke after stroke — never pop the dock per stroke.
+    if (m.type === "highlight" && m.pts) return;
     setLeftTab((t) => (tool === "stamp" ? (t ?? "markup") : "markup"));
   }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
@@ -2641,7 +2710,8 @@ export default function TakeoffCanvas() {
     const sp = panelByKey(m.sheet_id);
     if (!sp || !sp.img.w) return null;
     let nx, ny;
-    if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
+    if (m.type === "highlight" && Array.isArray(m.pts) && m.pts.length) { const mid = m.pts[Math.floor((m.pts.length - 1) / 2)]; nx = mid[0]; ny = mid[1]; }
+    else if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
     else if (m.type === "arrow" && m.from && m.to) { nx = (m.from[0] + m.to[0]) / 2; ny = (m.from[1] + m.to[1]) / 2; }
     else if (m.at) { nx = m.at[0]; ny = m.at[1]; }   // text + bubble + callout
     else return null;
@@ -2684,8 +2754,9 @@ export default function TakeoffCanvas() {
     const m = rev.find((mm) => mm.type !== "highlight" && hitMarkup(mm, p, thr))
       || rev.find((mm) => mm.type === "highlight" && hitMarkup(mm, p, thr));
     if (!m) return;
-    // an svg symbol carries no text — select it, but don't open a dead-end editor
-    if (m.type === "svg") { selectMarkup(m.id); return; }
+    // an svg symbol carries no text — select it, but don't open a dead-end editor;
+    // a highlighter stroke is pure ink (no text either), same rule
+    if (m.type === "svg" || (m.type === "highlight" && Array.isArray(m.pts))) { selectMarkup(m.id); return; }
     const anchor = markupAnchorStage(m);
     if (!anchor) return;
     selectMarkup(m.id);
@@ -2883,7 +2954,8 @@ export default function TakeoffCanvas() {
     const sp = panelByKey(m.sheet_id);
     if (!sp || !sp.img.w) return false;
     let anchor;
-    if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
+    if (m.type === "highlight" && Array.isArray(m.pts) && m.pts.length) anchor = m.pts[Math.floor((m.pts.length - 1) / 2)];
+    else if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
     else if (m.type === "callout") anchor = m.at || m.target;
     else if (m.type === "arrow" && m.from && m.to) anchor = [(m.from[0] + m.to[0]) / 2, (m.from[1] + m.to[1]) / 2];
     else anchor = m.at;   // text + bubble
@@ -3800,13 +3872,41 @@ export default function TakeoffCanvas() {
             face={<><Icon name="deduct" size={15} /><span>Cut Out</span></>}
             items={CUT_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, tint: "var(--c-danger)", onSelect: () => setTool(t.id) }))}
           />
-          <ToolMenu
-            title="Markup — annotations, not measurements"
-            active={MARKUP_IDS.includes(tool)}
-            onOpenChange={onMenuDepth}
-            face={<><Icon name="markup" size={15} /><span>Markup</span></>}
-            items={MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } }))}
-          />
+          <span style={{ position: "relative", display: "inline-flex" }}>
+            <ToolMenu
+              title="Markup — annotations, not measurements"
+              active={MARKUP_IDS.includes(tool)}
+              onOpenChange={onMenuDepth}
+              face={<><Icon name="markup" size={15} /><span>Markup</span></>}
+              items={MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } }))}
+            />
+            {/* highlighter style popover — visible while the tool is armed (hatch-picker chrome) */}
+            {tool === "highlighter" && (
+              <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "0 6px 22px rgba(0,0,0,.16)", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 7 }}>
+                <div style={{ display: "flex", gap: 6 }} title="Ink">
+                  {HL_INKS.map((c) => (
+                    <button key={c} onClick={() => setHlStyle((st) => ({ ...st, color: c }))}
+                      style={{ width: 16, height: 16, padding: 0, background: c, border: hlStyle.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {HL_SIZES.map(([lbl, px]) => (
+                    <button key={lbl} onClick={() => setHlStyle((st) => ({ ...st, size: px }))} title={`${lbl === "F" ? "Fine" : lbl === "M" ? "Medium" : "Broad"} tip`}
+                      style={{ width: 22, height: 20, padding: 0, fontFamily: "var(--f-mono)", fontSize: 10, cursor: "pointer", border: hlStyle.size === px ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: hlStyle.size === px ? "var(--ink)" : "transparent", color: hlStyle.size === px ? "var(--paper-bright)" : "var(--ink)" }}>{lbl}</button>
+                  ))}
+                  <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)" }} />
+                  {[["chisel", "M4 16 L14 6 L18 10 L8 20 Z"], ["round", "M5 17 Q12 3 19 13"]].map(([tip, d]) => (
+                    <button key={tip} onClick={() => setHlStyle((st) => ({ ...st, tip }))} title={`${tip} tip`}
+                      style={{ width: 24, height: 20, padding: 1, cursor: "pointer", border: hlStyle.tip === tip ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: "transparent" }}>
+                      <svg viewBox="0 0 24 24" width="18" height="14">{tip === "chisel"
+                        ? <path d={d} fill="currentColor" stroke="none" />
+                        : <path d={d} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />}</svg>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </span>
           <ToolMenu
             title="Edit takeoffs"
             onOpenChange={onMenuDepth}
@@ -4353,6 +4453,31 @@ export default function TakeoffCanvas() {
                           <rect x={x0} y={y0} width={x1 - x0} height={y1 - y0} fill="none" stroke="#1f3fc7" strokeWidth={(2 * w) / z} />
                         </>
                       ) : null);
+                      if (m.type === "highlight" && Array.isArray(m.pts)) {
+                        // freehand highlighter stroke — the ink keeps its OWN hue (a highlight
+                        // IS its color; dark legibility comes from the higher opacity, not a
+                        // boost). Weight (×) multiplies the stored width like every markup.
+                        const ip = m.pts.map(([nx, ny]) => [nx * p.img.w, ny * p.img.h]);
+                        if (ip.length < 2) return null;
+                        const sw = (m.w || 0.01) * p.img.w * w, o = darkMode ? 0.42 : 0.32;
+                        const ink = m.tip === "chisel"
+                          ? <path d={"M" + chiselRibbon(ip, sw, 45).map((q) => q.join(",")).join(" L") + " Z"} fill={m.color || "#ffd60a"} fillOpacity={o} />
+                          : <path d={strokePathD(ip)} fill="none" stroke={m.color || "#ffd60a"} strokeOpacity={o} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" />;
+                        return (
+                          <g key={m.id}>
+                            {/* selection halo follows the stroke's spine (white outer + cobalt
+                                inner, the selected-markup convention adapted to an open path) */}
+                            {selM && (
+                              <>
+                                <path d={strokePathD(ip)} fill="none" stroke="#fff" strokeWidth={sw + 8 / z} strokeLinecap="round" strokeLinejoin="round" />
+                                <path d={strokePathD(ip)} fill="none" stroke="#1f3fc7" strokeOpacity={0.55} strokeWidth={sw + 4 / z} strokeLinecap="round" strokeLinejoin="round" />
+                              </>
+                            )}
+                            {ink}
+                            {badge(ip[0][0], ip[0][1] - 9 / z)}
+                          </g>
+                        );
+                      }
                       if (m.type === "highlight") {
                         const [c0, c1] = m.rect;
                         const hx0 = Math.min(c0[0], c1[0]) * p.img.w, hy0 = Math.min(c0[1], c1[1]) * p.img.h;
@@ -4529,6 +4654,7 @@ export default function TakeoffCanvas() {
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               <path ref={cloudRef} fill="rgba(37,99,235,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale} strokeDasharray={`${5 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
               <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
+              <path ref={hlPathRef} style={{ display: "none" }} />
               {poly.length >= 2 && (tool === "linear" || tool === "surface"
                 ? <polyline points={poly.map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
                 : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : tool === "zone" ? "rgba(31,63,199,.06)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} strokeDasharray={tool === "zone" ? `${7 / tf.scale} ${5 / tf.scale}` : undefined} />)}
