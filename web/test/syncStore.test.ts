@@ -176,6 +176,25 @@ test("recovery: a crashed FIRST push (rev-less base) re-pushes instead of silent
   assert.equal(await metaGet("sync:A:marker"), undefined);
 });
 
+test("recovery (case c): a rev-less external write on a torn first push is blind-overwritten (intentional 4c deferral)", async () => {
+  // First push torn: marker {targetRev:1, baseRev:null}. Meanwhile a flag-off
+  // teammate wrote a rev-less doc. baseRev=null can't distinguish "our push never
+  // landed" from that external write, so 4b re-pushes over it — the SAME outcome a
+  // normal no-crash save produces (a rev-less remote loses in 4b; 4c is what
+  // snapshots the local side). Pinned so 4c can't silently regress this behavior.
+  await metaPut("sync:A:marker", { targetRev: 1, baseRev: null });
+  await metaPut("sync:A:touched", true);
+  const base = createLocalStore("A");
+  await base.saveAnnotations({ conditions: [{ id: "mine" }], shapes: [] });
+  const provider = fakeProvider({ data: { conditions: [{ id: "theirs" }], shapes: [] }, rev: null }); // rev-less external write
+  const sync = createSyncStore({ base, provider, folderId: "A" }) as any;
+  await sync.whenSynced();
+  await sync.whenPushed();
+
+  assert.equal(provider._remote.rev, 1); // re-pushed (not stranded locally)
+  assert.deepEqual(provider._remote.data.conditions, [{ id: "mine" }]); // 4b overwrites the rev-less remote
+});
+
 test("recovery: no re-push when the remote diverged from our base (left for 4c)", async () => {
   await metaPut("sync:A:marker", { targetRev: 4, baseRev: 3 });
   await metaPut("sync:A:synced_rev", 3);
