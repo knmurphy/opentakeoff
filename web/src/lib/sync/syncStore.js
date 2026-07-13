@@ -76,11 +76,16 @@ export function createSyncStore({ base, provider, folderId, onRemoteUpdate }) {
       await metaDelete(K.marker);
       return false;
     }
-    // Didn't land at targetRev. Clear the marker either way; a clean one-behind
-    // (targetRev-1) means our push never took → re-push. Anything else is a real
-    // divergence (someone else wrote) → leave it for 4c's reconcile.
+    // Didn't land at targetRev. Clear the marker either way; if the remote is
+    // STILL exactly what we based the push on (`baseRev` — a number, or null for a
+    // first push where synced_rev was unset), our push never took → re-push.
+    // Anything else is a real divergence (someone else wrote) → leave it for 4c.
+    // Using the recorded baseRev handles the first-push case uniformly: `targetRev-1`
+    // arithmetic can't express "based on null" (a not-landed first push leaves the
+    // remote rev-less/null, and rev 0 never exists).
     await metaDelete(K.marker);
-    return remoteRev === marker.targetRev - 1;
+    const baseRev = typeof marker.baseRev === "number" ? marker.baseRev : null;
+    return remoteRev === baseRev;
   }
 
   // ── mount seed: a truly-fresh (never-touched) project adopts remote wholesale.
@@ -100,7 +105,11 @@ export function createSyncStore({ base, provider, folderId, onRemoteUpdate }) {
     // this is no longer a seed (their edit wins locally; 4c reconciles later).
     if (await isTouched()) return;
     await base.saveAnnotations(remote.data); // adopt remote into local (no touched — not a local edit)
-    await metaPut(K.syncedRev, remote.rev); // base future pushes on remote's rev (may be null → rev-less)
+    // Base future pushes on remote's rev. A rev-less remote (a flag-off teammate's
+    // write) stores synced_rev=null, so the next edit's push runs expectedRev=null
+    // and blind-overwrites it (rev → 1). That's the mixed-fleet hazard the plan
+    // hands to 4c (rev-less remote WINS, snapshot the local side); 4b only seeds.
+    await metaPut(K.syncedRev, remote.rev);
     if (onRemoteUpdate) onRemoteUpdate(remote.data, remote.rev);
   }
 
@@ -139,7 +148,10 @@ export function createSyncStore({ base, provider, folderId, onRemoteUpdate }) {
     await bootstrap; // recovery/seed settle before any push
     const expectedRev = await readSyncedRev(); // durable base, never payload.rev
     const targetRev = (expectedRev ?? 0) + 1;
-    await metaPut(K.marker, { targetRev }); // marker BEFORE the push
+    // Record BOTH the target and the base we're pushing from, so recovery can tell
+    // "our push never landed" (remote still == baseRev, incl. null first-push) from
+    // a real divergence — see recover(). Marker written BEFORE the push.
+    await metaPut(K.marker, { targetRev, baseRev: expectedRev });
     const payload = await base.loadAnnotations(); // latest local content (coalesced)
     const res = await provider.push(payload, { expectedRev });
     if (res.conflict) {

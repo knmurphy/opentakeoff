@@ -129,7 +129,7 @@ test("crash ordering: touched is written BEFORE content, so a torn save never lo
 });
 
 test("recovery: a marker matching remote's rev means the push HAD landed → adopt, clear marker", async () => {
-  await metaPut("sync:A:marker", { targetRev: 5 });
+  await metaPut("sync:A:marker", { targetRev: 5, baseRev: 4 });
   await metaPut("sync:A:synced_rev", 4);
   await metaPut("sync:A:touched", true);
   const provider = fakeProvider({ data: { conditions: [], shapes: [] }, rev: 5 }); // it landed
@@ -142,13 +142,13 @@ test("recovery: a marker matching remote's rev means the push HAD landed → ado
   assert.equal(provider._remote.rev, 5); // no spurious re-push
 });
 
-test("recovery: a marker at remote targetRev-1 means the push never landed → re-push", async () => {
-  await metaPut("sync:A:marker", { targetRev: 5 });
+test("recovery: remote still at our baseRev means the push never landed → re-push", async () => {
+  await metaPut("sync:A:marker", { targetRev: 5, baseRev: 4 });
   await metaPut("sync:A:synced_rev", 4);
   await metaPut("sync:A:touched", true);
   const base = createLocalStore("A");
   await base.saveAnnotations({ conditions: [{ id: "ahead" }], shapes: [] }); // local one ahead
-  const provider = fakeProvider({ data: { conditions: [], shapes: [] }, rev: 4 }); // did NOT land
+  const provider = fakeProvider({ data: { conditions: [], shapes: [] }, rev: 4 }); // did NOT land (still at base 4)
   const sync = createSyncStore({ base, provider, folderId: "A" }) as any;
   await sync.whenSynced();
   await sync.whenPushed();
@@ -159,15 +159,46 @@ test("recovery: a marker at remote targetRev-1 means the push never landed → r
   assert.equal(await metaGet("sync:A:marker"), undefined);
 });
 
+test("recovery: a crashed FIRST push (rev-less base) re-pushes instead of silently dropping", async () => {
+  // first push: synced_rev was unset, so the marker recorded baseRev null / targetRev 1
+  await metaPut("sync:A:marker", { targetRev: 1, baseRev: null });
+  await metaPut("sync:A:touched", true);
+  const base = createLocalStore("A");
+  await base.saveAnnotations({ conditions: [{ id: "first" }], shapes: [] });
+  const provider = fakeProvider(null); // remote still empty — the push never landed
+  const sync = createSyncStore({ base, provider, folderId: "A" }) as any;
+  await sync.whenSynced();
+  await sync.whenPushed();
+
+  assert.equal(provider._remote.rev, 1); // re-pushed, not silently lost to Drive
+  assert.deepEqual(provider._remote.data.conditions, [{ id: "first" }]);
+  assert.equal(await metaGet("sync:A:synced_rev"), 1);
+  assert.equal(await metaGet("sync:A:marker"), undefined);
+});
+
+test("recovery: no re-push when the remote diverged from our base (left for 4c)", async () => {
+  await metaPut("sync:A:marker", { targetRev: 4, baseRev: 3 });
+  await metaPut("sync:A:synced_rev", 3);
+  await metaPut("sync:A:touched", true);
+  const provider = fakeProvider({ data: { conditions: [{ id: "theirs" }], shapes: [] }, rev: 7 }); // someone else moved it
+  const sync = createSyncStore({ base: createLocalStore("A"), provider, folderId: "A" }) as any;
+  await sync.whenSynced();
+  await sync.whenPushed();
+
+  assert.equal(provider._remote.rev, 7); // NOT blindly re-pushed over a divergent remote
+  assert.deepEqual(provider._remote.data.conditions, [{ id: "theirs" }]);
+  assert.equal(await metaGet("sync:A:marker"), undefined); // 4c reconciles the local-ahead state
+});
+
 test("recovery offline: marker kept and synced_rev untouched when Drive can't be read", async () => {
-  await metaPut("sync:A:marker", { targetRev: 5 });
+  await metaPut("sync:A:marker", { targetRev: 5, baseRev: 4 });
   await metaPut("sync:A:synced_rev", 4);
   const provider = fakeProvider({ data: {}, rev: 5 });
   provider._failPull = true; // offline
   const sync = createSyncStore({ base: createLocalStore("A"), provider, folderId: "A" }) as any;
   await sync.whenSynced();
 
-  assert.deepEqual(await metaGet("sync:A:marker"), { targetRev: 5 }); // kept for a later retry
+  assert.deepEqual(await metaGet("sync:A:marker"), { targetRev: 5, baseRev: 4 }); // kept for a later retry
   assert.equal(await metaGet("sync:A:synced_rev"), 4); // never assumed
 });
 
