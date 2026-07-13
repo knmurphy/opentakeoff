@@ -49,6 +49,7 @@ function fakeProvider() {
       return r ? r.data : null;
     },
     async putJson({ folderId, name, data, existingId }: any) {
+      if (this._hang === "putJson") return new Promise<any>(() => {});
       if (this._fail === "putJson") throw new Error("push fail");
       if (existingId && byId.has(existingId)) { byId.get(existingId).data = data; return { id: existingId }; }
       const id = nid();
@@ -167,6 +168,23 @@ test("delete immediately after save (push still in flight) does not resurrect", 
   assert.equal(await base.getSnapshot(meta.id, F), null);
   assert.equal(remoteSnapshotFiles(provider).length, 0, "no remote file survives a racy delete");
   assert.deepEqual(await sync.listSnapshots(), [], "no resurrection");
+});
+
+test("delete does not hang when the in-flight push is stuck, and still cannot resurrect", async () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const { base, provider, sync } = mk(); // timeoutMs is 50
+  provider._hang = "putJson"; // the push will reach putJson and never settle
+  const meta = await sync.saveSnapshot("stuck", { shapes: [1] }); // local write returns at once
+  await sleep(10); // let the background push advance INTO the hung putJson (past its deletedIds check)
+
+  // deleteSnapshot must resolve via the timeout cap, not block on the stuck push
+  const outcome = await Promise.race([
+    sync.deleteSnapshot(meta.id).then(() => "resolved"),
+    sleep(1000).then(() => "hung"),
+  ]);
+  assert.equal(outcome, "resolved", "delete must not hang on a stuck push");
+  assert.equal(await base.getSnapshot(meta.id, F), null);
+  assert.equal(remoteSnapshotFiles(provider).length, 0, "stuck push wrote nothing; delete removed nothing to recreate");
 });
 
 test("pullMissing skips a remote record whose project scope doesn't match this folder", async () => {

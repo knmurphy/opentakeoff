@@ -66,6 +66,12 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
   //   • whenIdle (test-only) awaits all of them; production never does (that's
   //     the point of fire-and-forget).
   const inflightPush = new Map();
+  // Ids deleted this session. A push checks this immediately before writing and
+  // skips if the id was deleted — so even when deleteSnapshot's wait-for-push is
+  // cut short by the timeout cap, a push that lands late still won't recreate the
+  // file (no resurrection) AND the delete never hangs. Ids are unique per save,
+  // so this set never needs clearing.
+  const deletedIds = new Set();
 
   // Resolve the shared `.opentakeoff` folder id. Injected resolver wins; else a
   // local memoized locate-else-create mirroring cloudStore.ensureSidecarId
@@ -143,6 +149,10 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
         const record = await base.getSnapshot(meta.id, project);
         if (!record) return;
         const snapsFolder = await ensureSnapshotsFolderId();
+        // Last check before writing: if the snapshot was deleted while we were
+        // resolving, don't recreate its file. No await between here and putJson,
+        // so a concurrent delete can't slip in after this check.
+        if (deletedIds.has(meta.id)) return;
         await provider.putJson({ folderId: snapsFolder, name: `${meta.id}.json`, data: record });
       })().catch(() => {
         // Swallow: local is canonical. A failed push means "not backed up yet",
@@ -181,11 +191,15 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
     // so the window is: delete-offline → later come online → list.
     async deleteSnapshot(id) {
       await base.deleteSnapshot(id);
-      // Wait out any in-flight push for this id first, so the remote file (if it
-      // is going to exist) exists BEFORE we try to delete it — otherwise a late
-      // push would recreate it and a later pull would resurrect the snapshot.
+      // Mark deleted FIRST: a still-running push now sees this and skips its
+      // write, so it can't recreate the file regardless of ordering.
+      deletedIds.add(id);
+      // Then briefly wait out an in-flight push so, in the common (fast) case,
+      // the file exists before we delete it below. Capped by the timeout so a
+      // hung/slow push never hangs the delete — if the cap fires first, the
+      // deletedIds guard above still prevents any late resurrection.
       const push = inflightPush.get(id);
-      if (push) { try { await push; } catch { /* push already swallows */ } }
+      if (push) { try { await withTimeout(push, timeoutMs); } catch { /* capped or already swallowed */ } }
       try {
         await withTimeout((async () => {
           const snapsFolder = await ensureSnapshotsFolderId();
