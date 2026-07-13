@@ -94,7 +94,10 @@ app is exactly the local tool it always was. The security posture stays honest:
 still a plain static site, **no secrets in the bundle**, team-only because the
 Google OAuth app is **Internal** to your domain, and your data sits in **your own
 Drive**. To set it up, see [`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md) and
-[`docs/GLIDE_INTEGRATION.md`](docs/GLIDE_INTEGRATION.md).
+[`docs/GLIDE_INTEGRATION.md`](docs/GLIDE_INTEGRATION.md). A cloud deployment can
+also opt into **local-first sync** (`VITE_CLOUD_SYNC=1`): annotations stay canonical
+in the browser and sync to Drive in the background, so the canvas is instant and
+survives a flaky network — see [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md).
 
 ## What's in the box
 
