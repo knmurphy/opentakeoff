@@ -402,6 +402,13 @@ export default function TakeoffCanvas() {
   // because the canvas went busy after the store adopted (Case 2), drained on idle.
   const busyStateRef = useRef({});
   const remotePendingRender = useRef(false);
+  // Bumped whenever a busy INTERACTION ref clears (drag/editor/scan end) — those don't
+  // trigger a render, so the idle-drain (below) can't observe the busy→idle edge from
+  // its state deps alone. idleTick is a drain dep so a ref-only idle transition still
+  // drains a deferred render (and un-blocks autosave, which stays suppressed while a
+  // render is deferred). Without it, suppression could wedge saves indefinitely.
+  const [idleTick, setIdleTick] = useState(0);
+  const bumpIdle = () => setIdleTick((t) => t + 1);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
   const lastSyncRef = useRef(0);       // last tf mirror sync (perf.now) — scheduleSync throttles against it
@@ -1175,10 +1182,22 @@ export default function TakeoffCanvas() {
     // content is already canonical locally and on Drive at its own rev — re-pushing
     // it would churn revs (seed) or spuriously conflict + loser-snapshot (adopt).
     if (suppressNextSave.current) { suppressNextSave.current = false; return; }
+    // A reconcile adopted a remote winner into local (synced_rev is already advanced)
+    // but the canvas is still showing the SUPERSEDED pre-adopt content because we
+    // deferred the render while busy (Slice 5b Case 2). Persisting/pushing now would
+    // send stale content at the winner's rev and silently clobber it. Skip entirely
+    // until the idle-drain re-hydrates the winner; any edits made on this superseded
+    // canvas are dropped by that re-hydrate (visible supersession, not silent loss —
+    // the co-editing casualty the rollout forbids). The drain clears the flag.
+    if (remotePendingRender.current) return;
     const payload = buildPayload();
     saveDataRef.current = payload;          // keep the freshest payload for an unmount flush
     setSaveState("saving");
     const t = setTimeout(() => {
+      // A render was deferred AFTER this save was scheduled (its closure captured the
+      // pre-adopt payload) → don't push stale over the winner; go idle so the canvas
+      // can drain and re-hydrate. Closes the last pre-scheduled-save loss window.
+      if (remotePendingRender.current) { setSaveState("idle"); return; }
       store.saveAnnotations(payload).then(() => setSaveState("saved")).catch((e) => {
         if (isStaleTabError(e)) setCommitMsg(STALE_TAB_MESSAGE);
         setSaveState("idle");
@@ -1282,17 +1301,20 @@ export default function TakeoffCanvas() {
       if (!alive || !remotePendingRender.current || computeBusy()) return;
       try {
         const a = await store.loadAnnotations(); // freshest local: the adopt, or an interim saved edit
-        if (!alive || computeBusy()) return;
+        // A concurrent store-side onRemoteUpdate may have hydrated + cleared the flag
+        // during the await — don't double-hydrate (Finding 4).
+        if (!alive || computeBusy() || !remotePendingRender.current) return;
         remotePendingRender.current = false;      // clear ONLY after a successful read
         suppressNextSave.current = true;
         hydrate(a || {});
       } catch { /* keep remotePendingRender → retry on the next idle, never drop it */ }
     })();
     return () => { alive = false; };
-    // computeBusy/hydrate are stable (refs/setters); the state deps below ARE the
-    // idle-transition triggers that should re-evaluate the drain.
+    // computeBusy/hydrate are stable (refs/setters); the deps below ARE the idle-
+    // transition triggers. saveState catches the debounced-save clearing; idleTick
+    // catches an interaction ref (drag/editor/scan) clearing with no state change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poly, calib, check, proposal, scaleGuide, prevScale, saveState]);
+  }, [poly, calib, check, proposal, scaleGuide, prevScale, saveState, idleTick]);
 
   function fitToView(w, h) {
     const el = containerRef.current;
@@ -2008,8 +2030,8 @@ export default function TakeoffCanvas() {
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
       return;
     }
-    if (ocDragRef.current) { ocDragRef.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
-    if (dragRef.current) { dragRef.current = null; try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
+    if (ocDragRef.current) { ocDragRef.current = null; bumpIdle(); try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
+    if (dragRef.current) { dragRef.current = null; bumpIdle(); try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ } return; }
     if (panRef.current) {
       panRef.current = null;
       setTf({ ...tfRef.current });   // sync once at end
@@ -2487,7 +2509,7 @@ export default function TakeoffCanvas() {
   function ocDragMove(e) {
     const d = ocDragRef.current;
     const tp = panelByKey(proposal?.key);
-    if (!proposal || !tp || !tp.img.w) { ocDragRef.current = null; return; }
+    if (!proposal || !tp || !tp.img.w) { ocDragRef.current = null; bumpIdle(); return; }
     const raw = toImage(e.clientX, e.clientY);
     const lx = raw[0] - tp.xOffset, ly = raw[1];
     setProposal((pr) => {
@@ -2681,7 +2703,7 @@ export default function TakeoffCanvas() {
   // defense-in-depth: editingRef locks pan/zoom/crosshair while the overlay is up.
   // If the input ever unmounts by a route other than finishEditor, this keeps the
   // ref from stranding true and freezing the canvas.
-  useEffect(() => { if (!editor) editingRef.current = false; }, [editor]);
+  useEffect(() => { if (!editor) { editingRef.current = false; bumpIdle(); } }, [editor]);
   // double-click a markup (Select tool) to edit its text in place — find the target
   // via toImage + hitMarkup (non-highlight beats highlight, mirroring selectAt) and
   // open the overlay at its anchor.
@@ -3111,6 +3133,7 @@ export default function TakeoffCanvas() {
       } catch { setCommitMsg("Couldn't reach the schedule reader — try again in a moment."); }
     } finally {
       scanBusyRef.current = false;
+      bumpIdle();   // scan done → let the idle-drain observe the busy→idle edge (Slice 5b)
     }
   }
 
