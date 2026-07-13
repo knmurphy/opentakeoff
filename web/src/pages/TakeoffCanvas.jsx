@@ -27,6 +27,7 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
+import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
@@ -386,6 +387,13 @@ export default function TakeoffCanvas() {
   // effect and push the just-adopted content back at synced_rev+1 (rev churn on a
   // seed; a spurious conflict + loser-snapshot on an adopt). Set true right before
   // the reconcile hydrate; the autosave effect swallows exactly the next run.
+  // INVARIANT (load-bearing): hydrate() must dirty ≥1 autosave dep so this flag is
+  // consumed on the very next commit and can't leak into a later REAL edit (it always
+  // does — setConditions/setShapes/setClientInfo mint fresh values unconditionally).
+  // And hydrate must not spawn a SECOND autosave-triggering commit that outlives the
+  // flag — normalizeLoadedGroups keeps the lastGroup-sync effect a no-op for exactly
+  // that reason. A future "skip setState if unchanged" optimization on either would
+  // reopen an escape; keep both guarantees.
   const suppressNextSave = useRef(false);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const syncRaf = useRef(0);
@@ -681,12 +689,14 @@ export default function TakeoffCanvas() {
     // Extracted to sanitizeSheetLevels (lib/sheetLevels.js) so this gate has
     // its own unit tests independent of the reducer.
     setSheetLevels(sanitizeSheetLevels(a.sheet_levels));
-    const grp = Array.isArray(a.sheet_group) ? a.sheet_group.slice(0, MAX_GROUP) : [];
-    setSheetGroup(grp);
-    const lg = Array.isArray(a.last_group) ? a.last_group.slice(0, MAX_GROUP) : grp;
     // else-clear matters at runtime (snapshot load): a payload without groups/
-    // tabs must not inherit the pre-load ones — autosave would persist a hybrid
-    setLastGroup(lg.length >= 2 ? lg : []);
+    // tabs must not inherit the pre-load ones — autosave would persist a hybrid.
+    // In group mode sheetGroup + lastGroup share ONE instance so the lastGroup-sync
+    // effect below is a reference-equal no-op — otherwise its follow-up commit would
+    // escape the one-shot save suppression and spuriously re-save (see normalizeLoadedGroups).
+    const { sheetGroup: grp, lastGroup: lgFinal } = normalizeLoadedGroups(a, MAX_GROUP);
+    setSheetGroup(grp);
+    setLastGroup(lgFinal);
     // gallery-first: tabs restore directly; legacy pinned pages migrate once
     // (over in the sheets effect, where file names are known); nothing open → gallery
     const tabs = Array.isArray(a.sheet_tabs) ? a.sheet_tabs : [];
