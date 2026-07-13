@@ -8,7 +8,7 @@ import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { store, localStore, createLocalStore, isStaleTabError, ANN_SCHEMA, STALE_TAB_MESSAGE, friendlyStoreError } from "../src/lib/store.js";
+import { store, localStore, createLocalStore, metaGet, metaPut, metaDelete, isStaleTabError, ANN_SCHEMA, STALE_TAB_MESSAGE, friendlyStoreError } from "../src/lib/store.js";
 import { createCloudStore } from "../src/lib/cloudStore.js";
 
 beforeEach(() => {
@@ -216,6 +216,42 @@ test("createLocalStore(folderId) scopes annotations per project and isolates the
 
   // saveAnnotations stamps the schema like the global store does
   assert.equal((await A.loadAnnotations() as any).schema, ANN_SCHEMA);
+});
+
+test("meta KV: round-trips values, misses read undefined, delete removes, keys are independent", async () => {
+  // miss → undefined (not a throw, not null)
+  assert.equal(await metaGet("sync:A:synced_rev"), undefined);
+
+  // primitives, objects, null, false all round-trip verbatim
+  await metaPut("sync:A:synced_rev", 7);
+  await metaPut("sync:A:touched", true);
+  await metaPut("sync:A:marker", { targetRev: 8 });
+  await metaPut("sync:A:last_pushed_at", null);
+  assert.equal(await metaGet("sync:A:synced_rev"), 7);
+  assert.equal(await metaGet("sync:A:touched"), true);
+  assert.deepEqual(await metaGet("sync:A:marker"), { targetRev: 8 });
+  assert.equal(await metaGet("sync:A:last_pushed_at"), null);
+
+  // each field is its OWN key — deleting one leaves the others (no shared record)
+  await metaDelete("sync:A:marker");
+  assert.equal(await metaGet("sync:A:marker"), undefined);
+  assert.equal(await metaGet("sync:A:synced_rev"), 7);
+  assert.equal(await metaGet("sync:A:touched"), true);
+
+  // per-project isolation via the folderId in the key
+  assert.equal(await metaGet("sync:B:synced_rev"), undefined);
+
+  // overwriting a key replaces in place
+  await metaPut("sync:A:synced_rev", 9);
+  assert.equal(await metaGet("sync:A:synced_rev"), 9);
+});
+
+test("meta KV does not collide with the annotations blob", async () => {
+  await localStore.saveAnnotations({ conditions: [{ id: "c" }], shapes: [] } as any);
+  await metaPut("sync::touched", true); // even a null-scope-ish sync key
+  // the sync key write left the annotations untouched, and vice-versa
+  assert.deepEqual((await localStore.loadAnnotations()).conditions, [{ id: "c" }]);
+  assert.equal(await metaGet("sync::touched"), true);
 });
 
 test("createLocalStore(folderId): PDFs and browser-global libraries stay global (unscoped)", async () => {
