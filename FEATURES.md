@@ -23,7 +23,7 @@ The buildable map: what OpenTakeoff does and exactly where each piece lives, so 
 | **Sample plan** | One-click demo: a real (public) medical-center floor finish plan | `web/public/demo/`, load button in the empty state |
 | **Bring-your-own-AI (opt-in)** | Client-side seam to a vision endpoint **you** configure (OpenAI-style or Anthropic-style; local runtimes welcome, key optional, stored per-browser). First consumer: *read scale with AI* — one title-block snapshot → suggestion in the existing confirm-to-apply flow. Dormant when unconfigured; no telemetry | `web/src/lib/ai.js` (`visionQuery`, config, request/response plumbing); `scaleFromLabel` in `web/src/lib/sheets.ts`; `captureTitleBlock`/`readScaleWithAi` in `TakeoffCanvas.jsx`; `web/src/components/AiSettings.jsx` |
 | **Optional AI backend** | Pluggable adapter interface for scale/room/finish suggestions; heuristic default, bring your own model | `server/app.py`, `server/adapters/base.py`, `server/adapters/heuristic.py` |
-| **Capture layer (opt-in)** | Local stdlib-only server banks Contribute payloads as (geometry → label) JSONL training rows — hash-gated dedup, verbatim payload archive, atomic mirror into a synced share | `capture/capture_server.py` (see `capture/README.md`); payload builder `web/src/lib/contribute.js` |
+| **Capture layer (opt-in)** | Local stdlib-only server banks Contribute payloads as (geometry → label) JSONL training rows — hash-gated dedup, verbatim payload archive, atomic mirror into a synced share. The mirror is wedge-proof: share ops run on capped expendable threads (`OPENTAKEOFF_MIRROR_TIMEOUT_S`, 15s default) behind a strand budget, so a stalled sync client can never hang a contribution | `capture/capture_server.py` (see `capture/README.md`); payload builder `web/src/lib/contribute.js` |
 | **MCP server** | The engine on stdio for MCP clients: load/scale/one-click/measure/summary/export as agent tools, same math and provenance as the canvas | `mcp/server.ts`, `mcp/src/{session,tools,pdf}.ts` (see `mcp/README.md`, `docs/MCP.md`) |
 
 ## Tested surface
@@ -32,7 +32,7 @@ The buildable map: what OpenTakeoff does and exactly where each piece lives, so 
 
 `cd mcp && npm test` — the MCP server over the bundled demo plan: session state + lazy caches (`mcp/test/session.test.ts`), the tool layer over an in-memory client/server pair (`mcp/test/tools.test.ts`), and a full load → scale → one-click ×4 → summary → export round-trip (`mcp/test/e2e.test.ts`).
 
-`python3 capture/capture_server.py selftest` — end-to-end over the wire: contribution rows, dedup on re-contribution, re-capture on retag, health counts, and the atomic mirror copy.
+`python3 capture/capture_server.py selftest` — end-to-end over the wire: contribution rows, dedup on re-contribution, re-capture on retag, health counts, the atomic mirror copy, and the wedged-share guarantees (a hanging mirror folder still banks the row and returns the POST within the cap).
 
 ## Extending it
 

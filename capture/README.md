@@ -73,6 +73,19 @@ you end up with `takeoff_labels (conflicted copy).jsonl`. The primary corpus
 stays local; the share always sees one consistent file plus a `corpus.json`
 with the current counts.
 
+The mirror also can't take the server down with it. A stalled sync client can
+leave a filesystem syscall in the share hanging **at the kernel** — no
+exception raised, no return — so every mirror copy runs on an expendable
+thread with a wall-clock cap (`OPENTAKEOFF_MIRROR_TIMEOUT_S`, default 15s)
+behind a 3-slot strand budget: a wedged share strands at most three threads,
+then further mirror attempts skip with a log line until it recovers. Your
+corpus row has already banked locally by then, and the `/contribute` response
+is never held hostage. One macOS gotcha worth knowing: if the capture server
+runs as a background service (launchd, not a terminal), the OS may silently
+park its first access to a cloud-synced folder waiting on a privacy-consent
+prompt that never renders — grant the Python binary Full Disk Access, or just
+run the server from a terminal.
+
 ## Where this design comes from
 
 This is the open edition of the capture layer inside
