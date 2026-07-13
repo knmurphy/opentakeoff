@@ -8,6 +8,7 @@ import ProjectHome from "./components/ProjectHome.jsx";
 import { GoogleAuthProvider, useGoogleAuth } from "./lib/google/AuthContext.jsx";
 import { projectIdFromUrl, setActiveStore } from "./lib/store.js";
 import { isGoogleConfigured, getAccessToken } from "./lib/google/auth.js";
+import { cloudSyncOptedIn } from "./lib/prefs.js";
 import { projectHomeFolderId } from "./lib/projectHome.js";
 import { initTheme } from "./lib/theme.js";
 
@@ -102,19 +103,33 @@ function ProjectGate({ projectId }) {
     setError("");
     (async () => {
       try {
+        const optedIn = cloudSyncOptedIn();   // per-browser flag, default OFF → legacy path
         const [{ createDrive }, { createCloudStore }] = await Promise.all([
           import("./lib/google/drive.js"),
           import("./lib/cloudStore.js"),
         ]);
         const drive = createDrive({ getToken: getAccessToken });
-        // Install + arm only while this effect is still current: a stale
-        // continuation (user navigated away before the imports resolved) must
-        // not re-install its cloud store over whatever replaced it — the
-        // unmount cleanup already restored the local store.
-        if (live) {
-          setActiveStore(createCloudStore(projectId, drive));
-          setStoreReady(true);
+        // BUILD only while this effect is still current. A stale continuation (user
+        // navigated away before the imports resolved, or React StrictMode's dev
+        // double-invoke) must not construct the composite: createSyncStore's bootstrap
+        // fires on construction, so an orphan that's never installed would still run a
+        // reconciler (redundant pulls/pushes over the same sync meta). Gating the
+        // build on `live` — re-checked after the dynamic import's await — keeps this to
+        // exactly the installed store, and matches the pre-5a "build inside if(live)".
+        let next;
+        if (optedIn) {
+          // Local-first: assemble the composite. composite.js (and the sync modules
+          // it imports) is pulled in ONLY here, so the legacy path and the anonymous
+          // bundle never load any Drive-sync code.
+          const { buildLocalFirstStore } = await import("./lib/sync/composite.js");
+          if (!live) return;   // navigated away during the import → don't build an orphan reconciler
+          next = buildLocalFirstStore(projectId, drive, createCloudStore(projectId, drive));
+        } else {
+          if (!live) return;   // navigated away → don't install over whatever replaced the store
+          next = createCloudStore(projectId, drive);   // LEGACY Drive-canonical path — byte-identical to today
         }
+        setActiveStore(next);
+        setStoreReady(true);
       } catch (e) {
         if (live) setError(String(e?.message || e));
       }

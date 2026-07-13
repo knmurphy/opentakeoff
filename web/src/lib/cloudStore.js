@@ -376,5 +376,16 @@ export function createCloudStore(folderId, drive, { local = localStore } = {}) {
     listSnapshots() { return local.listSnapshots(folderId); },
     getSnapshot(id) { return local.getSnapshot(id, folderId); },
     deleteSnapshot(id) { return local.deleteSnapshot(id); },
+
+    // ── shared sidecar resolvers, exposed for the local-first sync layer (F4) ──
+    // The annotation-sync provider and the snapshot-sync module must resolve the
+    // SAME `.opentakeoff` folder as this store. If each created its own, three
+    // writers would race `findChild`-then-`createFolder` (no uniqueness constraint)
+    // and the sidecar would split-brain — annotations.json and sheets.json landing
+    // in different `.opentakeoff` folders. main.jsx injects THIS store's memoized
+    // create-once resolver (and the non-creating read-path variant) into both sync
+    // layers so they all agree on one folder. Additive; unused on the legacy path.
+    ensureSidecarId,
+    findSidecarFolder,
   };
 }
