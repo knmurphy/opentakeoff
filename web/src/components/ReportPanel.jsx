@@ -999,10 +999,10 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
               "Measured with OpenTakeoff" credit. Disabled until a trade name exists. */}
           <div style={{ ...section, borderTop: "1px solid var(--ink-faint)", marginTop: 14, paddingTop: 12 }}>Branding — how this project's documents present</div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0", cursor: profs.profiles.length ? "pointer" : "not-allowed", opacity: profs.profiles.length ? 1 : 0.6 }}>
-            <input type="checkbox" name="clear-label" checked={brandSel.mode === "clearlabel"} disabled={!profs.profiles.length}
+            <input type="checkbox" name="trade-name-brand" checked={brandSel.mode === "clearlabel"} disabled={!profs.profiles.length}
               onChange={(e) => setBranding({ mode: e.target.checked ? "clearlabel" : "default" })} />
             <span style={{ fontSize: 12.5 }}>
-              Clear label — brand as your company
+              Trade name — brand as your company
               {!profs.profiles.length && <span style={{ color: "var(--ink-muted)" }}> (add a trade name first)</span>}
             </span>
           </label>
