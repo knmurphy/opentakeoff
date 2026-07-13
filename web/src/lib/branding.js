@@ -56,19 +56,31 @@ export function resolveBranding(sel) {
 // — i.e. a single global setting, which is exactly right there.
 const selKey = (projectId) => `branding:${projectId || ""}`;
 
+// Both swallow IndexedDB failures (stale-tab VersionError, private mode, quota)
+// and degrade — the same resilience loadCompany/saveCompany apply — so a blocked
+// DB can never surface as an unhandled rejection at a fire-and-forget call site.
 /** @param {string} [projectId] @returns {Promise<{mode:string, profileId:string|null}>} */
 export async function loadBrandingSelection(projectId) {
-  const v = await metaGet(selKey(projectId));
-  if (v && typeof v === "object") {
-    return { mode: v.mode === "clearlabel" ? "clearlabel" : "default", profileId: v.profileId ?? null };
+  try {
+    const v = await metaGet(selKey(projectId));
+    if (v && typeof v === "object") {
+      return { mode: v.mode === "clearlabel" ? "clearlabel" : "default", profileId: v.profileId ?? null };
+    }
+  } catch {
+    /* DB blocked/unavailable — fall through to the default (OpenTakeoff) */
   }
   return { mode: "default", profileId: null };
 }
 
-/** @param {string} projectId @param {{mode?:string, profileId?:string|null}} sel */
+/** @param {string} projectId @param {{mode?:string, profileId?:string|null}} sel @returns {Promise<boolean>} saved ok */
 export async function saveBrandingSelection(projectId, sel) {
-  await metaPut(selKey(projectId), {
-    mode: sel?.mode === "clearlabel" ? "clearlabel" : "default",
-    profileId: sel?.profileId ?? null,
-  });
+  try {
+    await metaPut(selKey(projectId), {
+      mode: sel?.mode === "clearlabel" ? "clearlabel" : "default",
+      profileId: sel?.profileId ?? null,
+    });
+    return true;
+  } catch {
+    return false; // quota / private mode / stale tab — caller decides what to do
+  }
 }

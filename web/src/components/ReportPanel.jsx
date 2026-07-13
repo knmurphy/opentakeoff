@@ -907,14 +907,16 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
     loadBrandingSelection(projectId).then((s) => { if (alive) setBrandSel(s); });
     return () => { alive = false; };
   }, [projectId]);
-  const setBranding = (patch) => setBrandSel((prev) => {
-    const next = { ...prev, ...patch };
+  // side effects stay OUT of the setState updater (React may double-invoke it):
+  // update local state, then persist and only bump the masthead AFTER the write
+  // commits — so the parent's meta-KV reload can't race ahead and read the old value
+  const setBranding = (patch) => {
+    const next = { ...brandSel, ...patch };
     // turning clear-label on with no explicit pick defaults to the first profile
     if (next.mode === "clearlabel" && !next.profileId) next.profileId = profs.profiles[0]?.id ?? null;
-    saveBrandingSelection(projectId, next);
-    if (onSaved) onSaved();
-    return next;
-  });
+    setBrandSel(next);
+    saveBrandingSelection(projectId, next).then((ok) => { if (ok && onSaved) onSaved(); });
+  };
   // which chip highlights — the SAME fallback the resolver uses (activeProfile),
   // so a stale/deleted profileId highlights the profile the deliverable actually
   // brands as (profiles[0]) instead of highlighting nothing
