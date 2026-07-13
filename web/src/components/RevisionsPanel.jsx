@@ -4,15 +4,22 @@
 // "Addendum 2", retrace what moved, and the compare reads out exactly which
 // finishes and sheets changed and by how much. Restore is guarded: restoring
 // auto-banks the live takeoff first, so it is never destructive.
+//
+// Persistence rides the snapshot entry points (store.saveSnapshot/
+// listSnapshots/getSnapshot/deleteSnapshot) — the store's one primitive for
+// point-in-time payloads — so revisions inherit per-project scoping in cloud
+// mode and the snapshot-sync layer for free, and a record saved here is the
+// same record the Snapshots modal lists (one dataset, two review surfaces).
 import React, { useEffect, useMemo, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
-import { store } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, friendlyStoreError } from "../lib/store.js";
 import { diffTakeoffs, diffToCsv, revSheetLabel } from "../lib/revisions.js";
 import { downloadText } from "../lib/totals.js";
 import { areaVal, areaUnit, lenVal, lenUnit } from "../lib/units";
 
 const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFractionDigits: d });
 const STATUS_COLOR = { added: "var(--c-positive)", removed: "var(--c-danger)", changed: "var(--c-warning)", unchanged: "var(--ink-muted)" };
+const errText = (e) => (isStaleTabError(e) ? STALE_TAB_MESSAGE : friendlyStoreError(e));
 
 export default function RevisionsPanel({ current, units = "imperial", onRestore, onClose }) {
   const [revs, setRevs] = useState(null);          // null = loading
@@ -25,7 +32,11 @@ export default function RevisionsPanel({ current, units = "imperial", onRestore,
   const [confirmId, setConfirmId] = useState("");  // two-step delete/restore: "del:<id>" | "restore:<id>"
   const [showUnchanged, setShowUnchanged] = useState(false);
 
-  const refresh = () => store.listRevisions().then(setRevs).catch((e) => setErr(String(e.message || e)));
+  // snapshot metadata → the panel's row shape (label/ts → name/created_at);
+  // listSnapshots already sorts newest-first and scopes to this project
+  const refresh = () => store.listSnapshots()
+    .then((list) => setRevs(list.map((s) => ({ id: s.id, name: s.label || "Untitled", created_at: s.ts, conditions: s.conditions ?? 0, shapes: s.shapes ?? 0 }))))
+    .catch((e) => setErr(errText(e)));
   useEffect(() => { refresh(); }, []);
   // default the baseline to the newest revision once the list is in
   useEffect(() => { if (revs?.length && !baseId) setBaseId(revs[0].id); }, [revs]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -40,7 +51,12 @@ export default function RevisionsPanel({ current, units = "imperial", onRestore,
   useEffect(() => {
     for (const id of [baseId, compareId]) {
       if (!id || id === "current" || payloads[id]) continue;
-      store.loadRevision(id).then((rec) => setPayloads((p) => ({ ...p, [id]: rec.payload || {} }))).catch((e) => setErr(String(e.message || e)));
+      store.getSnapshot(id)
+        .then((rec) => {
+          if (!rec) { setErr("Revision not found — it may have been deleted in another tab."); return; }
+          setPayloads((p) => ({ ...p, [id]: rec.payload || {} }));
+        })
+        .catch((e) => setErr(errText(e)));
     }
   }, [baseId, compareId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -53,29 +69,30 @@ export default function RevisionsPanel({ current, units = "imperial", onRestore,
 
   const save = async (name) => {
     setBusy(true); setErr("");
-    try { await store.saveRevision({ name: (name || "").trim() || defaultName(), payload: current }); setSaveName(""); await refresh(); }
-    catch (e) { setErr(String(e.message || e)); }
+    try { await store.saveSnapshot((name || "").trim() || defaultName(), current); setSaveName(""); await refresh(); }
+    catch (e) { setErr(errText(e)); }
     setBusy(false);
   };
   const del = async (id) => {
     setBusy(true); setErr("");
     try {
-      await store.deleteRevision(id);
+      await store.deleteSnapshot(id);
       if (baseId === id) setBaseId("");
       if (compareId === id) setCompareId("current");
       await refresh();
-    } catch (e) { setErr(String(e.message || e)); }
+    } catch (e) { setErr(errText(e)); }
     setBusy(false); setConfirmId("");
   };
   const restore = async (id) => {
     setBusy(true); setErr("");
     try {
       // bank the live takeoff first — restore must never be a one-way door
-      await store.saveRevision({ name: `Auto-backup before restore — ${new Date().toLocaleString()}`, payload: current });
-      const rec = await store.loadRevision(id);
+      await store.saveSnapshot(`Auto-backup before restore — ${new Date().toLocaleString()}`, current);
+      const rec = await store.getSnapshot(id);
+      if (!rec) { setErr("Revision not found — it may have been deleted in another tab."); setBusy(false); setConfirmId(""); return; }
       onRestore(rec.payload || {});
       await refresh();
-    } catch (e) { setErr(String(e.message || e)); }
+    } catch (e) { setErr(errText(e)); }
     setBusy(false); setConfirmId("");
   };
 

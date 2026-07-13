@@ -23,6 +23,7 @@ import ToolMenu from "../components/ToolMenu.jsx";
 import PlanNavigator from "../components/PlanNavigator.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import SnapshotPanel from "../components/SnapshotPanel.jsx";
+import RevisionsPanel from "../components/RevisionsPanel.jsx";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
@@ -304,6 +305,7 @@ export default function TakeoffCanvas() {
   }, [commitMsgState]);
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [showSnapshots, setShowSnapshots] = useState(false); // Snapshots modal (save / compare / restore)
+  const [showRevisions, setShowRevisions] = useState(false); // Revisions overlay (compare any two, buy-list deltas, CSV, auto-banked restore)
   const [importRows, setImportRows] = useState(null);        // Import-from-schedule approval rows (null = dialog closed)
   const [scheduleAnchor, setScheduleAnchor] = useState(null); // first marquee corner for the "schedule" tool — ISOLATED from poly so it can never leak into a measure shape
   const [projectName, setProjectName] = useState("");   // optional label for the report header
@@ -1164,6 +1166,25 @@ export default function TakeoffCanvas() {
     const pinned = palette.filter((id) => conditions.some((c) => c.id === id));
     return { project_name: projectName, ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
   };
+  // Runtime restore of a saved payload — Snapshot Load and Revision Restore
+  // share this one path. A runtime load (unlike mount) can interrupt work in
+  // flight: an unfinished trace/calibration/proposal must not commit into the
+  // restored takeoff under a reset activeCond. The check tool and the rescale
+  // stash are in that class too — a surviving prevScale would let "Revert
+  // scale" re-price the RESTORED takeoff against a scale stashed from the
+  // discarded timeline. Zone is in the same class: a surviving zoneCheck would
+  // re-classify the RESTORED shape set against the pre-load polygon (hydrate()
+  // also resets it, but this caller-side reset covers the pending in-progress
+  // trace too). Mid-session, savesArmed is already true, so hydrate's setStates
+  // re-fire the autosave effect and the restored payload persists (and pushes,
+  // on the sync path) like any other edit.
+  const restoreSavedPayload = (payload) => {
+    setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
+    setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null);
+    resetZone();
+    hydrate(payload || {});
+  };
+
   // markups MUST be in the deps (a cloud/callout/text or an RFI link is real work);
   // omitting it dropped markup saves and could persist a stale markups array.
   useEffect(() => {
@@ -4750,6 +4771,7 @@ export default function TakeoffCanvas() {
           {panelBtn(() => setLeftTab((t) => (t === "stamp" ? null : "stamp")), "stamp", "Stamps — reusable annotations dropped click-to-place", leftTab === "stamp", stampLib.stamps.length)}
           {panelBtn(() => setLeftTab((t) => (t === "rfi" ? null : "rfi")), "rfi", "RFI register — raise, track, and export Requests For Information", leftTab === "rfi", rfis.length)}
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
+          {panelBtn(() => setShowRevisions(true), "revisions", "Revisions — save the takeoff at each bid revision, compare what moved", showRevisions)}
         </div>
 
        </div>
@@ -4849,25 +4871,20 @@ export default function TakeoffCanvas() {
         />
       )}
 
+      {showRevisions && (
+        <RevisionsPanel
+          current={buildPayload()}
+          units={UNITS}
+          onRestore={restoreSavedPayload}
+          onClose={() => setShowRevisions(false)}
+        />
+      )}
+
       <SnapshotPanel
         open={showSnapshots} onClose={() => setShowSnapshots(false)}
         buildPayload={buildPayload} currentLabel={projectName}
         sheetLabel={(k) => tabLabel(k)}
-        onLoadSnapshot={(payload) => {
-          // a runtime load (unlike mount) can interrupt work in flight — an
-          // unfinished trace/calibration/proposal must not commit into the
-          // restored takeoff under a reset activeCond. The check tool and the
-          // rescale stash are in that class too: a surviving prevScale would
-          // let "Revert scale" re-price the RESTORED takeoff against a scale
-          // stashed from the discarded timeline. Zone is in the same class —
-          // a surviving zoneCheck would re-classify the RESTORED shape set
-          // against the pre-load polygon (hydrate() also resets it, but this
-          // caller-side reset covers the pending in-progress trace too).
-          setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
-          setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null);
-          resetZone();
-          hydrate(payload || {});
-        }}
+        onLoadSnapshot={restoreSavedPayload}
       />
     </div>
   );
