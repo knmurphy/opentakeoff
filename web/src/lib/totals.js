@@ -290,7 +290,7 @@ export function grandTotals(rows) {
  *   omits it, so a label-less project's CSV is byte-identical to the frozen v1 export.
  * @returns {string}
  */
-export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null, byLabel = null) {
+export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null, byLabel = null, brandName = "OpenTakeoff") {
   const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {
@@ -352,7 +352,7 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
     }
   }
 
-  const title = projectName ? `# ${projectName} — OpenTakeoff report\n` : "";
+  const title = projectName ? `# ${projectName} — ${brandName} report\n` : "";
   return title + lines.join("\n") + "\n";
 }
 

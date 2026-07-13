@@ -14,7 +14,7 @@ import { flushSync } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { store, isStaleTabError, STALE_TAB_MESSAGE } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, projectIdFromUrl } from "../lib/store.js";
 import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
 import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
 import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
@@ -39,7 +39,8 @@ import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
 import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel, shapeLabelValue, assignShapeLabel } from "../lib/shapeLabels.js";
 import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
-import { loadCompany } from "../lib/identity.js";
+import { loadProfiles } from "../lib/identity.js";
+import { resolveBranding, loadBrandingSelection } from "../lib/branding.js";
 import { starPath, cloudPath, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg } from "../lib/geometry.js";
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
@@ -2507,8 +2508,11 @@ export default function TakeoffCanvas() {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
       }).sort((a, b) => compareSheetKeys(a.key, b.key));   // canonical sheet order — shared comparator
+      // branding mode decides the cover identity + wordmark + parent credit;
+      // resolved per-project (folderId "" ⇒ the single browser-only setting)
+      const brand = resolveBranding({ ...(await loadBrandingSelection(projectIdFromUrl())), profiles: loadProfiles().profiles });
       const { bytes, filename } = await buildMarkedSetPdf({
-        projectName, clientInfo, company: loadCompany(),
+        projectName, clientInfo, company: brand.company, credit: brand.credit, coverTitle: brand.coverTitle,
         dark: darkMode, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
