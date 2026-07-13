@@ -188,6 +188,16 @@ test("pull with a non-creating findSidecarId returns null and creates nothing on
   assert.equal([...drive._byId.values()].length, 0, "a read-only pull must not create anything");
 });
 
+test("a non-integer rev (corrupt/hand-edited) is treated as absent, not trusted", async () => {
+  const { drive, provider } = mk();
+  await drive.putJson({ folderId: SIDECAR, name: "annotations.json", data: { shapes: [0], rev: 3.7 }, existingId: null });
+  // pull reports rev null (not 3.7), so no comparison ever bumps to 4.7
+  assert.equal((await provider.pull())!.rev, null);
+  // a first opt-in push (no expectedRev) overwrites the degenerate file at rev 1
+  const r = await provider.push({ shapes: [1], schema: "x" }, {});
+  assert.deepEqual(r, { rev: 1 });
+});
+
 test("rev 0 round-trips: pull yields rev 0, push with expectedRev 0 writes rev 1", async () => {
   const { drive, provider } = mk();
   await drive.putJson({ folderId: SIDECAR, name: "annotations.json", data: { shapes: [0], rev: 0 }, existingId: null });

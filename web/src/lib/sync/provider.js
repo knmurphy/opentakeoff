@@ -28,9 +28,13 @@ import { emptyAnnotations } from "../store.js";
 
 const ANN_NAME = "annotations.json";
 
-// Read a rev out of a payload: a finite integer or null (absent/garbage).
+// Read a rev out of a payload: an INTEGER, or null for absent/garbage. rev is an
+// additive integer counter, so a non-integer (a hand-edited or corrupt 3.7, a
+// string, NaN) is treated as absent rather than trusted — otherwise it would
+// bump to 4.7 and poison every later comparison. Number.isInteger already
+// rejects non-numbers, NaN, and Infinity.
 function revOf(data) {
-  return typeof data?.rev === "number" && Number.isFinite(data.rev) ? data.rev : null;
+  return Number.isInteger(data?.rev) ? data.rev : null;
 }
 
 /**
