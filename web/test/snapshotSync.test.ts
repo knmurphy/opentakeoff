@@ -48,9 +48,11 @@ function fakeProvider() {
       const r = byId.get(id);
       return r ? r.data : null;
     },
+    _delayPutJsonMs: 0,
     async putJson({ folderId, name, data, existingId }: any) {
       if (this._hang === "putJson") return new Promise<any>(() => {});
       if (this._fail === "putJson") throw new Error("push fail");
+      if (this._delayPutJsonMs) await new Promise((r) => setTimeout(r, this._delayPutJsonMs));
       if (existingId && byId.has(existingId)) { byId.get(existingId).data = data; return { id: existingId }; }
       const id = nid();
       byId.set(id, { id, name, parent: folderId, mime: "application/json", data });
@@ -185,6 +187,23 @@ test("delete does not hang when the in-flight push is stuck, and still cannot re
   assert.equal(outcome, "resolved", "delete must not hang on a stuck push");
   assert.equal(await base.getSnapshot(meta.id, F), null);
   assert.equal(remoteSnapshotFiles(provider).length, 0, "stuck push wrote nothing; delete removed nothing to recreate");
+});
+
+test("delete during a SLOW (finite) push does not resurrect — the late push cleans up its own file", async () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const { base, provider, sync } = mk(); // timeoutMs 50
+  provider._delayPutJsonMs = 150; // putJson creates the file, but only AFTER delete's cap fires
+  const meta = await sync.saveSnapshot("slow", { shapes: [1] });
+  await sleep(10); // push passes its pre-write deletedIds guard and enters the slow putJson
+
+  await sync.deleteSnapshot(meta.id); // cap fires at 50ms; findChild misses the not-yet-created file
+  // at this instant the file does NOT exist yet (putJson still in flight)
+  assert.equal(remoteSnapshotFiles(provider).length, 0);
+
+  await sync.whenIdle(); // let the slow push finish: it creates the file, then self-deletes it
+  assert.equal(await base.getSnapshot(meta.id, F), null);
+  assert.equal(remoteSnapshotFiles(provider).length, 0, "the late push cleaned up the file it created");
+  assert.deepEqual(await sync.listSnapshots(), [], "no resurrection");
 });
 
 test("pullMissing skips a remote record whose project scope doesn't match this folder", async () => {

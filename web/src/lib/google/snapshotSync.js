@@ -149,11 +149,19 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
         const record = await base.getSnapshot(meta.id, project);
         if (!record) return;
         const snapsFolder = await ensureSnapshotsFolderId();
-        // Last check before writing: if the snapshot was deleted while we were
-        // resolving, don't recreate its file. No await between here and putJson,
-        // so a concurrent delete can't slip in after this check.
+        // Skip the write if the snapshot was already deleted (fast path — avoids
+        // creating a file nobody wants). No await between here and putJson, so a
+        // delete can't slip in during this check.
         if (deletedIds.has(meta.id)) return;
-        await provider.putJson({ folderId: snapsFolder, name: `${meta.id}.json`, data: record });
+        const { id } = await provider.putJson({ folderId: snapsFolder, name: `${meta.id}.json`, data: record });
+        // But a delete may have landed WHILE putJson was in flight: it added the
+        // id and its own findChild ran before this file existed, so it deleted
+        // nothing. This push is now the only thing that knows about the file it
+        // just created — so it must clean up after itself. deleteSnapshot adds the
+        // id BEFORE awaiting the push, so by the time we recheck here any started
+        // delete is already visible. (Idempotent: if delete's findChild also
+        // caught it, deleteFile on the gone id is a harmless swallowed no-op.)
+        if (id && deletedIds.has(meta.id)) await provider.deleteFile(id).catch(() => {});
       })().catch(() => {
         // Swallow: local is canonical. A failed push means "not backed up yet",
         // surfaced by the Slice 6 status line — never asserted as backed up here.
@@ -191,13 +199,17 @@ export function createSnapshotSync({ base, provider, folderId, ensureSidecarId, 
     // so the window is: delete-offline → later come online → list.
     async deleteSnapshot(id) {
       await base.deleteSnapshot(id);
-      // Mark deleted FIRST: a still-running push now sees this and skips its
-      // write, so it can't recreate the file regardless of ordering.
+      // Mark deleted FIRST, before awaiting anything. This is what makes the
+      // ordering safe: a still-resolving push sees it and skips its write, and a
+      // push already past that guard sees it on its post-putJson recheck and
+      // deletes the file it created (see saveSnapshot). Setting it before the
+      // await guarantees any push that started is visible to both checks.
       deletedIds.add(id);
       // Then briefly wait out an in-flight push so, in the common (fast) case,
-      // the file exists before we delete it below. Capped by the timeout so a
-      // hung/slow push never hangs the delete — if the cap fires first, the
-      // deletedIds guard above still prevents any late resurrection.
+      // the file exists before our findChild below deletes it. Capped by the
+      // timeout so a hung/slow push never hangs the delete — if the cap fires
+      // first, the push's own post-write cleanup removes any file it later
+      // creates, so there's still no resurrection.
       const push = inflightPush.get(id);
       if (push) { try { await withTimeout(push, timeoutMs); } catch { /* capped or already swallowed */ } }
       try {
