@@ -163,3 +163,10 @@ export function extractRegionText(
   }
   return out;
 }
+
+// Ported from upstream d02032a lens: BYO-AI read-scale (see docs/PARENT_FORK_PORTS.md #3)
+export function scaleFromLabel(text: string): DetectedScale | null {
+  if (!text || /^\s*UNKNOWN\s*$/i.test(text)) return null;
+  const hits = _findScales(_canonScaleText(text));
+  return hits.length === 1 ? { upp: hits[0].upp, label: hits[0].label, multi: false } : null;
+}
