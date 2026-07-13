@@ -327,6 +327,29 @@ export function createLocalStore(folderId = null) {
   };
 }
 
+// Durable key-value on the keyPath-less meta store — a cloud-free primitive for
+// bookkeeping that isn't part of an annotations payload. The optional annotation
+// sync layer uses it for per-project `sync:<folderId>:*` fields, each stored under
+// its OWN key so the separate async paths that touch them (autosave / push /
+// crash-recovery) each do a single put — there is no shared record to suffer a
+// lost update.
+// Generic and Drive-free: nothing here reaches the network, so exposing it does
+// not compromise the snapshot cut-line. Callers own key namespacing; the sync
+// layer confines itself to the `sync:` prefix (distinct from the annotation /
+// library keys above).
+/** @param {string} key @returns {Promise<any>} stored value, or undefined if absent */
+export async function metaGet(key) {
+  return withDb((db) => tx(db, META_STORE, "readonly", (os) => os.get(key)));
+}
+/** @param {string} key @param {any} value */
+export async function metaPut(key, value) {
+  await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.put(value, key)));
+}
+/** @param {string} key */
+export async function metaDelete(key) {
+  await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.delete(key)));
+}
+
 // ── the mode-aware store seam ──────────────────────────────────────────────
 // The default build is byte-for-byte the old client-only app: `store` is
 // `localStore` and nothing here touches the network. The optional, team-only
