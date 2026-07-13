@@ -1,5 +1,23 @@
 # OpenTakeoff MCP server
 
+## Run it in 60 seconds (npx)
+
+No clone, no build — point your MCP client at the published package:
+
+```json
+{
+  "mcpServers": {
+    "opentakeoff": {
+      "command": "npx",
+      "args": ["-y", "opentakeoff-mcp"]
+    }
+  }
+}
+```
+
+Works with Claude Code (`claude mcp add opentakeoff -- npx -y opentakeoff-mcp`), Claude Desktop, Cursor, or any stdio MCP client. Node 20+.
+
+
 The takeoff engine — One-Click Area, the scale model, conditions, totals — on
 **stdio for your MCP client**. An agent can open a plan, read the title block,
 set the scale, click rooms, and hand back the same takeoff payload the browser
