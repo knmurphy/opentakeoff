@@ -27,3 +27,4 @@ server/.venv/
 .vscode/
 .idea/
 *.log
+mcp/dist/
