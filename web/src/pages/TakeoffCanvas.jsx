@@ -1246,6 +1246,7 @@ export default function TakeoffCanvas() {
     bridge.onRemoteUpdate = (data) => {
       saveDataRef.current = null;
       if (computeBusy()) { remotePendingRender.current = true; return; }
+      remotePendingRender.current = false; // this hydrate satisfies any earlier deferred render
       suppressNextSave.current = true;
       hydrate(data || {});
     };
@@ -1269,11 +1270,25 @@ export default function TakeoffCanvas() {
   useEffect(() => {
     const bridge = store.syncBridge;
     if (!bridge || computeBusy()) return;
-    bridge.flushPending?.();
-    if (remotePendingRender.current) {
-      remotePendingRender.current = false;
-      store.loadAnnotations().then((a) => { suppressNextSave.current = true; hydrate(a || {}); }).catch(() => {});
-    }
+    let alive = true;
+    (async () => {
+      // Serialize: drain Case 1 FIRST so a store-deferred adopt lands (and its
+      // onRemoteUpdate hydrates + clears remotePendingRender) before the Case 2
+      // re-read — otherwise the re-read could race the adopt's IDB writes and read
+      // stale local.
+      await bridge.flushPending?.();
+      // Re-check after the awaits: unmounted, or the user went busy again → bail and
+      // leave remotePendingRender set so the NEXT idle retries (never a dropped render).
+      if (!alive || !remotePendingRender.current || computeBusy()) return;
+      try {
+        const a = await store.loadAnnotations(); // freshest local: the adopt, or an interim saved edit
+        if (!alive || computeBusy()) return;
+        remotePendingRender.current = false;      // clear ONLY after a successful read
+        suppressNextSave.current = true;
+        hydrate(a || {});
+      } catch { /* keep remotePendingRender → retry on the next idle, never drop it */ }
+    })();
+    return () => { alive = false; };
     // computeBusy/hydrate are stable (refs/setters); the state deps below ARE the
     // idle-transition triggers that should re-evaluate the drain.
     // eslint-disable-next-line react-hooks/exhaustive-deps
