@@ -37,9 +37,14 @@ function revOf(data) {
  * @param {string} folderId  Drive project folder id (for symmetry / logging; the
  *   actual writes target the shared sidecar folder)
  * @param {ReturnType<import("../google/drive.js").createDrive>} drive
- * @param {{ ensureSidecarId: () => Promise<string> }} deps  shared `.opentakeoff` resolver
+ * @param {{ ensureSidecarId: () => Promise<string>, findSidecarId?: () => Promise<string|null> }} deps
+ *   `ensureSidecarId` is the create-once `.opentakeoff` resolver (write paths).
+ *   `findSidecarId` is the NON-creating resolver (read paths) — inject it so a
+ *   read-only pull on a fresh project never litters an empty `.opentakeoff`
+ *   (cloudStore keeps both; wiring must pass the non-creating one here). When
+ *   omitted, pull falls back to ensureSidecarId (fine for tests/standalone).
  */
-export function createDriveProvider(folderId, drive, { ensureSidecarId }) {
+export function createDriveProvider(folderId, drive, { ensureSidecarId, findSidecarId }) {
   // Memoized annotations.json id: locate-else-create exactly once, so concurrent
   // first-writes can't each create a duplicate file. Not cached on failure, so a
   // transient error retries. Mirrors cloudStore.ensureAnnId.
@@ -65,11 +70,15 @@ export function createDriveProvider(folderId, drive, { ensureSidecarId }) {
     // corrupt/truncated JSON) PROPAGATES: the caller must decide (the reconciler
     // keeps local canonical and never hydrates-empty-over-real on a failed pull).
     async pull() {
-      const sidecarId = await ensureSidecarId();
+      // Pure read: resolve the sidecar WITHOUT creating it (a read-only viewer on
+      // a fresh project must not litter an empty `.opentakeoff`). No non-creating
+      // resolver injected → fall back to the create-once one (tests/standalone).
+      const sidecarId = await (findSidecarId ? findSidecarId() : ensureSidecarId());
+      if (!sidecarId) return null; // no sidecar yet → no annotations → caller seeds
       const child = await drive.findChild(sidecarId, ANN_NAME);
       if (!child) return null;
       const data = await drive.getJson(child.id);
-      annIdP = Promise.resolve(child.id); // cache the id for a subsequent push
+      annIdP = Promise.resolve(child.id); // cache the id for a subsequent push (self-heals in push on failure)
       return { data, rev: revOf(data) };
     },
 
@@ -91,10 +100,13 @@ export function createDriveProvider(folderId, drive, { ensureSidecarId }) {
       try {
         remote = await drive.getJson(id);
       } catch {
-        // Unreadable remote (corrupt/blip): treat as "no known rev". A caller
-        // that passed expectedRev will therefore see a conflict below and can
-        // decide; a first push (expectedRev null) proceeds and overwrites the
-        // degenerate file.
+        // Unreadable remote (corrupt/blip) OR a stale cached id (the file was
+        // deleted out from under a prior pull's cache). Treat as "no known rev",
+        // and DROP the memo so the next call re-locates or re-creates the file
+        // instead of reusing a possibly-dead id forever (else push wedges). A
+        // caller that passed expectedRev sees a safe no-write conflict below and
+        // heals on retry; a first push (expectedRev null) proceeds.
+        annIdP = null;
         remote = null;
       }
       const remoteRev = revOf(remote);
@@ -103,7 +115,14 @@ export function createDriveProvider(folderId, drive, { ensureSidecarId }) {
         return { conflict: true, remote: { data: remote, rev: remoteRev } };
       }
       const nextRev = (expectedRev ?? remoteRev ?? 0) + 1;
-      await drive.putJson({ folderId: sidecarId, name: ANN_NAME, data: { ...data, rev: nextRev }, existingId: id });
+      try {
+        await drive.putJson({ folderId: sidecarId, name: ANN_NAME, data: { ...data, rev: nextRev }, existingId: id });
+      } catch (e) {
+        // Write failed — commonly a stale cached id. Drop the memo so the next
+        // push re-locates/re-creates rather than retrying the dead id forever.
+        annIdP = null;
+        throw e;
+      }
       return { rev: nextRev };
     },
   };

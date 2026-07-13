@@ -30,11 +30,19 @@ function fakeDrive() {
     },
     async putJson({ folderId, name, data, existingId }: any) {
       const bytes = new TextEncoder().encode(JSON.stringify(data));
-      if (existingId && byId.has(existingId)) { byId.get(existingId).bytes = bytes; return { id: existingId }; }
+      if (existingId) {
+        // Mirror real drive.js: updateFileBytes PATCHes by id and 404s if the
+        // file is gone. The fake must reject too, or it hides update-by-dead-id
+        // bugs (a create-branch fallback would silently paper over them).
+        if (!byId.has(existingId)) throw new Error(`update failed (HTTP 404): ${existingId} gone`);
+        byId.get(existingId).bytes = bytes;
+        return { id: existingId };
+      }
       const id = nid();
       byId.set(id, { id, name, parent: folderId, mime: "application/json", bytes });
       return { id };
     },
+    async deleteFile(id: string) { byId.delete(id); },
     async getJson(id: string) {
       this._getJsonCalls++;
       if (this._failGetJsonOnce) { this._failGetJsonOnce = false; throw new Error("unreadable"); }
@@ -145,6 +153,47 @@ test("concurrent first pushes don't create duplicate files (ensureAnnId memoized
   ]);
   const files = [...drive._byId.values()].filter((r: any) => r.name === "annotations.json");
   assert.equal(files.length, 1, "exactly one annotations.json");
+});
+
+test("push self-heals a stale cached id: a deleted file re-creates instead of wedging forever", async () => {
+  const { drive, provider } = mk();
+  await drive.putJson({ folderId: SIDECAR, name: "annotations.json", data: { shapes: [0], rev: 2 }, existingId: null });
+  const pulled = await provider.pull(); // caches the id for push
+  assert.equal(pulled!.rev, 2);
+
+  // the file is deleted out from under the cached id
+  const annFile = [...drive._byId.values()].find((r: any) => r.name === "annotations.json");
+  await drive.deleteFile(annFile!.id);
+
+  // first push after the delete: precondition read 404s → safe no-write conflict,
+  // and the dead id is dropped from the memo
+  const r1 = await provider.push({ shapes: [1] }, { expectedRev: 2 });
+  assert.equal((r1 as any).conflict, true);
+
+  // the NEXT push must succeed by re-locating/re-creating — no permanent wedge
+  const r2 = await provider.push({ shapes: [9], schema: "x" }, {});
+  assert.deepEqual(r2, { rev: 1 });
+  const files = [...drive._byId.values()].filter((r: any) => r.name === "annotations.json");
+  assert.equal(files.length, 1);
+  assert.deepEqual(remoteAnn(drive), { shapes: [9], schema: "x", rev: 1 });
+});
+
+test("pull with a non-creating findSidecarId returns null and creates nothing on a fresh project", async () => {
+  const drive = fakeDrive();
+  const provider = createDriveProvider("folderX", drive as any, {
+    ensureSidecarId: async () => { throw new Error("ensureSidecarId (create-once) must not run on a read path"); },
+    findSidecarId: async () => null, // no sidecar folder yet
+  });
+  assert.equal(await provider.pull(), null);
+  assert.equal([...drive._byId.values()].length, 0, "a read-only pull must not create anything");
+});
+
+test("rev 0 round-trips: pull yields rev 0, push with expectedRev 0 writes rev 1", async () => {
+  const { drive, provider } = mk();
+  await drive.putJson({ folderId: SIDECAR, name: "annotations.json", data: { shapes: [0], rev: 0 }, existingId: null });
+  assert.equal((await provider.pull())!.rev, 0); // 0 is a present rev, not "absent"
+  const r = await provider.push({ shapes: [1], schema: "x" }, { expectedRev: 0 });
+  assert.deepEqual(r, { rev: 1 });
 });
 
 test("provider never creates its own sidecar — it uses the injected resolver only", async () => {
