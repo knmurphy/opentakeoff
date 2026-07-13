@@ -85,17 +85,20 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // print masthead re-reads (a cheap localStorage parse + one meta-KV load)
   const [identityRev, setIdentityRev] = useState(0);
   // per-project branding selection (async meta KV); reloads when the modal saves
+  // OR when the project id changes (a switch while the report stays mounted)
+  const projectId = projectIdFromUrl();
   const [brandSel, setBrandSel] = useState({ mode: "default", profileId: null });
   useEffect(() => {
     let alive = true;
-    loadBrandingSelection(projectIdFromUrl()).then((s) => { if (alive) setBrandSel(s); });
+    loadBrandingSelection(projectId).then((s) => { if (alive) setBrandSel(s); });
     return () => { alive = false; };
-  }, [identityRev]);
+  }, [identityRev, projectId]);
   // resolveBranding decides the masthead identity, the export title tag, and the
   // end credit. company is null in default mode → the firm block renders the
-  // OpenTakeoff brand name instead of a trade-name identity.
+  // OpenTakeoff brand name instead of a trade-name identity (read only inside the
+  // brand.clear branch below, so it is never dereferenced when null).
   const brand = resolveBranding({ ...brandSel, profiles: loadProfiles().profiles });
-  const company = brand.company || {};
+  const company = brand.company;
   const hasClient = Boolean(clientInfo.client_name || clientInfo.client_address || clientInfo.reference || clientInfo.date);
   const [colPrefs, setColPrefs] = useState(loadColPrefs);
   const [showCols, setShowCols] = useState(false);
@@ -897,17 +900,25 @@ function ProjectInfoModal({ clientInfo = {}, onClientInfo, onSaved, onClose }) {
   // branding mode — per-project (meta KV, keyed on the project id). Toggling
   // clear-label on brands the deliverables as the trade name; off (default) is
   // OpenTakeoff. Persists immediately and bumps the masthead via onSaved.
+  const projectId = projectIdFromUrl();
   const [brandSel, setBrandSel] = useState({ mode: "default", profileId: null });
-  useEffect(() => { loadBrandingSelection(projectIdFromUrl()).then(setBrandSel); }, []);
+  useEffect(() => {
+    let alive = true;
+    loadBrandingSelection(projectId).then((s) => { if (alive) setBrandSel(s); });
+    return () => { alive = false; };
+  }, [projectId]);
   const setBranding = (patch) => setBrandSel((prev) => {
     const next = { ...prev, ...patch };
     // turning clear-label on with no explicit pick defaults to the first profile
     if (next.mode === "clearlabel" && !next.profileId) next.profileId = profs.profiles[0]?.id ?? null;
-    saveBrandingSelection(projectIdFromUrl(), next);
+    saveBrandingSelection(projectId, next);
     if (onSaved) onSaved();
     return next;
   });
-  const brandProfileId = brandSel.profileId || profs.profiles[0]?.id || null;
+  // which chip highlights — the SAME fallback the resolver uses (activeProfile),
+  // so a stale/deleted profileId highlights the profile the deliverable actually
+  // brands as (profiles[0]) instead of highlighting nothing
+  const brandProfileId = activeProfile({ profiles: profs.profiles, activeId: brandSel.profileId })?.id || null;
 
   const onLogoFile = async (e) => {
     const file = e.target.files && e.target.files[0];

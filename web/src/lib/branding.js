@@ -12,6 +12,7 @@
 // the selection lives in the per-project meta KV, keyed on the project id so it
 // degrades to a single global setting in the browser-only build (folderId "").
 import { metaGet, metaPut } from "./store.js";
+import { activeProfile } from "./identity.js";
 
 export const OT_NAME = "OpenTakeoff";
 export const OT_CREDIT = "Measured with OpenTakeoff";
@@ -26,9 +27,11 @@ export function resolveBranding(sel) {
   const profiles = sel?.profiles || [];
   // clear-label only takes effect when a real profile resolves — no profiles, a
   // stale id with none left, or mode off all fall back to OpenTakeoff. A stale
-  // id with other profiles present rides the first one (activeProfile semantics).
+  // id with other profiles present rides the first one. activeProfile() is the
+  // ONE place that fallback rule lives (shared with the modal chip highlight) so
+  // the deliverable and the UI can never disagree on which profile is selected.
   const profile = sel?.mode === "clearlabel"
-    ? (profiles.find((p) => p.id === sel?.profileId) || profiles[0] || null)
+    ? activeProfile({ profiles, activeId: sel?.profileId })
     : null;
   const clear = Boolean(profile);
   return {
