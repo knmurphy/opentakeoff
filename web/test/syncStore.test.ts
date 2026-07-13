@@ -258,6 +258,13 @@ test("rapid saves coalesce: the remote ends at the latest content", async () => 
   assert.equal(await metaGet("sync:A:synced_rev"), provider._remote.rev);
 });
 
+test("createSyncStore fails fast on a miswired base or provider", () => {
+  const base = createLocalStore("A");
+  assert.throws(() => createSyncStore({ base, provider: null as any, folderId: "A" }), /provider/);
+  assert.throws(() => createSyncStore({ base, provider: {} as any, folderId: "A" }), /provider/);
+  assert.throws(() => createSyncStore({ base: null as any, provider: fakeProvider(), folderId: "A" }), /base/);
+});
+
 test("the sync store exposes ONLY loadAnnotations + saveAnnotations", async () => {
   const sync = createSyncStore({ base: createLocalStore("A"), provider: fakeProvider(), folderId: "A" }) as any;
   await sync.whenSynced();

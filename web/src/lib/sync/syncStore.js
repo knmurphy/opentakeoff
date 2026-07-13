@@ -39,6 +39,16 @@ import { metaGet, metaPut, metaDelete } from "../store.js";
  *   signal; in 4b it fires only on a mount seed. (4c adds reconcile/conflict calls.)
  */
 export function createSyncStore({ base, provider, folderId, onRemoteUpdate }) {
+  // Fail fast on a miswired composite. Without this, a null/incomplete provider
+  // would let saveAnnotations still write touched/marker meta and then leave a
+  // marker that recovery keeps forever (its pull throws → treated as "offline") —
+  // a hard-to-debug wedge. Validate base too: a bad base loses the local write.
+  if (!base || typeof base.loadAnnotations !== "function" || typeof base.saveAnnotations !== "function") {
+    throw new Error("createSyncStore: base with loadAnnotations()/saveAnnotations() is required");
+  }
+  if (!provider || typeof provider.pull !== "function" || typeof provider.push !== "function") {
+    throw new Error("createSyncStore: provider with pull()/push() is required");
+  }
   const K = {
     touched: `sync:${folderId}:touched`,
     syncedRev: `sync:${folderId}:synced_rev`,
