@@ -22,7 +22,6 @@ import { ingestFiles } from "../lib/ingest.js";
 import ToolMenu from "../components/ToolMenu.jsx";
 import PlanNavigator from "../components/PlanNavigator.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
-import SnapshotPanel from "../components/SnapshotPanel.jsx";
 import RevisionsPanel from "../components/RevisionsPanel.jsx";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
@@ -304,8 +303,7 @@ export default function TakeoffCanvas() {
     return () => clearTimeout(t);
   }, [commitMsgState]);
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
-  const [showSnapshots, setShowSnapshots] = useState(false); // Snapshots modal (save / compare / restore)
-  const [showRevisions, setShowRevisions] = useState(false); // Revisions overlay (compare any two, buy-list deltas, CSV, auto-banked restore)
+  const [showRevisions, setShowRevisions] = useState(false); // Revisions overlay (save / compare any two, buy-list deltas, CSV, auto-banked restore)
   const [importRows, setImportRows] = useState(null);        // Import-from-schedule approval rows (null = dialog closed)
   const [scheduleAnchor, setScheduleAnchor] = useState(null); // first marquee corner for the "schedule" tool — ISOLATED from poly so it can never leak into a measure shape
   const [projectName, setProjectName] = useState("");   // optional label for the report header
@@ -389,7 +387,7 @@ export default function TakeoffCanvas() {
   // annotations.json in the folder (see #68). Error paths that skip hydrate
   // leave BOTH hydrated and this disarmed: the in-memory state is empty there,
   // so arming would let the first edit overwrite the intact saved takeoff with
-  // nothing (the loadError banner explains). A snapshot Load reuses hydrate() too, but
+  // nothing (the loadError banner explains). A revision Restore reuses hydrate() too, but
   // mid-session it runs with this already armed, so a restore saves — unchanged
   // by this fix. (Restoring on a canvas whose mount load FAILED stays disarmed
   // and is not persisted — the #73 gap, which persists on the LEGACY cloud path.
@@ -651,7 +649,7 @@ export default function TakeoffCanvas() {
       .catch((e) => !off && (setErr(String(e.message || e)), setStatus("error")));
     return () => { off = true; };
   }, [cloudMode]);
-  // Keep hasSheetsRef current so a later re-hydration (a Snapshot Load after the
+  // Keep hasSheetsRef current so a later re-hydration (a revision Restore after the
   // working set changed) reads the LIVE sheet count, not the mount-time value.
   // The mount sheets effect above also sets it synchronously for the initial
   // landing decision (before this post-render effect runs).
@@ -659,11 +657,11 @@ export default function TakeoffCanvas() {
 
   // ── load saved annotations once per project ───────────────────────────────
   // hydrate applies a saved payload to state — shared by the mount load and by
-  // Load in the Snapshots panel, so a restored snapshot walks the same
+  // Restore in the Revisions panel, so a restored revision walks the same
   // defensive path as a page reload.
   const hydrate = (a) => {
-    // Same cross-load-transient gap as the panel epoch bump below: a Snapshot
-    // Load runs in-place with the same sheet keys, so a surviving zoneCheck
+    // Same cross-load-transient gap as the panel epoch bump below: a revision
+    // Restore runs in-place with the same sheet keys, so a surviving zoneCheck
     // would immediately re-classify the RESTORED shape set against the
     // pre-load polygon — "correct" math against the wrong region. Reset it
     // unconditionally, mirroring the sheet_group/sheet_levels else-clear rule.
@@ -1179,8 +1177,8 @@ export default function TakeoffCanvas() {
     // byte-identical on round-trip; only a metric project carries the field.
     return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}) };
   };
-  // Runtime restore of a saved payload — Snapshot Load and Revision Restore
-  // share this one path. A runtime load (unlike mount) can interrupt work in
+  // Runtime restore of a saved payload — the Revisions panel's Restore lands
+  // here. A runtime load (unlike mount) can interrupt work in
   // flight: an unfinished trace/calibration/proposal must not commit into the
   // restored takeoff under a reset activeCond. The check tool and the rescale
   // stash are in that class too — a surviving prevScale would let "Revert
@@ -3841,10 +3839,6 @@ export default function TakeoffCanvas() {
           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "schedule" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "schedule" ? "var(--cobalt)" : "transparent", color: tool === "schedule" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
           <Icon name="rectTool" size={15} />Schedule
         </button>
-        <button onClick={() => setShowSnapshots((v) => !v)} title="Snapshots — save the takeoff as-is, then compare or restore it after an addendum"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${showSnapshots ? "var(--cobalt)" : "var(--ink-faint)"}`, background: showSnapshots ? "var(--cobalt)" : "transparent", color: showSnapshots ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="document" size={15} />Snapshots
-        </button>
         <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
           style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
         {/* Deliberately subtle, not a button: local-first app, cloud mode is an
@@ -5024,13 +5018,6 @@ export default function TakeoffCanvas() {
           onClose={() => setShowRevisions(false)}
         />
       )}
-
-      <SnapshotPanel
-        open={showSnapshots} onClose={() => setShowSnapshots(false)}
-        buildPayload={buildPayload} currentLabel={projectName}
-        sheetLabel={(k) => tabLabel(k)}
-        onLoadSnapshot={restoreSavedPayload}
-      />
     </div>
   );
 }

@@ -8,8 +8,8 @@
 // Persistence rides the snapshot entry points (store.saveSnapshot/
 // listSnapshots/getSnapshot/deleteSnapshot) — the store's one primitive for
 // point-in-time payloads — so revisions inherit per-project scoping in cloud
-// mode and the snapshot-sync layer for free, and a record saved here is the
-// same record the Snapshots modal lists (one dataset, two review surfaces).
+// mode and the snapshot-sync layer for free. This panel is the single review
+// surface over those records (the old Snapshots modal is retired).
 import React, { useEffect, useMemo, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { store, isStaleTabError, STALE_TAB_MESSAGE, friendlyStoreError } from "../lib/store.js";
