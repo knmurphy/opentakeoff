@@ -30,10 +30,12 @@ import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKe
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
+import { emptyLabels, addRoom, removeRoom, serialize, parse as parseLabels } from "../lib/labelStore";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { roomLabelSeeds, detectRegions } from "../lib/detectRooms";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
@@ -256,6 +258,14 @@ export default function TakeoffCanvas() {
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
   const [ocSel, setOcSel] = useState(null);        // selected proposal vertex {ri, vi} — Delete removes just that point
   const [ocHover, setOcHover] = useState(-1);      // proposal region under the cursor — handles reveal on hover
+  // Ground-truth labeling (issue #127): a validation-corpus harness. In "label"
+  // tool, a click inside a real room drops a truth seed in PANEL-LOCAL image px
+  // (the SAME frame oneClickAt/floodRegion seed the flood in), persisted to a
+  // gitignored example-plans/.labels/<sheet>.json sidecar via the dev-only vite
+  // bridge. gtRooms mirrors the loaded sheet's truth; gtSheet is the sheet key
+  // it belongs to (so switching sheets reloads instead of showing stale seeds).
+  const [gtRooms, setGtRooms] = useState([]);      // [{ number?, seed: [x,y] }] panel-LOCAL px, for gtSheet
+  const [gtSheet, setGtSheet] = useState(null);    // the sheet key gtRooms is loaded for
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
   const [selVert, setSelVert] = useState(null);         // selected vertex index of the selected shape — Delete removes just that point
   const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
@@ -1550,6 +1560,7 @@ export default function TakeoffCanvas() {
     if (tool === "calibrate") setCalib((c) => (c.length >= 2 ? [p] : [...c, p]));
     else if (tool === "check") setCheck((c) => (c.length >= 2 ? [p] : [...c, p]));
     else if (tool === "oneclick") oneClickAt(p, !!(ev && ev.altKey));
+    else if (tool === "label") labelAt(p);
     else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") setPoly((q) => [...q, p]);
     else if (tool === "count") commitCount(p);
     else if (tool === "rect" || tool === "deduct-rect") {
@@ -2292,16 +2303,16 @@ export default function TakeoffCanvas() {
   // vector corners would corrupt the ring. Duplicate/carve checks run inside a
   // FUNCTIONAL setProposal so a click racing the first raster render can't
   // clobber state.
-  function proposeRegion(f, tp, local, negative, raster) {
+  function proposeRegion(f, tp, local, negative, raster, method, silent) {
     const upp = uppFor(tp.key);
-    if (!upp) return;
+    if (!upp) return "noScale";
     let ring;
     if (raster) ring = traceRegion(f, RASTER_RDP_EPS);
     else {
       const grid = snapGridsRef.current.get(tp.key);
       ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
     }
-    if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
+    if (ring.length < 3) { if (!silent) setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return "untraceable"; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
     // Decide accept/dup/carve-reject INSIDE the functional updater, against
@@ -2350,12 +2361,14 @@ export default function TakeoffCanvas() {
           return prev;
         }
         outcome = "added";
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster, ...(method ? { method } : {}) }] };
       });
     });
+    if (silent) return outcome;   // batch caller (Detect Rooms) owns the summary message; per-seed dup/skip is not noise
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
     else if (outcome === "needsPos") setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
     else setCommitMsg("");
+    return outcome;
   }
   async function oneClickAt(p, negative) {
     const tp = panelAt(p[0]);
@@ -2421,13 +2434,153 @@ export default function TakeoffCanvas() {
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
       computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
       ...(activeLabel ? { label: activeLabel } : {}),
-      // the provenance receipt: machine-proposed, human-reviewed at the Create gate
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}) },
+      // the provenance receipt: machine-proposed, human-reviewed at the Create gate.
+      // method distinguishes a hand One-Click (one_click_v1) from a batch Detect
+      // Rooms seed (detect_rooms_v1) — set on the region by proposeRegion's caller.
+      origin: { method: r.method || "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}) },
     }));
     setShapes((s) => [...s, ...made]);
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
     setCommitMsg(`Created ${made.length} takeoff${made.length === 1 ? "" : "s"} — ${sf.toLocaleString(undefined, { maximumFractionDigits: 1 })} SF ${condById[activeCond]?.finish_tag || ""}. Click the next room.`);
     setProposal(null);
+  }
+
+  // ── Ground-truth labeling (issue #127) — the validation-corpus harness ──────
+  // A click inside a real room records a truth seed so batch detection can be
+  // scored (precision/recall) against it. The seed MUST land in the identical
+  // frame the detector seeds its flood in, or every score silently corrupts. So
+  // this mirrors oneClickAt EXACTLY: `tp = panelAt(p[0])`, then panel-LOCAL
+  // px = `[p[0] - tp.xOffset, p[1]]` (see oneClickAt line ~2233). Everything —
+  // basename, dims, seed — is derived from that ONE `tp`, never focusPanel
+  // (setFocusKey is async, so on a boundary click focusPanel is a frame stale
+  // while panelAt(p[0]) is already correct).
+  //
+  // The sidecar is keyed by SHEET KEY, not the PDF file: corpus PDFs are plan
+  // SETS (many sheets), detectRooms scores ONE sheet (focusPanel), so each sheet
+  // gets its own truth file at its own dims.
+  const gtKeyFor = (tp) => (tp.page > 1 ? `${tp.file}#${tp.page}` : tp.file);
+
+  // Load the sidecar for a sheet on demand (dev-only bridge; 404 ⇒ empty).
+  const loadGtFor = useCallback(async (key) => {
+    setGtSheet(key);
+    try {
+      const res = await fetch(`/_labels/${encodeURIComponent(key)}`);
+      if (res.ok) {
+        const data = parseLabels(await res.text());
+        setGtRooms(data.rooms || []);
+        return;
+      }
+    } catch { /* no bridge / bad file ⇒ start empty */ }
+    setGtRooms([]);
+  }, []);
+
+  // Persist the current truth list for `tp` to its sidecar (fire-and-forget).
+  const saveGt = useCallback(async (tp, rooms) => {
+    let labels = emptyLabels(gtKeyFor(tp), tp.img.w, tp.img.h);
+    for (const r of rooms) labels = addRoom(labels, r);
+    try {
+      await fetch(`/_labels/${encodeURIComponent(gtKeyFor(tp))}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: serialize(labels),
+      });
+    } catch { setCommitMsg("Couldn't write the label file — is the dev server running?"); }
+  }, []);
+
+  // Click within a marker's screen radius removes it; otherwise drop a new one.
+  function labelAt(p) {
+    const tp = panelAt(p[0]);
+    if (!tp.img.w) return;
+    const seed = [p[0] - tp.xOffset, p[1]];   // panel-LOCAL image px — mirrors oneClickAt
+    // ensure gtRooms belongs to THIS sheet before mutating (a boundary click can
+    // target a panel we haven't loaded yet)
+    const key = gtKeyFor(tp);
+    if (gtSheet !== key) { loadGtFor(key); return; }   // first click on a fresh sheet just loads its truth
+    const hitR = 12 / tfRef.current.scale;   // screen-constant hit radius
+    const hit = gtRooms.findIndex((r) => Math.hypot(r.seed[0] - seed[0], r.seed[1] - seed[1]) <= hitR);
+    let next;
+    if (hit >= 0) {
+      next = removeRoom({ plan: key, width: tp.img.w, height: tp.img.h, rooms: gtRooms }, hit).rooms;
+      setCommitMsg(`Removed a ground-truth room — ${next.length} truth ${next.length === 1 ? "room" : "rooms"} on this sheet.`);
+    } else {
+      const num = (typeof window !== "undefined" && window.prompt) ? (window.prompt("Room number (optional):") || "") : "";
+      const room = num.trim() ? { number: num.trim(), seed } : { seed };
+      next = [...gtRooms, room];
+      setCommitMsg(`Recorded a ground-truth room — ${next.length} truth ${next.length === 1 ? "room" : "rooms"} on this sheet.`);
+    }
+    setGtRooms(next);
+    saveGt(tp, next);
+  }
+
+  // In label mode, keep the shown truth in sync with the focused sheet — load
+  // the sidecar when we arm the tool or switch sheets, so we never paint one
+  // sheet's seeds over another's. (Declared after loadGtFor to dodge the TDZ.)
+  const focusGtKey = focusPanel && focusPanel.img.w ? gtKeyFor(focusPanel) : null;
+  useEffect(() => {
+    if (tool === "label" && focusGtKey && focusGtKey !== gtSheet) loadGtFor(focusGtKey);
+  }, [tool, focusGtKey, gtSheet, loadGtFor]);
+
+  // ── Detect Rooms (vector) — batch-seed the One-Click flood from labels ──────
+  // Issue #123: the thinnest end-to-end batch detection. Read room-number text
+  // labels off the focused panel's text layer (the SAME getTextContent source
+  // detectScale/extractRegionText use), seed the EXISTING flood at each, keep
+  // only clean `ok` floods (the status gate — grow-but-verify hatch escalations
+  // return `ok` and ARE real rooms), and fan them into the EXISTING proposal via
+  // proposeRegion. Nothing commits until Create (⏎), which stamps
+  // origin.method = "detect_rooms_v1". Vector, client-side, one panel at a time.
+  async function detectRooms() {
+    const tp = focusPanel;
+    if (!tp) return;
+    const upp = uppFor(tp.key);
+    if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first, then Detect Rooms.`); return; }
+    if (!activeCond) { setCommitMsg("Pick or add a condition first — Detect Rooms drops rooms onto it."); return; }
+    if (proposal && proposal.key !== tp.key) { setCommitMsg(`Finish the selection on ${labelFor(panelByKey(proposal.key))} first — ⏎ creates it, Esc discards.`); return; }
+    // Reviewing/creating the ghosts uses the One-Click substrate (the proposal
+    // clears on any other tool, ⏎ only fires Create in One-Click, the Create
+    // button lives in that cluster), so arm it. Track that WE armed it: setTool is
+    // async (toolRef only catches up on the next render's effect), so the
+    // post-await stale-tool guard below must treat "we just armed oneclick" as
+    // valid — otherwise the FIRST click (from another tool) would arm and then
+    // bail on its own not-yet-committed tool change.
+    const armedHere = toolRef.current !== "oneclick";
+    if (armedHere) { setTool("oneclick"); toolRef.current = "oneclick"; }
+    // Vector-only: Detect Rooms seeds the LINEWORK flood. Reject only a genuine
+    // SCAN WRAPPER — a big placed image with too little linework to bound rooms
+    // (the raster path there is single-click; #123 is client-side vector). This
+    // mirrors oneClickAt's trigger policy: a sheet is scan-only when it is
+    // raster-eligible AND not vector-viable. A sparse-but-clean vector plan (the
+    // demo has just 6 segments) is NOT a scan — ensureMask will bound its rooms.
+    const stats = sheetStatsRef.current.get(tp.key);
+    const rasterEligible = !!stats && stats.imageFrac >= RASTER_MIN_IMG_FRAC;
+    const vectorViable = !!stats && stats.segCount >= RASTER_MIN_SEGS;
+    if (rasterEligible && !vectorViable) { setCommitMsg("Detect Rooms reads vector linework — this looks like a scan. Click rooms one at a time with One-Click (O)."); return; }
+    const mo = ensureMask(tp.key);
+    if (!mo) { setCommitMsg(rasterEligible ? "Detect Rooms reads vector linework — this looks like a scan. Click rooms one at a time with One-Click (O)." : "Still reading this sheet's linework — try Detect Rooms again in a second."); return; }
+    const pageObj = pageObjsRef.current.get(tp.key);
+    if (!pageObj) { setCommitMsg("Open a sheet first."); return; }
+    const rs = renderScalesRef.current.get(tp.key) || RENDER_SCALE;
+    const seq = renderSeqRef.current;
+    setCommitMsg("Detecting rooms…");
+    let seeds;
+    try {
+      const vp = pageObj.getViewport({ scale: rs });
+      const tc = await pageObj.getTextContent();
+      if (seq !== renderSeqRef.current) { setCommitMsg(""); return; }   // sheet group changed mid-await
+      seeds = roomLabelSeeds(tc, vp.transform);
+    } catch { setCommitMsg("Couldn't read this sheet's text — click rooms with One-Click (O)."); return; }
+    if (toolRef.current !== "oneclick" || (proposalRef.current && proposalRef.current.key !== tp.key)) { setCommitMsg(""); return; }
+    if (!seeds.length) { setCommitMsg("No room-number labels found on this sheet — click rooms with One-Click (O)."); return; }
+    // Status gate: keep only clean `ok` floods (leak/tiny/boundary silently
+    // dropped). Fan each into the SAME proposal — proposeRegion's own pointInPoly
+    // check skips a seed landing inside an already-accepted region this run.
+    const regions = detectRegions(mo, seeds, fillSens);
+    let added = 0;
+    for (const r of regions) {
+      // silent=true: proposeRegion's own pointInPoly check dedups a seed inside
+      // an already-accepted region this run; the batch owns the summary message.
+      if (proposeRegion(r.flood, tp, r.seed, false, false, "detect_rooms_v1", true) === "added") added++;
+    }
+    setCommitMsg(added
+      ? `Detected ${added} room${added === 1 ? "" : "s"} on ${labelFor(tp)} — review the ghosts, then Create (⏎) to add to ${condById[activeCond]?.finish_tag || "the condition"}.`
+      : `Scanned ${seeds.length} label${seeds.length === 1 ? "" : "s"} but none floods to a clean room — click rooms with One-Click (O).`);
   }
 
   // ── One-Click proposal geometry editing — correct a fill BEFORE Create ──────
@@ -3828,6 +3981,19 @@ export default function TakeoffCanvas() {
             face={<><Icon name={faceTool.icon} size={15} /><span style={{ opacity: measureActive ? 1 : 0.6 }}>{faceTool.label}</span></>}
             items={MEASURE_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => setTool(t.id) }))}
           />
+          <button onClick={detectRooms}
+            title="Detect Rooms — read this sheet's room-number labels and propose every clean vector room at once as One-Click ghosts. Review them, then Create (⏎) to add to the active condition. Vector sheets only."
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="oneClick" size={15} />Detect Rooms
+          </button>
+          {/* Internal validation tool (issue #127) — dev builds only; never rendered in production. */}
+          {import.meta.env.DEV && (
+          <button onClick={() => setTool("label")}
+            title="Label GT — click inside each real room to record a ground-truth seed for the batch-detection validation corpus (issue #127). Click a marker to remove it. Truth is written to a gitignored .labels sidecar next to the plan. Internal validation tool."
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink-faint)", background: tool === "label" ? "var(--ink)" : "transparent", color: tool === "label" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="oneClick" size={15} />Label GT{tool === "label" ? ` · ${gtRooms.length}` : ""}
+          </button>
+          )}
           <ToolMenu
             title="Cut Out — subtract voids/columns (counts negative)"
             active={tool === "deduct"} accent="danger"
@@ -4286,6 +4452,20 @@ export default function TakeoffCanvas() {
                 return (
                   <g key={p.key} transform={`translate(${p.xOffset},0)`}>
                     {panels.length > 1 && <text x={0} y={-26} fontSize={64} fontWeight={700} fill={darkMode ? "#9a917f" : "#6b6256"}>{label}</text>}
+                    {/* ground-truth seeds (issue #127) — drawn at their PANEL-LOCAL
+                        px, the same frame they persist in, so a marker sits exactly
+                        where the detector will seed its flood. Focus panel only. */}
+                    {tool === "label" && gtSheet === gtKeyFor(p) && gtRooms.map((r, i) => {
+                      const z = tf.scale, [cx, cy] = r.seed, rad = 6 / z;
+                      return (
+                        <g key={"gt" + i} pointerEvents="none">
+                          <circle cx={cx} cy={cy} r={rad} fill="rgba(31,63,199,.28)" stroke="#1f3fc7" strokeWidth={2 / z} />
+                          <line x1={cx - rad} y1={cy} x2={cx + rad} y2={cy} stroke="#1f3fc7" strokeWidth={1.4 / z} />
+                          <line x1={cx} y1={cy - rad} x2={cx} y2={cy + rad} stroke="#1f3fc7" strokeWidth={1.4 / z} />
+                          {r.number ? <text x={cx + rad + 3 / z} y={cy + 4 / z} fontSize={13 / z} fontWeight={700} fill="#1f3fc7">{r.number}</text> : null}
+                        </g>
+                      );
+                    })}
                     {pShapes.map((s) => {
                       const cond = condById[s.condition_id];
                       const col = cond?.color || "#888";

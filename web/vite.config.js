@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { labelSidecarPlugin } from "./labelSidecarPlugin.js";
 
 // OpenTakeoff is a client-only static app: the takeoff canvas runs entirely in
 // the browser (pdf.js + canvas + the geometry libs), persists to IndexedDB /
@@ -10,7 +11,7 @@ import react from "@vitejs/plugin-react";
 // model AI sandbox in `../server` (see server/README.md). Without it, the app
 // works fully; the AI hooks just stay dormant.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), labelSidecarPlugin()],
   server: {
     port: 5173,
     proxy: {
