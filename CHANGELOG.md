@@ -2,6 +2,12 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-15
+
+### Added
+- **`mcp/Dockerfile`** — a multi-stage container build for the MCP server (Node 20, non-root, repo root as the build context so the `../../web/src/lib` engine imports resolve). Self-host with `docker build -f mcp/Dockerfile -t opentakeoff-mcp .` then `docker run --rm -i opentakeoff-mcp`. Verified end to end: builds clean and `tools/list` returns all 10 tools over stdio.
+- **`glama.json`** — Glama registry manifest naming the maintainer, so the server is claimable and listed at https://glama.ai/mcp/servers/Kentucky-ai/opentakeoff (claimed, quality-scored, installable, release `0.1.0`).
+
 ## 2026-07-13
 
 ### Changed
