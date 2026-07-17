@@ -1,5 +1,8 @@
 # OpenTakeoff MCP server
 
+Listed in the [official MCP registry](https://registry.modelcontextprotocol.io) as
+`io.github.Kentucky-ai/opentakeoff` and on [Glama](https://glama.ai/mcp/servers/Kentucky-ai/opentakeoff).
+
 ## Run it in 60 seconds (npx)
 
 No clone, no build — point your MCP client at the published package:
