@@ -2,13 +2,21 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-17
+
+### Fixed
+- **MCP: `mcpName` casing corrected to `io.github.Kentucky-ai/opentakeoff`** (0.1.3). The official MCP registry grants org namespaces with the org's exact GitHub casing and validates the npm `mcpName` with a case-sensitive match, so the lowercase form shipped in 0.1.2 could never pass both checks.
+
+### Added
+- **MCP: `mcp/server.json`** — the registry manifest (npm package `opentakeoff-mcp`, stdio transport) used by `mcp-publisher publish`.
+
 ## 2026-07-16
 
 ### Fixed
 - **MCP: `serverInfo` reports the real package version on the wire.** Published `opentakeoff-mcp` 0.1.1 still announced `0.1.0` in the `initialize` response (the fix landed on `main` after the 0.1.1 publish); shipped as **0.1.2**.
 
 ### Added
-- **MCP: `mcpName` identifier** (`io.github.kentucky-ai/opentakeoff`) in `mcp/package.json` — the ownership-verification field the official MCP registry validates for npm-hosted servers.
+- **MCP: `mcpName` identifier** in `mcp/package.json` — the ownership-verification field the official MCP registry validates for npm-hosted servers.
 
 ## 2026-07-15
 
