@@ -2,6 +2,14 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-16
+
+### Fixed
+- **MCP: `serverInfo` reports the real package version on the wire.** Published `opentakeoff-mcp` 0.1.1 still announced `0.1.0` in the `initialize` response (the fix landed on `main` after the 0.1.1 publish); shipped as **0.1.2**.
+
+### Added
+- **MCP: `mcpName` identifier** (`io.github.kentucky-ai/opentakeoff`) in `mcp/package.json` — the ownership-verification field the official MCP registry validates for npm-hosted servers.
+
 ## 2026-07-15
 
 ### Added
