@@ -7,24 +7,29 @@
 import path from "node:path";
 import { openPdf, positionedText, OPS, type DocHandle, type PageHandle } from "./pdf.ts";
 import { UserError, round1, round2 } from "./format.ts";
-import { STANDARD_SCALES, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
+import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import {
   extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea,
   MASK_MAX_DIM, type MaskObj, type VectorGeometry, type Point,
 } from "../../web/src/lib/oneclick.ts";
 import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
-import { SNAP_CELL } from "../../web/src/lib/canvasConstants.js";
 
-// PALETTE/HATCH_IDS mirror web/src/components/hatches.jsx and uid mirrors
-// web/src/lib/canvasUtil.js — copied, not imported, because those modules pull
-// in React. Keep them in lockstep so conditions minted here are identical to
-// the browser's. PALETTE/HATCH_IDS are user data — never re-theme them.
+// Copied from the canvas (web/src/pages/TakeoffCanvas.jsx) so conditions and
+// snap behavior minted here are identical to the browser's. PALETTE/HATCH_IDS
+// are user data — never re-theme them.
+const SNAP_CELL = 24; // snap-grid bucket, raster px
 const SNAP_TOL = 7;   // one-click vertex-snap tolerance, image px
 const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
-const HATCH_IDS = ["solid", "diag", "diag2", "cross", "diagdense", "horiz", "vert", "grid", "brick", "plank", "herring", "basket", "checker", "wave", "dots", "speckle"];
-let _idn = 0;
-const uid = (p: string): string => `${p}-${Date.now().toString(36)}-${(_idn++).toString(36)}`;
+const HATCH_IDS = ["solid", "diag", "diag2", "cross", "diagdense", "horiz", "vert", "grid", "brick", "plank", "herring", "basket", "checker", "wave", "fleur", "speckle"];
+// uid mirrors web/src/lib/provenance.js mintUuid: crypto.randomUUID is a
+// global in Node 20+, with the same non-secure-context fallback the browser
+// build carries so the two sides mint identically-shaped ids.
+const mintUuid = (): string =>
+  (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function")
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+const uid = (p: string): string => `${p}-${mintUuid()}`;
 
 export const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1"; // web/src/lib/store.js
 
@@ -39,11 +44,31 @@ export interface Condition {
   multiplier: number;
   waste_pct: number;
   materials: unknown[];
-  // Optional product spec from "Import from schedule" (all fields optional; the
-  // whole object is absent for hand-drawn conditions). Previously survived only
-  // as an untyped `...rest` passthrough — typed here so `description` and the
-  // rest are durable across MCP reads/exports.
-  spec?: { manufacturer?: string; style?: string; color?: string; size?: string; description?: string };
+}
+
+/** Shape provenance (contribution.v2 vocabulary — mirrors the canvas +
+ * web/src/lib/provenance.js). Truthfulness rules: `actor` is omitted for a
+ * human at the canvas and "agent" for MCP/automation; `reviewed` is true ONLY
+ * after a human affirmed the shape at an explicit review gate — this server
+ * has no such gate, so everything it commits is reviewed: false. */
+export interface ShapeOrigin {
+  method: "manual" | "one_click_v1" | "agent_v1";
+  /** Omitted = human. "agent" = the shape was produced by MCP/automation. */
+  actor?: "agent";
+  /** A human affirmed this shape at an explicit review gate. */
+  reviewed?: boolean;
+  /** one_click: the flood-fill seed, normalized to sheet dims. */
+  seed_norm?: [number, number];
+  hatch_filtered?: true;
+  raster_traced?: true;
+  fill_sensitivity?: number;
+  /** Machine's original trace, frozen on first human edit (provenance.js). */
+  proposed_verts_norm?: [number, number][];
+  edited?: boolean;
+  edited_before_create?: boolean;
+  copied?: boolean;
+  /** Per-kind tally of human corrections (provenance.js). */
+  edits?: Record<string, number>;
 }
 
 export interface Shape {
@@ -53,9 +78,7 @@ export interface Shape {
   measure_role: MeasureRole;
   verts_norm: [number, number][];
   computed: { area_sf: number; perimeter_lf: number };
-  origin?:
-    | { method: "one_click_v1"; seed_norm: [number, number]; reviewed: true; hatch_filtered?: true; raster_traced?: true }
-    | { method: "manual" }; // the receipt the canvas mints on every hand-traced shape
+  origin?: ShapeOrigin;
 }
 
 interface SheetState {
@@ -76,7 +99,14 @@ interface SheetState {
   snap?: ReturnType<typeof buildSnapGrid>;
   /** undefined = not built yet; null = sheet has zero vector segments (a scan) */
   mask?: MaskObj | null;
+  /** rendered-page PNG at IMAGE_MAX_EDGE, built on first resource read */
+  png?: Uint8Array;
 }
+
+/** Resource images cap their long edge here: the largest edge the mainstream
+ * vision models take without downscaling — these renders exist to be looked at
+ * by agents, so this is the native resolution of that audience. */
+export const IMAGE_MAX_EDGE = 1568;
 
 export interface SheetSummary {
   sheet: string;
@@ -87,11 +117,7 @@ export interface SheetSummary {
   height_px: number;
   sheet_number?: string;
   detected_scale?: string;
-  detected_scale_ambiguous?: string;
 }
-
-const AMBIGUOUS_SCALE_NOTE =
-  "this sheet shows several scale notes (enlarged details are often larger) — confirm against a known dimension before measuring";
 
 const sheetSummary = (s: SheetState): SheetSummary => ({
   sheet: s.key,
@@ -102,7 +128,6 @@ const sheetSummary = (s: SheetState): SheetSummary => ({
   height_px: s.heightPx,
   ...(s.sheetNumber ? { sheet_number: s.sheetNumber } : {}),
   ...(s.detected ? { detected_scale: s.detected.label } : {}),
-  ...(s.detected?.multi ? { detected_scale_ambiguous: AMBIGUOUS_SCALE_NOTE } : {}),
 });
 
 export class Session {
@@ -162,6 +187,45 @@ export class Session {
     throw new UserError(`Unknown sheet "${name}" — loaded sheets: ${[...this.sheets.keys()].join(", ")}.`);
   }
 
+  /** Resource-URI addressing: sheets by 1-based page number. */
+  sheetForPage(page: number): SheetState {
+    if (!this.doc) throw new UserError("No plan loaded — call load_plan first.");
+    for (const s of this.sheets.values()) if (s.pageNum === page) return s;
+    throw new UserError(`No page ${page} — the loaded plan has pages 1–${this.sheets.size}.`);
+  }
+
+  /** Every loaded sheet, in page order — [] before any plan loads. */
+  sheetList(): SheetState[] {
+    return [...this.sheets.values()].sort((a, b) => a.pageNum - b.pageNum);
+  }
+
+  /** The takeoff://sheets index payload — cheap (no geometry is built). */
+  index() {
+    if (!this.doc) {
+      return { file: null, page_count: 0, sheets: [], hint: "No plan loaded — call the load_plan tool with a PDF path, then list resources again." };
+    }
+    return {
+      file: this.file,
+      page_count: this.sheets.size,
+      sheets: this.sheetList().map((s) => ({
+        ...sheetSummary(s),
+        scale_set: s.upp != null,
+        shape_count: this.shapes.filter((x) => x.sheet_id === s.key).length,
+      })),
+    };
+  }
+
+  /** Rendered-page PNG, long edge capped at IMAGE_MAX_EDGE (never above the
+   * canvas-native RENDER_SCALE), cached per sheet until the next load_plan. */
+  async renderSheetPng(page: number): Promise<Uint8Array> {
+    const s = this.sheetForPage(page);
+    if (!s.png) {
+      const scale = Math.min(RENDER_SCALE, IMAGE_MAX_EDGE / Math.max(s.widthPt, s.heightPt));
+      s.png = await s.page.renderPng(scale);
+    }
+    return s.png;
+  }
+
   private async ensureGeometry(s: SheetState): Promise<VectorGeometry> {
     if (!s.geo) {
       const opList = await s.page.operatorList();
@@ -171,12 +235,9 @@ export class Session {
     return s.geo;
   }
 
-  /** v1 masks come from the sheet's vector linework only. Raster seam: the
-   * pixel-mask module now exists — web/src/lib/rastermask.ts (buildRasterMask,
-   * pure typed arrays, returns this same MaskObj shape with softCount 0) — the
-   * browser canvas uses it for scans. Wiring it here still needs a node canvas
-   * backend (e.g. @napi-rs/canvas) to render the page's RGBA at mask scale;
-   * until then a scanned sheet stays null. */
+  /** v1 masks come from the sheet's vector linework only. Raster seam: a scanned
+   * sheet would render via a node canvas into a future rastermask module that
+   * returns this same MaskObj shape. */
   async ensureMask(name: string): Promise<MaskObj | null> {
     const s = this.sheet(name);
     if (s.mask === undefined) {
@@ -203,7 +264,7 @@ export class Session {
     return `Set the scale for ${s.key} first — use set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.`;
   }
 
-  setScale(name: string, mode: { label?: string; upp?: number; calibrate?: { p1: [number, number]; p2: [number, number]; feet: number }; use_detected?: true }) {
+  setScale(name: string, mode: { label?: string; upp?: number; calibrate?: { p1: [number, number]; p2: [number, number]; feet: number }; use_detected?: boolean }) {
     const s = this.sheet(name);
     let upp: number;
     let label: string | undefined;
@@ -225,7 +286,7 @@ export class Session {
       if (!(feet > 0)) throw new UserError("Calibration feet must be positive.");
       upp = feet / px;
       source = "calibrate";
-    } else if (mode.use_detected === true) {
+    } else if (mode.use_detected) {
       if (!s.detected) throw new UserError(`No detected scale for ${s.key} — read the title block with read_sheet_text, or calibrate from a known dimension.`);
       upp = s.detected.upp;
       label = s.detected.label;
@@ -233,44 +294,8 @@ export class Session {
     } else {
       throw new UserError("Provide exactly one of: label, upp, calibrate, use_detected.");
     }
-    const prevUpp = s.upp;
     s.upp = upp;
-    // Re-price this sheet's committed shapes at the new scale. computed is
-    // baked at commit-time upp (oneClick/measurePolygon/measureLine below), so
-    // without this a late recalibrate — the workflow the browser's check tool
-    // makes routine — left takeoff_summary at the OLD scale and export_takeoff
-    // emitting new units_per_px with stale computed, which the app hydrates
-    // verbatim (it trusts saved computed to match the saved scale). Mirrors the
-    // browser's rescaleSheet (TakeoffCanvas.jsx). Shapes can't exist before the
-    // first set_scale (measures are scale-gated), so prevUpp==null never skips
-    // real work; the engine has no count tool (MeasureRole above), so there is
-    // no scale-independent EA case to exempt here — keep that exemption in mind
-    // if counts ever land.
-    let repriced = 0;
-    if (prevUpp != null && prevUpp !== upp) {
-      for (const sh of this.shapes) {
-        if (sh.sheet_id !== s.key) continue;
-        sh.computed = this.priceShape(s, sh);
-        repriced++;
-      }
-    }
-    return {
-      sheet: s.key, upp, ...(label ? { label } : {}), source,
-      ...(repriced > 0 ? { repriced } : {}),
-      ...(source === "detected" && s.detected?.multi ? { warning: AMBIGUOUS_SCALE_NOTE } : {}),
-    };
-  }
-
-  /** Price a committed shape's quantities at the sheet's CURRENT upp — the same
-   * math the commit paths bake in, re-run from verts_norm. Linear mirrors
-   * measureLine: area_sf stays 0 (the canvas only mints border SF from a
-   * condition thickness, which this engine's Condition doesn't carry). */
-  private priceShape(s: SheetState, sh: Shape): Shape["computed"] {
-    const upp = s.upp!;
-    const pts: Point[] = sh.verts_norm.map(([nx, ny]) => [nx * s.widthPx, ny * s.heightPx]);
-    if (sh.measure_role === "linear") return { area_sf: 0, perimeter_lf: round2(openLen(pts) * upp) };
-    const met = closedMetrics(pts);
-    return { area_sf: round2(met.area * upp * upp), perimeter_lf: round2(met.perim * upp) };
+    return { sheet: s.key, upp, ...(label ? { label } : {}), source };
   }
 
   private conditionFor(tag: string): Condition {
@@ -339,10 +364,13 @@ export class Session {
     const perimeter_lf = round2(perimPx * upp);
     let shape_id: string | undefined;
     if (opts.condition) {
+      // actor + reviewed: false — this is a machine-proposed trace no human
+      // has affirmed; only an explicit human review gate may set reviewed.
       shape_id = this.commit(s, opts.condition, opts.role, ring, { area_sf, perimeter_lf }, {
         method: "one_click_v1",
+        actor: "agent",
         seed_norm: [x / s.widthPx, y / s.heightPx],
-        reviewed: true,
+        reviewed: false,
         ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
       }).id;
     }
@@ -356,7 +384,9 @@ export class Session {
     const area_sf = round2(met.area * s.upp * s.upp);
     const perimeter_lf = round2(met.perim * s.upp);
     let shape_id: string | undefined;
-    if (opts.condition) shape_id = this.commit(s, opts.condition, opts.role, verts, { area_sf, perimeter_lf }, { method: "manual" }).id;
+    // agent-supplied coordinates are a hand trace by a machine hand: manual
+    // method, agent actor — and never reviewed (no human affirmed anything).
+    if (opts.condition) shape_id = this.commit(s, opts.condition, opts.role, verts, { area_sf, perimeter_lf }, { method: "manual", actor: "agent" }).id;
     return { area_sf, perimeter_lf, nverts: verts.length, ...(shape_id ? { shape_id } : {}) };
   }
 
@@ -366,7 +396,7 @@ export class Session {
     const length_lf = round2(openLen(pts) * s.upp);
     let shape_id: string | undefined;
     // area_sf stays 0 — the canvas only mints border SF when the condition has a thickness
-    if (opts.condition) shape_id = this.commit(s, opts.condition, "linear", pts, { area_sf: 0, perimeter_lf: length_lf }, { method: "manual" }).id;
+    if (opts.condition) shape_id = this.commit(s, opts.condition, "linear", pts, { area_sf: 0, perimeter_lf: length_lf }, { method: "manual", actor: "agent" }).id;
     return { length_lf, npts: pts.length, ...(shape_id ? { shape_id } : {}) };
   }
 
@@ -385,12 +415,7 @@ export class Session {
   }
 
   /** The exact browser save payload (TakeoffCanvas.jsx autosave + the schema key
-   * store.saveAnnotations stamps) — importable by the app. One known, harmless
-   * divergence: the browser's buildPayload omits `sheet_levels` when empty
-   * (its general convention for additive/optional keys — see client_info,
-   * condition_columns, palette), and MCP has no level-assignment surface, so
-   * its export is always in the "empty" case — omitted here too, never
-   * `sheet_levels: {}`, to match that convention rather than special-case it. */
+   * store.saveAnnotations stamps) — importable by the app. */
   exportPayload() {
     if (!this.doc) throw new UserError("No plan loaded — call load_plan first.");
     return {
@@ -404,6 +429,7 @@ export class Session {
       sheet_group: [],
       last_group: [],
       sheet_tabs: [],
+      sheet_levels: {},
     };
   }
 

@@ -5,6 +5,7 @@
 // derived columns live HERE (getters), never as new row fields.
 import { round2 } from "./num.js";
 import { attrValue, columnLabel } from "./conditionColumns.js";
+import { M_PER_FT, M2_PER_SF } from "./units";
 
 // key → (row, ctx) => primitive. ctx (optional):
 //   { perimByCond: Map(condition_id → unrounded floor-perimeter LF) }
@@ -40,11 +41,12 @@ export const TABLE_PROFILE = [
   { key: "floor_sf",      header: "Floor SF",   defaultVisible: true },
   { key: "wall_sf",       header: "Wall SF",    defaultVisible: true },
   { key: "border_sf",     header: "Border SF",  defaultVisible: true },
+  { key: "total_sf",      header: "Total SF",   defaultVisible: false, foot: (g) => g.total_sf },
   { key: "lf",            header: "LF",         defaultVisible: true },
   { key: "ea",            header: "EA",         defaultVisible: true },
   { key: "waste_pct",     header: "Waste",      defaultVisible: true },
-  { key: "total_sf_net",  header: "SF ordered", defaultVisible: true,  accent: true, foot: (g) => g.total_sf_net },
-  { key: "sy_net",        header: "SY",         defaultVisible: true,  accent: true, foot: (g) => g.sy_net },
+  { key: "total_sf_net",  header: "SF w/Waste", defaultVisible: true,  accent: true, foot: (g) => g.total_sf_net },
+  { key: "sy_net",        header: "SY w/Waste", defaultVisible: true,  accent: true, foot: (g) => g.sy_net },
   // grandTotals output carries all four keys the waste getters read, so the
   // TOTAL cells delegate to the same formulas as the body cells
   { key: "waste_sf",      header: "Waste SF",   defaultVisible: false, foot: (g) => GETTERS.waste_sf(g) },
@@ -65,9 +67,9 @@ export const CSV_PROFILE = [
   { key: "total_sf",     header: "Total SF",            defaultVisible: true },
   { key: "lf",           header: "LF",                  defaultVisible: true },
   { key: "ea",           header: "EA",                  defaultVisible: true },
-  { key: "total_sf_net", header: "Total SF (w/ waste)", defaultVisible: true },
-  { key: "lf_net",       header: "LF (w/ waste)",       defaultVisible: true },
-  { key: "sy_net",       header: "SY (w/ waste)",       defaultVisible: true },
+  { key: "total_sf_net", header: "Total SF w/Waste",    defaultVisible: true },
+  { key: "lf_net",       header: "LF w/Waste",          defaultVisible: true },
+  { key: "sy_net",       header: "SY w/Waste",          defaultVisible: true },
   { key: "waste_sf",      header: "Waste SF", defaultVisible: false },
   { key: "waste_lf",      header: "Waste LF", defaultVisible: false },
   { key: "perimeter_ref", header: "Perimeter LF (ref, incl. openings)", defaultVisible: false },
@@ -78,6 +80,42 @@ export const CSV_PROFILE = [
 // (totalsToCsv), and XLSX (reportWorkbook) all resolve through here so the
 // three outputs can never read different values for the same column.
 export const colGetter = (c) => c.get || GETTERS[c.key];
+
+// ── Metric display (units port) ─────────────────────────────────────────────
+// Unit-system conversion happens at the COLUMN DESCRIPTOR, the one seam every
+// output (table, CSV, XLSX Conditions tab) already resolves values through —
+// internal math stays feet (lib/units contract). In metric the SY column
+// retires, headers swap SF→m² / LF→m, and each dimensioned column's getter
+// (and tfoot foot) wraps in the converter; the descriptor also carries `conv`
+// so the CSV/XLSX TOTAL rows (which read grandTotals by key, not through
+// getters) convert the same way. Imperial passes the input through UNTOUCHED —
+// identity, so the frozen v1 CSV golden and every existing caller are
+// byte-identical.
+const COL_DIM = {
+  floor_sf: "area", wall_sf: "area", border_sf: "area", total_sf: "area",
+  total_sf_net: "area", waste_sf: "area",
+  lf: "len", lf_net: "len", waste_lf: "len", perimeter_ref: "len",
+};
+export const METRIC_LABELS = { area: "m²", len: "m" };        // on-screen table
+export const METRIC_CSV_LABELS = { area: "m2", len: "m" };    // CSV/XLSX (ASCII, matches the legend PDF)
+export function applyUnits(cols, units, labels = METRIC_LABELS) {
+  if (units !== "metric") return cols;
+  return cols.filter((c) => c.key !== "sy_net").map((c) => {
+    const dim = COL_DIM[c.key];
+    if (!dim) return c;
+    const conv = dim === "area"
+      ? (v) => round2((Number(v) || 0) * M2_PER_SF)
+      : (v) => round2((Number(v) || 0) * M_PER_FT);
+    const base = colGetter(c);
+    return {
+      ...c,
+      header: c.header.replace(/\bSF\b/g, labels.area).replace(/\bLF\b/g, labels.len),
+      conv,
+      get: (r, ctx) => conv(base(r, ctx)),
+      ...(c.foot ? { foot: (g) => conv(c.foot(g)) } : {}),
+    };
+  });
+}
 
 // User-defined condition columns → runtime column descriptors, appended after
 // either profile. Keys are "custom:<colId>" — can't collide with built-in
@@ -146,6 +184,36 @@ export function specColProfile(conditions) {
     defaultVisible: true,
     spec: true,
     get: (r, ctx) => specValue(ctx?.specByCond?.get(r.id), f.field),
+  }));
+}
+
+// ── Labor & subfloor type (typed directly on the condition) ────────────────
+// Free-text `condition.laborType` / `condition.subfloorType` — filled in by
+// hand in the Supporting Materials panel, no import, no vocabulary. Same
+// treatment as spec above: values reach the getters through ctx.laborByCond
+// (Map(condition_id → { laborType, subfloorType })), never as new
+// conditionTotals row fields, and a field-column is emitted only when at
+// least one condition carries a visible value — a project that never uses
+// them produces zero extra columns.
+export const LABOR_FIELDS = [
+  { field: "laborType", header: "Labor Type" },
+  { field: "subfloorType", header: "Subfloor Type" },
+];
+
+export function laborValue(labor, field) {
+  if (!labor || typeof labor !== "object" || Array.isArray(labor)) return "";
+  const v = labor[field];
+  return typeof v === "string" && v.trim() ? v : "";
+}
+
+export function laborColProfile(conditions) {
+  const list = Array.isArray(conditions) ? conditions : [];
+  return LABOR_FIELDS.filter((f) => list.some((c) => laborValue(c, f.field))).map((f) => ({
+    key: "labor:" + f.field,
+    header: f.header,
+    defaultVisible: true,
+    labor: true,
+    get: (r, ctx) => laborValue(ctx?.laborByCond?.get(r.id), f.field),
   }));
 }
 

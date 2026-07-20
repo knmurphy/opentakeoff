@@ -28,6 +28,21 @@ async function call(client: Client, name: string, args: Record<string, unknown> 
   return { isError: !!res.isError, data: JSON.parse(res.content[0].text) };
 }
 
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const originalWrite = process.stderr.write;
+  let output = "";
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    output += chunk.toString();
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return output;
+}
+
 test("tools/list: all ten tools, each described with the coordinate contract", async () => {
   const client = await pair();
   const { tools } = await client.listTools();
@@ -90,6 +105,40 @@ test("set_scale: zero or several modes are rejected; one mode works", async () =
   assert.match(badLabel.data.error, /Unknown scale label/);
 });
 
+test("tool tracing: opt-in structured metadata goes to stderr without result content", async () => {
+  const client = await pair();
+  const originalTrace = process.env.OPENTAKEOFF_MCP_TRACE;
+  try {
+    delete process.env.OPENTAKEOFF_MCP_TRACE;
+    const quiet = await captureStderr(async () => {
+      await call(client, "takeoff_summary");
+    });
+    assert.equal(quiet, "");
+
+    process.env.OPENTAKEOFF_MCP_TRACE = "1";
+    const traced = await captureStderr(async () => {
+      await call(client, "measure_polygon", { sheet: KEY, verts: [[0, 0], [100, 0], [100, 100]] });
+    });
+
+    const lines = traced.trim().split("\n");
+    assert.equal(lines.length, 1);
+    const event = JSON.parse(lines[0]);
+    assert.equal(event.event, "opentakeoff_mcp_tool_call");
+    assert.equal(event.tool, "measure_polygon");
+    assert.equal(event.sheet, KEY);
+    assert.equal(event.is_error, true);
+    assert.equal(typeof event.duration_ms, "number");
+    assert.ok(event.duration_ms >= 0);
+    assert.equal(typeof event.result_size, "number");
+    assert.ok(event.result_size > 0);
+    assert.doesNotMatch(traced, /Set the scale/);
+    assert.doesNotMatch(traced, /verts/);
+  } finally {
+    if (originalTrace === undefined) delete process.env.OPENTAKEOFF_MCP_TRACE;
+    else process.env.OPENTAKEOFF_MCP_TRACE = originalTrace;
+  }
+});
+
 test("delete_shape: removes a committed shape; unknown id is isError", async () => {
   const client = await pair();
   await call(client, "load_plan", { path: PLAN });
@@ -104,4 +153,23 @@ test("delete_shape: removes a committed shape; unknown id is isError", async () 
   const gone = await call(client, "delete_shape", { shape_id: committed.data.shape_id });
   assert.equal(gone.isError, true);
   assert.match(gone.data.error, /No shape with id/);
+});
+
+test("output contract: every tool declares outputSchema; structuredContent mirrors the text item", async () => {
+  const client = await pair();
+  const { tools } = await client.listTools();
+  for (const t of tools) {
+    const schema: any = (t as any).outputSchema;
+    assert.ok(schema && schema.type === "object", `${t.name} declares an object outputSchema`);
+    assert.ok(schema.properties && Object.keys(schema.properties).length > 0, `${t.name} outputSchema has properties`);
+  }
+  // A structured reply validates AND byte-matches the back-compat text item.
+  const res: any = await client.callTool({ name: "load_plan", arguments: { path: PLAN } });
+  assert.equal(!!res.isError, false);
+  assert.ok(res.structuredContent, "structuredContent present");
+  assert.deepEqual(res.structuredContent, JSON.parse(res.content[0].text), "structuredContent === parsed text content");
+  // Error replies stay plain isError results — no structuredContent required.
+  const bad: any = await client.callTool({ name: "sheet_info", arguments: { sheet: "no-such-sheet" } });
+  assert.equal(!!bad.isError, true);
+  assert.equal(bad.structuredContent, undefined);
 });

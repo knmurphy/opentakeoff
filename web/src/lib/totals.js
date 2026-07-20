@@ -20,7 +20,8 @@
 
 import { round2 } from "./num.js";
 import { csvEsc as esc } from "./csv.js";
-import { GETTERS, CSV_PROFILE, colGetter, floorPerimeterLf } from "./reportColumns.js";
+import { GETTERS, CSV_PROFILE, colGetter, floorPerimeterLf, applyUnits, METRIC_CSV_LABELS } from "./reportColumns.js";
+import { M_PER_FT, M2_PER_SF } from "./units";
 import { attrValue } from "./conditionColumns.js";
 import { shapeLabelValue } from "./shapeLabels.js";
 import { compareSheetKeys } from "./sheetKey"; // NOT ./sheets — that module imports pdfjs-dist
@@ -288,10 +289,21 @@ export function grandTotals(rows) {
  * @param {Array<{value: string|null, rows: any[]}>|null} [byLabel] labelGroupedRows()
  *   result — appends a "by label" section (ordered per-bucket quantities); null/empty
  *   omits it, so a label-less project's CSV is byte-identical to the frozen v1 export.
+ * @param {string} [brandName]
+ * @param {"imperial"|"metric"} [units] display units — "metric" converts every
+ *   dimensioned column/section to m²/m and RETIRES the SY column (upstream's
+ *   metric contract); coverage rates in the materials section stay as entered
+ *   (SF/LF-based). "imperial" (default) is byte-identical to the frozen export.
  * @returns {string}
  */
-export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null, byLabel = null, brandName = "OpenTakeoff") {
-  const columns = cols || CSV_PROFILE.filter((c) => c.defaultVisible);
+export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel = null, cols = null, ctx = null, byLabel = null, brandName = "OpenTakeoff", units = "imperial") {
+  // the caller passes RAW descriptors; conversion happens here (one site per
+  // output) through the same applyUnits seam the report table uses
+  const columns = applyUnits(cols || CSV_PROFILE.filter((c) => c.defaultVisible), units, METRIC_CSV_LABELS);
+  const M = units === "metric";
+  const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
+  const A = (v) => (M ? round2((Number(v) || 0) * M2_PER_SF) : v);
+  const L = (v) => (M ? round2((Number(v) || 0) * M_PER_FT) : v);
   const lines = [columns.map((c) => esc(c.header)).join(",")];
   for (const r of rows) {
     lines.push(columns.map((c) => esc(colGetter(c)?.(r, ctx))).join(","));
@@ -299,16 +311,19 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   const g = grandTotals(rows);
   // TOTAL row, column-driven: "TOTAL" under the finish column, grand-total
   // values where they exist, blank otherwise (perimeter_ref stays blank —
-  // reference figures never total).
-  const foot = (key) => {
-    if (key === "finish") return "TOTAL";
+  // reference figures never total). A metric descriptor carries `conv` so the
+  // by-key reads convert exactly like the body cells.
+  const foot = (c) => {
+    if (c.key === "finish") return "TOTAL";
     // derived waste feet: same getter as the body cells (g carries all four inputs)
-    if (key === "waste_sf" || key === "waste_lf") return GETTERS[key](g);
-    return g[key] !== undefined ? g[key] : "";
+    const v = (c.key === "waste_sf" || c.key === "waste_lf") ? GETTERS[c.key](g) : (g[c.key] !== undefined ? g[c.key] : "");
+    return c.conv && v !== "" ? c.conv(v) : v;
   };
-  lines.push(columns.map((c) => esc(foot(c.key))).join(","));
+  lines.push(columns.map((c) => esc(foot(c))).join(","));
 
-  // supporting materials — per condition, then a combined buy list
+  // supporting materials — per condition, then a combined buy list. Coverage
+  // rates deliberately stay as entered (SF/LF-based) in metric mode — the
+  // upstream metric contract; the report panel carries the footnote.
   const basisLabel = (b) => (b === "linear" ? "LF" : b === "count" ? "EA" : "SF");
   const perCond = [];
   for (const r of rows) for (const m of (r.materials || [])) perCond.push([r.finish_tag, m.name, m.qty, m.unit, `1 ${m.unit || "unit"} / ${m.per} ${basisLabel(m.basis)}`, m.note || ""]);
@@ -326,14 +341,14 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   // because display labels are session-volatile.
   if (bySheet && bySheet.length) {
     lines.push("");
-    lines.push(["Sheet", "Sheet ID", "Finish", "Floor SF", "Wall SF", "Border SF", "LF", "EA"].map(esc).join(","));
+    lines.push(["Sheet", "Sheet ID", "Finish", `Floor ${AU}`, `Wall ${AU}`, `Border ${AU}`, LU, "EA"].map(esc).join(","));
     for (const g of bySheet) {
       const label = sheetLabel ? sheetLabel(g.sheet_id) : g.sheet_id;
       for (const row of g.rows) {
         const mult = row.multiplier || 1;
         const finish = mult > 1 ? `${row.finish_tag} ×${mult}` : row.finish_tag;
         const r = roundSheetRow(row);
-        lines.push([label, g.sheet_id, finish, r.floor_sf, r.wall_sf, r.border_sf, r.lf, r.ea].map(esc).join(","));
+        lines.push([label, g.sheet_id, finish, A(r.floor_sf), A(r.wall_sf), A(r.border_sf), L(r.lf), r.ea].map(esc).join(","));
       }
     }
     if (hasMultipliers(bySheet)) lines.push("# " + BY_SHEET_BASE_NOTE);
@@ -345,10 +360,10 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
   // CSV stays byte-identical.
   if (byLabel && byLabel.length) {
     lines.push("");
-    lines.push(["Label", "Finish", "Floor SF", "Wall SF", "Border SF", "LF", "EA"].map(esc).join(","));
+    lines.push(["Label", "Finish", `Floor ${AU}`, `Wall ${AU}`, `Border ${AU}`, LU, "EA"].map(esc).join(","));
     for (const g of byLabel) {
       const name = g.value || "Unlabeled";
-      for (const row of g.rows) lines.push([name, row.finish_tag, row.floor_sf, row.wall_sf, row.border_sf, row.lf, row.ea].map(esc).join(","));
+      for (const row of g.rows) lines.push([name, row.finish_tag, A(row.floor_sf), A(row.wall_sf), A(row.border_sf), L(row.lf), row.ea].map(esc).join(","));
     }
   }
 
@@ -373,9 +388,9 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
  *   rfis?: any[], sheetLabel?: ((sheetId: any) => string)|null,
  *   conditionColumns?: Array<{id: string, name: string, values: string[]}>,
  *   attrsByCond?: Map<any, object>|null, shapeLabels?: string[],
- *   byLabel?: Array<{value: string|null, rows: any[]}>}} args
+ *   byLabel?: Array<{value: string|null, rows: any[]}>, displayUnits?: string}} args
  */
-export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null, shapeLabels = [], byLabel = [] }) {
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null, shapeLabels = [], byLabel = [], displayUnits = "imperial" }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   // destructuring defaults don't apply to an explicit null, and both values can
   // trace back to a corrupted payload — coerce (and drop malformed items) so
@@ -446,6 +461,12 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
       label: gp.value ?? null,   // null = Unlabeled
       rows: (gp.rows || []).map((r) => ({ id: r.id, finish_tag: r.finish_tag, floor_sf: r.floor_sf, wall_sf: r.wall_sf, border_sf: r.border_sf, lf: r.lf, ea: r.ea, total_sf: r.total_sf, total_sf_net: r.total_sf_net })),
     })),
+    // units metadata APPENDS last (additive-only v1): every quantity above is
+    // RAW internal feet (SF/LF/SY keys, uninterpretable otherwise); this is
+    // the display system the exporting user was reading — the units port's
+    // "JSON stays raw, but says so" contract.
+    units: "imperial (SF/LF — raw internal values)",
+    display_units: displayUnits === "metric" ? "metric" : "imperial",
   };
 }
 

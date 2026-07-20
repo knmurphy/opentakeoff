@@ -19,7 +19,7 @@
 // nothing until used and the app stays zero-install.
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
-import { pointInPoly, starPath, arrowheadPath, cloudBezier } from "./geometry.js";
+import { pointInPoly, starPath, arrowheadPath, cloudBezier, chiselRibbon } from "./geometry.js";
 import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
 import { RENDER_SCALE } from "./sheets";
@@ -125,14 +125,17 @@ function hatchLines(poly, style) {
   return out;
 }
 
-function shapeChip(shape, cond) {
+function shapeChip(shape, cond, M = false) {
   const cp = shape.computed || {};
   const tag = cond?.finish_tag || "";
+  const uA = (sf) => (M ? sf * 0.09290304 : sf);
+  const uL = (lf) => (M ? lf * 0.3048 : lf);
+  const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
   switch (shape.measure_role) {
-    case "floor_area": return `${tag} · ${num(cp.area_sf || 0)} SF`;
-    case "deduct": return `-${num(cp.area_sf || 0)} SF deduct`;
-    case "surface_area": return `${tag} · ${num(cp.area_sf || 0)} SF wall`;
-    case "linear": return `${tag} · ${num(cp.perimeter_lf || 0)} LF`;
+    case "floor_area": return `${tag} · ${num(uA(cp.area_sf || 0))} ${AU}`;
+    case "deduct": return `-${num(uA(cp.area_sf || 0))} ${AU} deduct`;
+    case "surface_area": return `${tag} · ${num(uA(cp.area_sf || 0))} ${AU} wall`;
+    case "linear": return `${tag} · ${num(uL(cp.perimeter_lf || 0))} ${LU}`;
     default: return "";
   }
 }
@@ -153,8 +156,15 @@ function invertPixels(cv) {
   ctx.restore();
 }
 
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, coverTitle = "Marked Set" }) {
-  const { PDFDocument, StandardFonts, rgb, degrees } = await import("pdf-lib");
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, coverTitle = "Marked Set", units = "imperial" }) {
+  // display-unit edge (lib/units contract): quantities arrive as internal feet;
+  // metric converts at the drawn string only — legend rows, by-sheet rows, and
+  // the per-shape chips. ASCII "m2" (Helvetica WinAnsi has no superscript 2).
+  const M = units === "metric";
+  const uA = (sf) => (M ? sf * 0.09290304 : sf);
+  const uL = (lf) => (M ? lf * 0.3048 : lf);
+  const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
+  const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle } = await import("pdf-lib");
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   // resolve a linked markup's RFI number for the on-sheet marker (ASCII, WinAnsi-safe)
   const rfiNum = new Map((rfis || []).map((r) => [r.id, r.number]));
@@ -264,12 +274,14 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const c = condById[r.id] || {};
       pg.drawRectangle({ x: 52, y: y - 2, width: 14, height: 10, color: rgb(...hex(c.color)), opacity: 0.8, borderColor: rgb(...hex(c.color)), borderWidth: 0.7 });
       draw(`${r.finish_tag}${r.multiplier > 1 ? ` ×${r.multiplier}` : ""}`, { x: 72, y, size: 10.5, font: bold, color: ink });
+      // zero-gate on the CONVERTED value — what the page prints (a 0.5 SF
+      // sliver reads 0.0 m2 in metric; it must drop, not print "0 m2")
       const qty = [
-        shows(r.floor_sf) ? `${num(r.floor_sf)} SF` : "", shows(r.wall_sf) ? `${num(r.wall_sf)} SF wall` : "",
-        shows(r.border_sf) ? `${num(r.border_sf)} SF border` : "", shows(r.lf) ? `${num(r.lf)} LF` : "", shows(r.ea, 0) ? `${num(r.ea, 0)} EA` : "",
+        shows(uA(r.floor_sf)) ? `${num(uA(r.floor_sf))} ${AU}` : "", shows(uA(r.wall_sf)) ? `${num(uA(r.wall_sf))} ${AU} wall` : "",
+        shows(uA(r.border_sf)) ? `${num(uA(r.border_sf))} ${AU} border` : "", shows(uL(r.lf)) ? `${num(uL(r.lf))} ${LU}` : "", shows(r.ea, 0) ? `${num(r.ea, 0)} EA` : "",
       ].filter(Boolean).join(" · ");
       draw(qty || "-", { x: 190, y, size: 10, font, color: ink });
-      draw(`${c.hatch && c.hatch !== "solid" ? c.hatch + " · " : ""}waste ${r.waste_pct}% -> ${num(r.total_sf_net)} SF`, { x: 420, y, size: 8.5, font, color: muted });
+      draw(`${c.hatch && c.hatch !== "solid" ? c.hatch + " · " : ""}waste ${r.waste_pct}% -> ${num(uA(r.total_sf_net))} ${AU}`, { x: 420, y, size: 8.5, font, color: muted });
       y -= 15;
       if (y < 120) break;
     }
@@ -286,7 +298,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         const c = condById[r.id] || {};
         pg.drawRectangle({ x: 66, y: y - 1, width: 9, height: 7, color: rgb(...hex(c.color)), opacity: 0.8 });
         const { floor_sf: floor, wall_sf: wall, border_sf: border, lf, ea } = roundSheetRow(r);
-        const qty = [shows(floor) ? `${num(floor)} SF` : "", shows(wall) ? `${num(wall)} SF wall` : "", shows(border) ? `${num(border)} SF border` : "", shows(lf) ? `${num(lf)} LF` : "", shows(ea, 0) ? `${num(ea, 0)} EA` : ""].filter(Boolean).join(" · ");
+        const qty = [shows(uA(floor)) ? `${num(uA(floor))} ${AU}` : "", shows(uA(wall)) ? `${num(uA(wall))} ${AU} wall` : "", shows(uA(border)) ? `${num(uA(border))} ${AU} border` : "", shows(uL(lf)) ? `${num(uL(lf))} ${LU}` : "", shows(ea, 0) ? `${num(ea, 0)} EA` : ""].filter(Boolean).join(" · ");
         draw(`${r.finish_tag}${r.multiplier > 1 ? ` ×${r.multiplier}` : ""}  ${qty}`, { x: 82, y, size: 8.5, font, color: ink });
         y -= 11;
       }
@@ -396,6 +408,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     }
     const ptScale = Math.hypot(...(() => { const p0 = toPage(0, 0), p1 = toPage(1, 0); return [p1[0] - p0[0], p1[1] - p0[1]]; })());
     const svgPath = (pts) => pts.map(([x, y], i) => { const [px, py] = toPage(x, y); return `${i ? "L" : "M"}${px},${-py}`; }).join(" ") + " Z";
+    const svgOpenPath = (pts) => pts.map(([x, y], i) => { const [px, py] = toPage(x, y); return `${i ? "L" : "M"}${px},${-py}`; }).join(" ");
     const line = (x1, y1, x2, y2, colorRgb, w, opacity = 1, dash) => {
       const [sx, sy] = toPage(x1, y1), [ex, ey] = toPage(x2, y2);
       pg.drawLine({ start: { x: sx, y: sy }, end: { x: ex, y: ey }, thickness: w, color: colorRgb, opacity, ...(dash ? { dashArray: dash } : {}) });
@@ -435,13 +448,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         if (!isDeduct && cond?.hatch && cond.hatch !== "solid") {
           for (const [ax, ay, bx, by] of hatchLines(pts, cond.hatch)) line(ax, ay, bx, by, col, 0.5, 0.55 + alphaBoost);
         }
-        chip(shapeChip(s, cond), ...centroid(pts), col);
+        chip(shapeChip(s, cond, M), ...centroid(pts), col);
       } else if (s.measure_role === "linear" || s.measure_role === "surface_area") {
         // shared branch — dash only the linear role; surface_area stays solid
         const segDash = s.measure_role === "linear" ? pdfDashFor(cond?.line_style || "solid") : undefined;
         for (let i = 1; i < pts.length; i++) line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], col, 1.4, 0.95, segDash);
         const mid = pts[Math.floor((pts.length - 1) / 2)];
-        chip(shapeChip(s, cond), mid[0], mid[1] - 14, col);
+        chip(shapeChip(s, cond, M), mid[0], mid[1] - 14, col);
       } else if (s.measure_role === "count") {
         const [px, py] = toPage(pts[0][0], pts[0][1]);
         pg.drawEllipse({ x: px, y: py, xScale: 4.5, yScale: 4.5, borderColor: col, borderWidth: 1.2, color: col, opacity: 0.35 });
@@ -464,7 +477,22 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const mcol = rgb(...hex(dark ? boostForDark(mbase) : mbase));
       const mdash = pdfDashFor(m.line_style || "solid");
       const mw = clampWeight(m.weight);   // stroke-width multiplier (markups only), default ×1
-      if (m.type === "highlight" && m.rect) {
+      if (m.type === "highlight" && (m.pts || []).length >= 2) {
+        // freehand highlighter stroke — ink stays its own color in both export
+        // modes (a highlight IS its hue); width is stored as a fraction of sheet
+        // width → image px → page points. Weight (×) multiplies like the canvas.
+        const ipts = m.pts.map(([nx, ny]) => [nx * W, ny * H]);
+        const inkCol = rgb(...hex(m.color || "#ffd60a"));
+        const wImg = (m.w || 0.01) * W * mw;
+        if (m.tip === "chisel") {
+          pg.drawSvgPath(svgPath(chiselRibbon(ipts, wImg, 45)), { x: 0, y: 0, color: inkCol, opacity: 0.35 });
+        } else {
+          pg.drawSvgPath(svgOpenPath(ipts), {
+            x: 0, y: 0, borderColor: inkCol, borderWidth: wImg * ptScale, borderOpacity: 0.35,
+            ...(LineCapStyle ? { borderLineCap: LineCapStyle.Round } : {}),   // butt caps if the pin drops the export
+          });
+        }
+      } else if (m.type === "highlight" && m.rect) {
         const [[nx0, ny0], [nx1, ny1]] = m.rect;
         const r = [[nx0 * W, ny0 * H], [nx1 * W, ny0 * H], [nx1 * W, ny1 * H], [nx0 * W, ny1 * H]];
         pg.drawSvgPath(svgPath(r), { x: 0, y: 0, color: mcol, opacity: 0.18 + alphaBoost / 2, borderColor: mcol, borderWidth: 1 * mw, borderOpacity: 0.9, ...(mdash ? { borderDashArray: mdash } : {}) });

@@ -21,19 +21,14 @@ Register the server with your MCP client (any stdio client):
   "mcpServers": {
     "opentakeoff": {
       "command": "node",
-      "args": [
-        "--import", "/absolute/path/to/opentakeoff/mcp/node_modules/tsx/dist/loader.mjs",
-        "/absolute/path/to/opentakeoff/mcp/server.ts"
-      ]
+      "args": ["--import", "tsx", "/absolute/path/to/opentakeoff/mcp/server.ts"]
     }
   }
 }
 ```
 
-Both paths must be absolute — clients spawn stdio servers from their own
-working directory, where a bare `--import tsx` can't resolve and the server
-dies before the handshake. Never point a client config at `npm start` — npm's
-banner goes to stdout, which is the MCP wire.
+Never point a client config at `npm start` — npm's banner goes to stdout,
+which is the MCP wire. `node --import tsx` is the whole invocation.
 
 ## What the agent gets
 
@@ -107,7 +102,7 @@ dense linework (hatching or text).`
 - The **MCP server** is the agent-integration surface: real tools, real
   quantities, stdio.
 - The **[AI sandbox](../server/README.md)** (`server/`) is the other socket —
-  a FastAPI adapter interface for plugging your own local *model* under
+  a FastAPI adapter interface for plugging your own local *vision model* under
   the canvas's suggestion endpoints.
 - Scanned (raster-only) sheets aren't supported by the MCP server yet; the
   seam for a raster mask is marked in `mcp/src/session.ts`.

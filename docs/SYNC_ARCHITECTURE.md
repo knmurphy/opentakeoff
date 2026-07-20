@@ -75,11 +75,11 @@ sync layer a ready `drive` client.
 That's the whole surface. **This is intentionally documented, not built** — a second
 provider is YAGNI until one is real. What makes it tractable is the **cut-line**: the
 dependency is strictly one-way — the sync modules import the store API and an injected
-provider, never the reverse, and nothing in the store core, the canvas, or the Snapshot
+provider, never the reverse, and nothing in the store core, the canvas, or the Revisions
 panel imports them. The *only* importer is `main.jsx`'s opted-in branch (a dynamic
 `import("./lib/sync/composite.js")`). Remove that one branch and delete `web/src/lib/
 sync/*` + `web/src/lib/google/snapshotSync*`, and a fully working local-first app
-remains with no dangling imports. And because `SnapshotPanel` / `snapshotDiff` / the
+remains with no dangling imports. And because `RevisionsPanel` / `snapshotDiff` / the
 store core carry zero Drive references, the upstream/parent repo can cherry-pick the
 snapshot feature (`putSnapshot` + the snapshot-sync module) on its own.
 

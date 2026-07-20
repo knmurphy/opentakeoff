@@ -3,11 +3,18 @@
 Thanks for helping build a free takeoff tool for flooring contractors. PRs,
 issues, and ideas are all welcome.
 
+## Where to start
+
+- [`good first issue`](https://github.com/Kentucky-ai/opentakeoff/labels/good%20first%20issue)
+  — small, fully specified, exact files named. Claim one in a comment.
+- [The flagship challenge](https://github.com/Kentucky-ai/opentakeoff/issues/29)
+  — an open design-and-build bake-off. Post a design comment first; multiple
+  entries welcome; the best one merges with credit.
+
 ## Dev setup
 
 ```bash
 cd web
-nvm use            # Node version comes from web/.nvmrc — CI uses the same file
 npm install
 npm run dev        # http://localhost:5173 — drag in demo/sample-plan.pdf
 ```
@@ -15,27 +22,39 @@ npm run dev        # http://localhost:5173 — drag in demo/sample-plan.pdf
 Before opening a PR:
 
 ```bash
-npm run check      # typecheck + lint + test + build — the exact sequence CI runs
+npm run typecheck  # tsc --noEmit (the geometry libs are typed)
+npm test           # node test runner over the One-Click geometry
+npm run build      # vite build -> dist/
 ```
 
-If `npm run check` is green locally, CI will be green: CI reads the Node
-version from `web/.nvmrc` and runs this same script, nothing more.
+The optional AI sandbox lives in [`server/`](server/README.md) and the optional
+capture layer in [`capture/`](capture/README.md) — neither is needed for canvas
+work. If you touch `capture/`, run `python3 capture/capture_server.py selftest`
+(stdlib only, no setup).
 
-## How changes ship
+## Pull requests — how we work
 
-Full pipeline details (CI, deploys, security model, troubleshooting) live in
-[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The short version:
-
-- `main` is protected: all changes land via PR, the `web` CI check must pass,
-  and the branch must be up to date with `main` before merging. No force-pushes.
-- Merging to `main` triggers the Deploy workflow, which re-runs `npm run check`
-  and publishes `web/dist` to Netlify (production:
-  [takeoff.345flooring.com](https://takeoff.345flooring.com)). Netlify never
-  builds on its own — the only build environments are your machine and Actions,
-  both pinned by `.nvmrc`.
-
-The optional AI sandbox lives in [`server/`](server/README.md) and is not needed
-for canvas work.
+- **One concern per PR.** A feature, a fix, or a refactor — not all three. Small
+  PRs get reviewed fast; grab-bags stall.
+- **Open an issue first for anything big.** Typo fixes and small bugs can go
+  straight to a PR. New tools, new panels, or anything that changes the canvas
+  feel should start as an issue so we agree on the shape before you build it.
+- **`main` is protected.** Changes land by pull request with green CI
+  (typecheck, tests, build — plus the capture selftest); force-pushes and branch
+  deletion are blocked. Write commit subjects the way the history does —
+  `feat(canvas): …`, `fix(oneclick): …`, `docs: …` — they become the changelog.
+- **Show your work.** Canvas-visible changes want a screenshot or GIF in the PR;
+  quantity-affecting changes want a measured-vs-expected check against the
+  bundled sample plan (the PR template asks for both).
+- **Stay vendor-neutral.** Generic, industry-typical rates and terms only — no
+  manufacturer or product brand names in code, docs, or sample data.
+- **Update the paper trail.** A `CHANGELOG.md` entry and a `FEATURES.md` row
+  when behavior changes; `docs/USER_GUIDE.md` when the flow a user follows
+  changes.
+- **Review etiquette.** Comments are about the code, never the author; every
+  conversation gets resolved before merge. Expect a review within a few days.
+  Maintainers may push small fixups onto your branch to land a PR faster — say
+  so in the PR if you'd rather make the changes yourself.
 
 ## Architecture in one minute
 
@@ -49,10 +68,11 @@ for canvas work.
   canvas only ever talks to `store`, so a backend can be added by implementing
   the same four methods.
 - **`web/src/lib/totals.js`** + **`components/ReportPanel.jsx`** — role-aware
-  totaling, the Report, and CSV/XLSX/JSON export (the hand-rolled .xlsx writer
-  lives in `web/src/lib/xlsx.js`).
+  totaling, the Report, and CSV/JSON export.
 - **`web/src/lib/contribute.js`** — the opt-in "contribute to the open flooring
   model" payload builder (derived data only).
+- **`capture/capture_server.py`** — the optional local capture server: banks
+  Contribute payloads as (geometry → label) training rows in a corpus you own.
 
 ## Scope
 
