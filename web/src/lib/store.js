@@ -253,7 +253,10 @@ export const localStore = {
     const scope = project ?? null;
     // cursor walk, collecting metadata only — the list UI never needs the
     // payloads (they can be MBs of shapes), and getAll() would materialize
-    // every one of them at once; this bounds peak memory to a single record
+    // every one of them at once; this bounds peak memory to a single record.
+    // conditions/shapes are COUNTS derived during the walk (the cursor already
+    // holds the record), so the return stays payload-free while list UIs can
+    // still say how big each snapshot is.
     const metas = await withDb((db) => tx(db, SNAP_STORE, "readonly", (os) => {
       const out = [];
       const req = os.openCursor();
@@ -262,8 +265,12 @@ export const localStore = {
         if (!cur) return;
         // only this scope's snapshots — legacy records (no `project`) are null-scope
         if ((cur.value.project ?? null) === scope) {
-          const { id, ts, label } = cur.value;
-          out.push({ id, ts, label });
+          const { id, ts, label, payload } = cur.value;
+          // Array.isArray, not || [] — a corrupted payload with a truthy non-array
+          // field would otherwise surface `.length === undefined` in the panel.
+          out.push({ id, ts, label,
+                     conditions: Array.isArray(payload?.conditions) ? payload.conditions.length : 0,
+                     shapes: Array.isArray(payload?.shapes) ? payload.shapes.length : 0 });
         }
         cur.continue();
       };

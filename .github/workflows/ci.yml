@@ -1,9 +1,11 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
-  workflow_dispatch:   # allow running the check on demand (e.g. for a branch whose PR was opened by an app token, which doesn't trigger the pull_request event)
 
+# least-privilege token: every job only checks out and reads
 permissions:
   contents: read
 
@@ -14,22 +16,28 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version-file: web/.nvmrc
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npm run check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
 
   mcp:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
@@ -42,3 +50,13 @@ jobs:
         working-directory: mcp
       - run: npm test
         working-directory: mcp
+      - run: npm run build
+        working-directory: mcp
+      - run: npm run smoke:dist
+        working-directory: mcp
+
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 capture/capture_server.py selftest

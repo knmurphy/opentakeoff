@@ -2,13 +2,6 @@
 // scales, totals) — these helpers convert at the edges only: readouts, chips,
 // the report, exports, and the calibration input. Toggling systems never
 // rewrites stored data.
-//
-// NOTE (this fork): the metric display mode itself (upstream ee3c2ad) is not
-// ported yet — the canvas runs imperial-only, so the metric-only exports here
-// (areaVal/areaUnit/lenVal/lenUnit/calInputToFeet in their "metric" branches)
-// sit unused until that port lands. They're kept whole so the metric port is a
-// drop-in and the check-a-dimension helpers below stay byte-identical to
-// upstream.
 export type UnitSystem = "imperial" | "metric";
 
 export const M_PER_FT = 0.3048;

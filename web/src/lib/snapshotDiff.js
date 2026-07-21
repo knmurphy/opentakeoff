@@ -1,4 +1,7 @@
 // Snapshot comparison (PR-6) — QUANTITY-LEVEL, deliberately NOT geometric.
+// NOTE: its UI consumer (the Snapshots modal) is retired — the Revisions panel
+// diffs via lib/revisions.js. This module stays as the tested reference diff
+// (test/snapshotDiff.test.ts) with no in-app callers.
 // Shape identity doesn't survive revisions: a re-imported sheet or a
 // deleted-and-redrawn room gets fresh shape uids, so pairing shapes across
 // snapshots would diff as noise. What an estimator actually reviews is
@@ -23,8 +26,8 @@ import { conditionTotals, sheetTotals, round2 } from "./totals.js";
 const COND_FIELDS = ["floor_sf", "wall_sf", "border_sf", "lf", "ea", "total_sf", "total_sf_net"];
 // Sheet rows carry BASE quantities only (sheetTotals semantics: the condition
 // multiplier is NOT applied, and there's no waste at sheet level).
-// Exported: SnapshotPanel derives its by-sheet delta columns from this list,
-// so the panel's columns can't drift from what the diff actually compares.
+// Exported so a consumer can derive its by-sheet delta columns from this list
+// and never drift from what the diff actually compares.
 export const SHEET_FIELDS = ["floor_sf", "wall_sf", "border_sf", "lf", "ea"];
 
 // round2(b − a) per field, treating a missing side as zero. So for an
@@ -43,8 +46,8 @@ function deltasOf(fields, a, b) {
 // derive from the same 0.05 threshold — sub-display drift is "unchanged"
 // (and, when it's the only difference, the takeoff reports identical).
 // The per-field factor (ea ×1 → 0 decimals, others ×10 → 1 decimal) must stay
-// in lockstep with SnapshotPanel's SHEET_META display decimals — drift there
-// resurrects the all-"—" changed-rows bug described above.
+// in lockstep with any consumer's display decimals — drift there resurrects
+// the all-"—" changed-rows bug described above.
 const allZero = (d) => Object.entries(d).every(([k, v]) => Math.round(Math.abs(v) * (k === "ea" ? 1 : 10)) === 0);
 
 // Pair A rows with B rows: id match first, then finish_tag fallback over the

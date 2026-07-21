@@ -81,8 +81,8 @@ test("listSnapshots strips payloads, sorts ts desc; deleteSnapshot removes", asy
 
   const list = await store.listSnapshots();
   assert.deepEqual(list, [
-    { id: b.id, ts: b.ts, label: "second" },   // newest first
-    { id: a.id, ts: a.ts, label: "first" },
+    { id: b.id, ts: b.ts, label: "second", conditions: 0, shapes: 0 },   // newest first
+    { id: a.id, ts: a.ts, label: "first", conditions: 0, shapes: 1 },    // counts derived, payload still stripped
   ]);
   assert.ok(list.every((r: any) => !("payload" in r)));
 
@@ -102,7 +102,7 @@ test("project scope isolates listSnapshots: A sees A, not B, not local", async (
   assert.deepEqual((await store.listSnapshots("B")).map((r: any) => r.id), [b.id]);
   assert.deepEqual((await store.listSnapshots()).map((r: any) => r.id), [loc.id]);
   // metadata-only rows in scoped listing too
-  assert.deepEqual(await store.listSnapshots("A"), [{ id: a.id, ts: a.ts, label: "in-A" }]);
+  assert.deepEqual(await store.listSnapshots("A"), [{ id: a.id, ts: a.ts, label: "in-A", conditions: 0, shapes: 0 }]);
 });
 
 test("getSnapshot scope guard: right scope returns record, wrong scope returns null", async () => {
@@ -144,7 +144,8 @@ test("legacy snapshot record with no `project` field reads back as null (local) 
   db.close();
 
   // no migration needed: legacy record is the null (local) scope
-  assert.deepEqual(await store.listSnapshots(), [{ id: "snap_legacy", ts: 111, label: "old" }]);
+  // (a payload-less legacy record counts as zero conditions/shapes)
+  assert.deepEqual(await store.listSnapshots(), [{ id: "snap_legacy", ts: 111, label: "old", conditions: 0, shapes: 0 }]);
   const rec = await store.getSnapshot("snap_legacy");
   assert.ok(rec);
   assert.equal(rec.label, "old");

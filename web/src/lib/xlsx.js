@@ -13,8 +13,10 @@
 // materialsSummary, shapesDetail — so the four tabs carry the same numbers as
 // the on-screen table: waste applied only to order quantities, never measured.
 
-import { GETTERS, colGetter } from "./reportColumns.js";
+import { GETTERS, colGetter, applyUnits, METRIC_CSV_LABELS } from "./reportColumns.js";
 import { grandTotals, materialsSummary, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
+import { round2 } from "./num.js";
+import { M_PER_FT, M2_PER_SF } from "./units";
 
 // ---------------------------------------------------------------------------
 // XML plumbing
@@ -160,31 +162,40 @@ export async function buildXlsx(sheets) {
  * @param {{perimByCond?: Map<any, number>, attrsByCond?: Map<any, object>, specByCond?: Map<any, object>}|null}
  *   [args.ctx] handed to the getters
  * @param {((sheetId: any) => string)|null} [args.sheetLabel]
+ * @param {"imperial"|"metric"} [args.units] display units — "metric" converts
+ *   the Conditions and By-sheet tabs to m2/m (SY retires) exactly like the CSV;
+ *   the Shapes tab stays raw internal feet (the shapes CSV/JSON contract) and
+ *   its note line says so. "imperial" (default) is byte-identical.
  * @returns {Array<{name: string, rows: any[][]}>}
  */
-export function reportWorkbook({ rows = [], bySheet = [], shapeRows = [], cols = null, ctx = null, sheetLabel = null }) {
-  const columns = cols || [];
+export function reportWorkbook({ rows = [], bySheet = [], shapeRows = [], cols = null, ctx = null, sheetLabel = null, units = "imperial" }) {
+  const columns = applyUnits(cols || [], units, METRIC_CSV_LABELS);
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
+  const M = units === "metric";
+  const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
+  const A = (v) => (M ? round2((Number(v) || 0) * M2_PER_SF) : v);
+  const L = (v) => (M ? round2((Number(v) || 0) * M_PER_FT) : v);
 
   // Conditions — same columns, getters, and TOTAL row as totalsToCsv (per-
-  // column get, i.e. custom columns, falls back to the shared GETTERS)
+  // column get, i.e. custom columns, falls back to the shared GETTERS; a
+  // metric descriptor carries `conv` so the by-key TOTAL reads convert too)
   const conditions = [columns.map((c) => c.header)];
   for (const r of rows) conditions.push(columns.map((c) => colGetter(c)?.(r, ctx)));
   const g = grandTotals(rows);
   conditions.push(columns.map((c) => {
     if (c.key === "finish") return "TOTAL";
-    if (c.key === "waste_sf" || c.key === "waste_lf") return GETTERS[c.key](g);
-    return g[c.key] !== undefined ? g[c.key] : "";
+    const v = (c.key === "waste_sf" || c.key === "waste_lf") ? GETTERS[c.key](g) : (g[c.key] !== undefined ? g[c.key] : "");
+    return c.conv && v !== "" ? c.conv(v) : v;
   }));
 
   // By sheet — base (unmultiplied) quantities, rounded at serialization only
-  const bySheetRows = [["Sheet", "Sheet ID", "Finish", "Floor SF", "Wall SF", "Border SF", "LF", "EA"]];
+  const bySheetRows = [["Sheet", "Sheet ID", "Finish", `Floor ${AU}`, `Wall ${AU}`, `Border ${AU}`, LU, "EA"]];
   for (const gp of bySheet) {
     for (const row of gp.rows) {
       const mult = row.multiplier || 1;
       const finish = mult > 1 ? `${row.finish_tag} ×${mult}` : row.finish_tag;
       const r = roundSheetRow(row);
-      bySheetRows.push([String(label(gp.sheet_id)), String(gp.sheet_id), finish, r.floor_sf, r.wall_sf, r.border_sf, r.lf, r.ea]);
+      bySheetRows.push([String(label(gp.sheet_id)), String(gp.sheet_id), finish, A(r.floor_sf), A(r.wall_sf), A(r.border_sf), L(r.lf), r.ea]);
     }
   }
   if (hasMultipliers(bySheet)) bySheetRows.push([], [BY_SHEET_BASE_NOTE]);
@@ -201,9 +212,12 @@ export function reportWorkbook({ rows = [], bySheet = [], shapeRows = [], cols =
     for (const s of combined) materials.push([s.name, s.qty, s.unit]);
   }
 
-  // Shapes — measured only: no multiplier, no waste (shapesDetail semantics)
+  // Shapes — measured only: no multiplier, no waste (shapesDetail semantics).
+  // Deliberately RAW internal feet even in metric display mode — this tab
+  // mirrors the standalone shapes CSV/JSON (machine-consumable raw values);
+  // the note line flags it so a metric reader isn't surprised.
   const shapesTab = [
-    ["Per-shape measured quantities — no multiplier or waste; deducts negative; LF on floor/deduct/surface rows is trace reference only (incl. openings) — linear rows alone sum to condition LF"],
+    ["Per-shape measured quantities — no multiplier or waste; deducts negative; LF on floor/deduct/surface rows is trace reference only (incl. openings) — linear rows alone sum to condition LF" + (M ? ". Raw internal SF/LF (display units: metric)" : "")],
     ["Shape", "Sheet", "Sheet ID", "Finish", "Role", "Area SF", "LF", "EA", "Height ft", "Height override", "Origin"],
   ];
   for (const r of shapeRows) {

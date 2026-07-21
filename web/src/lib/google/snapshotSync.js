@@ -1,6 +1,6 @@
 // Optional Drive sync for snapshots — an append-only union layer that DECORATES
 // the local snapshot store. It wraps localStore's four snapshot methods so the
-// SnapshotPanel keeps calling `store.saveSnapshot/listSnapshots/getSnapshot/
+// RevisionsPanel keeps calling `store.saveSnapshot/listSnapshots/getSnapshot/
 // deleteSnapshot` unaware any sync exists (zero diff to the panel or
 // snapshotDiff.js). Local is always authoritative and a write never blocks on
 // the network; Drive is a best-effort backup/union so another machine can see

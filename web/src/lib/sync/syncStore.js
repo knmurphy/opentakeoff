@@ -5,7 +5,7 @@
 // the isBusy() defer-gate that keeps a remote adopt from clobbering in-flight work.
 //
 // Composition: base = createLocalStore(folderId) (Slice 3), provider = the
-// annotation-sync provider (Slice 4a). The SnapshotPanel/canvas call
+// annotation-sync provider (Slice 4a). The RevisionsPanel/canvas call
 // store.loadAnnotations/saveAnnotations unaware sync exists.
 //
 // Invariants (from the reviewed plan + advisor):
