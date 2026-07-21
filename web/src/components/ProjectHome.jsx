@@ -12,7 +12,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AuthChip from "./AuthChip.jsx";
 import { projectHomeFolderId, listProjectFolders, createRecents, browserStorage } from "../lib/projectHome.js";
-import { getAccessToken } from "../lib/google/auth.js";
+import { getAccessToken, signOut } from "../lib/google/auth.js";
 
 const rowBase = { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" };
 const sectionHead = { padding: "10px 18px 6px", fontFamily: "var(--f-mono)", fontSize: 10.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" };
@@ -38,7 +38,7 @@ export default function ProjectHome() {
     // the anonymous bundle. (getAccessToken is fine to import statically —
     // auth.js already ships in that bundle via main.jsx.)
     import("../lib/google/drive.js")
-      .then(({ createDrive }) => listProjectFolders(createDrive({ getToken: getAccessToken }), projectHomeFolderId()))
+      .then(({ createDrive }) => listProjectFolders(createDrive({ getToken: getAccessToken, onUnauthorized: signOut }), projectHomeFolderId()))
       .then((list) => { if (live) { setFolders(list); setLoading(false); } })
       .catch((e) => { if (live) { setErr(String(e?.message || e)); setLoading(false); } });
     return () => { live = false; };

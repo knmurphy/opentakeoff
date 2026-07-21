@@ -15,10 +15,17 @@ const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /**
  * @param {object} opts
- * @param {() => Promise<string>} opts.getToken  async access-token source
- * @param {typeof fetch} [opts.fetch]            injectable for tests
+ * @param {() => Promise<string>} opts.getToken       async access-token source
+ * @param {typeof fetch} [opts.fetch]                 injectable for tests
+ * @param {() => void} [opts.onUnauthorized]          called (best-effort) on a 401 — the
+ *   cached token is no longer valid at Google (revoked, not just locally expired;
+ *   getAccessToken() already refreshes within its own skew window, so a 401 reaching
+ *   here means server-side revocation, issue #152). Callers wire this to auth.js's
+ *   signOut() so every surface built on this client — including the local-first sync
+ *   layer, which swallows this error as best-effort and would otherwise fail silently —
+ *   bounces back to sign-in the same way, regardless of what they do with the throw.
  */
-export function createDrive({ getToken, fetch = globalThis.fetch }) {
+export function createDrive({ getToken, fetch = globalThis.fetch, onUnauthorized } = {}) {
   // Escape a value for the Drive `q` search grammar, where '...' delimits string
   // literals. Both backslash and single quote must be backslash-escaped —
   // backslash FIRST, or we'd double-escape the ones we add for quotes. (A name
@@ -33,10 +40,18 @@ export function createDrive({ getToken, fetch = globalThis.fetch }) {
     return { Authorization: `Bearer ${t}`, ...extra };
   }
 
-  // Throw a message that carries the HTTP status and any response body, so a
-  // failed call is diagnosable from the console — mirrors contribute.js.
+  // Non-401 failures throw a message carrying the HTTP status and any response
+  // body, so a failed call is diagnosable from the console — mirrors
+  // contribute.js. A 401 is handled separately below: it means the token
+  // itself is dead at Google (#152), not a diagnosable per-call failure, so it
+  // triggers onUnauthorized and throws a re-auth message instead of the
+  // status/body detail.
   async function assertOk(res, what) {
     if (res.ok) return res;
+    if (res.status === 401) {
+      try { onUnauthorized?.(); } catch { /* must never mask the real error below */ }
+      throw new Error("Google session expired — please sign in again.");
+    }
     let detail = "";
     try { detail = (await res.text()) || ""; } catch { /* body may be unreadable */ }
     throw new Error(`Drive ${what} failed (HTTP ${res.status})${detail ? `: ${detail}` : ""}.`);

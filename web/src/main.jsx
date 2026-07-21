@@ -7,7 +7,7 @@ import TakeoffCanvas from "./pages/TakeoffCanvas.jsx";
 import ProjectHome from "./components/ProjectHome.jsx";
 import { GoogleAuthProvider, useGoogleAuth } from "./lib/google/AuthContext.jsx";
 import { projectIdFromUrl, setActiveStore } from "./lib/store.js";
-import { isGoogleConfigured, getAccessToken } from "./lib/google/auth.js";
+import { isGoogleConfigured, getAccessToken, signOut } from "./lib/google/auth.js";
 import { cloudSyncEnabled } from "./lib/prefs.js";
 import { projectHomeFolderId } from "./lib/projectHome.js";
 import { initTheme } from "./lib/theme.js";
@@ -108,7 +108,11 @@ function ProjectGate({ projectId }) {
           import("./lib/google/drive.js"),
           import("./lib/cloudStore.js"),
         ]);
-        const drive = createDrive({ getToken: getAccessToken });
+        // onUnauthorized: a 401 means Google revoked the token server-side (#152) —
+        // bounce back to sign-in the same way regardless of which layer (legacy
+        // cloudStore or the local-first sync composite, both built from this same
+        // drive instance below) hit it.
+        const drive = createDrive({ getToken: getAccessToken, onUnauthorized: signOut });
         // BUILD only while this effect is still current. A stale continuation (user
         // navigated away before the imports resolved, or React StrictMode's dev
         // double-invoke) must not construct the composite: createSyncStore's bootstrap
