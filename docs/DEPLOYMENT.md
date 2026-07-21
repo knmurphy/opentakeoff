@@ -11,7 +11,8 @@ branch → npm run check (local) → PR → CI (`web` check) → squash-merge
 ```
 
 - **CI** (`.github/workflows/ci.yml`) runs on every PR: `npm ci` then
-  `npm run check` (typecheck → lint → tests → build) inside `web/`.
+  `npm run typecheck`, `npm test`, and `npm run build` inside `web/` — this
+  is a subset of `npm run check` (CI does not currently run the `lint` step).
 - Nothing in this repo publishes `web/dist` anywhere. The `netlify.toml`
   build section exists for anyone spinning up their own one-click Netlify
   deploy of a fork.
@@ -21,10 +22,13 @@ branch → npm run check (local) → PR → CI (`web` check) → squash-merge
 CI failures that don't reproduce locally are almost always environment drift.
 This repo pins the environment so drift can't happen:
 
-- **Node version** lives in `web/.nvmrc` (one source of truth). `nvm use`
-  reads it locally; CI reads it via `node-version-file`.
-- **`npm run check`** is the exact command CI runs — same order, same steps.
-  Green locally ⇒ green in CI.
+- **Node version**: both the repo root and `web/` have an `.nvmrc` (kept in
+  sync, currently both pin the same version). `nvm use` in `web/` reads the
+  local one; CI's `node-version-file: .nvmrc` resolves relative to the repo
+  root, so CI actually reads the root file.
+- **`npm run typecheck && npm test && npm run build`** is the exact sequence
+  CI runs — green locally ⇒ green in CI. `npm run check` additionally runs
+  `lint`, which is a useful local gate but isn't enforced in CI today.
 - **`npm ci`** in CI installs strictly from `package-lock.json`; if your
   lockfile is out of sync with `package.json`, CI fails fast rather than
   silently resolving different versions.
