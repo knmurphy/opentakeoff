@@ -48,6 +48,7 @@ import { buildMarkedSetPdf, downloadBytes } from "../lib/markedset.js";
 import { loadProfiles } from "../lib/identity.js";
 import { resolveBranding, loadBrandingSelection } from "../lib/branding.js";
 import { starPath, cloudPath, thinStroke, strokePathD, chiselRibbon, buildSnapGrid, nearestSnap, ANGLE_TOL, angleSnap, closedMetrics, openLen, pointInPoly, hitShape, arrowheadPath, distToSeg, reflectVertsNorm } from "../lib/geometry.js";
+import { flattenCurve } from "../lib/curve.js";
 import { dashArrayFor, boostForDark, clampWeight, snapWeight, LINE_STYLES, LINE_STYLE_IDS, WEIGHT_STEPS } from "../lib/lineStyles.js";
 import { nextRfiNumber } from "../lib/rfi.js";
 import { libFields, matFieldOverridden, libPushPatch, libRevertPatch, libEntryPatch, matEditPatch } from "../lib/materials.js";
@@ -95,6 +96,31 @@ import * as panelGeom from "../lib/panelGeometry.js";
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
 const CARPET_ROLL_FT = 12;
+
+// Click-select against a curved line's DRAWN path: flatten the control points and
+// hand hitShape a stand-in shape (lib/geometry.js stays byte-identical with Spline's).
+// Flattening is cached per shape object + sheet dims — pointer-move hit-testing calls
+// this every frame, and shapes are replaced (not mutated) on any edit via the command
+// layer, so a WeakMap keyed by shape identity invalidates itself for free.
+const curveFlatCache = new WeakMap();
+function hitShapeC(s, x, y, w, h, thr) {
+  // w/h fall back to {w:0,h:0} while a sheet's image is still loading
+  // (panelImgs[key] unset) — dividing by them below would yield NaN/Infinity,
+  // so fall through to plain hitShape, which zeroes out harmlessly like every
+  // other shape type already does against an unloaded sheet.
+  if (!s.curved || s.measure_role !== "linear" || !w || !h) return hitShape(s, x, y, w, h, thr);
+  let cached = curveFlatCache.get(s);
+  if (!cached || cached.w !== w || cached.h !== h) {
+    // Chord-length stepping needs real px distances, but the cached/returned
+    // points stay normalized — verts_norm keeps meaning what its name says,
+    // and hitShape sees the real w/h like every other shape.
+    const flatPx = flattenCurve((s.verts_norm || []).map(([nx, ny]) => [nx * w, ny * h]));
+    const flatNorm = flatPx.map(([px, py]) => [px / w, py / h]);
+    cached = { w, h, flatNorm };
+    curveFlatCache.set(s, cached);
+  }
+  return hitShape({ ...s, verts_norm: cached.flatNorm }, x, y, w, h, thr);
+}
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -1667,7 +1693,7 @@ export default function TakeoffCanvas() {
       if (menuDepthRef.current > 0) return;
       if (e.key === "Enter") {
         if (tool === "oneclick" && proposal?.regions.length) { e.preventDefault(); createProposal(); return; }
-        const ok = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
+        const ok = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface" || tool === "curve") && poly.length >= 2);
         if (ok) { e.preventDefault(); finishShape(); return; }
         // ⏎ with agent proposals pending on a visible sheet = accept them all —
         // the agent's analogue of one-click's Create gate. Only fires when no
@@ -1679,7 +1705,7 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (lower === "g") { setView("gallery"); return; }
       if (e.key === "D" && e.shiftKey) { setTool("deduct-rect"); return; }
-      const map = { p: "pan", v: "select", m: "multiselect", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter" };
+      const map = { p: "pan", v: "select", m: "multiselect", a: "area", r: "rect", l: "linear", q: "curve", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter" };
       const t = map[lower];
       if (t) setTool(t);
     };
@@ -1901,7 +1927,7 @@ export default function TakeoffCanvas() {
     if (tool === "calibrate") setCalib((c) => (c.length >= 2 ? [p] : [...c, p]));
     else if (tool === "check") setCheck((c) => (c.length >= 2 ? [p] : [...c, p]));
     else if (tool === "oneclick") oneClickAt(p, !!(ev && ev.altKey));
-    else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") setPoly((q) => [...q, p]);
+    else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "curve" || tool === "surface" || tool === "zone") setPoly((q) => [...q, p]);
     else if (tool === "count") commitCount(p);
     else if (tool === "rect" || tool === "deduct-rect") {
       if (poly.length === 0) setPoly([p]);
@@ -2075,14 +2101,14 @@ export default function TakeoffCanvas() {
       }
     }
     // 3. move the selected shape if its body (not a handle) was hit
-    if (sel && selSp && hitShape(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
+    if (sel && selSp && hitShapeC(sel, p[0] - selSp.xOffset, p[1], selSp.img.w, selSp.img.h, thr)) {
       dragRef.current = { kind: "move", shapeId: selectedId, start: p, orig: sel.verts_norm, prev: geomSnapshot(sel), shape: sel, gx: e.clientX, gy: e.clientY };
       e.currentTarget.setPointerCapture(e.pointerId); return;
     }
     // 4. otherwise pick a shape (or clear the selection)
     const hit = [...visibleShapes].reverse().find((s) => {
       const sp = panelByKey(s.sheet_id);
-      return hitShape(s, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr);
+      return hitShapeC(s, p[0] - sp.xOffset, p[1], sp.img.w, sp.img.h, thr);
     });
     selectShape(hit ? hit.id : null);
     if (hit) { dragRef.current = { kind: "move", shapeId: hit.id, start: p, orig: hit.verts_norm, prev: geomSnapshot(hit), shape: hit, gx: e.clientX, gy: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); return; }
@@ -2137,7 +2163,7 @@ export default function TakeoffCanvas() {
       return { area_sf: +(LF * h).toFixed(2), perimeter_lf: +LF.toFixed(2) };
     }
     if (s.measure_role === "linear") {
-      const LF = openLen(pts) * u;
+      const LF = openLen(s.curved ? flattenCurve(pts) : pts) * u;
       const tIn = Number(condById[s.condition_id]?.thickness_in) || 0;
       return { perimeter_lf: +LF.toFixed(2), area_sf: tIn > 0 ? +((LF * tIn) / 12).toFixed(2) : 0 };
     }
@@ -2165,7 +2191,7 @@ export default function TakeoffCanvas() {
     }
 
     // rubber-band preview: last point → cur (area/deduct/zone); rect preview: corner → cur
-    const drawing = (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone");
+    const drawing = (tool === "area" || tool === "deduct" || tool === "linear" || tool === "curve" || tool === "surface" || tool === "zone");
 
     // polar tracking: endpoint snap wins (osnap beats polar); otherwise pull the
     // rubber band onto the 45° family. ⇧ forces the lock at any angle. The click
@@ -2323,7 +2349,7 @@ export default function TakeoffCanvas() {
     const thr = 8 / tfRef.current.scale;
     const hit = [...visibleShapes].reverse().find((s) => {
       const sp = panelByKey(s.sheet_id);
-      return hitShape(s, pt[0] - sp.xOffset, pt[1], sp.img.w, sp.img.h, thr);
+      return hitShapeC(s, pt[0] - sp.xOffset, pt[1], sp.img.w, sp.img.h, thr);
     });
     if (!hit) { el.style.display = "none"; hoverIdRef.current = ""; return; }
     if (hoverIdRef.current !== hit.id) { el.textContent = describeShape(hit); hoverIdRef.current = hit.id; }
@@ -2703,16 +2729,19 @@ export default function TakeoffCanvas() {
       origin: { method: "manual" },
     }] });
   }
-  function commitLinear(points) {
+  function commitLinear(points, curved = false) {
     if (points.length < 2) return;
     const tp = panelAt(points[0][0]);
     const upp = uppFor(tp.key);
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
     if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
-    const LF = openLen(points) * upp;
+    // curved: verts stay the clicked CONTROL points (drag one → re-smooths);
+    // length always comes from the flattened spline
+    const LF = openLen(curved ? flattenCurve(points) : points) * upp;
     const tIn = Number(aCond?.thickness_in) || 0; // borders/feature strips: SF = LF × T/12
     dispatchShape({ type: "add", shapes: [{
       sheet_id: tp.key, condition_id: activeCond, measure_role: "linear",
+      ...(curved ? { curved: true } : {}),
       verts_norm: points.map(([x, y]) => [(x - tp.xOffset) / tp.img.w, y / tp.img.h]),
       computed: { perimeter_lf: +LF.toFixed(2), area_sf: tIn > 0 ? +((LF * tIn) / 12).toFixed(2) : 0 },
       ...(activeLabel ? { label: activeLabel } : {}),
@@ -3525,7 +3554,7 @@ export default function TakeoffCanvas() {
       setPoly([]);
       return;
     }
-    if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]);
+    if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else if (tool === "curve") commitLinear(poly, true); else commitPoly(poly, tool === "deduct"); setPoly([]);
   }
   function deleteSelected() { if (selectedId) { dispatchShape({ type: "delete", ids: [selectedId] }); setSelectedId(null); } }
   // already-assigned guard: a palette-chip dblclick reassigns twice (onClick +
@@ -4111,7 +4140,8 @@ export default function TakeoffCanvas() {
       if (!(field === "thickness_in" && s.measure_role === "linear")) return s;
       const sp = panelByKey(s.sheet_id);
       const u = uppFor(s.sheet_id) || 0;
-      const LF = openLen(s.verts_norm.map(([nx, ny]) => [nx * sp.img.w, ny * sp.img.h])) * u;
+      const lpts = s.verts_norm.map(([nx, ny]) => [nx * sp.img.w, ny * sp.img.h]);
+      const LF = openLen(s.curved ? flattenCurve(lpts) : lpts) * u;
       return { ...s, computed: { perimeter_lf: +LF.toFixed(2), area_sf: v > 0 ? +((LF * v) / 12).toFixed(2) : 0 } };
     }));
   };
@@ -4239,7 +4269,7 @@ export default function TakeoffCanvas() {
   };
   const measureActive = MEASURE_TOOLS.some((t) => t.id === tool);
   const faceTool = MEASURE_TOOLS.find((t) => t.id === (measureActive ? tool : lastMeasureRef.current)) || MEASURE_TOOLS[0];
-  const finishOk = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2);
+  const finishOk = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface" || tool === "curve") && poly.length >= 2);
 
   // panel-toggle for the right-edge rail — square like the zoom cluster, count as a
   // tiny mono line under the icon. Lives on the canvas, costs the toolbar zero rows.
@@ -5178,7 +5208,7 @@ export default function TakeoffCanvas() {
        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
-          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
+          onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "curve" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : tool === "multiselect" ? "crosshair" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
@@ -5250,7 +5280,8 @@ export default function TakeoffCanvas() {
                       }
                       if (s.measure_role === "linear") {
                         // line_style governs linear outlines (surface_area keeps its dash-dot identity above)
-                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
+                        const lpts = s.curved ? flattenCurve(pts) : pts;
+                        return <polyline key={s.id} points={lpts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       const ded = s.measure_role === "deduct";
                       // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
@@ -5570,8 +5601,8 @@ export default function TakeoffCanvas() {
               <path ref={cloudRef} fill="rgba(37,99,235,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale} strokeDasharray={`${5 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
               <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               <path ref={hlPathRef} style={{ display: "none" }} />
-              {poly.length >= 2 && (tool === "linear" || tool === "surface"
-                ? <polyline points={poly.map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
+              {poly.length >= 2 && (tool === "linear" || tool === "curve" || tool === "surface"
+                ? <polyline points={(tool === "curve" ? flattenCurve(poly) : poly).map((p) => p.join(",")).join(" ")} fill="none" stroke={tool === "surface" ? activeColor : "#1f3fc7"} strokeWidth={(tool === "surface" ? 3.5 : 2.5) / tf.scale} strokeDasharray={tool === "surface" ? `${10 / tf.scale} ${3 / tf.scale} ${2 / tf.scale} ${3 / tf.scale}` : undefined} strokeLinecap="round" strokeLinejoin="round" />
                 : <polygon points={poly.map((p) => p.join(",")).join(" ")} fill={poly.length >= 3 ? (tool === "deduct" ? "rgba(176,58,38,.22)" : tool === "zone" ? "rgba(31,63,199,.06)" : shapeFill(aCond)) : "none"} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} strokeDasharray={tool === "zone" ? `${7 / tf.scale} ${5 / tf.scale}` : undefined} />)}
               {/* bold the most recent segment so you see where you just clicked */}
               {poly.length >= 2 && (

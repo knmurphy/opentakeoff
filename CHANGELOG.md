@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-20
+
+### Added
+- **Curved Line tool (`Q`)** — like Linear, but the line bends smoothly through your clicks: radius walls, curved transitions, winding corridors. A centripetal Catmull-Rom spline (`web/src/lib/curve.js`) passes through every clicked point; LF is priced at the **true curved length**, not the chords, and a condition thickness yields border SF exactly like Linear. The shape stores only the clicked control points — drag one later and the curve re-smooths — while rendering, hit-testing, thickness re-flow, and re-scale re-flow all measure the flattened spline (vertex-capped, render-invariant). Curved shapes ride the normal linear schema plus a `curved: true` flag (declared in `docs/CONTRIBUTION_SPEC.md`); older readers degrade to the straight polyline through the points. (Cherry-picked from upstream's Kentucky-ai/opentakeoff#76 — not this repo's own #76.)
+
 ## 2026-07-19
 
 ### Added
