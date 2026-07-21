@@ -14,6 +14,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import { store, isStaleTabError, STALE_TAB_MESSAGE, friendlyStoreError } from "../lib/store.js";
 import { diffTakeoffs, diffToCsv, revSheetLabel } from "../lib/revisions.js";
+import { diffShapesForCloud } from "../lib/revisionClouds.js";
 import { downloadText } from "../lib/totals.js";
 import { areaVal, areaUnit, lenVal, lenUnit } from "../lib/units";
 
@@ -21,7 +22,7 @@ const num = (v, d = 1) => (Number(v) || 0).toLocaleString(undefined, { maximumFr
 const STATUS_COLOR = { added: "var(--c-positive)", removed: "var(--c-danger)", changed: "var(--c-warning)", unchanged: "var(--ink-muted)" };
 const errText = (e) => (isStaleTabError(e) ? STALE_TAB_MESSAGE : friendlyStoreError(e));
 
-export default function RevisionsPanel({ current, units = "imperial", onRestore, onClose }) {
+export default function RevisionsPanel({ current, units = "imperial", onRestore, onAutoFlag, onClose }) {
   const [revs, setRevs] = useState(null);          // null = loading
   const [saveName, setSaveName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -100,6 +101,28 @@ export default function RevisionsPanel({ current, units = "imperial", onRestore,
     if (!diff) return;
     const base = (current.project_name || "takeoff").replace(/[^\w.-]+/g, "_");
     downloadText(`${base}_compare.csv`, diffToCsv(diff, { aName: nameOf(baseId), bName: nameOf(compareId), units, projectName: current.project_name || "" }), "text/csv");
+  };
+
+  // Auto-flag (#149): only meaningful against the live, editable canvas — a
+  // frozen historical revision's payload has nowhere to receive a markup
+  // write. Pairs shapes by ID between baseline and current on each sheet,
+  // which is only a real (not noisy) diff when the baseline was saved right
+  // after a "transfer takeoff to new sheet" — see diffShapesForCloud.
+  const canAutoFlag = !!diff && compareId === "current" && typeof onAutoFlag === "function";
+  const handleAutoFlag = () => {
+    if (!canAutoFlag) return;
+    const baseShapes = sideA.shapes || [], curShapes = sideB.shapes || [];
+    const sheetIds = new Set([...baseShapes, ...curShapes].map((s) => s.sheet_id));
+    // One map built once (not a .find() per shape — this runs once per
+    // sheet per shape, so a linear scan per lookup makes the whole diff
+    // O(shapes × conditions)). Baseline entries first, current overwrites —
+    // current wins on a shared id, but a removed shape's condition that only
+    // ever existed in the baseline still resolves instead of falling to "?".
+    const tagById = new Map();
+    for (const c of sideA.conditions || []) tagById.set(c.id, c.finish_tag);
+    for (const c of sideB.conditions || []) tagById.set(c.id, c.finish_tag);
+    const tagOf = (id) => tagById.get(id);
+    onAutoFlag([...sheetIds].flatMap((id) => diffShapesForCloud(baseShapes, curShapes, id, tagOf)));
   };
 
   const AU = areaUnit(units), LU = lenUnit(units);
@@ -210,6 +233,10 @@ export default function RevisionsPanel({ current, units = "imperial", onRestore,
                 <input type="checkbox" checked={showUnchanged} onChange={(e) => setShowUnchanged(e.target.checked)} name="show-unchanged" />show unchanged
               </label>
               <button className="btn-ghost" onClick={exportCsv} disabled={!diff}><Icon name="document" size={13} />Export compare CSV</button>
+              <button className="btn-ghost" onClick={handleAutoFlag} disabled={!canAutoFlag}
+                title={compareId === "current" ? "Auto-place Revision Cloud markups where shapes changed since the baseline (best right after a sheet transfer, scale already set)" : "Only available comparing a revision against the current takeoff"}>
+                <Icon name="revisions" size={13} />Auto-flag changes
+              </button>
             </div>
 
             {!diff ? (
