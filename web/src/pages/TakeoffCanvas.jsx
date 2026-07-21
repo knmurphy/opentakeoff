@@ -100,9 +100,9 @@ const CARPET_ROLL_FT = 12;
 // Click-select against a curved line's DRAWN path: flatten the control points and
 // hand hitShape a stand-in shape (lib/geometry.js stays byte-identical with Spline's).
 function hitShapeC(s, x, y, w, h, thr) {
-  if (!s.curved) return hitShape(s, x, y, w, h, thr);
+  if (!s.curved || s.measure_role !== "linear") return hitShape(s, x, y, w, h, thr);
   const flat = flattenCurve((s.verts_norm || []).map(([nx, ny]) => [nx * w, ny * h]));
-  return hitShape({ ...s, verts_norm: flat.map(([px, py]) => [px / w, py / h]) }, x, y, w, h, thr);
+  return hitShape({ ...s, verts_norm: flat }, x, y, 1, 1, thr);
 }
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
