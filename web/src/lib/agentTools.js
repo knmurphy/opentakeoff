@@ -214,10 +214,108 @@ const clampRegion = (r) => ({
 
 const MEASURE_ROLES = new Set(["floor_area", "deduct"]);
 
+// The canvas-provided capability contract (documented in prose at the top of
+// this file). Typed loosely — each capability's precise payload lives with the
+// canvas that builds ctx; here we only need "these methods exist" so the
+// handlers and executeAgentTool typecheck without an `any` on ctx.
+/**
+ * @typedef {{
+ *   listSheets: () => any[],
+ *   uppFor: (sheet: string) => number | null,
+ *   sheetDims: (sheet: string) => { w: number, h: number } | null,
+ *   detectedLabel: (sheet: string) => string,
+ *   readSheetText: (sheet: string, region: any) => Promise<any[]>,
+ *   readSchedule: (sheet: string, region: any) => Promise<any[]>,
+ *   viewRegion: (sheet: string, region: any) => Promise<{ image_data_url: string, width: number, height: number }>,
+ *   oneClick: (sheet: string, x: number, y: number) => Promise<Record<string, any>>,
+ *   getConditions: () => any[],
+ *   createCondition: (finish_tag: string) => { id: string, finish_tag: string },
+ *   proposeShapes: (shapes: any[]) => { staged: number },
+ * }} AgentToolCtx
+ */
+
+// ── handler map ───────────────────────────────────────────────────────────────
+// name → async execute(ctx, args). Parallels DEFS_BY_NAME (schema by name) with
+// behavior by name; executeAgentTool looks the handler up here instead of
+// branching a switch. Every handler is async so awaiting one uniformly keeps a
+// sync return and a thrown capability on the same throw→catch path.
+//
+// NOTE: this entry shape ({ [name]: (ctx, args) => result }) is a PRIVATE
+// internal detail — it is NOT the public plugin agent-tool descriptor and is
+// explicitly NON-normative for it (the real descriptor lives in #167). Do not
+// export it or treat it as a contract; the deferred agent-tool plugin seam
+// defines its own shape.
+/** @type {Record<string, (ctx: AgentToolCtx, args: any) => Promise<Record<string, any>>>} */
+const HANDLERS = {
+  list_sheets: async (ctx) => ({ sheets: ctx.listSheets() }),
+  read_sheet_text: async (ctx, args) => {
+    if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — ask the estimator to open it, or pick one from list_sheets.` };
+    const items = await ctx.readSheetText(args.sheet, args.region ? clampRegion(args.region) : null);
+    return { count: items.length, items };
+  },
+  read_schedule: async (ctx, args) => {
+    if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — pick one from list_sheets.` };
+    const rows = await ctx.readSchedule(args.sheet, clampRegion(args.region));
+    if (!rows.length) return { rows: [], note: "No schedule table found in that region — draw the region around the table including its CODE / MATERIAL / ... header, or use view_region to look at the area." };
+    return { rows };
+  },
+  view_region: async (ctx, args) => {
+    if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — pick one from list_sheets.` };
+    const img = await ctx.viewRegion(args.sheet, clampRegion(args.region));
+    // image_data_url is lifted into an image block by the loop, never
+    // serialized into the text result.
+    return { image_data_url: img.image_data_url, width: img.width, height: img.height };
+  },
+  one_click: async (ctx, args) => {
+    if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — pick one from list_sheets.` };
+    if (ctx.uppFor(args.sheet) == null) return { error: agentScaleGate(args.sheet, ctx.detectedLabel(args.sheet)) };
+    return await ctx.oneClick(args.sheet, args.x, args.y);
+  },
+  get_conditions: async (ctx) => ({ conditions: ctx.getConditions() }),
+  create_condition: async (ctx, args) => {
+    const tag = args.finish_tag.trim();
+    if (!tag) return { error: "finish_tag must be a non-empty string." };
+    const existing = ctx.getConditions().find((c) => c.finish_tag.toUpperCase() === tag.toUpperCase());
+    if (existing) return { condition_id: existing.id, finish_tag: existing.finish_tag, note: "already existed" };
+    const made = ctx.createCondition(tag);
+    return { condition_id: made.id, finish_tag: made.finish_tag };
+  },
+  propose_shapes: async (ctx, args) => {
+    const condIds = new Set(ctx.getConditions().map((c) => c.id));
+    const clean = [];
+    const rejected = [];
+    for (const s of args.shapes) {
+      const dims = ctx.sheetDims(s.sheet);
+      if (!dims) { rejected.push(`sheet ${s.sheet} isn't open`); continue; }
+      if (ctx.uppFor(s.sheet) == null) { rejected.push(agentScaleGate(s.sheet, ctx.detectedLabel(s.sheet))); continue; }
+      if (!MEASURE_ROLES.has(s.measure_role)) { rejected.push(`measure_role must be floor_area or deduct (got ${JSON.stringify(s.measure_role)})`); continue; }
+      if (!condIds.has(s.condition_id)) { rejected.push(`unknown condition_id ${JSON.stringify(s.condition_id)} — use get_conditions or create_condition`); continue; }
+      const verts = Array.isArray(s.verts_norm)
+        ? s.verts_norm.filter((v) => Array.isArray(v) && v.length >= 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]))
+        : [];
+      if (verts.length < 3 || verts.length !== s.verts_norm.length) { rejected.push("verts_norm must be a ring of at least 3 [x,y] points — use the ring one_click returned"); continue; }
+      const evidence = pickAgentEvidence(s.evidence);
+      if (!evidence) { rejected.push("every proposal must cite evidence: schedule_row_tag and/or matched_text and/or seed_norm"); continue; }
+      clean.push({
+        sheet: s.sheet,
+        verts_norm: verts.map(([x, y]) => [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))]),
+        condition_id: s.condition_id,
+        measure_role: s.measure_role,
+        evidence,
+      });
+    }
+    const staged = clean.length ? ctx.proposeShapes(clean) : { staged: 0 };
+    return { staged: staged.staged, ...(rejected.length ? { rejected } : {}) };
+  },
+};
+
 /**
  * Execute one tool call. NEVER throws — every failure comes back as an
  * `{ error }` result the loop feeds to the model as a tool result, so a bad
  * call is a correctable turn, not a crashed run.
+ * @param {AgentToolCtx} ctx
+ * @param {string} name
+ * @param {any} args
  * @returns {Promise<Record<string, any>>}
  */
 export async function executeAgentTool(ctx, name, args) {
@@ -225,73 +323,11 @@ export async function executeAgentTool(ctx, name, args) {
   if (!def) return { error: `Unknown tool: ${name}. Available: ${AGENT_TOOL_DEFS.map((d) => d.name).join(", ")}.` };
   const bad = validateToolArgs(def.input_schema, args);
   if (bad) return { error: `Invalid arguments for ${name}: ${bad}.` };
+  const handler = HANDLERS[name];
+  if (!handler) return { error: `Unknown tool: ${name}.` }; // unreachable (def exists); keeps the contract airtight
   try {
-    switch (name) {
-      case "list_sheets":
-        return { sheets: ctx.listSheets() };
-      case "read_sheet_text": {
-        if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — ask the estimator to open it, or pick one from list_sheets.` };
-        const items = await ctx.readSheetText(args.sheet, args.region ? clampRegion(args.region) : null);
-        return { count: items.length, items };
-      }
-      case "read_schedule": {
-        if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — pick one from list_sheets.` };
-        const rows = await ctx.readSchedule(args.sheet, clampRegion(args.region));
-        if (!rows.length) return { rows: [], note: "No schedule table found in that region — draw the region around the table including its CODE / MATERIAL / ... header, or use view_region to look at the area." };
-        return { rows };
-      }
-      case "view_region": {
-        if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — pick one from list_sheets.` };
-        const img = await ctx.viewRegion(args.sheet, clampRegion(args.region));
-        // image_data_url is lifted into an image block by the loop, never
-        // serialized into the text result.
-        return { image_data_url: img.image_data_url, width: img.width, height: img.height };
-      }
-      case "one_click": {
-        if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — pick one from list_sheets.` };
-        if (ctx.uppFor(args.sheet) == null) return { error: agentScaleGate(args.sheet, ctx.detectedLabel(args.sheet)) };
-        return await ctx.oneClick(args.sheet, args.x, args.y);
-      }
-      case "get_conditions":
-        return { conditions: ctx.getConditions() };
-      case "create_condition": {
-        const tag = args.finish_tag.trim();
-        if (!tag) return { error: "finish_tag must be a non-empty string." };
-        const existing = ctx.getConditions().find((c) => c.finish_tag.toUpperCase() === tag.toUpperCase());
-        if (existing) return { condition_id: existing.id, finish_tag: existing.finish_tag, note: "already existed" };
-        const made = ctx.createCondition(tag);
-        return { condition_id: made.id, finish_tag: made.finish_tag };
-      }
-      case "propose_shapes": {
-        const condIds = new Set(ctx.getConditions().map((c) => c.id));
-        const clean = [];
-        const rejected = [];
-        for (const s of args.shapes) {
-          const dims = ctx.sheetDims(s.sheet);
-          if (!dims) { rejected.push(`sheet ${s.sheet} isn't open`); continue; }
-          if (ctx.uppFor(s.sheet) == null) { rejected.push(agentScaleGate(s.sheet, ctx.detectedLabel(s.sheet))); continue; }
-          if (!MEASURE_ROLES.has(s.measure_role)) { rejected.push(`measure_role must be floor_area or deduct (got ${JSON.stringify(s.measure_role)})`); continue; }
-          if (!condIds.has(s.condition_id)) { rejected.push(`unknown condition_id ${JSON.stringify(s.condition_id)} — use get_conditions or create_condition`); continue; }
-          const verts = Array.isArray(s.verts_norm)
-            ? s.verts_norm.filter((v) => Array.isArray(v) && v.length >= 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]))
-            : [];
-          if (verts.length < 3 || verts.length !== s.verts_norm.length) { rejected.push("verts_norm must be a ring of at least 3 [x,y] points — use the ring one_click returned"); continue; }
-          const evidence = pickAgentEvidence(s.evidence);
-          if (!evidence) { rejected.push("every proposal must cite evidence: schedule_row_tag and/or matched_text and/or seed_norm"); continue; }
-          clean.push({
-            sheet: s.sheet,
-            verts_norm: verts.map(([x, y]) => [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))]),
-            condition_id: s.condition_id,
-            measure_role: s.measure_role,
-            evidence,
-          });
-        }
-        const staged = clean.length ? ctx.proposeShapes(clean) : { staged: 0 };
-        return { staged: staged.staged, ...(rejected.length ? { rejected } : {}) };
-      }
-    }
+    return await handler(ctx, args);
   } catch (e) {
     return { error: `Tool ${name} failed: ${String((e && e.message) || e)}` };
   }
-  return { error: `Unknown tool: ${name}.` }; // unreachable; keeps the contract airtight
 }

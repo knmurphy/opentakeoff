@@ -23,7 +23,9 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
     detectedLabel: () => "",
     readSheetText: async () => [{ text: "RM 204", x: 0.4, y: 0.5 }],
     readSchedule: async () => [{ finish_tag: "CPT-1", section: "FLOORING", category: "floor", description: "CARPET", manufacturer: "", style: "", spec_color: "", size: "", suggested: true }],
-    viewRegion: async () => ({ image_data_url: "data:image/png;base64,AAAA", width: 100, height: 80 }),
+    // Extra `_debug` key present on purpose: view_region must return an EXPLICIT
+    // pick, so a naive `return img` would leak it — the key-set assertion catches that.
+    viewRegion: async () => ({ image_data_url: "data:image/png;base64,AAAA", width: 100, height: 80, _debug: "internal" }),
     oneClick: async (sheet: string, x: number, y: number) => {
       calls.oneClick.push([sheet, x, y]);
       return { verts_norm: [[0.1, 0.1], [0.3, 0.1], [0.3, 0.3], [0.1, 0.3]], area_sf: 200, perimeter_lf: 60, seed_norm: [x, y] };
@@ -63,8 +65,82 @@ test("validateToolArgs: required keys and primitive types enforced", () => {
 test("unknown tool → error RESULT, never a throw", async () => {
   const { ctx } = makeCtx();
   const out = await executeAgentTool(ctx, "summon_geometry", {});
-  assert.match(out.error, /Unknown tool: summon_geometry/);
-  assert.match(out.error, /list_sheets/);   // tells the model what IS available
+  // Verbatim: the unknown-tool message lists every real tool so the model can
+  // self-correct. Byte-identical guard — the exact string is the contract.
+  assert.equal(
+    out.error,
+    "Unknown tool: summon_geometry. Available: list_sheets, read_sheet_text, read_schedule, view_region, one_click, get_conditions, create_condition, propose_shapes.",
+  );
+});
+
+// ── per-tool characterization: success + error for all 8 tools ─────────────────
+// These pin behavior byte-for-byte across the switch→handler-map refactor. Where
+// the message wording differs BETWEEN tools (e.g. the sheet-not-open text), each
+// is asserted verbatim so nobody "helpfully" unifies them during the move.
+
+test("list_sheets: success returns the ctx sheet list; a capability throw is caught", async () => {
+  const { ctx } = makeCtx();
+  const out = await executeAgentTool(ctx, "list_sheets", {});
+  assert.deepEqual(out, { sheets: [{ sheet: "plan.pdf", title: "A101", width: 2000, height: 1500, scale_set: true }] });
+  const { ctx: boom } = makeCtx({ listSheets: () => { throw new Error("registry gone"); } });
+  const err = await executeAgentTool(boom, "list_sheets", {});
+  assert.equal(err.error, "Tool list_sheets failed: registry gone");
+});
+
+test("read_sheet_text: success returns count+items; closed sheet refuses verbatim", async () => {
+  const { ctx } = makeCtx();
+  const out = await executeAgentTool(ctx, "read_sheet_text", { sheet: "plan.pdf" });
+  assert.deepEqual(out, { count: 1, items: [{ text: "RM 204", x: 0.4, y: 0.5 }] });
+  const closed = await executeAgentTool(ctx, "read_sheet_text", { sheet: "ghost.pdf" });
+  assert.equal(closed.error, "Sheet ghost.pdf isn't open on the canvas — ask the estimator to open it, or pick one from list_sheets.");
+});
+
+test("read_schedule: success returns rows; empty region → non-error note; closed sheet refuses verbatim", async () => {
+  const { ctx } = makeCtx();
+  const region = { x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.9 };
+  const out = await executeAgentTool(ctx, "read_schedule", { sheet: "plan.pdf", region });
+  assert.equal(out.rows.length, 1);
+  assert.equal(out.rows[0].finish_tag, "CPT-1");
+  const { ctx: empty } = makeCtx({ readSchedule: async () => [] });
+  const none = await executeAgentTool(empty, "read_schedule", { sheet: "plan.pdf", region });
+  assert.deepEqual(none, { rows: [], note: "No schedule table found in that region — draw the region around the table including its CODE / MATERIAL / ... header, or use view_region to look at the area." });
+  const closed = await executeAgentTool(ctx, "read_schedule", { sheet: "ghost.pdf", region });
+  assert.equal(closed.error, "Sheet ghost.pdf isn't open on the canvas — pick one from list_sheets.");
+});
+
+test("view_region: success returns exactly {image_data_url,width,height}; closed sheet refuses verbatim", async () => {
+  const { ctx } = makeCtx();
+  const region = { x0: 0.1, y0: 0.1, x1: 0.9, y1: 0.9 };
+  const out = await executeAgentTool(ctx, "view_region", { sheet: "plan.pdf", region });
+  // Exact key set — a naive `return img` would leak extra fields; this catches it.
+  assert.deepEqual(Object.keys(out).sort(), ["height", "image_data_url", "width"]);
+  assert.equal(out.image_data_url, "data:image/png;base64,AAAA");
+  assert.equal(out.width, 100);
+  assert.equal(out.height, 80);
+  const closed = await executeAgentTool(ctx, "view_region", { sheet: "ghost.pdf", region });
+  assert.equal(closed.error, "Sheet ghost.pdf isn't open on the canvas — pick one from list_sheets.");
+});
+
+test("one_click: closed sheet refuses verbatim (success + scale-gate covered elsewhere)", async () => {
+  const { ctx } = makeCtx();
+  const closed = await executeAgentTool(ctx, "one_click", { sheet: "ghost.pdf", x: 0.5, y: 0.5 });
+  assert.equal(closed.error, "Sheet ghost.pdf isn't open on the canvas — pick one from list_sheets.");
+});
+
+test("get_conditions: success returns the ctx conditions; a capability throw is caught", async () => {
+  const { ctx } = makeCtx();
+  const out = await executeAgentTool(ctx, "get_conditions", {});
+  assert.deepEqual(out, { conditions: [{ id: "cnd-1", finish_tag: "CPT-1", hatch: "solid", waste_pct: 5 }] });
+  const { ctx: boom } = makeCtx({ getConditions: () => { throw new Error("conditions gone"); } });
+  const err = await executeAgentTool(boom, "get_conditions", {});
+  assert.equal(err.error, "Tool get_conditions failed: conditions gone");
+});
+
+test("create_condition: whitespace-only tag rejects verbatim (pins .trim())", async () => {
+  const { ctx, calls } = makeCtx();
+  const out = await executeAgentTool(ctx, "create_condition", { finish_tag: "   " });
+  assert.equal(out.error, "finish_tag must be a non-empty string.");
+  assert.equal(calls.createCondition.length, 0);
 });
 
 test("bad args → error RESULT naming the problem", async () => {
