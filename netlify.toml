@@ -25,19 +25,29 @@
   to     = "/index.html"
   status = 200
 
-# Security headers. Upstream's policy, kept as-is wherever possible — connect-src
-# stays open ON PURPOSE (the BYO-AI base URL and the capture/contribute endpoint
-# are user-configured: your own server, localhost, any provider).
-# Fork divergences, each mapped to shipped code:
-#   - script-src/frame-src + accounts.google.com — the GIS SDK + auth iframe for
-#     the team cloud mode this deploy runs (company-specific feature).
+# Security headers. This is the fork's PERMANENT, deliberate CSP home — a fork
+# decision on its own merits, not a tracking of upstream's file-of-the-week.
+# Upstream has flipped between netlify.toml and web/public/_headers more than
+# once; we compared both (2026-07-20) and the actual policy content is
+# equivalent either way, so we stopped chasing the mechanism. Don't add a
+# web/public/_headers file — two CSP headers on one response enforce as their
+# intersection, and this block is the only source we maintain.
+#
+# Baseline (shared shape with upstream): default-src 'self', wasm-unsafe-eval
+# for pdf.js's WASM image codec, open connect-src (the BYO-AI base URL and the
+# capture/contribute endpoint are user-configured: your own server, localhost,
+# any provider — can't be pinned to a fixed allowlist).
+#
+# First-class fork additions (not a bolt-on divergence — these are load-bearing
+# for shipped features and must survive any future re-sync of this block):
+#   - script-src/frame-src + accounts.google.com — the GIS SDK + auth iframe
+#     Google sign-in / team cloud mode depends on.
 #   - style-src + fonts.googleapis.com, font-src + fonts.gstatic.com — the
 #     webfonts @import'd by src/styles/tokens.css (upstream's block omits these
 #     and silently falls back to system fonts).
-#   - Strict-Transport-Security + upgrade-insecure-requests retained from the
-#     fork's previous _headers policy.
-# This is the ONLY header source — don't add a web/public/_headers file
-# (duplicate CSPs enforce as the intersection).
+#   - Strict-Transport-Security + upgrade-insecure-requests, Permissions-Policy
+#     interest-cohort=() (FLoC opt-out) — hardening carried from the fork's
+#     original _headers policy.
 [[headers]]
   for = "/*"
   [headers.values]
@@ -45,5 +55,5 @@
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "DENY"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), interest-cohort=()"
     Strict-Transport-Security = "max-age=31536000"
