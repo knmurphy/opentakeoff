@@ -111,7 +111,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const templatesRef = useRef(null);
   // optional Drive sync of templates (#115) — offered only when signed in AND a
   // Projects root is configured. googleUser/driveRoot are also the push/load args.
-  const { user: googleUser } = useGoogleAuth();
+  const { user: googleUser, signOut } = useGoogleAuth();
   const driveRoot = projectHomeFolderId();
   const canSync = canSyncTemplates(googleUser, driveRoot);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -249,7 +249,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     setSyncBusy(true); setSyncMsg("Pushing…");
     try {
       const { createDrive } = await import("../lib/google/drive.js");
-      const { count } = await pushTemplatesToDrive(createDrive({ getToken: getAccessToken }), driveRoot, googleUser.email, templates);
+      const { count } = await pushTemplatesToDrive(createDrive({ getToken: getAccessToken, onUnauthorized: signOut }), driveRoot, googleUser.email, templates);
       setSyncMsg(`Pushed ${count} to Drive.`);
     } catch (e) {
       setSyncMsg(`Push failed: ${String(e?.message || e)}`);
@@ -260,7 +260,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     setSyncBusy(true); setSyncMsg("Loading…");
     try {
       const { createDrive } = await import("../lib/google/drive.js");
-      const remote = await loadTemplatesFromDrive(createDrive({ getToken: getAccessToken }), driveRoot, googleUser.email);
+      const remote = await loadTemplatesFromDrive(createDrive({ getToken: getAccessToken, onUnauthorized: signOut }), driveRoot, googleUser.email);
       // Merge against the IN-MEMORY set (the source of truth the popover shows),
       // not a fresh localStorage read — a blocked-storage read would look empty
       // and drop templates that are live in state.

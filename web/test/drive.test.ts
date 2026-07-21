@@ -207,3 +207,32 @@ test("non-2xx responses throw with the HTTP status and body", async () => {
     return true;
   });
 });
+
+// #152: a 401 means the token itself is dead at Google (revoked), not just a
+// permissions/scope problem on an otherwise-live token — that's what tells the
+// caller to force re-auth rather than show a generic Drive error.
+test("a 401 calls onUnauthorized once and throws a re-auth message, not the generic Drive error", async () => {
+  const { fetch } = stubFetch([makeRes({ ok: false, status: 401, text: "invalid_token" })]);
+  let calls = 0;
+  const drive = createDrive({ getToken, fetch, onUnauthorized: () => { calls += 1; } });
+  await assert.rejects(drive.listChildren("folder1"), (e: any) => {
+    assert.match(e.message, /session expired/i);
+    assert.doesNotMatch(e.message, /HTTP 401/);
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
+test("a non-401 error never calls onUnauthorized", async () => {
+  const { fetch } = stubFetch([makeRes({ ok: false, status: 500, text: "boom" })]);
+  let calls = 0;
+  const drive = createDrive({ getToken, fetch, onUnauthorized: () => { calls += 1; } });
+  await assert.rejects(drive.listChildren("folder1"));
+  assert.equal(calls, 0);
+});
+
+test("onUnauthorized is optional — a 401 still throws cleanly with none provided", async () => {
+  const { fetch } = stubFetch([makeRes({ ok: false, status: 401, text: "invalid_token" })]);
+  const drive = createDrive({ getToken, fetch });
+  await assert.rejects(drive.listChildren("folder1"), /session expired/i);
+});
