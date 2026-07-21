@@ -539,7 +539,7 @@ What's sent, and only when you run an AI feature: the sheet region in question a
 
 ### MCP — for agent users
 
-The same engine speaks [MCP](https://modelcontextprotocol.io), one command away: `npx -y opentakeoff-mcp` (or the one-click `opentakeoff-mcp.mcpb` bundle for Claude Desktop). An MCP client gets ten tools — `load_plan`, `sheet_info`, `set_scale`, `one_click`, `measure_polygon`, `measure_line`, `takeoff_summary`, `export_takeoff`, `delete_shape`, `read_sheet_text` — plus browsable sheet resources, over the very same measuring engine, with the same scale gate and the same provenance receipts; `export_takeoff` emits the app's own save payload. Setup, the coordinate contract, and a full example transcript: [MCP.md](MCP.md) and [`mcp/README.md`](../mcp/README.md).
+The same engine speaks [MCP](https://modelcontextprotocol.io), one command away: `npx -y opentakeoff-mcp` (or the one-click `opentakeoff-mcp.mcpb` bundle for Claude Desktop). An MCP client gets eleven tools — `load_plan`, `sheet_info`, `set_scale`, `one_click`, `detect_rooms`, `measure_polygon`, `measure_line`, `takeoff_summary`, `export_takeoff`, `delete_shape`, `read_sheet_text` — plus browsable sheet resources, over the very same measuring engine, with the same scale gate and the same provenance receipts; `detect_rooms` batches `one_click` across every room-number label on a sheet in one call; `export_takeoff` emits the app's own save payload. Setup, the coordinate contract, and a full example transcript: [MCP.md](MCP.md) and [`mcp/README.md`](../mcp/README.md).
 
 ---
 
