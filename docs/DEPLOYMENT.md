@@ -1,14 +1,35 @@
 # Deployment & CI
 
-How OpenTakeoff ships: every change lands on `main` through a pull request,
-and every merge to `main` is automatically deployed to production at
-<https://takeoff.345flooring.com>. There is no manual deploy step and no
-"deploy later" state — **a merge is a deploy**.
+How OpenTakeoff ships: every change lands on `main` through a pull request in
+**this** repo (`knmurphy/opentakeoff`, public). This repo builds and tests
+every change but does not deploy anything itself.
+
+Production (<https://takeoff.345flooring.com>) is built and deployed from a
+**separate private repo**, `345-Flooring/opentakeoff`, which carries this
+repo as its `public` git remote and periodically merges `public/main` into
+its own `main`. That push is what deploys — in the private repo, **a merge
+is a deploy**; here, a merge is just a merge.
+
+Why the split: this repo is a public fork tracking upstream
+(`Kentucky-ai/opentakeoff`), so it stays a clean, presentable, generic
+takeoff tool. Anything specific to running the business (the Neon-backed
+team-library sync function and its schema, proprietary material-catalog
+data, future pipeline-management code) lives only in the private repo, never
+in this one's history.
 
 ## The pipeline
 
 ```
+this repo (public)
 branch → npm run check (local) → PR → CI (`web` check) → squash-merge
+                                                             │
+                                                             ▼
+                                                     origin/main (public)
+                                                             │
+                                          (periodic: git merge public/main)
+                                                             ▼
+345-Flooring/opentakeoff (private)
+                                                          main
                                                              │
                                                              ▼
                                           .github/workflows/deploy.yml
@@ -18,14 +39,17 @@ branch → npm run check (local) → PR → CI (`web` check) → squash-merge
                                           https://takeoff.345flooring.com
 ```
 
-- **CI** (`.github/workflows/ci.yml`) runs on every PR: `npm ci` then
-  `npm run check` (typecheck → lint → tests → build) inside `web/`.
-- **Deploy** (`.github/workflows/deploy.yml`) runs on every push to `main`
-  (which, given branch protection, means every merged PR). It re-runs the same
-  check, then publishes `web/dist` to Netlify with `--no-build`.
+- **CI** (`.github/workflows/ci.yml`) runs on every PR in *both* repos:
+  `npm ci` then `npm run check` (typecheck → lint → tests → build) inside
+  `web/`. This repo has no further workflow after that.
+- **Deploy** (`.github/workflows/deploy.yml`) exists only in the private
+  repo. It runs on every push to *its* `main`, re-runs the same check, then
+  publishes `web/dist` to Netlify with `--no-build`.
 - **Netlify never builds.** It only hosts what Actions uploads. The
   `netlify.toml` build section exists for one-click deploys of forks; the
   production site is upload-only.
+- Merges here don't reach production on their own — someone needs to merge
+  `public/main` into the private repo's `main` for a change to actually ship.
 
 ## Local/CI parity
 
@@ -58,9 +82,13 @@ them as build environment variables wherever `npm run check`/`build` runs (or in
 `web/.env.local` locally — see [`web/.env.example`](../web/.env.example)). Full
 one-time setup is in [`GOOGLE_SETUP.md`](GOOGLE_SETUP.md).
 
+These same three variables are replicated as GitHub Variables on the private
+repo's `production` environment, so its build produces the same bundle this
+repo would with cloud mode on.
+
 ## Rules on `main`
 
-Enforced by GitHub branch protection (admins included):
+Enforced by GitHub branch protection (admins included), in both repos:
 
 - Changes land via PR only; direct pushes are rejected.
 - The `web` CI check must be green.
@@ -73,24 +101,26 @@ Merge with `gh pr merge <n> --squash --delete-branch`, then
 
 ## Security model
 
-- The Netlify deploy token is an **environment secret** on the `production`
-  environment, which is restricted to protected branches — only a workflow
-  that declares `environment: production` *and* runs from `main` can read it.
-  It is never available to pull requests, forks, or other workflows.
+- This repo has no Netlify credentials at all — the deploy token
+  (`NETLIFY_AUTH_TOKEN`) and site id live only as **environment secrets** on
+  the private repo's `production` environment, restricted to protected
+  branches there. They were never retrievable from this repo even before the
+  split (GitHub secrets are write-only), and now they don't exist here to
+  begin with.
 - Fork PRs run CI with **no secrets** and a **read-only** `GITHUB_TOKEN`;
   first-time contributors need maintainer approval before workflows run.
-- Both workflows declare `permissions: contents: read` (least privilege).
+- CI declares `permissions: contents: read` (least privilege).
 - Only GitHub-owned and verified-creator actions are allowed, and
-  `netlify-cli` is pinned to an exact version in the deploy step — bump it
-  deliberately, never float it.
-- No token values, account identifiers, or rotation procedures appear in this
-  repo. Account-level runbook details are documented privately.
+  `netlify-cli` is pinned to an exact version in the private repo's deploy
+  step — bump it deliberately, never float it.
+- No token values, account identifiers, or rotation procedures appear in
+  either repo. Account-level runbook details are documented privately.
 
 ## When something fails
 
 - **CI red on a PR**: run `npm run check` in `web/` on Node from `.nvmrc`
   (`nvm use`). It reproduces the failure locally — fix, push, CI re-runs.
-- **Deploy run red after a merge**: the site keeps serving the previous
-  deploy (Netlify deploys are atomic). Fix forward with a new PR, or re-run
-  the failed run from the Actions tab once the cause is external
+- **Deploy run red after a merge (private repo)**: the site keeps serving the
+  previous deploy (Netlify deploys are atomic). Fix forward with a new PR, or
+  re-run the failed run from the Actions tab once the cause is external
   (e.g. a secrets/config issue).

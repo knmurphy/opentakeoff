@@ -18,18 +18,23 @@ npm run check    # typecheck + lint + test + build — exactly what CI runs; gre
 
 `main` is protected on GitHub (PRs only, green `web` check, branch up to date,
 no force-pushes — admins included) and a local pre-commit hook rejects commits
-made on `main`. **Merging to `main` deploys to production**
-(<https://takeoff.345flooring.com>) via `.github/workflows/deploy.yml`, which
-re-runs `npm run check` and publishes `web/dist` to Netlify with `--no-build`
-— Netlify never builds anything itself.
+made on `main`. **Merging to `main` here does *not* deploy anything.** This
+repo (`knmurphy/opentakeoff`, public) is the upstream-tracking fork; it builds
+and tests every PR but publishes nowhere.
 
-> **Production is <https://takeoff.345flooring.com> — nothing else.**
+> **Production deploy moved to a private downstream repo.**
+> <https://takeoff.345flooring.com> is built and deployed from
+> `345-Flooring/opentakeoff` (private), which carries this repo's `main` as
+> its `public` remote and merges it in periodically. To actually ship a
+> change to production: merge it here first, then merge `public/main` into
+> the private repo's `main` — that push is what triggers its own
+> `.github/workflows/deploy.yml`. See `docs/DEPLOYMENT.md` for the full
+> pipeline and why the split exists.
+>
 > <https://opentakeoff.netlify.app> is the *parent repo's*
-> (Kentucky-ai/opentakeoff) demo deployment; the inherited README badge and
-> links still point there, but this fork does not serve it. Verify deploys
-> against takeoff.345flooring.com only.
+> (Kentucky-ai/opentakeoff) demo deployment — unrelated to either fork.
 
-So:
+So, in this repo:
 
 1. **Branch first** — never commit on `main`: `git checkout -b <topic>`.
 2. **`npm run check` before pushing** (in `web/`). It is exactly what CI runs,
@@ -40,8 +45,9 @@ So:
    (`gh pr merge <n> --squash --delete-branch`), then
    `git checkout main && git pull --ff-only` and delete the local branch
    (`git branch -D <topic>` — squash merges need `-D`).
-5. **Remember a merge is a deploy.** Don't merge work you haven't verified in
-   the running app.
+5. A merge here is *not* a deploy — but don't treat that as license to skip
+   verifying in the running app. It still needs to reach production via the
+   private repo eventually, and that merge there *is* a deploy.
 
 The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.test.ts`); the canvas itself is verified by hand — **Vite does not flag undefined identifiers in JSX**, so grep for your new identifiers after editing and load the app once before you call it done. The bundled sample plan (`web/public/demo/`, wired to the "Load sample plan" button) is the fastest end-to-end check: load it, press `A`, trace a room, open Report.
 
