@@ -245,8 +245,16 @@ const MEASURE_ROLES = new Set(["floor_area", "deduct"]);
 // explicitly NON-normative for it (the real descriptor lives in #167). Do not
 // export it or treat it as a contract; the deferred agent-tool plugin seam
 // defines its own shape.
+//
+// Null-prototype: a plain `{}` literal inherits Object.prototype, so a tool
+// `name` colliding with a prototype member (`toString`, `constructor`,
+// `hasOwnProperty`, `__proto__`, …) would resolve `HANDLERS[name]` to an
+// inherited function and dispatch it — where the old `switch` matched only its
+// string-literal cases and fell through to the unknown-tool path. `Object.create
+// (null)` restores that: such names resolve to `undefined` and hit the guard in
+// executeAgentTool, byte-identical to the old switch default.
 /** @type {Record<string, (ctx: AgentToolCtx, args: any) => Promise<Record<string, any>>>} */
-const HANDLERS = {
+const HANDLERS = Object.assign(Object.create(null), {
   list_sheets: async (ctx) => ({ sheets: ctx.listSheets() }),
   read_sheet_text: async (ctx, args) => {
     if (!ctx.sheetDims(args.sheet)) return { error: `Sheet ${args.sheet} isn't open on the canvas — ask the estimator to open it, or pick one from list_sheets.` };
@@ -307,7 +315,7 @@ const HANDLERS = {
     const staged = clean.length ? ctx.proposeShapes(clean) : { staged: 0 };
     return { staged: staged.staged, ...(rejected.length ? { rejected } : {}) };
   },
-};
+});
 
 /**
  * Execute one tool call. NEVER throws — every failure comes back as an
@@ -324,7 +332,11 @@ export async function executeAgentTool(ctx, name, args) {
   const bad = validateToolArgs(def.input_schema, args);
   if (bad) return { error: `Invalid arguments for ${name}: ${bad}.` };
   const handler = HANDLERS[name];
-  if (!handler) return { error: `Unknown tool: ${name}.` }; // unreachable (def exists); keeps the contract airtight
+  // Reachable when `name` is a def only by inheritance (a prototype-member name
+  // that leaks through DEFS_BY_NAME) but has no own HANDLERS entry — matches the
+  // old switch's fall-through default exactly (no "Available:" list, unlike the
+  // !def gate above).
+  if (!handler) return { error: `Unknown tool: ${name}.` };
   try {
     return await handler(ctx, args);
   } catch (e) {

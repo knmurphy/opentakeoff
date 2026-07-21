@@ -73,6 +73,21 @@ test("unknown tool → error RESULT, never a throw", async () => {
   );
 });
 
+test("unknown tool colliding with an Object.prototype key → error RESULT, never a leaked prototype fn", async () => {
+  // The switch→handler-map move dispatches through HANDLERS[name]. A plain-object
+  // map inherits Object.prototype, so a name like `toString`/`constructor` would
+  // resolve to an inherited function and get called — the old switch matched only
+  // its string-literal cases and fell through to the unknown-tool default. Each of
+  // these must return that default result (no "Available:" list — they clear the
+  // !def gate by inheritance, exactly as they did before the refactor).
+  const { ctx } = makeCtx();
+  for (const name of ["toString", "valueOf", "hasOwnProperty", "constructor", "__proto__", "isPrototypeOf"]) {
+    const out = await executeAgentTool(ctx, name, {});
+    assert.equal(out.error, `Unknown tool: ${name}.`, `${name} must fall through to the unknown-tool default`);
+    assert.equal(typeof out, "object", `${name} must not leak a non-object result`);
+  }
+});
+
 // ── per-tool characterization: success + error for all 8 tools ─────────────────
 // These pin behavior byte-for-byte across the switch→handler-map refactor. Where
 // the message wording differs BETWEEN tools (e.g. the sheet-not-open text), each
