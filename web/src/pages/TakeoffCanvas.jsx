@@ -1475,7 +1475,11 @@ export default function TakeoffCanvas() {
   const computeBusy = () => isCanvasBusy({
     ...busyStateRef.current,
     saveState: saveStateRef.current,
-    dragging: !!dragRef.current || !!ocDragRef.current,
+    // multiDownRef: a mid-marquee gesture defers a remote adopt like any drag; a
+    // STATIC multi selection deliberately does not (view state — ids survive a
+    // re-hydrate, the prune effect reconciles casualties, and joining busy would
+    // let a held selection starve sync adoption indefinitely)
+    dragging: !!dragRef.current || !!ocDragRef.current || !!multiDownRef.current,
     editing: editingRef.current,
     scanning: scanBusyRef.current,
   });

@@ -10,7 +10,9 @@
 //   - proposal/scaleGuide/prevScale: One-Click review, scale guide, prev-scale prompt
 //   - saveState === "saving": a debounced save is scheduled (CRITICAL-b: a re-hydrate
 //     now would cancel the trace's pending save via the autosave effect's clearTimeout)
-//   - dragging: a shape/vertex/markup move OR a One-Click proposal-edit drag is live
+//   - dragging: a shape/vertex/markup move, a One-Click proposal-edit drag, OR a
+//     multi-select marquee is live (a STATIC multi selection is view state and
+//     deliberately does NOT gate — ids survive a re-hydrate; see the caller)
 //   - editing: the inline on-canvas text editor is open (unsaved keystrokes)
 //   - scanning: a paid OCR read is in flight
 //   - agentRunning: the agent tool-use loop is mid-run (a re-hydrate would wipe
