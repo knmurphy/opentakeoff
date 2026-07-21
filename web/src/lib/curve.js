@@ -25,7 +25,7 @@ function crPoint(p0, p1, p2, p3, t) {
 // with chord length (smooth at any zoom) under a hard total cap, so a long curved
 // corridor can't mint a thousand-vertex shape (render-invariance budget).
 export function flattenCurve(pts, opts = {}) {
-  const maxPts = opts.maxPts || 220;
+  const maxPts = opts.maxPts ?? 220;
   const n = (pts || []).length;
   if (n < 3) return (pts || []).map((p) => [p[0], p[1]]);
   const P = [pts[0], ...pts, pts[n - 1]];

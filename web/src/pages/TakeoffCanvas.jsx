@@ -107,11 +107,15 @@ function hitShapeC(s, x, y, w, h, thr) {
   if (!s.curved || s.measure_role !== "linear") return hitShape(s, x, y, w, h, thr);
   let cached = curveFlatCache.get(s);
   if (!cached || cached.w !== w || cached.h !== h) {
-    const flat = flattenCurve((s.verts_norm || []).map(([nx, ny]) => [nx * w, ny * h]));
-    cached = { w, h, flat };
+    // Chord-length stepping needs real px distances, but the cached/returned
+    // points stay normalized — verts_norm keeps meaning what its name says,
+    // and hitShape sees the real w/h like every other shape.
+    const flatPx = flattenCurve((s.verts_norm || []).map(([nx, ny]) => [nx * w, ny * h]));
+    const flatNorm = flatPx.map(([px, py]) => [px / w, py / h]);
+    cached = { w, h, flatNorm };
     curveFlatCache.set(s, cached);
   }
-  return hitShape({ ...s, verts_norm: cached.flat }, x, y, 1, 1, thr);
+  return hitShape({ ...s, verts_norm: cached.flatNorm }, x, y, w, h, thr);
 }
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
