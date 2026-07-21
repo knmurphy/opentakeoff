@@ -87,14 +87,18 @@ export function readPersistedSession(raw, { now, clientId: cid }) {
   // ReportPanel all read user.email directly (no optional chaining in
   // places), so a malformed/corrupted blob restoring an email-less "signed
   // in" user would render broken instead of falling back to the sign-in gate.
-  if (!storedUser || typeof storedUser !== "object" || Array.isArray(storedUser)) return null;
+  // (No separate Array.isArray check needed: JSON never round-trips a string
+  // .email property onto an array, so the check below already rejects one.)
+  if (!storedUser || typeof storedUser !== "object") return null;
   if (typeof storedUser.email !== "string" || !storedUser.email) return null;
   return { token: { accessToken, expiresAt }, user: storedUser };
 }
 
 // Mirror the current token+user to sessionStorage (or clear it when either is
 // missing). Called after every mint/refresh and on sign-out — see call sites.
-function persistSession() {
+// Exported only for testing the actual storage glue (see authSession.test.ts);
+// callers within this module should never need to invoke it directly.
+export function persistSession() {
   try {
     if (!token || !user) { sessionStorage.removeItem(SESSION_KEY); return; }
     sessionStorage.setItem(SESSION_KEY, JSON.stringify({
@@ -105,8 +109,9 @@ function persistSession() {
 
 // Restore token+user from sessionStorage at module load, if still valid for
 // this build. A reload within the token's lifetime then needs zero contact
-// with Google — see the trust-model note at the top of this file.
-function hydrateSession() {
+// with Google — see the trust-model note at the top of this file. Exported
+// only for testing the actual storage glue (see authSession.test.ts).
+export function hydrateSession() {
   try {
     const raw = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
     const restored = readPersistedSession(raw, { now: Date.now(), clientId: clientId() });
@@ -114,7 +119,10 @@ function hydrateSession() {
   } catch { /* corrupt JSON / no sessionStorage (Node, private mode) — falls back to today's behavior */ }
 }
 
-hydrateSession();
+// Unconfigured builds can never have persisted a session (persistSession()
+// is only reachable through signIn()/getAccessToken(), both gated behind
+// isGoogleConfigured()), so skip the pointless storage read on every load.
+if (isGoogleConfigured()) hydrateSession();
 
 // The raw build-time org domain (VITE_GOOGLE_HD), exposed so the scan caller can
 // stamp it on its request for the server's drift cross-check (the server compares
@@ -250,6 +258,12 @@ async function ensureTokenClient() {
         // expires_in is seconds from now
         expiresAt: Date.now() + (Number(resp.expires_in) || 0) * 1000,
       };
+      // Load-bearing for the silent-refresh path (getAccessToken() on an
+      // already-signed-in session, where `user` is already set): that's the
+      // ONLY flow this call persists anything for. During signIn()'s own
+      // interactive mint, `user` is still null here (fetchProfile() hasn't
+      // run yet), so this is a harmless no-op clear — signIn() below does
+      // the real write once it also has the profile.
       persistSession();
       p.resolve(token.accessToken);
     },
