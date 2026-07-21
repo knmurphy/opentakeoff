@@ -70,7 +70,7 @@ test("canSyncTemplates: needs both a user with an email AND a Drive root", () =>
 // ── templatesFileName (per-user namespacing) ─────────────────────────────────
 
 test("templatesFileName: per-user, lower-cased so casing can't split a user's file", () => {
-  assert.equal(templatesFileName("Estimator@345Flooring.com"), "report-templates-estimator@345flooring.com.json");
+  assert.equal(templatesFileName("Estimator@Example.com"), "report-templates-estimator@example.com.json");
   assert.notEqual(templatesFileName("a@x.com"), templatesFileName("b@x.com"));
 });
 

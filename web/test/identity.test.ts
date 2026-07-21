@@ -18,10 +18,10 @@ function stubStore() {
 test("loadProfiles migrates a legacy single company into one active profile", () => {
   const store = stubStore();
   try {
-    store.set("opentakeoff_company", '{"name":"345 Flooring","address":"Lynnwood, WA"}');
+    store.set("opentakeoff_company", '{"name":"Acme Flooring","address":"Lynnwood, WA"}');
     const s = loadProfiles();
     assert.equal(s.profiles.length, 1);
-    assert.equal(s.profiles[0].name, "345 Flooring");
+    assert.equal(s.profiles[0].name, "Acme Flooring");
     assert.equal(s.profiles[0].address, "Lynnwood, WA");
     assert.equal(s.activeId, s.profiles[0].id);
     assert.deepEqual(activeProfile(s), s.profiles[0]);
@@ -63,15 +63,15 @@ test("loadCompany: malformed / non-object payloads collapse to {}", () => {
 });
 
 test("reducers: add / set-active / update-active / remove", () => {
-  let { state } = addProfile({ profiles: [], activeId: null }, { name: "345 Flooring" });
+  let { state } = addProfile({ profiles: [], activeId: null }, { name: "Acme Flooring" });
   assert.equal(state.profiles.length, 1);
-  assert.equal(activeProfile(state).name, "345 Flooring");
+  assert.equal(activeProfile(state).name, "Acme Flooring");
   ({ state } = addProfile(state, { name: "Fin Workspaces" }));
   assert.equal(state.profiles.length, 2);
   assert.equal(activeProfile(state).name, "Fin Workspaces");        // new profile is active
   const firstId = state.profiles[0].id;
   state = setActiveProfile(state, firstId);
-  assert.equal(activeProfile(state).name, "345 Flooring");
+  assert.equal(activeProfile(state).name, "Acme Flooring");
   state = updateActiveProfile(state, { address: "Lynnwood, WA" });
   assert.equal(activeProfile(state).address, "Lynnwood, WA");
   assert.equal(state.profiles[1].address, undefined);               // the other profile untouched
@@ -88,14 +88,14 @@ test("profile fields are trimmed and empties dropped, matching the legacy mirror
   let { state } = addProfile({ profiles: [], activeId: null }, { name: "   ", address: "  Lynnwood, WA  " });
   assert.equal(activeProfile(state).name, undefined);            // whitespace-only dropped, not "   "
   assert.equal(activeProfile(state).address, "Lynnwood, WA");    // trimmed
-  state = updateActiveProfile(state, { name: "  345 Flooring  " });
-  assert.equal(activeProfile(state).name, "345 Flooring");
+  state = updateActiveProfile(state, { name: "  Acme Flooring  " });
+  assert.equal(activeProfile(state).name, "Acme Flooring");
 });
 
 test("saveProfiles round-trips and mirrors the active profile to loadCompany", () => {
   const store = stubStore();
   try {
-    let { state } = addProfile({ profiles: [], activeId: null }, { name: "345 Flooring", address: "A" });
+    let { state } = addProfile({ profiles: [], activeId: null }, { name: "Acme Flooring", address: "A" });
     ({ state } = addProfile(state, { name: "Fin Workspaces", address: "B" }));
     assert.equal(saveProfiles(state), true);
     const reloaded = loadProfiles();
@@ -103,7 +103,7 @@ test("saveProfiles round-trips and mirrors the active profile to loadCompany", (
     assert.equal(activeProfile(reloaded).name, "Fin Workspaces");
     assert.deepEqual(loadCompany(), { name: "Fin Workspaces", address: "B" });   // masthead sees active
     saveProfiles(setActiveProfile(reloaded, reloaded.profiles[0].id));
-    assert.deepEqual(loadCompany(), { name: "345 Flooring", address: "A" });     // switch → mirror updates
+    assert.deepEqual(loadCompany(), { name: "Acme Flooring", address: "A" });     // switch → mirror updates
   } finally {
     delete (globalThis as any).localStorage;
   }

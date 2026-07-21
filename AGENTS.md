@@ -22,10 +22,10 @@ made on `main`. **Merging to `main` no longer deploys anything** — the
 production deploy workflow has been removed from this repo; it now only
 builds and tests every change.
 
-> **Production is <https://takeoff.345flooring.com> — nothing else.**
-> <https://opentakeoff.netlify.app> is the *parent repo's*
-> (Kentucky-ai/opentakeoff) demo deployment; the inherited README badge and
-> links still point there, but this fork does not serve it.
+> **The project's live demo is <https://opentakeoff.netlify.app>** — the parent
+> repo's (Kentucky-ai/opentakeoff) deployment. This fork tracks that repo and
+> exists to contribute back to it, so that's the deployment its README badge and
+> links point at; the fork serves none of its own, and merging here does not deploy.
 
 So:
 

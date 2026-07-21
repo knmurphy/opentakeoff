@@ -40,7 +40,7 @@ team-only cloud mode (Google sign-in + shared Drive) adds three build-time
 variables, read by Vite and inlined into `web/dist` at build:
 
 - `VITE_GOOGLE_CLIENT_ID` — the public OAuth 2.0 Web client id.
-- `VITE_GOOGLE_HD` — your Google Workspace domain (e.g. `345flooring.com`).
+- `VITE_GOOGLE_HD` — your Google Workspace domain (e.g. `example.com`).
 - `VITE_PRICING_FILE_ID` — the Drive file id of the synced `pricing.json`.
 
 All three are **non-secret public identifiers** and are meant to ship in the

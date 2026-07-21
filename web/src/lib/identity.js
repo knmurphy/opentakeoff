@@ -42,8 +42,8 @@ export function saveCompany(c) {
 }
 
 // ── trade-name profiles ───────────────────────────────────────────────────────
-// A firm can operate under more than one trade name (e.g. 345 Flooring / Fin
-// Workspaces) — same tool, different masthead identity. Profiles are the list of
+// A firm can operate under more than one trade name (e.g. Acme Flooring /
+// Acme Hardwood) — same tool, different masthead identity. Profiles are the list of
 // saved trade names; the ACTIVE one is mirrored to the legacy `opentakeoff_company`
 // key so loadCompany() and every masthead/marked-set consumer keep working
 // unchanged (they always render the active trade name).
