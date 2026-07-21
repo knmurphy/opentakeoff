@@ -22,6 +22,7 @@ import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_B
 import { pointInPoly, starPath, arrowheadPath, cloudBezier, chiselRibbon } from "./geometry.js";
 import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
+import { flattenCurve } from "./curve.js";
 import { RENDER_SCALE } from "./sheets";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
 
@@ -435,7 +436,8 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     const alphaBoost = dark ? 0.22 : 0;   // honest colors, brighter on negative linework
     for (const s of shapesBy.get(sh.key) || []) {
       const cond = condById[s.condition_id];
-      const pts = (s.verts_norm || []).map(([nx, ny]) => [nx * W, ny * H]);
+      const rawPts = (s.verts_norm || []).map(([nx, ny]) => [nx * W, ny * H]);
+      const pts = s.curved && s.measure_role === "linear" ? flattenCurve(rawPts) : rawPts;
       if (!pts.length) continue;
       const isDeduct = s.measure_role === "deduct";
       const col = rgb(...hex(isDeduct ? DEDUCT_RED : cond?.color));
