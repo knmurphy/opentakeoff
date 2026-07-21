@@ -44,6 +44,14 @@ test("vertex cap holds on a long many-point curve (render-invariance budget)", (
   for (const c of many) assert.ok(hasPt(out, c, 1e-4), "still interpolates every control point");
 });
 
+test("vertex cap holds tightly with many closely-spaced points (per-segment floor can't push total past maxPts)", () => {
+  // Tiny chords all hit the same per-segment step floor, so scaling alone
+  // isn't enough to stay under budget — the allocator must actively ration.
+  const dense: Pt[] = Array.from({ length: 200 }, (_, i) => [i * 2, 0]);
+  const out = flattenCurve(dense);
+  assert.ok(out.length <= 221, `tight cap: ${out.length} <= 221 (maxPts 220 + leading point)`);
+});
+
 test("input never mutated", () => {
   const ctrl: Pt[] = [[0, 0], [40, 60], [90, 10]];
   const snapshot = JSON.stringify(ctrl);

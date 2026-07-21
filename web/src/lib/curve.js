@@ -38,8 +38,11 @@ export function flattenCurve(pts, opts = {}) {
   }
   const scale = total > maxPts ? maxPts / total : 1;
   const out = [[pts[0][0], pts[0][1]]];
+  let budget = Math.min(total, maxPts);
   for (let i = 1; i < P.length - 2; i++) {
-    const steps = Math.max(2, Math.round(want[i - 1] * scale));
+    const segsLeft = P.length - 2 - i; // segments remaining, including this one — reserve 1 each for the rest
+    const steps = Math.max(1, Math.min(Math.round(want[i - 1] * scale), budget - (segsLeft - 1)));
+    budget -= steps;
     for (let j = 1; j <= steps; j++) out.push(crPoint(P[i - 1], P[i], P[i + 1], P[i + 2], j / steps));
   }
   return out;

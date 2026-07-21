@@ -99,10 +99,19 @@ const CARPET_ROLL_FT = 12;
 
 // Click-select against a curved line's DRAWN path: flatten the control points and
 // hand hitShape a stand-in shape (lib/geometry.js stays byte-identical with Spline's).
+// Flattening is cached per shape object + sheet dims — pointer-move hit-testing calls
+// this every frame, and shapes are replaced (not mutated) on any edit via the command
+// layer, so a WeakMap keyed by shape identity invalidates itself for free.
+const curveFlatCache = new WeakMap();
 function hitShapeC(s, x, y, w, h, thr) {
   if (!s.curved || s.measure_role !== "linear") return hitShape(s, x, y, w, h, thr);
-  const flat = flattenCurve((s.verts_norm || []).map(([nx, ny]) => [nx * w, ny * h]));
-  return hitShape({ ...s, verts_norm: flat }, x, y, 1, 1, thr);
+  let cached = curveFlatCache.get(s);
+  if (!cached || cached.w !== w || cached.h !== h) {
+    const flat = flattenCurve((s.verts_norm || []).map(([nx, ny]) => [nx * w, ny * h]));
+    cached = { w, h, flat };
+    curveFlatCache.set(s, cached);
+  }
+  return hitShape({ ...s, verts_norm: cached.flat }, x, y, 1, 1, thr);
 }
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
