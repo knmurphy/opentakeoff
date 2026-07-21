@@ -220,6 +220,21 @@ test("label: assigns/clears with assignShapeLabel semantics and NO provenance st
   assert.ok(!("label" in cleared.shapes[1]));
 });
 
+test("label BATCH (#113): one ids[] command labels N shapes with heterogeneous priors; inverse restores each individually", () => {
+  const bare = manualShape("shp-b1");                          // no label key
+  const p1 = { ...manualShape("shp-b2"), label: "Phase 1" };
+  const p2 = { ...machineShape("shp-b3"), label: "Phase 2" };
+  const shapes = [bare, p1, p2];
+  // ONE command over all three — the bulk-assign path dispatches exactly this
+  const fwd = roundTrip(shapes, { type: "label", ids: [bare.id, p1.id, p2.id], value: "Phase 3" });
+  for (const s of fwd.shapes) {
+    assert.equal(s.label, "Phase 3");
+    assert.ok(!("updated_at" in s), "bulk labeling stamps nothing — documented non-edit");
+  }
+  // roundTrip already asserted the inverse restored bare→key-absent, p1→"Phase 1",
+  // p2→"Phase 2" exactly (deep-equal incl. key presence) — the batch is one undo step.
+});
+
 // ── delete ───────────────────────────────────────────────────────────────────
 
 test("delete: counts by origin method, inverse restores shapes verbatim at their indices", () => {

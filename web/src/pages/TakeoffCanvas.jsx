@@ -40,6 +40,7 @@ import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertice
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
+import { shapesInStageRect } from "../lib/marquee.js";
 import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
 import { sanitizeConditionColumns, sanitizeConditionAttrs, renameColumnValue, columnLabel } from "../lib/conditionColumns.js";
 import { sanitizeShapeLabels, sanitizeShapeLabelsOnShapes, renameShapeLabel, shapeLabelValue } from "../lib/shapeLabels.js";
@@ -305,6 +306,11 @@ export default function TakeoffCanvas() {
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
   const [selVert, setSelVert] = useState(null);         // selected vertex index of the selected shape — Delete removes just that point
   const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
+  // Multi-select mode (#113): the selected shape ID SET. Pure view state — never
+  // persisted, never in the busy predicate (a static selection must not starve
+  // sync adoption); the prune effect below reconciles it against visibleShapes.
+  const [multiSel, setMultiSel] = useState(() => new Set());
+  const clearMulti = () => setMultiSel((p) => (p.size ? new Set() : p));
   const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
   // Deletion provenance: shapes leave no record once filtered out of `shapes`,
   // so every delete COMMAND yields a per-origin-method tally (`counted`, keyed
@@ -465,6 +471,10 @@ export default function TakeoffCanvas() {
   const aimChipRef = useRef(null);     // readout chip by the cursor (locked angle · live segment length)
   const dragRef = useRef(null);        // {kind:'move'|'vertex'|'edge'|'markupMove', shapeId?/markupId?, vIndex?, start:[x,y], orig:verts_norm/markup coords, moved?, prev: grab-time geomSnapshot (shape drags), shape: grab-time shape, lastVerts/lastComputed: latest preview frame — the release commit's geom command payload}
   const ocDragRef = useRef(null);      // One-Click proposal edit drag: {kind:'oc-vertex'|'oc-edge', ri, vi?/i?/j?, oa?, ob?, sx?, sy?} — poly is panel-LOCAL px
+  const multiDownRef = useRef(null);   // multi-select mode live press {p:[stage px], cx, cy, marquee, cur} — <5 client px = toggle click, past it = marquee (mirrors the pendingClick→pan threshold)
+  const multiPrevToolRef = useRef(null); // multi-select's own prev-tool (NOT prevToolRef — zone's clear logic owns that; sharing would race the two transition effects)
+  const marqueeRectRef = useRef(null); // marquee rubber-band <rect> — DOM-updated per move like rectRef, no React render per frame
+  const lastToggleRef = useRef(null);  // {id, t} of the last click-toggle — a dblclick's second toggle is swallowed (~400ms window; e.detail is 0 on pointerup in some engines, so a timestamp check, not detail)
   const ocHoverRef = useRef(-1);       // mirror of ocHover (region index under cursor) — compared per-move to avoid stale-closure churn
   const editingRef = useRef(false);    // true while the inline text editor is open — read in moveCrosshair/onPointerDown/wheel (a REF, never per-mousemove state) to suppress the crosshair and freeze pan/zoom
   const editorRef = useRef(null);      // mirror of the open editor object, so finishEditor can commit without a stale-closure race
@@ -1465,7 +1475,11 @@ export default function TakeoffCanvas() {
   const computeBusy = () => isCanvasBusy({
     ...busyStateRef.current,
     saveState: saveStateRef.current,
-    dragging: !!dragRef.current || !!ocDragRef.current,
+    // multiDownRef: a mid-marquee gesture defers a remote adopt like any drag; a
+    // STATIC multi selection deliberately does not (view state — ids survive a
+    // re-hydrate, the prune effect reconciles casualties, and joining busy would
+    // let a held selection starve sync adoption indefinitely)
+    dragging: !!dragRef.current || !!ocDragRef.current || !!multiDownRef.current,
     editing: editingRef.current,
     scanning: scanBusyRef.current,
   });
@@ -1665,7 +1679,7 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (lower === "g") { setView("gallery"); return; }
       if (e.key === "D" && e.shiftKey) { setTool("deduct-rect"); return; }
-      const map = { p: "pan", v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter" };
+      const map = { p: "pan", v: "select", m: "multiselect", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter" };
       const t = map[lower];
       if (t) setTool(t);
     };
@@ -1714,6 +1728,10 @@ export default function TakeoffCanvas() {
         if (poly.length) { setPoly((q) => q.slice(0, -1)); }
         else if (ocSel && proposal) { deleteSelectedOcVertex(); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
+        // bulk delete (#113): the whole multi selection in ONE undoable command
+        // (ids[] delete — one recordCommand entry regardless of N). Mode entry
+        // cleared poly, so the pop branch above can't shadow this.
+        else if (tool === "multiselect" && multiSel.size) { dispatchShape({ type: "delete", ids: [...multiSel] }); clearMulti(); }
         else if (selVert != null && selectedId) { deleteSelectedShapeVertex(); }
         else if (selectedId) { dispatchShape({ type: "delete", ids: [selectedId] }); setSelectedId(null); }
         else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
@@ -1723,7 +1741,7 @@ export default function TakeoffCanvas() {
         // tool's points, on-screen or hidden
         else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
         else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
+      } else if (e.key === "Escape") { if (tool === "multiselect" && (multiSel.size || multiDownRef.current)) { multiDownRef.current = null; if (marqueeRectRef.current) marqueeRectRef.current.style.display = "none"; clearMulti(); } else if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
       // ⌘Z: the drawing context wins — mid-trace it still pops the last placed
       // point (with or without ⇧, matching the old behavior byte-for-byte);
       // only with no trace in progress does the command stack engage
@@ -1740,7 +1758,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tool, selectedId, selVert, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tool, selectedId, selVert, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, sheetKey, groupSig, scales, focusKey, multiSel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The typed "drawing says" value belongs to ONE completed two-point check.
   // The moment the measurement is no longer complete — third-click restart,
@@ -1769,6 +1787,51 @@ export default function TakeoffCanvas() {
     prevToolRef.current = tool;
   }, [tool]);
 
+  // Multi-select mode transitions (#113). useLayoutEffect, not useEffect: a plain
+  // effect leaves one painted frame where isMulti is true with an unseeded set —
+  // the seeded shape's highlight (and any handles) visibly flash off.
+  useLayoutEffect(() => {
+    const prev = multiPrevToolRef.current;
+    multiPrevToolRef.current = tool;
+    if (tool === "multiselect" && prev !== "multiselect") {
+      // ENTRY: seed from the single selection, then clear it — a null selectedId
+      // structurally disarms the vertex-handle block and every
+      // `tool === "select" && selectedId` surface. Clear any in-progress trace
+      // (a leftover poly would shadow bulk-⌫ via the poly.length branch) and the
+      // frozen crosshair visuals (moveCrosshair bails in this mode and would
+      // never hide them).
+      if (selectedId) setMultiSel(new Set([selectedId]));
+      selectShape(null);
+      setPoly([]);
+      hideCrosshair();
+    } else if (prev === "multiselect" && tool !== "multiselect") {
+      // EXIT: abort a live gesture FIRST — a letter shortcut mid-drag must not
+      // let the trailing pointerup resurrect a cleared selection.
+      multiDownRef.current = null;
+      if (marqueeRectRef.current) marqueeRectRef.current.style.display = "none";
+      // Collapse a 1-member set to single-select — but only when nothing else
+      // already claimed the selection: pasteClipboard does
+      // selectShape(pastedId) + setTool("select"), and an unguarded collapse
+      // would clobber the fresh paste with a stale multi member.
+      if (multiSel.size === 1 && tool === "select" && !selectedId) selectShape([...multiSel][0]);
+      clearMulti();   // never selectShape(null) here — same paste reason
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool]);
+
+  // Prune the multi selection against what's on screen: external deletes (undo,
+  // agent, another surface) and sheet-visibility changes both funnel through
+  // visibleShapes (memoized). Same-instance return when nothing changed — no
+  // render churn on ordinary shape edits.
+  useEffect(() => {
+    setMultiSel((prev) => {
+      if (!prev.size) return prev;
+      const vis = new Set(visibleShapes.map((s) => s.id));
+      const next = new Set([...prev].filter((id) => vis.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleShapes]);
+
   // ── pointer ────────────────────────────────────────────────────────────────
   function onPointerDown(e) {
     if (status !== "ready") return;
@@ -1788,13 +1851,24 @@ export default function TakeoffCanvas() {
     // does its own endpoint snap (ocSnap) on drop, so it always uses the raw
     // cursor here; otherwise a stale ref freezes the drag or jumps it on grab.
     // schedule (marquee) wants the raw cursor like select — snapping a corner to
-    // a vector vertex would shift the box off the schedule and misread the region
-    const rawCursor = tool === "select" || tool === "schedule";
+    // a vector vertex would shift the box off the schedule and misread the region.
+    // multiselect too: moveCrosshair bails in this mode, so snapRef/angleRef are
+    // frozen leftovers from the last draw tool — a snapped press point would land
+    // the toggle/marquee anchor somewhere the cursor never was.
+    const rawCursor = tool === "select" || tool === "schedule" || tool === "multiselect";
     const p = (!rawCursor && snapOn && snapRef.current) ? snapRef.current
       : (!rawCursor && angleOn && angleRef.current) ? angleRef.current
         : toImage(e.clientX, e.clientY);
     const fp = panelAt(p[0]);
     if (fp.key !== focusKey) setFocusKey(fp.key);
+    // Multi-select mode (#113): arm the press AFTER focus follows the click (the
+    // Scale cluster / hi-res / paste target aim at the focused panel) and return —
+    // click-vs-marquee is decided by the 5 client-px threshold in onPointerMove.
+    if (tool === "multiselect") {
+      multiDownRef.current = { p, cx: e.clientX, cy: e.clientY, marquee: false, cur: null };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     if (tool === "highlighter") {
       // ink is freehand: raw coords (no snap/angle), drag paints — press-drag pan is
       // intentionally unavailable while armed (space/middle/right-drag still pan)
@@ -2072,7 +2146,7 @@ export default function TakeoffCanvas() {
   }
   function moveCrosshair(e) {
     if (editingRef.current) return;   // inline editor open — no aim crosshair (ref check, never per-mousemove state)
-    if (tool === "pan" || tool === "select" || status !== "ready" || !containerRef.current) return;
+    if (tool === "pan" || tool === "select" || tool === "multiselect" || status !== "ready" || !containerRef.current) return;
     // snap-to-vector: nearest PDF endpoint within threshold becomes the active
     // point — looked up in the hovered panel's grid, in that panel's local frame
     let cur = toImage(e.clientX, e.clientY);
@@ -2244,7 +2318,7 @@ export default function TakeoffCanvas() {
   function updateHover(e) {
     const el = hoverRef.current;
     if (!el) return;
-    if (panRef.current || dragRef.current || pendingClickRef.current || status !== "ready") { el.style.display = "none"; hoverIdRef.current = ""; return; }
+    if (panRef.current || dragRef.current || pendingClickRef.current || multiDownRef.current || status !== "ready") { el.style.display = "none"; hoverIdRef.current = ""; return; }
     const pt = toImage(e.clientX, e.clientY);
     const thr = 8 / tfRef.current.scale;
     const hit = [...visibleShapes].reverse().find((s) => {
@@ -2271,6 +2345,23 @@ export default function TakeoffCanvas() {
         hlPathRef.current.setAttribute("d", hlStyle.tip === "chisel"
           ? (st.pts.length > 1 ? "M" + chiselRibbon(st.pts, w, 45).map((v) => v.join(",")).join(" L") + " Z" : "")
           : strokePathD(st.pts));
+      }
+      return;
+    }
+    // Multi-select live press: past 5 client px the press is a marquee — the
+    // rubber-band <rect> is DOM-updated per move (rectRef pattern, no React
+    // render). Under the threshold it stays a pending toggle click.
+    if (multiDownRef.current) {
+      const st = multiDownRef.current;
+      if (!st.marquee && Math.hypot(e.clientX - st.cx, e.clientY - st.cy) > 5) st.marquee = true;
+      if (st.marquee) {
+        st.cur = toImage(e.clientX, e.clientY);
+        const el = marqueeRectRef.current;
+        if (el) {
+          el.setAttribute("x", Math.min(st.p[0], st.cur[0])); el.setAttribute("y", Math.min(st.p[1], st.cur[1]));
+          el.setAttribute("width", Math.abs(st.cur[0] - st.p[0])); el.setAttribute("height", Math.abs(st.cur[1] - st.p[1]));
+          el.style.display = "block";
+        }
       }
       return;
     }
@@ -2388,6 +2479,45 @@ export default function TakeoffCanvas() {
         // and survives raster-budget changes (screen px ÷ scale ÷ panel width at draw time)
         addMarkup({ type: "highlight", pts, color: hlStyle.color,
                     w: (hlStyle.size / tfRef.current.scale) / tp.img.w, tip: hlStyle.tip }, tp.key);
+      }
+      return;
+    }
+    // Multi-select press resolves (#113). Tool-gated on purpose: a mid-gesture
+    // mode exit (letter shortcut / Esc) clears the ref in the transition effect,
+    // and even if this up races that, the tool check stops a commit against a
+    // mode the user just left. pointercancel ABORTS rather than commits — a
+    // palm-rejection/browser-gesture marquee is noise, unlike an interrupted
+    // shape drag (which protects real user work and does land, below).
+    if (multiDownRef.current) {
+      const st = multiDownRef.current;
+      multiDownRef.current = null;
+      if (marqueeRectRef.current) marqueeRectRef.current.style.display = "none";
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* gone */ }
+      bumpIdle();   // gesture over → busy→idle edge (Slice 5b), same as the drag branch
+      if (tool !== "multiselect" || e.type === "pointercancel") return;
+      if (st.marquee) {
+        if (st.cur) {
+          const ids = shapesInStageRect(visibleShapes, [st.p, st.cur], panelByKey);
+          if (ids.length) setMultiSel((prev) => new Set([...prev, ...ids]));   // additive union — click-toggle deselects strays
+        }
+      } else {
+        const thr = 8 / tfRef.current.scale;
+        const hit = [...visibleShapes].reverse().find((s) => {
+          const sp = panelByKey(s.sheet_id);
+          return sp && hitShape(s, st.p[0] - sp.xOffset, st.p[1], sp.img.w, sp.img.h, thr);
+        });
+        if (hit) {
+          // dblclick guard: the second click of a double toggles the shape right
+          // back OFF — swallow a same-id toggle inside the dblclick window
+          const lt = lastToggleRef.current;
+          const now = performance.now();
+          if (!(lt && lt.id === hit.id && now - lt.t < 400)) {
+            lastToggleRef.current = { id: hit.id, t: now };
+            setMultiSel((prev) => { const n = new Set(prev); if (n.has(hit.id)) n.delete(hit.id); else n.add(hit.id); return n; });
+          }
+        }
+        // empty-canvas click: deliberate no-op — a 40-shape selection must not
+        // evaporate on a stray click; Esc / the HUD button / mode exit clear.
       }
       return;
     }
@@ -3398,7 +3528,10 @@ export default function TakeoffCanvas() {
     if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]);
   }
   function deleteSelected() { if (selectedId) { dispatchShape({ type: "delete", ids: [selectedId] }); setSelectedId(null); } }
-  function reassignSelected(condId) { if (selectedId) dispatchShape({ type: "reassign", ids: [selectedId], condition_id: condId }); }
+  // already-assigned guard: a palette-chip dblclick reassigns twice (onClick +
+  // onDoubleClick→openConditionInPanel) — the second must be a no-op, not a
+  // second undo entry with a second provenance stamp
+  function reassignSelected(condId) { if (selectedId && shapes.find((s) => s.id === selectedId)?.condition_id !== condId) dispatchShape({ type: "reassign", ids: [selectedId], condition_id: condId }); }
   function reassignSelectedLabel(value) { if (selectedId) dispatchShape({ type: "label", ids: [selectedId], value }); }   // Select-tool single-shape re-label (#111) — value "" / null clears it; label commands never stamp
 
   // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
@@ -4071,6 +4204,24 @@ export default function TakeoffCanvas() {
 
   const markupCount = markups.filter((m) => panelKeySet.has(m.sheet_id)).length;
   const selShape = selectedId ? visibleShapes.find((s) => s.id === selectedId) : null;
+  const isMulti = tool === "multiselect";
+  // Shared label across the multi selection: {value} when uniform ("" = none),
+  // {mixed:true} when heterogeneous, null when not applicable. The mixed
+  // sentinel's option VALUE is \0-prefixed — outside the visible-string
+  // space real labels live in, so a label literally named "— mixed —" can
+  // never make a uniform selection display as mixed.
+  const multiLabel = (() => {
+    if (!isMulti || !multiSel.size) return null;
+    let v;
+    for (const s of visibleShapes) {
+      if (!multiSel.has(s.id)) continue;
+      const lv = shapeLabelValue(s);
+      if (v === undefined) v = lv;
+      else if (v !== lv) return { mixed: true };
+    }
+    return { value: v ?? "" };
+  })();
+  const MIXED_SENTINEL = "\0mixed";
   const setShapeHeight = (raw) => {
     const v = Math.max(0, parseFloat(raw) || 0);
     setShapes((ss) => ss.map((s) => {
@@ -4114,7 +4265,23 @@ export default function TakeoffCanvas() {
   // move a selected shape's quantities. EVERY activation surface, reassigning
   // or not, dismisses a live bulk selection.
   const activateCondition = (id, { reassign = true } = {}) => {
-    if (reassign && tool === "select" && selectedId) reassignSelected(id);
+    if (reassign) {
+      if (tool === "select" && selectedId) reassignSelected(id);
+      // bulk reassign (#113): one ids[] command, one undo step. The
+      // already-assigned no-op guard matters: a palette-chip DOUBLE-click fires
+      // onClick then onDoubleClick→openConditionInPanel, both reassign-true —
+      // without the guard that's two undo entries + double provenance stamps.
+      // Digits 1–9 pass reassign:false and can never reach this arm.
+      else if (tool === "multiselect" && multiSel.size) {
+        // only the shapes actually changing — reassign stamps provenance on every
+        // id it's given, and an already-assigned shape must not collect a stamp.
+        // Single pass over visibleShapes (multiSel is pruned to it) rather than
+        // a shapes.find per selected id.
+        const visById = new Map(visibleShapes.map((s) => [s.id, s]));
+        const ids = [...multiSel].filter((sid) => visById.get(sid)?.condition_id !== id);
+        if (ids.length) dispatchShape({ type: "reassign", ids, condition_id: id });
+      }
+    }
     setActiveCond(id);
     panelSelectionRef.current?.();   // plain activation dismisses a live bulk selection (panel view state)
   };
@@ -4538,7 +4705,8 @@ export default function TakeoffCanvas() {
         {cluster("Mode",
           <span style={{ display: "inline-flex", border: "1px solid var(--ink-faint)" }}>
             {segBtn("pan", "pan", "Pan (P) — or hold right-click / Space mid-measure")}
-            {segBtn("select", "select", "Select (V) — pick a takeoff, drag points", true)}
+            {segBtn("select", "select", "Select (V) — pick a takeoff, drag points")}
+            {segBtn("multiselect", "multiSelect", "Multi-select (M) — click or drag a box to select several takeoffs, then re-label / reassign / delete them together", true)}
           </span>
         )}
         {vRule}
@@ -4609,7 +4777,7 @@ export default function TakeoffCanvas() {
               { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
               { id: "redo", label: "Redo", shortcut: "⇧⌘Z", onSelect: redoShapeCommand },
               "divider",
-              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
+              { id: "del", icon: "close", label: isMulti && multiSel.size > 1 ? `Delete ${multiSel.size} selected` : "Delete selected", shortcut: "⌫", disabled: !(selectedId || (isMulti && multiSel.size)), tint: "var(--c-danger)", onSelect: () => { if (isMulti && multiSel.size) { dispatchShape({ type: "delete", ids: [...multiSel] }); clearMulti(); } else deleteSelected(); } },
             ]}
           />
         </>)}
@@ -4649,13 +4817,27 @@ export default function TakeoffCanvas() {
             so changing it reliably re-labels that shape (a value-always-active
             select couldn't reassign to the already-active label — onChange wouldn't fire). */}
         {shapeLabels.length > 0 && cluster(
-          tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape` : (activeLabel ? `Label · ${activeLabel}` : "Label"),
+          multiLabel ? `Label · ${multiSel.size} selected → shapes`
+            : tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape`
+              : (activeLabel ? `Label · ${activeLabel}` : "Label"),
           <select
-            value={tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
-            onChange={(e) => activateLabel(e.target.value || null)}
-            title="Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."
-            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel ? "var(--cobalt)" : "transparent", color: activeLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
+            value={multiLabel ? (multiLabel.mixed ? MIXED_SENTINEL : multiLabel.value)
+              : tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
+            onChange={(e) => {
+              // multi mode: dispatch directly — ONE ids[] label command (one undo
+              // step, no provenance stamp), and deliberately NOT activateLabel:
+              // bulk-labeling a selection must not change the active tracing label
+              if (multiLabel) dispatchShape({ type: "label", ids: [...multiSel], value: e.target.value });
+              else activateLabel(e.target.value || null);
+            }}
+            title={multiLabel ? `Re-label the ${multiSel.size} selected takeoff${multiSel.size > 1 ? "s" : ""} — one undo step. "No label" clears.` : "Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."}
+            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel || multiLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel && !multiLabel ? "var(--cobalt)" : "transparent", color: activeLabel && !multiLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
             <option value="">No label</option>
+            {multiLabel?.mixed && <option value={MIXED_SENTINEL} disabled>— mixed —</option>}
+            {/* a uniform ad-hoc label that left the vocabulary (removeLabel keeps
+                the string on shapes) still needs an option, or the select goes blank */}
+            {multiLabel && !multiLabel.mixed && multiLabel.value && !shapeLabels.includes(multiLabel.value)
+              && <option value={multiLabel.value}>{multiLabel.value}</option>}
             {shapeLabels.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
         )}
@@ -4715,7 +4897,7 @@ export default function TakeoffCanvas() {
               <span style={{ fontSize: 11.5, color: "var(--ink-muted)", fontStyle: "italic", padding: "3px 8px", border: "1px dashed var(--ink-faint)" }}>drag conditions here (or pin a row) for 1-9 one-click access</span>
             ) : paletteConds.map((c) => {
               const on = c.id === activeCond;
-              const reassign = tool === "select" && selectedId;
+              const reassign = (tool === "select" && selectedId) || (isMulti && multiSel.size > 0);
               const idx = palette.indexOf(c.id);   // palette position → the 1–9 hotkey number
               return (
                 <span key={c.id} style={{ display: "inline-flex", alignItems: "center" }}
@@ -4725,7 +4907,7 @@ export default function TakeoffCanvas() {
                     onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copyMove"; }}
                     onClick={() => activateCondition(c.id)}
                     onDoubleClick={() => openConditionInPanel(c.id)}
-                    title={reassign ? `Reassign the selected takeoff to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
+                    title={reassign ? `Reassign the ${isMulti && multiSel.size > 1 ? `${multiSel.size} selected takeoffs` : "selected takeoff"} to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
                     style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 5px", border: on ? `2px solid ${c.color}` : (reassign ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5, lineHeight: 1 }}>
                     {idx < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px" }}>{idx + 1}</span>}
                     <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
@@ -4798,7 +4980,7 @@ export default function TakeoffCanvas() {
             const hIdx = pinnedPal ? palette.indexOf(c.id) : i;
             const hot = hIdx >= 0 && hIdx < 9;
             return (
-              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
+              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={(tool === "select" && selectedId) || (isMulti && multiSel.size > 0) ? `Reassign ${isMulti && multiSel.size > 1 ? `the ${multiSel.size} selected shapes` : "selected shape"} to this condition` : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : ((tool === "select" && selectedId) || (isMulti && multiSel.size > 0) ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
                 {hot && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinnedPal ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinnedPal ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px" }}>{hIdx + 1}</span>}
                 <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
               </button>
@@ -4997,7 +5179,7 @@ export default function TakeoffCanvas() {
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={hideCrosshair} onContextMenu={(e) => e.preventDefault()}
           onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
-          style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : "none", touchAction: "none" }}>
+          style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "pan" ? "grab" : tool === "select" ? "default" : tool === "multiselect" ? "crosshair" : "none", touchAction: "none" }}>
           {/* aim crosshair (draw modes): the OS cursor is hidden on the canvas — the
               crosshair IS the cursor. Two crisp full-page hairlines riding the
               EFFECTIVE point (angle-locked / endpoint-snapped), the SPLINE STAR at
@@ -5050,7 +5232,7 @@ export default function TakeoffCanvas() {
                     {pShapes.map((s) => {
                       const cond = condById[s.condition_id];
                       const col = cond?.color || "#888";
-                      const sel = s.id === selectedId;
+                      const sel = isMulti ? multiSel.has(s.id) : s.id === selectedId;
                       const pts = dn(s.verts_norm);
                       // Screen-constant strokes: zoom is a CSS transform on the
                       // stage div, which never enters this SVG's CTM — so
@@ -5075,7 +5257,7 @@ export default function TakeoffCanvas() {
                       return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
                     {/* vertex handles for the selected shape (drag to reshape) */}
-                    {selectedId && (() => {
+                    {selectedId && !isMulti && (() => {
                       const sel = pShapes.find((s) => s.id === selectedId);
                       if (!sel || sel.measure_role === "count") return null;
                       const qs = dn(sel.verts_norm);
@@ -5383,6 +5565,8 @@ export default function TakeoffCanvas() {
                   color; the draft never mimics anyone's takeoff look. Solid, no dashes. */}
               <line ref={rubberRef} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={1.5 / tf.scale} strokeOpacity={0.85} strokeLinecap="round" style={{ display: "none" }} />
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
+              {/* multi-select marquee — stage-px frame so one lasso spans side-by-side panels */}
+              <rect ref={marqueeRectRef} fill="rgba(31,63,199,.06)" stroke="#1f3fc7" strokeWidth={1.5 / tf.scale} strokeDasharray={`${6 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
               <path ref={cloudRef} fill="rgba(37,99,235,.06)" stroke="#1f3fc7" strokeWidth={2 / tf.scale} strokeDasharray={`${5 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
               <rect ref={highlightRef} fill="rgba(196,122,16,.18)" stroke="#c47a10" strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               <path ref={hlPathRef} style={{ display: "none" }} />
@@ -5486,8 +5670,20 @@ export default function TakeoffCanvas() {
         {/* live readout — top-right. Height is capped short of the panel rail's centered
             band (same right:14 column) so populated totals never cover the rail buttons. */}
         <div style={{ position: "absolute", right: 14, top: 14, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, padding: "12px 16px", minWidth: 200, maxWidth: 260, maxHeight: "calc(50% - 110px)", overflowY: "auto", boxShadow: "0 4px 18px rgba(0,0,0,.12)", fontVariantNumeric: "tabular-nums", zIndex: 6 }}>
-          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool === "zone" ? "Zone check" : (aCond?.finish_tag || "No condition")}</div>
-          {tool === "oneclick" && proposal?.regions.length ? (() => {
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool === "zone" ? "Zone check" : isMulti ? "Multi-select" : (aCond?.finish_tag || "No condition")}</div>
+          {isMulti ? (
+            <>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{multiSel.size} <span style={{ fontSize: 13, fontWeight: 600 }}>selected</span></div>
+              <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>
+                click toggles · drag lassoes · ⌫ deletes · condition chip reassigns{shapeLabels.length ? " · Label menu re-labels" : ""} · Esc clears
+              </div>
+              {multiSel.size > 0 && (
+                <button onClick={clearMulti} style={{ marginTop: 6, padding: "3px 9px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11.5 }}>
+                  Clear selection (Esc)
+                </button>
+              )}
+            </>
+          ) : tool === "oneclick" && proposal?.regions.length ? (() => {
             const pos = proposal.regions.filter((r) => r.kind === "pos");
             const neg = proposal.regions.filter((r) => r.kind === "neg");
             const sf = pos.reduce((n, r) => n + r.area_sf, 0) - neg.reduce((n, r) => n + r.area_sf, 0);
@@ -5683,7 +5879,7 @@ export default function TakeoffCanvas() {
           matLibById={matLibById}
           linkedCountById={linkedCountById}
           panelPrefs={panelPrefs}
-          reassigning={tool === "select" && !!selectedId}
+          reassigning={(tool === "select" && !!selectedId) || (isMulti && multiSel.size > 0)}
           epoch={panelEpoch}
           clearSelectionRef={panelSelectionRef}
           {...panelHandlers}
