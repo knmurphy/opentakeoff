@@ -38,7 +38,11 @@ export function flattenCurve(pts, opts = {}) {
   }
   const scale = total > maxPts ? maxPts / total : 1;
   const out = [[pts[0][0], pts[0][1]]];
-  let budget = Math.min(total, maxPts);
+  const segCount = P.length - 3;
+  // Every segment needs >=1 step to reach its control point, so with more
+  // segments than maxPts the cap genuinely can't hold — segCount, not
+  // maxPts, is the honest floor rather than an accident of the clamp below.
+  let budget = Math.max(Math.min(total, maxPts), segCount);
   for (let i = 1; i < P.length - 2; i++) {
     const segsLeft = P.length - 2 - i; // segments remaining, including this one — reserve 1 each for the rest
     const steps = Math.max(1, Math.min(Math.round(want[i - 1] * scale), budget - (segsLeft - 1)));

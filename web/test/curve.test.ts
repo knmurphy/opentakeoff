@@ -52,6 +52,16 @@ test("vertex cap holds tightly with many closely-spaced points (per-segment floo
   assert.ok(out.length <= 221, `tight cap: ${out.length} <= 221 (maxPts 220 + leading point)`);
 });
 
+test("more control points than maxPts: 1 step/segment is the honest floor, not an overshoot", () => {
+  // Every segment needs >=1 step to reach its control point — with more
+  // segments than the 220 cap, the cap can't hold; the floor should be
+  // segCount exactly, not something larger from a fragile clamp interaction.
+  const many: Pt[] = Array.from({ length: 250 }, (_, i) => [i * 300, (i % 2) * 200]);
+  const out = flattenCurve(many);
+  assert.equal(out.length, many.length, "exactly 1 step per segment — every control point, nothing extra");
+  for (const c of many) assert.ok(hasPt(out, c, 1e-4), "still interpolates every control point");
+});
+
 test("input never mutated", () => {
   const ctrl: Pt[] = [[0, 0], [40, 60], [90, 10]];
   const snapshot = JSON.stringify(ctrl);
