@@ -6,7 +6,22 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readPersistedSession } from "../src/lib/google/auth.js";
+import { readPersistedSession, persistSession, hydrateSession, getUser, isSignedIn, signOut } from "../src/lib/google/auth.js";
+
+// Map-backed sessionStorage stub, matching identity.test.ts's stubStore()
+// pattern. clientId() reads import.meta.env, which is undefined outside Vite
+// (plain node:test), so it always resolves to "" here — stubbed blobs below
+// use clientId: "" to match, the same way this module's own hydrateSession()
+// would see it in this test environment.
+function stubSessionStorage() {
+  const store = new Map<string, string>();
+  (globalThis as any).sessionStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k) : null),
+    setItem: (k: string, v: string) => void store.set(k, String(v)),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  return store;
+}
 
 const NOW = 1_700_000_000_000;
 const CLIENT_ID = "abc123.apps.googleusercontent.com";
@@ -67,4 +82,82 @@ test("malformed raw payloads collapse to null", () => {
     readPersistedSession(blob({ expiresAt: "soon" }), { now: NOW, clientId: CLIENT_ID }),
     null,
   );
+});
+
+// The tests above cover readPersistedSession() (the pure decision). These
+// cover the actual sessionStorage glue around it — hydrateSession(),
+// persistSession(), and signOut()'s clear — against a stubbed sessionStorage,
+// so a regression in the glue itself (wrong module state read, swapped
+// arguments, wrong key) would be caught, not just a bug in the pure validator.
+
+test("hydrateSession() restores getUser()/isSignedIn() from a valid stubbed blob", () => {
+  const store = stubSessionStorage();
+  (globalThis as any).window = {}; // signOut()'s window.google?.… reference needs this to exist
+  try {
+    const restoredUser = { email: "kevin@345flooring.com", name: "Kevin" };
+    store.set("opentakeoff_gauth", JSON.stringify({
+      clientId: "", // clientId() resolves to "" outside Vite — see stubSessionStorage() comment
+      accessToken: "ya29.fake-token",
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      user: restoredUser,
+    }));
+
+    hydrateSession();
+
+    assert.equal(isSignedIn(), true);
+    assert.deepEqual(getUser(), restoredUser);
+  } finally {
+    signOut(); // reset the module's shared token/user state for later tests
+    delete (globalThis as any).sessionStorage;
+    delete (globalThis as any).window;
+  }
+});
+
+test("hydrateSession() leaves getUser()/isSignedIn() signed-out when the stubbed blob is expired", () => {
+  const store = stubSessionStorage();
+  (globalThis as any).window = {};
+  try {
+    store.set("opentakeoff_gauth", JSON.stringify({
+      clientId: "",
+      accessToken: "ya29.fake-token",
+      expiresAt: Date.now() - 1,
+      user: { email: "kevin@345flooring.com" },
+    }));
+
+    hydrateSession();
+
+    assert.equal(isSignedIn(), false);
+    assert.equal(getUser(), null);
+  } finally {
+    signOut();
+    delete (globalThis as any).sessionStorage;
+    delete (globalThis as any).window;
+  }
+});
+
+test("persistSession() writes the current session, then signOut() clears it", () => {
+  const store = stubSessionStorage();
+  (globalThis as any).window = {};
+  try {
+    const restoredUser = { email: "kevin@345flooring.com" };
+    store.set("opentakeoff_gauth", JSON.stringify({
+      clientId: "",
+      accessToken: "ya29.fake-token",
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      user: restoredUser,
+    }));
+    hydrateSession(); // populate module state from the stub, exercising the read path
+
+    persistSession(); // re-persist the now-populated state, exercising the write path
+    const written = JSON.parse(store.get("opentakeoff_gauth")!);
+    assert.equal(written.accessToken, "ya29.fake-token");
+    assert.deepEqual(written.user, restoredUser);
+
+    signOut();
+    assert.equal(store.has("opentakeoff_gauth"), false); // signOut()'s persistSession() cleared it
+    assert.equal(isSignedIn(), false);
+  } finally {
+    delete (globalThis as any).sessionStorage;
+    delete (globalThis as any).window;
+  }
 });
