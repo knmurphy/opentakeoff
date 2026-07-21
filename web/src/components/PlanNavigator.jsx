@@ -306,9 +306,15 @@ export default function PlanNavigator({
 
   // ── transfer takeoff to a reissued sheet (#149) ─────────────────────────
   // Sources with shapes first (most likely candidates) — a freshly imported
-  // sheet has none, so it's never its own source.
-  const transferSources = (destKey) =>
-    allKeys.filter((k) => k !== destKey && shapeCount(k) > 0).sort((a, b) => shapeCount(b) - shapeCount(a));
+  // sheet has none, so it's never its own source. This list is identical for
+  // every shapeless card (the offer only appears when shapeCount(key) === 0,
+  // so a destKey-specific `k !== destKey` filter is a no-op there) — computed
+  // once per render instead of re-scanning `shapes` per card, per render.
+  const sourcesWithShapes = useMemo(
+    () => allKeys.filter((k) => shapeCount(k) > 0).sort((a, b) => shapeCount(b) - shapeCount(a)),
+    [allKeys, shapes],   // eslint-disable-line react-hooks/exhaustive-deps -- shapeCount is a pure function of `shapes`, already listed
+  );
+  const transferSources = (destKey) => sourcesWithShapes.filter((k) => k !== destKey);
   const doTransfer = async (sourceKey, destKey) => {
     setTransferTarget(null);
     await onTransferShapes(sourceKey, destKey);
@@ -497,6 +503,7 @@ export default function PlanNavigator({
             const isSel = idx >= 0;
             const thumb = thumbCacheRef.current.get(key);
             const cnt = shapeCount(key);
+            const sources = cnt === 0 && onTransferShapes ? transferSources(key) : [];
             const isOpenTab = openTabs.includes(key);
             const parsed = parseSheetKey(key);
             const isFirstPageOfPdf = parsed.page === 1;   // per-PDF close lives on the first card only
@@ -529,7 +536,7 @@ export default function PlanNavigator({
                 </div>
                 {/* Transfer takeoff to a reissued sheet (#149) — only offered on a
                     shapeless card, since a merge-into-existing-shapes flow isn't built. */}
-                {cnt === 0 && onTransferShapes && transferSources(key).length > 0 && (
+                {sources.length > 0 && (
                   <div style={{ padding: "0 10px 8px" }} onClick={(e) => e.stopPropagation()}>
                     {transferTarget === key ? (
                       <select autoFocus defaultValue="" name="transfer-source"
@@ -537,7 +544,7 @@ export default function PlanNavigator({
                         onBlur={() => setTransferTarget(null)}
                         style={{ width: "100%", fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "3px 5px" }}>
                         <option value="" disabled>Transfer takeoff from…</option>
-                        {transferSources(key).map((k) => <option key={k} value={k}>{labelOf(k)} ({shapeCount(k)}▦)</option>)}
+                        {sources.map((k) => <option key={k} value={k}>{labelOf(k)} ({shapeCount(k)}▦)</option>)}
                       </select>
                     ) : (
                       <button onClick={() => setTransferTarget(key)}

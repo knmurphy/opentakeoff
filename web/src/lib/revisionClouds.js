@@ -16,8 +16,7 @@
 // the comment on TakeoffCanvas' transferShapesToSheet for why this is an
 // accepted gap rather than something this module tries to correct for.
 import { vertsEqual } from "./shapeCommands.js";
-
-const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+import { round2 } from "./num.js";
 // Same 0.05 SF / 0.5 EA display-precision philosophy as revisions.js, applied
 // per-shape instead of to a summed row.
 const visible = (unit, d) => Math.abs(d) >= (unit === "ea" ? 0.5 : 0.05);
@@ -67,6 +66,18 @@ export function diffShapesForCloud(baselineShapes, currentShapes, sheetId, condi
   const cur = (currentShapes || []).filter((s) => s.sheet_id === sheetId);
   const baseById = new Map(base.map((s) => [s.id, s]));
   const curById = new Map(cur.map((s) => [s.id, s]));
+
+  // Id continuity is the whole premise (see module comment) — nothing in the
+  // UI restricts Auto-flag to a transfer-created baseline, so guard here: if
+  // both sides have shapes but share NO ids at all, they're independently
+  // traced sets (e.g. the baseline predates a re-import, or isn't a transfer
+  // baseline at all) and every shape would read as simultaneously Removed and
+  // Added — a flood of clouds that look like real markers but carry no
+  // signal. Skip the sheet rather than mislead. (A sheet that's genuinely new
+  // on one side, base.length or cur.length === 0, still gets a real diff —
+  // this only guards the zero-overlap-with-shapes-on-both-sides case.)
+  if (base.length && cur.length && !base.some((s) => curById.has(s.id))) return [];
+
   const clouds = [];
 
   for (const s of cur) {

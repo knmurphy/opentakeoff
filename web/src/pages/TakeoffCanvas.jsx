@@ -3232,9 +3232,21 @@ export default function TakeoffCanvas() {
   // one revision event, same as an estimator manually placing several clouds
   // under one △n for one addendum, not N independent numbers.
   function addMarkups(list) {
-    if (!list.length) return;
-    const nextRev = 1 + Math.max(0, ...markups.map((m) => (Number.isFinite(m.rev) ? m.rev : 0)));
-    setMarkups((ms) => [...ms, ...list.map((m) => ({ id: uid("mk"), created_at: nowIso(), rfi_id: "", rev: nextRev, ...m }))]);
+    // unlike addMarkup(m, key), a bulk item carries its OWN sheet_id (a batch
+    // can span multiple sheets) — drop anything that forgot one rather than
+    // minting an orphaned sheet_id: undefined markup.
+    const valid = list.filter((m) => m.sheet_id);
+    if (!valid.length) return;
+    // nextRev is computed FROM the functional updater's `ms` (not the closed-
+    // over `markups`), and the insert happens in the same update — two calls
+    // in the same tick (e.g. a double-clicked Auto-flag button, which has no
+    // busy guard) each see the other's insert and never share a rev number.
+    // A reduce, not Math.max(0, ...arr) — spreading a very large markups
+    // array as call arguments risks the engine's argument-count ceiling.
+    setMarkups((ms) => {
+      const nextRev = 1 + ms.reduce((mx, m) => (Number.isFinite(m.rev) && m.rev > mx ? m.rev : mx), 0);
+      return [...ms, ...valid.map((m) => ({ id: uid("mk"), created_at: nowIso(), rfi_id: "", rev: nextRev, ...m }))];
+    });
     setLeftTab("markup");
   }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
@@ -3592,13 +3604,29 @@ export default function TakeoffCanvas() {
   // the destination's scale before adjusting (the toast below nudges this) keeps
   // the baseline and the rescale in the same beat and avoids it in practice; a
   // same-sheet reissue almost always keeps the source's scale anyway.
+  //
+  // Scope decision: markups (clouds/callouts/notes) on the source sheet do
+  // NOT follow the transfer — only shapes do. A markup often ties to a
+  // specific detail on THAT sheet (an RFI-linked callout, a note pointing at
+  // something that may look different on the reissue), so silently carrying
+  // it to the destination risks attaching it to the wrong context. It stays
+  // put, visible and intact, on the source sheet. Same scope cross-sheet
+  // paste already draws (shapes only) — not a new inconsistency.
   async function transferShapesToSheet(sourceKey, destKey) {
     const ids = shapes.filter((s) => s.sheet_id === sourceKey).map((s) => s.id);
     if (!ids.length) return;
     const res = dispatchShape({ type: "resheet", ids, sheet_id: destKey });
     // buildPayload() would still read the pre-dispatch `shapes` state (setShapes
     // hasn't flushed yet this tick) — splice in dispatchShape's synchronous result.
-    await store.saveSnapshot(`Transfer ${sourceKey} → ${destKey} — ${new Date().toLocaleString()}`, { ...buildPayload(), shapes: res.shapes });
+    try {
+      await store.saveSnapshot(`Transfer ${sourceKey} → ${destKey} — ${new Date().toLocaleString()}`, { ...buildPayload(), shapes: res.shapes });
+    } catch (e) {
+      // The resheet already committed (shapes moved, autosave will persist
+      // it) — only the dedicated baseline snapshot failed, so Auto-flag has
+      // nothing to diff against until the user saves one manually.
+      setCommitMsg(`Transferred, but couldn't save a baseline revision: ${e.message || e} — save one manually from Revisions before adjusting, or Auto-flag will have nothing to compare against.`);
+      return;
+    }
     setCommitMsg(`Transferred ${ids.length} takeoff${ids.length === 1 ? "" : "s"} to ${destKey} — set its scale first if needed, then adjust to match, then Revisions → Auto-flag changes when done.`);
   }
 

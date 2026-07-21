@@ -115,6 +115,11 @@ const assignSnapshot = (s) => ({
   ...("origin" in s ? { origin: s.origin } : {}),
 });
 
+// sheet_id snapshot for resheet restore rows — no provenance fields, unlike
+// assignSnapshot: resheet never stamps updated_at/origin, so there's nothing
+// to carry back.
+const sheetSnapshot = (s) => ({ id: s.id, sheet_id: s.sheet_id });
+
 // ── the pure apply ───────────────────────────────────────────────────────────
 // applyShapeCommand(shapes, cmd) → { shapes, inverse, counted? }
 //   shapes   the next array (input never mutated);
@@ -207,7 +212,7 @@ export function applyShapeCommand(shapes, cmd) {
     case "resheet": {
       if (cmd.restore) {
         const byId = new Map(cmd.restore.map((r) => [r.id, r]));
-        const inverse = { type: "resheet", restore: shapes.filter((s) => byId.has(s.id)).map((s) => ({ id: s.id, sheet_id: s.sheet_id })) };
+        const inverse = { type: "resheet", restore: shapes.filter((s) => byId.has(s.id)).map(sheetSnapshot) };
         const next = shapes.map((s) => (byId.has(s.id) ? { ...s, sheet_id: byId.get(s.id).sheet_id } : s));
         return { shapes: next, inverse };
       }
@@ -215,7 +220,7 @@ export function applyShapeCommand(shapes, cmd) {
       const restore = [];
       const next = shapes.map((s) => {
         if (!idSet.has(s.id)) return s;
-        restore.push({ id: s.id, sheet_id: s.sheet_id });
+        restore.push(sheetSnapshot(s));
         return { ...s, sheet_id: cmd.sheet_id };
       });
       return { shapes: next, inverse: { type: "resheet", restore } };

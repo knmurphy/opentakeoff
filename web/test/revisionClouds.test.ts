@@ -87,3 +87,27 @@ test("unknown condition_id falls back to '?' in the label rather than throwing",
   const clouds = diffShapesForCloud([], [cur], "b.pdf#1", tagOf);
   assert.match(clouds[0].text, /^Added — \?/);
 });
+
+test("zero id overlap with shapes on both sides is skipped, not flooded with Added+Removed clouds", () => {
+  // Auto-flag run against a baseline that ISN'T a transfer baseline (or one
+  // that predates a re-import) — same sheet, independently-traced shapes,
+  // no shared ids. Every id-based pairing would fail, so this must skip
+  // rather than report every shape as simultaneously removed and added.
+  const base = shape({ id: "old-1" });
+  const cur = shape({ id: "new-1" });
+  assert.deepEqual(diffShapesForCloud([base], [cur], "b.pdf#1", tagOf), []);
+});
+
+test("a genuinely new sheet (nothing in baseline) still diffs normally — the zero-overlap guard doesn't suppress it", () => {
+  const cur = shape({ id: "s1" });
+  const clouds = diffShapesForCloud([], [cur], "b.pdf#1", tagOf);
+  assert.equal(clouds.length, 1);
+  assert.match(clouds[0].text, /^Added/);
+});
+
+test("a sheet emptied entirely (nothing in current) still diffs normally — the zero-overlap guard doesn't suppress it", () => {
+  const base = shape({ id: "s1" });
+  const clouds = diffShapesForCloud([base], [], "b.pdf#1", tagOf);
+  assert.equal(clouds.length, 1);
+  assert.match(clouds[0].text, /^Removed/);
+});
