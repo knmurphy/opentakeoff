@@ -3230,6 +3230,28 @@ export default function TakeoffCanvas() {
     if (m.type === "highlight" && m.pts) return;
     setLeftTab((t) => (tool === "stamp" ? (t ?? "markup") : "markup"));
   }
+  // Bulk markup placement — the Revisions panel's auto-flag lands here (#149).
+  // Every cloud from ONE auto-flag pass shares a single rev number: they're
+  // one revision event, same as an estimator manually placing several clouds
+  // under one △n for one addendum, not N independent numbers.
+  function addMarkups(list) {
+    // unlike addMarkup(m, key), a bulk item carries its OWN sheet_id (a batch
+    // can span multiple sheets) — drop anything that forgot one rather than
+    // minting an orphaned sheet_id: undefined markup.
+    const valid = list.filter((m) => m.sheet_id);
+    if (!valid.length) return;
+    // nextRev is computed FROM the functional updater's `ms` (not the closed-
+    // over `markups`), and the insert happens in the same update — two calls
+    // in the same tick (e.g. a double-clicked Auto-flag button, which has no
+    // busy guard) each see the other's insert and never share a rev number.
+    // A reduce, not Math.max(0, ...arr) — spreading a very large markups
+    // array as call arguments risks the engine's argument-count ceiling.
+    setMarkups((ms) => {
+      const nextRev = 1 + ms.reduce((mx, m) => (Number.isFinite(m.rev) && m.rev > mx ? m.rev : mx), 0);
+      return [...ms, ...valid.map((m) => ({ id: uid("mk"), created_at: nowIso(), rfi_id: "", rev: nextRev, ...m }))];
+    });
+    setLeftTab("markup");
+  }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
   // (lib/markedset.js). Exports in the CURRENT view: dark canvas → dark PDF.
@@ -3565,6 +3587,53 @@ export default function TakeoffCanvas() {
   // second undo entry with a second provenance stamp
   function reassignSelected(condId) { if (selectedId && shapes.find((s) => s.id === selectedId)?.condition_id !== condId) dispatchShape({ type: "reassign", ids: [selectedId], condition_id: condId }); }
   function reassignSelectedLabel(value) { if (selectedId) dispatchShape({ type: "label", ids: [selectedId], value }); }   // Select-tool single-shape re-label (#111) — value "" / null clears it; label commands never stamp
+
+  // Transfer a reissued sheet's takeoff — bulk-move every shape from an
+  // existing (soon-superseded) sheet onto a freshly imported one, instead of
+  // re-tracing from scratch (#149). A MOVE (resheet), not a copy: copying
+  // would double-count quantities since every total sums across ALL shapes
+  // regardless of sheet, and re-keying in place is what preserves shape ids
+  // across the move — the auto-flag diff (RevisionsPanel → diffShapesForCloud)
+  // depends on that id continuity to pair "as transferred" against "as
+  // adjusted" later. verts_norm/computed carry over unchanged (same precedent
+  // as cross-sheet paste) — no registration/rescale here; recompute happens
+  // naturally the next time the destination sheet's scale is set.
+  //
+  // Known limitation (accepted, not fixed here): the baseline snapshot below
+  // freezes `computed` at the SOURCE sheet's scale. If the destination later
+  // gets a DIFFERENT scale, that rescale re-prices the live shapes but not the
+  // already-saved baseline — so Auto-flag reads the scale change itself as a
+  // quantity delta on every transferred shape, even ones never touched. Setting
+  // the destination's scale before adjusting (the toast below nudges this) keeps
+  // the baseline and the rescale in the same beat and avoids it in practice; a
+  // same-sheet reissue almost always keeps the source's scale anyway.
+  //
+  // Scope decision: markups (clouds/callouts/notes) on the source sheet do
+  // NOT follow the transfer — only shapes do. A markup often ties to a
+  // specific detail on THAT sheet (an RFI-linked callout, a note pointing at
+  // something that may look different on the reissue), so silently carrying
+  // it to the destination risks attaching it to the wrong context. It stays
+  // put, visible and intact, on the source sheet. Same scope cross-sheet
+  // paste already draws (shapes only) — not a new inconsistency.
+  async function transferShapesToSheet(sourceKey, destKey) {
+    const ids = shapes.filter((s) => s.sheet_id === sourceKey).map((s) => s.id);
+    if (!ids.length) return;
+    // Save the baseline BEFORE committing the move (not after) — the
+    // transferred array is computed here, not dispatched yet, so a failed
+    // save leaves `shapes` state completely untouched instead of moved-with-
+    // no-baseline. The actual dispatchShape (which commits + records the
+    // undo entry) only runs once the save has succeeded.
+    const idSet = new Set(ids);
+    const transferred = shapes.map((s) => (idSet.has(s.id) ? { ...s, sheet_id: destKey } : s));
+    try {
+      await store.saveSnapshot(`Transfer ${sourceKey} → ${destKey} — ${new Date().toLocaleString()}`, { ...buildPayload(), shapes: transferred });
+    } catch (e) {
+      setCommitMsg(`Couldn't transfer: ${e.message || e} — nothing moved.`);
+      return;
+    }
+    dispatchShape({ type: "resheet", ids, sheet_id: destKey });
+    setCommitMsg(`Transferred ${ids.length} takeoff${ids.length === 1 ? "" : "s"} to ${destKey} — set its scale first if needed, then adjust to match, then Revisions → Auto-flag changes when done.`);
+  }
 
   // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
   // the panel's ⌖ / double-click navigation. Fit zoom is capped so a lone
@@ -5944,6 +6013,7 @@ export default function TakeoffCanvas() {
           })}
           onClosePdf={closePdf}
           onRemoveFromProject={cloudMode ? removeFromProject : undefined}
+          onTransferShapes={transferShapesToSheet}
           onCloseProject={cloudMode ? closeProject : undefined}
           onBrowseProjects={cloudMode ? browseProjects : undefined}
           listFolder={cloudMode ? pickerListFolder : undefined}
@@ -5991,6 +6061,7 @@ export default function TakeoffCanvas() {
           current={buildPayload()}
           units={units}
           onRestore={restoreSavedPayload}
+          onAutoFlag={addMarkups}
           onClose={() => setShowRevisions(false)}
         />
       )}

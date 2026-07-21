@@ -57,7 +57,7 @@ function roundTrip(shapes: any[], cmd: any) {
 // ── policy completeness ──────────────────────────────────────────────────────
 
 test("every applied command type has a PROVENANCE_POLICY row; unknown types throw", () => {
-  for (const t of ["add", "geom", "reassign", "label", "delete", "replace"]) {
+  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "resheet"]) {
     assert.ok(t in PROVENANCE_POLICY, `policy row missing for ${t}`);
   }
   assert.throws(() => applyShapeCommand([], { type: "resize" } as any), /PROVENANCE_POLICY/);
@@ -202,6 +202,28 @@ test("reassign: manual gets bare updated_at, machine gets the full stamp; invers
   assert.equal(ox.condition_id, "cnd-2");
   assert.deepEqual(ox.origin.edits, { reassign: 1 });     // machine: the full stamp
   assert.deepEqual(ox.origin.proposed_verts_norm, x.verts_norm);
+});
+
+// ── resheet ──────────────────────────────────────────────────────────────────
+
+test("resheet: re-keys sheet_id for the id set, no stamp, computed/updated_at untouched; inverse restores sheet_id exactly", () => {
+  const m = manualShape("shp-a"), x = machineShape("shp-b");
+  const shapes = [m, x];
+  const fwd = roundTrip(shapes, { type: "resheet", ids: [m.id, x.id], sheet_id: "b.pdf#1" });
+  const [om, ox] = fwd.shapes;
+  assert.equal(om.sheet_id, "b.pdf#1");
+  assert.equal(ox.sheet_id, "b.pdf#1");
+  assert.deepEqual(om.computed, m.computed);       // untouched — recompute is deferred
+  assert.deepEqual(ox.computed, x.computed);
+  assert.ok(!("updated_at" in om), "resheet is a documented non-edit — nothing stamps");
+  assert.deepEqual(om.origin, m.origin);           // provenance untouched
+});
+
+test("resheet: leaves shapes on other sheets alone", () => {
+  const a = manualShape("shp-a"), other = { ...manualShape("shp-c"), sheet_id: "z.pdf#1" };
+  const fwd = roundTrip([a, other], { type: "resheet", ids: [a.id], sheet_id: "b.pdf#1" });
+  assert.equal(fwd.shapes[0].sheet_id, "b.pdf#1");
+  assert.equal(fwd.shapes[1].sheet_id, "z.pdf#1");
 });
 
 // ── label ────────────────────────────────────────────────────────────────────

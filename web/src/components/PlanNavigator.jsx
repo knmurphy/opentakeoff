@@ -52,7 +52,7 @@ export default function PlanNavigator({
   // plan-set (gallery) data
   sheets, getDoc, scales, detectedScales, shapes, labels, onLabel, onDetect,
   thumbCacheRef, busyRef, openTabs, onOpen,
-  onAddFiles, onClosePdf, onRemoveFromProject,
+  onAddFiles, onClosePdf, onRemoveFromProject, onTransferShapes,
   onCloseProject, onBrowseProjects,
   levels = {}, onAssignLevel,
   // browse (Drive) data
@@ -136,6 +136,7 @@ export default function PlanNavigator({
   const [driveErr, setDriveErr] = useState("");
   const [addMenu, setAddMenu] = useState(false);
   const [confirmClose, setConfirmClose] = useState(null);   // { file, shapeCount } | null
+  const [transferTarget, setTransferTarget] = useState(null);   // destination sheet key with its picker open, or null
   const [, bump] = useState(0);
   const seqRef = useRef(0);
   const queueRef = useRef([]);
@@ -301,6 +302,22 @@ export default function PlanNavigator({
     const { file } = confirmClose;
     setConfirmClose(null);
     await onRemoveFromProject(file);
+  };
+
+  // ── transfer takeoff to a reissued sheet (#149) ─────────────────────────
+  // Sources with shapes first (most likely candidates) — a freshly imported
+  // sheet has none, so it's never its own source. This list is identical for
+  // every shapeless card (the offer only appears when shapeCount(key) === 0,
+  // so a destKey-specific `k !== destKey` filter is a no-op there) — computed
+  // once per render instead of re-scanning `shapes` per card, per render.
+  const sourcesWithShapes = useMemo(
+    () => allKeys.filter((k) => shapeCount(k) > 0).sort((a, b) => shapeCount(b) - shapeCount(a)),
+    [allKeys, shapes],   // eslint-disable-line react-hooks/exhaustive-deps -- shapeCount is a pure function of `shapes`, already listed
+  );
+  const transferSources = (destKey) => sourcesWithShapes.filter((k) => k !== destKey);
+  const doTransfer = async (sourceKey, destKey) => {
+    setTransferTarget(null);
+    await onTransferShapes(sourceKey, destKey);
   };
 
   // ══ RENDER ════════════════════════════════════════════════════════════════
@@ -486,6 +503,7 @@ export default function PlanNavigator({
             const isSel = idx >= 0;
             const thumb = thumbCacheRef.current.get(key);
             const cnt = shapeCount(key);
+            const sources = cnt === 0 && onTransferShapes ? transferSources(key) : [];
             const isOpenTab = openTabs.includes(key);
             const parsed = parseSheetKey(key);
             const isFirstPageOfPdf = parsed.page === 1;   // per-PDF close lives on the first card only
@@ -516,6 +534,27 @@ export default function PlanNavigator({
                     {scales[key] ? "scale ✓" : detectedScales[key] ? `plan: ${detectedScales[key].label}` : "no scale"}
                   </span>
                 </div>
+                {/* Transfer takeoff to a reissued sheet (#149) — only offered on a
+                    shapeless card, since a merge-into-existing-shapes flow isn't built. */}
+                {sources.length > 0 && (
+                  <div style={{ padding: "0 10px 8px" }} onClick={(e) => e.stopPropagation()}>
+                    {transferTarget === key ? (
+                      <select autoFocus defaultValue="" name="transfer-source"
+                        onChange={(e) => { if (e.target.value) doTransfer(e.target.value, key); }}
+                        onBlur={() => setTransferTarget(null)}
+                        style={{ width: "100%", fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "3px 5px" }}>
+                        <option value="" disabled>Transfer takeoff from…</option>
+                        {sources.map((k) => <option key={k} value={k}>{labelOf(k)} ({shapeCount(k)}▦)</option>)}
+                      </select>
+                    ) : (
+                      <button onClick={() => setTransferTarget(key)}
+                        title="Bulk-move an existing sheet's takeoff onto this one, instead of re-tracing from scratch"
+                        style={{ padding: 0, border: "none", background: "none", color: "var(--cobalt)", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
+                        Transfer takeoff…
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
