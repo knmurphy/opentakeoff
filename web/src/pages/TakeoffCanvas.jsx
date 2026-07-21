@@ -3227,6 +3227,16 @@ export default function TakeoffCanvas() {
     if (m.type === "highlight" && m.pts) return;
     setLeftTab((t) => (tool === "stamp" ? (t ?? "markup") : "markup"));
   }
+  // Bulk markup placement — the Revisions panel's auto-flag lands here (#149).
+  // Every cloud from ONE auto-flag pass shares a single rev number: they're
+  // one revision event, same as an estimator manually placing several clouds
+  // under one △n for one addendum, not N independent numbers.
+  function addMarkups(list) {
+    if (!list.length) return;
+    const nextRev = 1 + Math.max(0, ...markups.map((m) => (Number.isFinite(m.rev) ? m.rev : 0)));
+    setMarkups((ms) => [...ms, ...list.map((m) => ({ id: uid("mk"), created_at: nowIso(), rfi_id: "", rev: nextRev, ...m }))]);
+    setLeftTab("markup");
+  }
   // Marked-set PDF: every sheet carrying takeoffs/markups, work burned in as
   // drawn, legend cover with net totals — built fully in the browser
   // (lib/markedset.js). Exports in the CURRENT view: dark canvas → dark PDF.
@@ -3562,6 +3572,35 @@ export default function TakeoffCanvas() {
   // second undo entry with a second provenance stamp
   function reassignSelected(condId) { if (selectedId && shapes.find((s) => s.id === selectedId)?.condition_id !== condId) dispatchShape({ type: "reassign", ids: [selectedId], condition_id: condId }); }
   function reassignSelectedLabel(value) { if (selectedId) dispatchShape({ type: "label", ids: [selectedId], value }); }   // Select-tool single-shape re-label (#111) — value "" / null clears it; label commands never stamp
+
+  // Transfer a reissued sheet's takeoff — bulk-move every shape from an
+  // existing (soon-superseded) sheet onto a freshly imported one, instead of
+  // re-tracing from scratch (#149). A MOVE (resheet), not a copy: copying
+  // would double-count quantities since every total sums across ALL shapes
+  // regardless of sheet, and re-keying in place is what preserves shape ids
+  // across the move — the auto-flag diff (RevisionsPanel → diffShapesForCloud)
+  // depends on that id continuity to pair "as transferred" against "as
+  // adjusted" later. verts_norm/computed carry over unchanged (same precedent
+  // as cross-sheet paste) — no registration/rescale here; recompute happens
+  // naturally the next time the destination sheet's scale is set.
+  //
+  // Known limitation (accepted, not fixed here): the baseline snapshot below
+  // freezes `computed` at the SOURCE sheet's scale. If the destination later
+  // gets a DIFFERENT scale, that rescale re-prices the live shapes but not the
+  // already-saved baseline — so Auto-flag reads the scale change itself as a
+  // quantity delta on every transferred shape, even ones never touched. Setting
+  // the destination's scale before adjusting (the toast below nudges this) keeps
+  // the baseline and the rescale in the same beat and avoids it in practice; a
+  // same-sheet reissue almost always keeps the source's scale anyway.
+  async function transferShapesToSheet(sourceKey, destKey) {
+    const ids = shapes.filter((s) => s.sheet_id === sourceKey).map((s) => s.id);
+    if (!ids.length) return;
+    const res = dispatchShape({ type: "resheet", ids, sheet_id: destKey });
+    // buildPayload() would still read the pre-dispatch `shapes` state (setShapes
+    // hasn't flushed yet this tick) — splice in dispatchShape's synchronous result.
+    await store.saveSnapshot(`Transfer ${sourceKey} → ${destKey} — ${new Date().toLocaleString()}`, { ...buildPayload(), shapes: res.shapes });
+    setCommitMsg(`Transferred ${ids.length} takeoff${ids.length === 1 ? "" : "s"} to ${destKey} — set its scale first if needed, then adjust to match, then Revisions → Auto-flag changes when done.`);
+  }
 
   // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
   // the panel's ⌖ / double-click navigation. Fit zoom is capped so a lone
@@ -5941,6 +5980,7 @@ export default function TakeoffCanvas() {
           })}
           onClosePdf={closePdf}
           onRemoveFromProject={cloudMode ? removeFromProject : undefined}
+          onTransferShapes={transferShapesToSheet}
           onCloseProject={cloudMode ? closeProject : undefined}
           onBrowseProjects={cloudMode ? browseProjects : undefined}
           listFolder={cloudMode ? pickerListFolder : undefined}
@@ -5988,6 +6028,7 @@ export default function TakeoffCanvas() {
           current={buildPayload()}
           units={units}
           onRestore={restoreSavedPayload}
+          onAutoFlag={addMarkups}
           onClose={() => setShowRevisions(false)}
         />
       )}

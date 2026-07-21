@@ -41,6 +41,12 @@
 //   replace   NO stamp, NO counted, inverse null (never recorded): the escape
 //             hatch for whole-array non-edits — hydrate, revision restore,
 //             rescale's computed re-price.
+//   resheet   NO stamp — a sheet re-key (transfer takeoff to a reissued sheet)
+//             is a location change, not an edit to the shape itself; `computed`
+//             is deliberately left untouched (recompute happens naturally when
+//             the destination sheet's scale is next set — see TakeoffCanvas'
+//             transferShapesToSheet). `restore` puts back the prior sheet_id
+//             exactly, same restore-row shape as `reassign`.
 // ─────────────────────────────────────────────────────────────────────────────
 import { mintUuid, nowIso, stampEdit } from "./provenance.js";
 import { assignShapeLabel } from "./shapeLabels.js";
@@ -52,6 +58,7 @@ export const PROVENANCE_POLICY = {
   label: "no stamp (documented non-edit)",
   delete: "no stamp; counted per origin.method unless noCount",
   replace: "no stamp, no counted, no undo entry (whole-array non-edit)",
+  resheet: "no stamp; sheet_id re-key only, computed left untouched",
 };
 
 // Undo depth — one bounded gesture history, not an archive (revisions are).
@@ -196,6 +203,22 @@ export function applyShapeCommand(shapes, cmd) {
         return { ...stampEdit(s, "reassign"), condition_id: cmd.condition_id };
       });
       return { shapes: next, inverse: { type: "reassign", restore } };
+    }
+    case "resheet": {
+      if (cmd.restore) {
+        const byId = new Map(cmd.restore.map((r) => [r.id, r]));
+        const inverse = { type: "resheet", restore: shapes.filter((s) => byId.has(s.id)).map((s) => ({ id: s.id, sheet_id: s.sheet_id })) };
+        const next = shapes.map((s) => (byId.has(s.id) ? { ...s, sheet_id: byId.get(s.id).sheet_id } : s));
+        return { shapes: next, inverse };
+      }
+      const idSet = new Set(cmd.ids);
+      const restore = [];
+      const next = shapes.map((s) => {
+        if (!idSet.has(s.id)) return s;
+        restore.push({ id: s.id, sheet_id: s.sheet_id });
+        return { ...s, sheet_id: cmd.sheet_id };
+      });
+      return { shapes: next, inverse: { type: "resheet", restore } };
     }
     case "label": {
       // Deliberately NO provenance stamp — same contract as the vocabulary
