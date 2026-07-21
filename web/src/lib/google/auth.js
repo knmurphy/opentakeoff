@@ -13,8 +13,13 @@
 // can't ping the paid scan reader even if the app is ever set External. The client_id
 // is public by design (that's how browser OAuth works) and there is NO
 // client_secret — this is the Google Identity Services token-client flow.
-// Access tokens live in a module-level variable ONLY; they are never written to
-// localStorage/sessionStorage/IndexedDB, so a closed tab forgets them.
+// Access tokens + the signed-in profile are cached in sessionStorage, scoped to
+// this browser tab and keyed to this build's client_id (see SESSION_KEY /
+// persistSession / hydrateSession below), so a reload within the token's ~1h
+// lifetime restores instantly with NO contact with Google — sidestepping the
+// GIS/COOP silent-refresh issue entirely (see SILENT_TIMEOUT_MS). Never written
+// to localStorage or IndexedDB, and never synced across tabs: closing the tab,
+// or a client_id change across deploys, forgets the session same as before.
 
 const GSI_SRC = "https://accounts.google.com/gsi/client";
 const USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
@@ -45,7 +50,11 @@ const EXPIRY_SKEW_MS = 60_000;
 // time-boxed, since a human is expected to take their time on it.
 const SILENT_TIMEOUT_MS = 4000;
 
-// ── in-memory state (never persisted) ───────────────────────────────────────
+// sessionStorage key for the cached { clientId, accessToken, expiresAt, user }
+// blob — see persistSession()/hydrateSession() below.
+const SESSION_KEY = "opentakeoff_gauth";
+
+// ── in-memory state, mirrored to sessionStorage on change ───────────────────
 let tokenClient = null;         // the GIS token client, created once
 let scriptPromise = null;       // de-dupes the <script> injection
 let token = null;               // { accessToken, expiresAt } | null
@@ -63,6 +72,49 @@ function clientId() {
 function domainHint() {
   return (import.meta.env && import.meta.env.VITE_GOOGLE_HD) || "";
 }
+
+// Pure decision: does a parsed sessionStorage blob represent a still-usable
+// session for THIS build? Split out (like domainAllows/isAllowedDomain below)
+// so it's unit-testable without real sessionStorage or import.meta.env. `now`
+// and `clientId` are injected so tests don't depend on Date.now() or Vite env.
+export function readPersistedSession(raw, { now, clientId: cid }) {
+  if (!raw || typeof raw !== "object") return null;
+  const { clientId: storedCid, accessToken, expiresAt, user: storedUser } = raw;
+  if (storedCid !== cid) return null;                 // different build/app on this origin
+  if (typeof accessToken !== "string" || !accessToken) return null;
+  if (typeof expiresAt !== "number" || !(now < expiresAt - EXPIRY_SKEW_MS)) return null;
+  // Require a usable email, not just "some object": AccountChip/AuthChip/
+  // ReportPanel all read user.email directly (no optional chaining in
+  // places), so a malformed/corrupted blob restoring an email-less "signed
+  // in" user would render broken instead of falling back to the sign-in gate.
+  if (!storedUser || typeof storedUser !== "object" || Array.isArray(storedUser)) return null;
+  if (typeof storedUser.email !== "string" || !storedUser.email) return null;
+  return { token: { accessToken, expiresAt }, user: storedUser };
+}
+
+// Mirror the current token+user to sessionStorage (or clear it when either is
+// missing). Called after every mint/refresh and on sign-out — see call sites.
+function persistSession() {
+  try {
+    if (!token || !user) { sessionStorage.removeItem(SESSION_KEY); return; }
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      clientId: clientId(), accessToken: token.accessToken, expiresAt: token.expiresAt, user,
+    }));
+  } catch { /* private mode / storage disabled — session-only, same as theme.js */ }
+}
+
+// Restore token+user from sessionStorage at module load, if still valid for
+// this build. A reload within the token's lifetime then needs zero contact
+// with Google — see the trust-model note at the top of this file.
+function hydrateSession() {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+    const restored = readPersistedSession(raw, { now: Date.now(), clientId: clientId() });
+    if (restored) { token = restored.token; user = restored.user; }
+  } catch { /* corrupt JSON / no sessionStorage (Node, private mode) — falls back to today's behavior */ }
+}
+
+hydrateSession();
 
 // The raw build-time org domain (VITE_GOOGLE_HD), exposed so the scan caller can
 // stamp it on its request for the server's drift cross-check (the server compares
@@ -198,6 +250,7 @@ async function ensureTokenClient() {
         // expires_in is seconds from now
         expiresAt: Date.now() + (Number(resp.expires_in) || 0) * 1000,
       };
+      persistSession();
       p.resolve(token.accessToken);
     },
     // GIS fires error_callback (NOT callback) when the user closes/dismisses the
@@ -295,14 +348,16 @@ async function fetchProfile(accessToken) {
 // and (via the state guard) drop the token the moment the user clicks Allow,
 // breaking first-time sign-in. The timeout is only for the non-interactive
 // getAccessToken() refresh, where a stuck popup must never hang a Drive call.
-// The token stays in memory only. Resolves with the user object; rejects (so
-// the caller can surface it) if the user closes/cancels the dialog.
+// The token is cached to sessionStorage (see persistSession) so a later reload
+// doesn't need to repeat this. Resolves with the user object; rejects (so the
+// caller can surface it) if the user closes/cancels the dialog.
 export async function signIn() {
   if (!isGoogleConfigured()) {
     throw new Error("Google sign-in is not configured for this build.");
   }
   const accessToken = await requestToken("");
   user = await fetchProfile(accessToken);
+  persistSession();
   notify();
   return user;
 }
@@ -323,6 +378,7 @@ export function signOut() {
   const t = token?.accessToken;
   token = null;
   user = null;
+  persistSession();
   if (t && window.google?.accounts?.oauth2?.revoke) {
     try { window.google.accounts.oauth2.revoke(t); } catch { /* best effort */ }
   }
