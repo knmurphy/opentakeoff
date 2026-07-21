@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-21
+
+### Changed
+- **Security headers re-adopt upstream's file shape: `web/public/_headers` is the CSP home again, `netlify.toml` carries no `[[headers]]` block.** Both files are now byte-identical to upstream (Kentucky-ai/opentakeoff), which has since adopted every policy line this fork's netlify.toml block carried — Google sign-in origins, the `@import`'d webfonts, HSTS, the FLoC opt-out — so this is a pure mechanism swap with **zero change to the served policy**. It reverses 2026-07-20's "netlify.toml is the permanent CSP home" call: now that this repo no longer deploys production and exists to track upstream with minimal friction, matching upstream's file layout is what keeps every future sync conflict-free. Still true: never let both files carry a CSP at once — two CSP headers on one response enforce as their intersection.
+
 ## 2026-07-20
 
 ### Added
