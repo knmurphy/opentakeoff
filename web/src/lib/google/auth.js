@@ -83,7 +83,12 @@ export function readPersistedSession(raw, { now, clientId: cid }) {
   if (storedCid !== cid) return null;                 // different build/app on this origin
   if (typeof accessToken !== "string" || !accessToken) return null;
   if (typeof expiresAt !== "number" || !(now < expiresAt - EXPIRY_SKEW_MS)) return null;
-  if (!storedUser || typeof storedUser !== "object") return null;
+  // Require a usable email, not just "some object": AccountChip/AuthChip/
+  // ReportPanel all read user.email directly (no optional chaining in
+  // places), so a malformed/corrupted blob restoring an email-less "signed
+  // in" user would render broken instead of falling back to the sign-in gate.
+  if (!storedUser || typeof storedUser !== "object" || Array.isArray(storedUser)) return null;
+  if (typeof storedUser.email !== "string" || !storedUser.email) return null;
   return { token: { accessToken, expiresAt }, user: storedUser };
 }
 

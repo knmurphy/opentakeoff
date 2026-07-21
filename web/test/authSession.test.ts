@@ -48,6 +48,14 @@ test("missing or empty accessToken ⇒ null", () => {
 test("missing user, or user not an object ⇒ null", () => {
   assert.equal(readPersistedSession(blob({ user: undefined }), { now: NOW, clientId: CLIENT_ID }), null);
   assert.equal(readPersistedSession(blob({ user: "kevin@345flooring.com" }), { now: NOW, clientId: CLIENT_ID }), null);
+  assert.equal(readPersistedSession(blob({ user: ["not", "an", "object"] }), { now: NOW, clientId: CLIENT_ID }), null);
+});
+
+test("user object with no usable email ⇒ null (AccountChip/AuthChip read user.email directly)", () => {
+  assert.equal(readPersistedSession(blob({ user: {} }), { now: NOW, clientId: CLIENT_ID }), null);
+  assert.equal(readPersistedSession(blob({ user: { name: "Kevin" } }), { now: NOW, clientId: CLIENT_ID }), null);
+  assert.equal(readPersistedSession(blob({ user: { email: "" } }), { now: NOW, clientId: CLIENT_ID }), null);
+  assert.equal(readPersistedSession(blob({ user: { email: 42 } }), { now: NOW, clientId: CLIENT_ID }), null);
 });
 
 test("malformed raw payloads collapse to null", () => {
