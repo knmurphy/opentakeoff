@@ -266,7 +266,11 @@ export const localStore = {
         // only this scope's snapshots — legacy records (no `project`) are null-scope
         if ((cur.value.project ?? null) === scope) {
           const { id, ts, label, payload } = cur.value;
-          out.push({ id, ts, label, conditions: (payload?.conditions || []).length, shapes: (payload?.shapes || []).length });
+          // Array.isArray, not || [] — a corrupted payload with a truthy non-array
+          // field would otherwise surface `.length === undefined` in the panel.
+          out.push({ id, ts, label,
+                     conditions: Array.isArray(payload?.conditions) ? payload.conditions.length : 0,
+                     shapes: Array.isArray(payload?.shapes) ? payload.shapes.length : 0 });
         }
         cur.continue();
       };

@@ -37,8 +37,9 @@ export const GESTURE_MS = 140;      // wheel/pinch quiet window before the detai
 // hidden tabs). The primary recovery for THAT case is the visibilitychange retry below —
 // this is only a backstop for some other, unknown cause of a wedged render, so it's set
 // long enough to never fire on a merely slow (not stuck) render — confirmed live: a large
-// region under real CPU contention took 50+ seconds and still resolved on its own.
-export const DETAIL_STALL_MS = 25000;
+// region under real CPU contention took 50+ seconds and still resolved on its own, so the
+// backstop sits above that observation.
+export const DETAIL_STALL_MS = 60000;
 
 export const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
 
