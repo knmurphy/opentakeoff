@@ -1724,6 +1724,10 @@ export default function TakeoffCanvas() {
         if (poly.length) { setPoly((q) => q.slice(0, -1)); }
         else if (ocSel && proposal) { deleteSelectedOcVertex(); }
         else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
+        // bulk delete (#113): the whole multi selection in ONE undoable command
+        // (ids[] delete — one recordCommand entry regardless of N). Mode entry
+        // cleared poly, so the pop branch above can't shadow this.
+        else if (tool === "multiselect" && multiSel.size) { dispatchShape({ type: "delete", ids: [...multiSel] }); clearMulti(); }
         else if (selVert != null && selectedId) { deleteSelectedShapeVertex(); }
         else if (selectedId) { dispatchShape({ type: "delete", ids: [selectedId] }); setSelectedId(null); }
         else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
@@ -3520,7 +3524,10 @@ export default function TakeoffCanvas() {
     if (tool === "surface") commitSurface(poly); else if (tool === "linear") commitLinear(poly); else commitPoly(poly, tool === "deduct"); setPoly([]);
   }
   function deleteSelected() { if (selectedId) { dispatchShape({ type: "delete", ids: [selectedId] }); setSelectedId(null); } }
-  function reassignSelected(condId) { if (selectedId) dispatchShape({ type: "reassign", ids: [selectedId], condition_id: condId }); }
+  // already-assigned guard: a palette-chip dblclick reassigns twice (onClick +
+  // onDoubleClick→openConditionInPanel) — the second must be a no-op, not a
+  // second undo entry with a second provenance stamp
+  function reassignSelected(condId) { if (selectedId && shapes.find((s) => s.id === selectedId)?.condition_id !== condId) dispatchShape({ type: "reassign", ids: [selectedId], condition_id: condId }); }
   function reassignSelectedLabel(value) { if (selectedId) dispatchShape({ type: "label", ids: [selectedId], value }); }   // Select-tool single-shape re-label (#111) — value "" / null clears it; label commands never stamp
 
   // pan/zoom the canvas to fit a condition's takeoffs on the open sheets —
@@ -4194,6 +4201,23 @@ export default function TakeoffCanvas() {
   const markupCount = markups.filter((m) => panelKeySet.has(m.sheet_id)).length;
   const selShape = selectedId ? visibleShapes.find((s) => s.id === selectedId) : null;
   const isMulti = tool === "multiselect";
+  // Shared label across the multi selection: {value} when uniform ("" = none),
+  // {mixed:true} when heterogeneous, null when not applicable. The mixed
+  // sentinel's option VALUE is  -prefixed — outside the visible-string
+  // space real labels live in, so a label literally named "— mixed —" can
+  // never make a uniform selection display as mixed.
+  const multiLabel = (() => {
+    if (!isMulti || !multiSel.size) return null;
+    let v;
+    for (const s of shapes) {
+      if (!multiSel.has(s.id)) continue;
+      const lv = shapeLabelValue(s);
+      if (v === undefined) v = lv;
+      else if (v !== lv) return { mixed: true };
+    }
+    return { value: v ?? "" };
+  })();
+  const MIXED_SENTINEL = " mixed";
   const setShapeHeight = (raw) => {
     const v = Math.max(0, parseFloat(raw) || 0);
     setShapes((ss) => ss.map((s) => {
@@ -4237,7 +4261,20 @@ export default function TakeoffCanvas() {
   // move a selected shape's quantities. EVERY activation surface, reassigning
   // or not, dismisses a live bulk selection.
   const activateCondition = (id, { reassign = true } = {}) => {
-    if (reassign && tool === "select" && selectedId) reassignSelected(id);
+    if (reassign) {
+      if (tool === "select" && selectedId) reassignSelected(id);
+      // bulk reassign (#113): one ids[] command, one undo step. The
+      // already-assigned no-op guard matters: a palette-chip DOUBLE-click fires
+      // onClick then onDoubleClick→openConditionInPanel, both reassign-true —
+      // without the guard that's two undo entries + double provenance stamps.
+      // Digits 1–9 pass reassign:false and can never reach this arm.
+      else if (tool === "multiselect" && multiSel.size) {
+        // only the shapes actually changing — reassign stamps provenance on every
+        // id it's given, and an already-assigned shape must not collect a stamp
+        const ids = [...multiSel].filter((sid) => shapes.find((s) => s.id === sid)?.condition_id !== id);
+        if (ids.length) dispatchShape({ type: "reassign", ids, condition_id: id });
+      }
+    }
     setActiveCond(id);
     panelSelectionRef.current?.();   // plain activation dismisses a live bulk selection (panel view state)
   };
@@ -4733,7 +4770,7 @@ export default function TakeoffCanvas() {
               { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
               { id: "redo", label: "Redo", shortcut: "⇧⌘Z", onSelect: redoShapeCommand },
               "divider",
-              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
+              { id: "del", icon: "close", label: isMulti && multiSel.size > 1 ? `Delete ${multiSel.size} selected` : "Delete selected", shortcut: "⌫", disabled: !(selectedId || (isMulti && multiSel.size)), tint: "var(--c-danger)", onSelect: () => { if (isMulti && multiSel.size) { dispatchShape({ type: "delete", ids: [...multiSel] }); clearMulti(); } else deleteSelected(); } },
             ]}
           />
         </>)}
@@ -4773,13 +4810,27 @@ export default function TakeoffCanvas() {
             so changing it reliably re-labels that shape (a value-always-active
             select couldn't reassign to the already-active label — onChange wouldn't fire). */}
         {shapeLabels.length > 0 && cluster(
-          tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape` : (activeLabel ? `Label · ${activeLabel}` : "Label"),
+          multiLabel ? `Label · ${multiSel.size} selected → shapes`
+            : tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape`
+              : (activeLabel ? `Label · ${activeLabel}` : "Label"),
           <select
-            value={tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
-            onChange={(e) => activateLabel(e.target.value || null)}
-            title="Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."
-            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel ? "var(--cobalt)" : "transparent", color: activeLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
+            value={multiLabel ? (multiLabel.mixed ? MIXED_SENTINEL : multiLabel.value)
+              : tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
+            onChange={(e) => {
+              // multi mode: dispatch directly — ONE ids[] label command (one undo
+              // step, no provenance stamp), and deliberately NOT activateLabel:
+              // bulk-labeling a selection must not change the active tracing label
+              if (multiLabel) dispatchShape({ type: "label", ids: [...multiSel], value: e.target.value });
+              else activateLabel(e.target.value || null);
+            }}
+            title={multiLabel ? `Re-label the ${multiSel.size} selected takeoff${multiSel.size > 1 ? "s" : ""} — one undo step. "No label" clears.` : "Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."}
+            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel || multiLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel && !multiLabel ? "var(--cobalt)" : "transparent", color: activeLabel && !multiLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
             <option value="">No label</option>
+            {multiLabel?.mixed && <option value={MIXED_SENTINEL} disabled>— mixed —</option>}
+            {/* a uniform ad-hoc label that left the vocabulary (removeLabel keeps
+                the string on shapes) still needs an option, or the select goes blank */}
+            {multiLabel && !multiLabel.mixed && multiLabel.value && !shapeLabels.includes(multiLabel.value)
+              && <option value={multiLabel.value}>{multiLabel.value}</option>}
             {shapeLabels.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
         )}
@@ -4839,7 +4890,7 @@ export default function TakeoffCanvas() {
               <span style={{ fontSize: 11.5, color: "var(--ink-muted)", fontStyle: "italic", padding: "3px 8px", border: "1px dashed var(--ink-faint)" }}>drag conditions here (or pin a row) for 1-9 one-click access</span>
             ) : paletteConds.map((c) => {
               const on = c.id === activeCond;
-              const reassign = tool === "select" && selectedId;
+              const reassign = (tool === "select" && selectedId) || (isMulti && multiSel.size > 0);
               const idx = palette.indexOf(c.id);   // palette position → the 1–9 hotkey number
               return (
                 <span key={c.id} style={{ display: "inline-flex", alignItems: "center" }}
@@ -4849,7 +4900,7 @@ export default function TakeoffCanvas() {
                     onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copyMove"; }}
                     onClick={() => activateCondition(c.id)}
                     onDoubleClick={() => openConditionInPanel(c.id)}
-                    title={reassign ? `Reassign the selected takeoff to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
+                    title={reassign ? `Reassign the ${isMulti && multiSel.size > 1 ? `${multiSel.size} selected takeoffs` : "selected takeoff"} to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
                     style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 5px", border: on ? `2px solid ${c.color}` : (reassign ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5, lineHeight: 1 }}>
                     {idx < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px" }}>{idx + 1}</span>}
                     <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
@@ -4922,7 +4973,7 @@ export default function TakeoffCanvas() {
             const hIdx = pinnedPal ? palette.indexOf(c.id) : i;
             const hot = hIdx >= 0 && hIdx < 9;
             return (
-              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
+              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={(tool === "select" && selectedId) || (isMulti && multiSel.size > 0) ? `Reassign ${isMulti && multiSel.size > 1 ? `the ${multiSel.size} selected shapes` : "selected shape"} to this condition` : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : ((tool === "select" && selectedId) || (isMulti && multiSel.size > 0) ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
                 {hot && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinnedPal ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinnedPal ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px" }}>{hIdx + 1}</span>}
                 <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
               </button>
@@ -5821,7 +5872,7 @@ export default function TakeoffCanvas() {
           matLibById={matLibById}
           linkedCountById={linkedCountById}
           panelPrefs={panelPrefs}
-          reassigning={tool === "select" && !!selectedId}
+          reassigning={(tool === "select" && !!selectedId) || (isMulti && multiSel.size > 0)}
           epoch={panelEpoch}
           clearSelectionRef={panelSelectionRef}
           {...panelHandlers}
