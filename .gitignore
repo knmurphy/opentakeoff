@@ -18,6 +18,10 @@ server/.venv/
 .env.*
 !.env.example
 
+# Local plan corpus (real project PDFs) — never commit; previously only ignored
+# via .git/info/exclude, which doesn't travel with clones
+example-plans/
+
 # Netlify CLI local state (never commit; the root netlify.toml IS committed)
 .netlify/
 **/.netlify/
