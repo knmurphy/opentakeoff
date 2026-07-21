@@ -25,7 +25,7 @@ function stubSessionStorage() {
 
 const NOW = 1_700_000_000_000;
 const CLIENT_ID = "abc123.apps.googleusercontent.com";
-const USER = { email: "kevin@345flooring.com", name: "Kevin", hd: "345flooring.com" };
+const USER = { email: "kevin@example.com", name: "Kevin", hd: "example.com" };
 
 function blob(overrides = {}) {
   return {
@@ -62,7 +62,7 @@ test("missing or empty accessToken ⇒ null", () => {
 
 test("missing user, or user not an object ⇒ null", () => {
   assert.equal(readPersistedSession(blob({ user: undefined }), { now: NOW, clientId: CLIENT_ID }), null);
-  assert.equal(readPersistedSession(blob({ user: "kevin@345flooring.com" }), { now: NOW, clientId: CLIENT_ID }), null);
+  assert.equal(readPersistedSession(blob({ user: "kevin@example.com" }), { now: NOW, clientId: CLIENT_ID }), null);
   assert.equal(readPersistedSession(blob({ user: ["not", "an", "object"] }), { now: NOW, clientId: CLIENT_ID }), null);
 });
 
@@ -94,7 +94,7 @@ test("hydrateSession() restores getUser()/isSignedIn() from a valid stubbed blob
   const store = stubSessionStorage();
   (globalThis as any).window = {}; // signOut()'s window.google?.… reference needs this to exist
   try {
-    const restoredUser = { email: "kevin@345flooring.com", name: "Kevin" };
+    const restoredUser = { email: "kevin@example.com", name: "Kevin" };
     store.set("opentakeoff_gauth", JSON.stringify({
       clientId: "", // clientId() resolves to "" outside Vite — see stubSessionStorage() comment
       accessToken: "ya29.fake-token",
@@ -121,7 +121,7 @@ test("hydrateSession() leaves getUser()/isSignedIn() signed-out when the stubbed
       clientId: "",
       accessToken: "ya29.fake-token",
       expiresAt: Date.now() - 1,
-      user: { email: "kevin@345flooring.com" },
+      user: { email: "kevin@example.com" },
     }));
 
     hydrateSession();
@@ -139,7 +139,7 @@ test("persistSession() writes the current session, then signOut() clears it", ()
   const store = stubSessionStorage();
   (globalThis as any).window = {};
   try {
-    const restoredUser = { email: "kevin@345flooring.com" };
+    const restoredUser = { email: "kevin@example.com" };
     store.set("opentakeoff_gauth", JSON.stringify({
       clientId: "",
       accessToken: "ya29.fake-token",

@@ -9,7 +9,7 @@ import { shapesToCsv } from "../src/lib/shapesExport.js";
 import { rfisToCsv } from "../src/lib/rfi.js";
 
 const PROFILES = [
-  { id: "a", name: "345 Flooring", address: "1 A St", logo: "data:image/png;base64,AAA" },
+  { id: "a", name: "Acme Flooring", address: "1 A St", logo: "data:image/png;base64,AAA" },
   { id: "b", name: "Fin Workspaces", address: "2 B St" },
 ];
 
@@ -46,7 +46,7 @@ test("clear-label with no profiles falls back to default (nothing to brand as)",
 test("clear-label with a stale profileId falls back to the first profile", () => {
   const b = resolveBranding({ mode: "clearlabel", profileId: "gone", profiles: PROFILES });
   assert.equal(b.clear, true);
-  assert.equal(b.brandName, "345 Flooring");
+  assert.equal(b.brandName, "Acme Flooring");
 });
 
 test("clear-label profile without a name → brandName degrades to OpenTakeoff, company kept", () => {
@@ -66,9 +66,9 @@ test("garbage / missing mode → default", () => {
 // resolver hands brandName to each CSV, defaulting to OpenTakeoff when unbranded
 test("CSV export titles carry the brand name (default OpenTakeoff)", () => {
   assert.match(totalsToCsv([], "Proj"), /^# Proj — OpenTakeoff report/);
-  assert.match(totalsToCsv([], "Proj", null, null, null, null, null, "345 Flooring"), /^# Proj — 345 Flooring report/);
+  assert.match(totalsToCsv([], "Proj", null, null, null, null, null, "Acme Flooring"), /^# Proj — Acme Flooring report/);
   assert.match(shapesToCsv([], "Proj"), /^# Proj — OpenTakeoff shapes/);
-  assert.match(shapesToCsv([], "Proj", "345 Flooring"), /^# Proj — 345 Flooring shapes/);
+  assert.match(shapesToCsv([], "Proj", "Acme Flooring"), /^# Proj — Acme Flooring shapes/);
   assert.match(rfisToCsv([], [], "Proj"), /^# Proj — OpenTakeoff RFI log/);
-  assert.match(rfisToCsv([], [], "Proj", null, "345 Flooring"), /^# Proj — 345 Flooring RFI log/);
+  assert.match(rfisToCsv([], [], "Proj", null, "Acme Flooring"), /^# Proj — Acme Flooring RFI log/);
 });

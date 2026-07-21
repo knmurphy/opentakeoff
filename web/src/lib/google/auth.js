@@ -160,7 +160,7 @@ export function isSignedIn() {
 // Pure org-domain match — the decision behind isAllowedDomain(), split out so it
 // is unit-testable without the module's private sign-in state. `allowed` is a
 // comma-separated list (an org whose one Workspace spans several domains lists
-// them all, e.g. "345flooring.com,345constructionco.com"); the account is in if
+// them all, e.g. "example.com,example.org"); the account is in if
 // its domain is ANY of them. Derives the domain EXACTLY as the server does
 // (netlify/functions/parse-schedule.mjs): the Workspace `hd` claim, falling back
 // to the email's domain, case-folded. An empty `allowed` ⇒ any account (parity

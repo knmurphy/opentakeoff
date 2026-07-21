@@ -2,7 +2,7 @@
 
 Tracks the cherry-pick effort from `Kentucky-ai/opentakeoff` (upstream remote `upstream`) into this fork. Six ports are live in production; four remain.
 
-## Shipped (production, `takeoff.345flooring.com`)
+## Shipped (production, `opentakeoff.netlify.app`)
 
 | # | Feature | Upstream commit | PR |
 |---|---|---|---|

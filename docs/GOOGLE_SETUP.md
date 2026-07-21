@@ -12,7 +12,7 @@ ship in the bundle; the actual access boundary is enforced by Google, not by a
 secret. See the security model at the end.
 
 You'll need: a Google Cloud account, and a team that's on **Google Workspace**
-(a shared domain, e.g. `345flooring.com`). Workspace is what makes the "Internal"
+(a shared domain, e.g. `example.com`). Workspace is what makes the "Internal"
 consent screen — and therefore the whole "just our team" guarantee — possible.
 
 ---
@@ -56,7 +56,7 @@ Under **APIs & Services → Credentials → Create credentials → OAuth client 
 
 1. **Application type: Web application.**
 2. **Authorized JavaScript origins** — add:
-   - `https://takeoff.345flooring.com` (production)
+   - `https://opentakeoff.netlify.app` (production)
    - `http://localhost:5173` (local dev)
 3. There is **no client secret** in this flow. OpenTakeoff uses the Google
    Identity Services browser token-client (PKCE-style) flow, which authenticates
@@ -67,7 +67,7 @@ Under **APIs & Services → Credentials → Create credentials → OAuth client 
 
    ```dotenv
    VITE_GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
-   VITE_GOOGLE_HD=345flooring.com
+   VITE_GOOGLE_HD=example.com
    ```
 
    `VITE_GOOGLE_HD` is your Workspace domain — the "hosted domain" hint that,
@@ -100,7 +100,7 @@ OpenTakeoff/ (Shared Drive)
 
 Each **per-project folder lives under `Projects/`**, and its Drive **folder id**
 is the handle to the project. That folder id is what your Glide project list
-deep-links to — `https://takeoff.345flooring.com/?project=<driveFolderId>` — so
+deep-links to — `https://opentakeoff.netlify.app/?project=<driveFolderId>` — so
 opening a project from Glide lands the signed-in user directly in that folder.
 See [`GLIDE_INTEGRATION.md`](GLIDE_INTEGRATION.md).
 

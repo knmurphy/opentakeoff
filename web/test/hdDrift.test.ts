@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { hdDriftWarning } from "../netlify/functions/parse-schedule.mjs";
 
 test("agreement ⇒ null (no warning)", () => {
-  assert.equal(hdDriftWarning("345flooring.com", "345flooring.com"), null);
+  assert.equal(hdDriftWarning("example.com", "example.com"), null);
 });
 
 test("both empty ⇒ null (OSS cloud-no-lock parity)", () => {
@@ -22,42 +22,42 @@ test("both empty ⇒ null (OSS cloud-no-lock parity)", () => {
 });
 
 test("the named failure: client empty while server set ⇒ warns", () => {
-  const w = hdDriftWarning("", "345flooring.com");
+  const w = hdDriftWarning("", "example.com");
   assert.ok(w, "must warn when the client gate would silently no-op");
-  assert.match(w!, /345flooring\.com/);
+  assert.match(w!, /example\.com/);
 });
 
 test("reverse drift: client set while server empty ⇒ warns", () => {
-  assert.ok(hdDriftWarning("345flooring.com", ""));
+  assert.ok(hdDriftWarning("example.com", ""));
 });
 
 test("two different domains ⇒ warns", () => {
-  assert.ok(hdDriftWarning("elsewhere.com", "345flooring.com"));
+  assert.ok(hdDriftWarning("elsewhere.com", "example.com"));
 });
 
 test("case and whitespace differences do NOT warn (folded like the gates)", () => {
-  assert.equal(hdDriftWarning("  345Flooring.COM ", "345flooring.com"), null);
-  assert.equal(hdDriftWarning("345flooring.com", "345FLOORING.COM"), null);
+  assert.equal(hdDriftWarning("  Example.COM ", "example.com"), null);
+  assert.equal(hdDriftWarning("example.com", "EXAMPLE.COM"), null);
 });
 
 // Multi-domain lists: compared as SETS — same members in any order agree, a real
 // membership difference warns.
 test("identical multi-domain lists in different order ⇒ null (set compare)", () => {
   assert.equal(
-    hdDriftWarning("345flooring.com,345constructionco.com", "345constructionco.com, 345flooring.com"),
+    hdDriftWarning("example.com,example.org", "example.org, example.com"),
     null,
   );
 });
 
 test("subset/superset lists ⇒ warns (a domain gated on one side only)", () => {
-  const w = hdDriftWarning("345flooring.com", "345flooring.com,345constructionco.com");
+  const w = hdDriftWarning("example.com", "example.com,example.org");
   assert.ok(w, "one gate covers a domain the other doesn't");
-  assert.match(w!, /345constructionco\.com/);
+  assert.match(w!, /example\.org/);
 });
 
 test("duplicate and blank entries are normalized before comparing", () => {
   assert.equal(
-    hdDriftWarning("345flooring.com,,345flooring.com", " 345flooring.com "),
+    hdDriftWarning("example.com,,example.com", " example.com "),
     null,
   );
 });

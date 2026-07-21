@@ -9,7 +9,7 @@
 //      Bearer …) — the client hides the feature when signed out, but THIS check
 //      is the real gate (a hidden button doesn't stop curl);
 //   2. the token is verified against Google, and the account's domain must match
-//      ALLOWED_HD when set (e.g. 345flooring.com);
+//      ALLOWED_HD when set (e.g. example.com);
 //   3. the vision-model key lives only in this function's env (GEMINI_API_KEY),
 //      never in the browser bundle.
 // Off by default: with no GEMINI_API_KEY the endpoint returns 501 and the scan
@@ -24,7 +24,7 @@ const GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v3/userinfo";
 // the model — parse-schedule logs `gemini 404 … NOT_FOUND` distinctly (see
 // mapGeminiHttpFailure) so an early retirement is obvious in the function logs.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
-// Comma-separated org allow-list (e.g. "345flooring.com,345constructionco.com")
+// Comma-separated org allow-list (e.g. "example.com,example.org")
 // — an org whose one Google Workspace spans several domains lists them all here.
 // Empty ⇒ any verified Google account. This is the AUTHORITATIVE org gate; the
 // client mirrors it in isAllowedDomain() (src/lib/google/auth.js) as a build-time

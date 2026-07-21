@@ -32,7 +32,7 @@ OpenTakeoff/ (Shared Drive)
 Give each project row a button (or link) that opens:
 
 ```
-https://takeoff.345flooring.com/?project=<driveFolderId>
+https://opentakeoff.netlify.app/?project=<driveFolderId>
 ```
 
 In Glide:
@@ -41,7 +41,7 @@ In Glide:
    your folder-id column. The template is:
 
    ```
-   https://takeoff.345flooring.com/?project={FolderId}
+   https://opentakeoff.netlify.app/?project={FolderId}
    ```
 
    (replace `{FolderId}` with a reference to your Drive-folder-id column).
