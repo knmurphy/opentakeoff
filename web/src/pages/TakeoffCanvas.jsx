@@ -60,6 +60,7 @@ import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
 // CAPABILITIES those tools close over and the review gate their proposals
 // pass through. AiSettings is the config surface for the ai.js seam.
 import AgentPanel from "../components/AgentPanel.jsx";
+import PluginOverlayHost from "../components/PluginOverlayHost.jsx";   // SPIKE #166 — opt-in plugin injection point
 import AiSettings from "../components/AiSettings.jsx";
 import { AGENT_TOOL_DEFS, executeAgentTool, agentScaleGate } from "../lib/agentTools.js";
 import { runAgentLoop } from "../lib/agentLoop.js";
@@ -454,6 +455,20 @@ export default function TakeoffCanvas() {
   const [projectName, setProjectName] = useState("");   // optional label for the report header
   const [clientInfo, setClientInfo] = useState({});      // per-project client/job fields for branded output; additive payload field
   const fileInputRef = useRef(null);                    // hidden <input type=file> for "Open PDF"
+
+  // SPIKE #166 — the ONLY canvas-side surface a plugin sees. A plain capability
+  // bag (accessors + the real dispatchShape chokepoint), rebuilt each render so
+  // accessors read live state. Everything else — plugin UI, storage, error
+  // isolation — lives in PluginOverlayHost / the plugin, not here.
+  const pluginApi = {
+    units,
+    getConditions: () => conditions,
+    getShapes: () => shapes,
+    getActiveConditionId: () => activeCond,
+    getSelectedShapeId: () => selectedId,
+    getProjectName: () => projectName,
+    dispatchShape,
+  };
 
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -6070,6 +6085,10 @@ export default function TakeoffCanvas() {
           (the Agent panel links here; closing re-renders, so `configured`
           re-reads immediately). */}
       {showAiSettings && <AiSettings onClose={() => setShowAiSettings(false)} />}
+
+      {/* SPIKE #166 — opt-in plugin overlays. Renders nothing when no feature
+          folders are present (public core ships none). */}
+      <PluginOverlayHost api={pluginApi} />
     </div>
   );
 }
