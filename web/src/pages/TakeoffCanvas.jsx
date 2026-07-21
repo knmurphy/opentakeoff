@@ -104,7 +104,11 @@ const CARPET_ROLL_FT = 12;
 // layer, so a WeakMap keyed by shape identity invalidates itself for free.
 const curveFlatCache = new WeakMap();
 function hitShapeC(s, x, y, w, h, thr) {
-  if (!s.curved || s.measure_role !== "linear") return hitShape(s, x, y, w, h, thr);
+  // w/h fall back to {w:0,h:0} while a sheet's image is still loading
+  // (panelImgs[key] unset) — dividing by them below would yield NaN/Infinity,
+  // so fall through to plain hitShape, which zeroes out harmlessly like every
+  // other shape type already does against an unloaded sheet.
+  if (!s.curved || s.measure_role !== "linear" || !w || !h) return hitShape(s, x, y, w, h, thr);
   let cached = curveFlatCache.get(s);
   if (!cached || cached.w !== w || cached.h !== h) {
     // Chord-length stepping needs real px distances, but the cached/returned
