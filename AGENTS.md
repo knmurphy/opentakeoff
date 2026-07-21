@@ -18,16 +18,14 @@ npm run check    # typecheck + lint + test + build — exactly what CI runs; gre
 
 `main` is protected on GitHub (PRs only, green `web` check, branch up to date,
 no force-pushes — admins included) and a local pre-commit hook rejects commits
-made on `main`. **Merging to `main` deploys to production**
-(<https://takeoff.345flooring.com>) via `.github/workflows/deploy.yml`, which
-re-runs `npm run check` and publishes `web/dist` to Netlify with `--no-build`
-— Netlify never builds anything itself.
+made on `main`. **Merging to `main` no longer deploys anything** — the
+production deploy workflow has been removed from this repo; it now only
+builds and tests every change.
 
 > **Production is <https://takeoff.345flooring.com> — nothing else.**
 > <https://opentakeoff.netlify.app> is the *parent repo's*
 > (Kentucky-ai/opentakeoff) demo deployment; the inherited README badge and
-> links still point there, but this fork does not serve it. Verify deploys
-> against takeoff.345flooring.com only.
+> links still point there, but this fork does not serve it.
 
 So:
 
@@ -40,8 +38,8 @@ So:
    (`gh pr merge <n> --squash --delete-branch`), then
    `git checkout main && git pull --ff-only` and delete the local branch
    (`git branch -D <topic>` — squash merges need `-D`).
-5. **Remember a merge is a deploy.** Don't merge work you haven't verified in
-   the running app.
+5. A merge here is not a deploy — still verify your change in the running app
+   before merging, the same as always.
 
 The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.test.ts`); the canvas itself is verified by hand — **Vite does not flag undefined identifiers in JSX**, so grep for your new identifiers after editing and load the app once before you call it done. The bundled sample plan (`web/public/demo/`, wired to the "Load sample plan" button) is the fastest end-to-end check: load it, press `A`, trace a room, open Report.
 
