@@ -4207,13 +4207,13 @@ export default function TakeoffCanvas() {
   const isMulti = tool === "multiselect";
   // Shared label across the multi selection: {value} when uniform ("" = none),
   // {mixed:true} when heterogeneous, null when not applicable. The mixed
-  // sentinel's option VALUE is  -prefixed — outside the visible-string
+  // sentinel's option VALUE is \0-prefixed — outside the visible-string
   // space real labels live in, so a label literally named "— mixed —" can
   // never make a uniform selection display as mixed.
   const multiLabel = (() => {
     if (!isMulti || !multiSel.size) return null;
     let v;
-    for (const s of shapes) {
+    for (const s of visibleShapes) {
       if (!multiSel.has(s.id)) continue;
       const lv = shapeLabelValue(s);
       if (v === undefined) v = lv;
@@ -4221,7 +4221,7 @@ export default function TakeoffCanvas() {
     }
     return { value: v ?? "" };
   })();
-  const MIXED_SENTINEL = " mixed";
+  const MIXED_SENTINEL = "\0mixed";
   const setShapeHeight = (raw) => {
     const v = Math.max(0, parseFloat(raw) || 0);
     setShapes((ss) => ss.map((s) => {
@@ -4274,8 +4274,11 @@ export default function TakeoffCanvas() {
       // Digits 1–9 pass reassign:false and can never reach this arm.
       else if (tool === "multiselect" && multiSel.size) {
         // only the shapes actually changing — reassign stamps provenance on every
-        // id it's given, and an already-assigned shape must not collect a stamp
-        const ids = [...multiSel].filter((sid) => shapes.find((s) => s.id === sid)?.condition_id !== id);
+        // id it's given, and an already-assigned shape must not collect a stamp.
+        // Single pass over visibleShapes (multiSel is pruned to it) rather than
+        // a shapes.find per selected id.
+        const visById = new Map(visibleShapes.map((s) => [s.id, s]));
+        const ids = [...multiSel].filter((sid) => visById.get(sid)?.condition_id !== id);
         if (ids.length) dispatchShape({ type: "reassign", ids, condition_id: id });
       }
     }

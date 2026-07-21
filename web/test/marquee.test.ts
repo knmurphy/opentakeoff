@@ -48,6 +48,13 @@ test("shapes on non-visible or degenerate panels are excluded", () => {
   assert.deepEqual(shapesInStageRect([ghost, flat], [[0, 0], [2000, 800]], withFlat), []);
 });
 
+test("a panel with a real width but zero/missing height is degenerate too — excluded, not folded to Y=0", () => {
+  const flatH = { ...sqA, id: "flat-h", sheet_id: "H" };
+  const withFlatH = (k: string) => (k === "H" ? { img: { w: 1000, h: 0 }, xOffset: 0 } : byKey(k));
+  // Without the height guard, center Y collapses to 0 and a rect touching y=0 would wrongly select it.
+  assert.deepEqual(shapesInStageRect([flatH], [[0, 0], [2000, 800]], withFlatH), []);
+});
+
 test("reversed corners are normalized — [b,a] ≡ [a,b]", () => {
   assert.deepEqual(shapesInStageRect([sqA], [[350, 300], [250, 200]], byKey), ["sq-a"]);
 });

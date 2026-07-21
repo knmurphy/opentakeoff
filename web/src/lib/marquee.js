@@ -19,7 +19,7 @@ export function shapesInStageRect(shapes, [a, b], panelByKey) {
   const out = [];
   for (const s of shapes || []) {
     const sp = panelByKey(s.sheet_id);
-    if (!sp || !sp.img?.w) continue;          // sheet not on screen / degenerate panel
+    if (!sp || !sp.img?.w || !sp.img?.h) continue;   // sheet not on screen / degenerate panel
     const c = shapeCenter(s);
     if (!c) continue;
     const X = c[0] * sp.img.w + sp.xOffset, Y = c[1] * sp.img.h;
