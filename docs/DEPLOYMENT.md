@@ -1,31 +1,20 @@
 # Deployment & CI
 
-How OpenTakeoff ships: every change lands on `main` through a pull request,
-and every merge to `main` is automatically deployed to production at
-<https://takeoff.345flooring.com>. There is no manual deploy step and no
-"deploy later" state — **a merge is a deploy**.
+Every change to this repo lands on `main` through a pull request and is
+built and tested by CI. **This repo does not deploy anywhere** — there is no
+deploy workflow here.
 
 ## The pipeline
 
 ```
 branch → npm run check (local) → PR → CI (`web` check) → squash-merge
-                                                             │
-                                                             ▼
-                                          .github/workflows/deploy.yml
-                                          npm ci → npm run check → netlify deploy
-                                                             │
-                                                             ▼
-                                          https://takeoff.345flooring.com
 ```
 
 - **CI** (`.github/workflows/ci.yml`) runs on every PR: `npm ci` then
   `npm run check` (typecheck → lint → tests → build) inside `web/`.
-- **Deploy** (`.github/workflows/deploy.yml`) runs on every push to `main`
-  (which, given branch protection, means every merged PR). It re-runs the same
-  check, then publishes `web/dist` to Netlify with `--no-build`.
-- **Netlify never builds.** It only hosts what Actions uploads. The
-  `netlify.toml` build section exists for one-click deploys of forks; the
-  production site is upload-only.
+- Nothing in this repo publishes `web/dist` anywhere. The `netlify.toml`
+  build section exists for anyone spinning up their own one-click Netlify
+  deploy of a fork.
 
 ## Local/CI parity
 
@@ -33,7 +22,7 @@ CI failures that don't reproduce locally are almost always environment drift.
 This repo pins the environment so drift can't happen:
 
 - **Node version** lives in `web/.nvmrc` (one source of truth). `nvm use`
-  reads it locally; both workflows read it via `node-version-file`.
+  reads it locally; CI reads it via `node-version-file`.
 - **`npm run check`** is the exact command CI runs — same order, same steps.
   Green locally ⇒ green in CI.
 - **`npm ci`** in CI installs strictly from `package-lock.json`; if your
@@ -51,12 +40,12 @@ variables, read by Vite and inlined into `web/dist` at build:
 - `VITE_PRICING_FILE_ID` — the Drive file id of the synced `pricing.json`.
 
 All three are **non-secret public identifiers** and are meant to ship in the
-bundle — there is no client secret or API key here, so unlike the Netlify token
-they are not repository/environment secrets. They're **optional**: leave them
-unset and the app builds and runs exactly as before (anonymous, local-only). Set
-them as build environment variables wherever `npm run check`/`build` runs (or in
-`web/.env.local` locally — see [`web/.env.example`](../web/.env.example)). Full
-one-time setup is in [`GOOGLE_SETUP.md`](GOOGLE_SETUP.md).
+bundle — there is no client secret or API key here. They're **optional**:
+leave them unset and the app builds and runs exactly as before (anonymous,
+local-only). Set them as build environment variables wherever
+`npm run check`/`build` runs (or in `web/.env.local` locally — see
+[`web/.env.example`](../web/.env.example)). Full one-time setup is in
+[`GOOGLE_SETUP.md`](GOOGLE_SETUP.md).
 
 ## Rules on `main`
 
@@ -73,24 +62,16 @@ Merge with `gh pr merge <n> --squash --delete-branch`, then
 
 ## Security model
 
-- The Netlify deploy token is an **environment secret** on the `production`
-  environment, which is restricted to protected branches — only a workflow
-  that declares `environment: production` *and* runs from `main` can read it.
-  It is never available to pull requests, forks, or other workflows.
+- This repo holds no deploy credentials of any kind — nothing here can
+  publish to any hosting target.
 - Fork PRs run CI with **no secrets** and a **read-only** `GITHUB_TOKEN`;
   first-time contributors need maintainer approval before workflows run.
-- Both workflows declare `permissions: contents: read` (least privilege).
-- Only GitHub-owned and verified-creator actions are allowed, and
-  `netlify-cli` is pinned to an exact version in the deploy step — bump it
-  deliberately, never float it.
-- No token values, account identifiers, or rotation procedures appear in this
-  repo. Account-level runbook details are documented privately.
+- CI declares `permissions: contents: read` (least privilege).
+- Only GitHub-owned and verified-creator actions are allowed.
+- No token values, account identifiers, deploy targets, or rotation
+  procedures appear in this repo.
 
 ## When something fails
 
 - **CI red on a PR**: run `npm run check` in `web/` on Node from `.nvmrc`
   (`nvm use`). It reproduces the failure locally — fix, push, CI re-runs.
-- **Deploy run red after a merge**: the site keeps serving the previous
-  deploy (Netlify deploys are atomic). Fix forward with a new PR, or re-run
-  the failed run from the Actions tab once the cause is external
-  (e.g. a secrets/config issue).
