@@ -40,8 +40,12 @@ export function createDrive({ getToken, fetch = globalThis.fetch, onUnauthorized
     return { Authorization: `Bearer ${t}`, ...extra };
   }
 
-  // Throw a message that carries the HTTP status and any response body, so a
-  // failed call is diagnosable from the console — mirrors contribute.js.
+  // Non-401 failures throw a message carrying the HTTP status and any response
+  // body, so a failed call is diagnosable from the console — mirrors
+  // contribute.js. A 401 is handled separately below: it means the token
+  // itself is dead at Google (#152), not a diagnosable per-call failure, so it
+  // triggers onUnauthorized and throws a re-auth message instead of the
+  // status/body detail.
   async function assertOk(res, what) {
     if (res.ok) return res;
     if (res.status === 401) {
