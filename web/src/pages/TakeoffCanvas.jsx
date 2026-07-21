@@ -3615,18 +3615,20 @@ export default function TakeoffCanvas() {
   async function transferShapesToSheet(sourceKey, destKey) {
     const ids = shapes.filter((s) => s.sheet_id === sourceKey).map((s) => s.id);
     if (!ids.length) return;
-    const res = dispatchShape({ type: "resheet", ids, sheet_id: destKey });
-    // buildPayload() would still read the pre-dispatch `shapes` state (setShapes
-    // hasn't flushed yet this tick) — splice in dispatchShape's synchronous result.
+    // Save the baseline BEFORE committing the move (not after) — the
+    // transferred array is computed here, not dispatched yet, so a failed
+    // save leaves `shapes` state completely untouched instead of moved-with-
+    // no-baseline. The actual dispatchShape (which commits + records the
+    // undo entry) only runs once the save has succeeded.
+    const idSet = new Set(ids);
+    const transferred = shapes.map((s) => (idSet.has(s.id) ? { ...s, sheet_id: destKey } : s));
     try {
-      await store.saveSnapshot(`Transfer ${sourceKey} → ${destKey} — ${new Date().toLocaleString()}`, { ...buildPayload(), shapes: res.shapes });
+      await store.saveSnapshot(`Transfer ${sourceKey} → ${destKey} — ${new Date().toLocaleString()}`, { ...buildPayload(), shapes: transferred });
     } catch (e) {
-      // The resheet already committed (shapes moved, autosave will persist
-      // it) — only the dedicated baseline snapshot failed, so Auto-flag has
-      // nothing to diff against until the user saves one manually.
-      setCommitMsg(`Transferred, but couldn't save a baseline revision: ${e.message || e} — save one manually from Revisions before adjusting, or Auto-flag will have nothing to compare against.`);
+      setCommitMsg(`Couldn't transfer: ${e.message || e} — nothing moved.`);
       return;
     }
+    dispatchShape({ type: "resheet", ids, sheet_id: destKey });
     setCommitMsg(`Transferred ${ids.length} takeoff${ids.length === 1 ? "" : "s"} to ${destKey} — set its scale first if needed, then adjust to match, then Revisions → Auto-flag changes when done.`);
   }
 

@@ -62,7 +62,7 @@ test("changed shape via quantity only (verts identical, computed moved — e.g. 
   const cur = shape({ computed: { area_sf: 120, perimeter_lf: 44 } });
   const clouds = diffShapesForCloud([base], [cur], "b.pdf#1", tagOf);
   assert.equal(clouds.length, 1);
-  assert.equal(clouds[0].status, undefined);   // no status field leaks into the markup shape
+  assert.ok(!("status" in clouds[0]), "no status field leaks into the markup shape");
   assert.match(clouds[0].text, /\+20\.0 SF, \+4\.0 LF/);
 });
 

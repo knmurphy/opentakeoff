@@ -113,12 +113,15 @@ export default function RevisionsPanel({ current, units = "imperial", onRestore,
     if (!canAutoFlag) return;
     const baseShapes = sideA.shapes || [], curShapes = sideB.shapes || [];
     const sheetIds = new Set([...baseShapes, ...curShapes].map((s) => s.sheet_id));
-    // Look up in BOTH sides, current first — a removed shape's condition may
-    // no longer exist in sideB.conditions at all, so preferring one array
-    // outright (rather than falling back per-lookup) would mislabel it "?"
-    // even though the baseline still knows its tag.
-    const tagOf = (id) => (sideB.conditions || []).find((c) => c.id === id)?.finish_tag
-      ?? (sideA.conditions || []).find((c) => c.id === id)?.finish_tag;
+    // One map built once (not a .find() per shape — this runs once per
+    // sheet per shape, so a linear scan per lookup makes the whole diff
+    // O(shapes × conditions)). Baseline entries first, current overwrites —
+    // current wins on a shared id, but a removed shape's condition that only
+    // ever existed in the baseline still resolves instead of falling to "?".
+    const tagById = new Map();
+    for (const c of sideA.conditions || []) tagById.set(c.id, c.finish_tag);
+    for (const c of sideB.conditions || []) tagById.set(c.id, c.finish_tag);
+    const tagOf = (id) => tagById.get(id);
     onAutoFlag([...sheetIds].flatMap((id) => diffShapesForCloud(baseShapes, curShapes, id, tagOf)));
   };
 
