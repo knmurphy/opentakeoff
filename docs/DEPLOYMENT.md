@@ -32,7 +32,7 @@ branch → npm run check (local) → PR → CI (`web` check) → squash-merge
                                                           main
                                                              │
                                                              ▼
-                                          .github/workflows/deploy.yml
+                                    .github/workflows/deploy.yml (private repo only)
                                           npm ci → npm run check → netlify deploy
                                                              │
                                                              ▼

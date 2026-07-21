@@ -27,9 +27,10 @@ and tests every PR but publishes nowhere.
 > `345-Flooring/opentakeoff` (private), which carries this repo's `main` as
 > its `public` remote and merges it in periodically. To actually ship a
 > change to production: merge it here first, then merge `public/main` into
-> the private repo's `main` — that push is what triggers its own
-> `.github/workflows/deploy.yml`. See `docs/DEPLOYMENT.md` for the full
-> pipeline and why the split exists.
+> the private repo's `main` — that push is what triggers
+> `.github/workflows/deploy.yml` **in the private repo** (this repo no
+> longer has that file). See `docs/DEPLOYMENT.md` for the full pipeline and
+> why the split exists.
 >
 > <https://opentakeoff.netlify.app> is the *parent repo's*
 > (Kentucky-ai/opentakeoff) demo deployment — unrelated to either fork.
