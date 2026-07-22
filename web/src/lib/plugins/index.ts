@@ -16,6 +16,12 @@
 // The host and tests import those internals from their concrete modules.
 
 // Author-facing descriptor surface.
+// NOTE: `validateDescriptor` is structural only — it does NOT gate on host
+// version, so calling it directly on a descriptor pinned to a FUTURE context
+// would hard-reject that descriptor for a key this host doesn't yet understand,
+// defeating forward-compat. Always run `selectRenderablePlugins` (the version
+// gate) FIRST and validate only the `rendered` set — `loadFeaturePlugins` already
+// composes them in that order; prefer it over calling this by hand.
 export { validateDescriptor } from "./descriptor.ts";
 export type {
   PluginDescriptor,

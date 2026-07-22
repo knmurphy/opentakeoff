@@ -22,9 +22,13 @@ export function parseVersion(raw: unknown): CtxVersion | null {
   return { major: Number(m[1]), minor: Number(m[2]) };
 }
 
-/** Format a version pair back to its canonical `"major.minor"` string. */
+/** Format a version pair back to its canonical `"major.minor"` string. A
+ *  non-integer part renders as `?` rather than `undefined`/`NaN`, so a diagnostic
+ *  built from a malformed host (only reachable by a mistyped caller — the app
+ *  always passes the well-formed CANVAS_CONTEXT_VERSION) stays readable. */
 export function formatVersion(v: CtxVersion): string {
-  return `${v.major}.${v.minor}`;
+  const part = (n: number): string => (Number.isInteger(n) ? String(n) : "?");
+  return `${part(v.major)}.${part(v.minor)}`;
 }
 
 /** Is a plugin requiring `req` renderable on a host advertising `host`?

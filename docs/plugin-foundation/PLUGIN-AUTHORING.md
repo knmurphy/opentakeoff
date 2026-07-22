@@ -31,6 +31,14 @@ to a *future* `minCtxVersion` is **version-skipped** ("host too old"), never
 hard-rejected — so you can ship a plugin that targets a newer host and older
 hosts simply skip it.
 
+> **Ordering matters if you call the primitives yourself.** That forward-compat
+> guarantee lives in the *order* the host runs things: `selectRenderablePlugins`
+> (the version gate) FIRST, then `validateDescriptor` on only the surviving set.
+> `validateDescriptor` is structural and host-version-blind — call it directly on
+> a future-pinned descriptor and it will hard-reject the unknown key it carries.
+> Use `loadFeaturePlugins`, which composes the two in the correct order; reach for
+> the primitives only if you're re-implementing the loader.
+
 ### Overlay slots — render-time `render({ ctx, onClose })`
 
 ```js
