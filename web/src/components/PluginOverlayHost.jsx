@@ -78,9 +78,12 @@ export default function PluginOverlayHost({ api, onActionError }) {
 
   return (
     <>
+      {/* Launcher + manager column. Anchored at left:58 — clear of the native
+          zoom/fit/dark-mode control column (TakeoffCanvas, left:14 bottom:14, 34px
+          wide) so plugin UI never covers those. See the host safe-zone note. */}
       <div
         style={{
-          position: "absolute", left: 14, bottom: 14, zIndex: 40,
+          position: "absolute", left: 58, bottom: 14, zIndex: 40,
           display: "flex", flexDirection: "column", gap: 6,
         }}
       >

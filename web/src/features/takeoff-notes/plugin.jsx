@@ -62,7 +62,7 @@ function NotesPanel({ ctx, onClose }) {
   return (
     <div
       style={{
-        position: "absolute", left: 14, bottom: 60, zIndex: 45, width: 300,
+        position: "absolute", left: 58, bottom: 60, zIndex: 45, width: 300,
         background: "var(--paper-bright)", border: "1px solid var(--ink)",
         boxShadow: "var(--shadow-2)", color: "var(--ink)", fontSize: 12.5,
       }}
