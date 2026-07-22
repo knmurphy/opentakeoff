@@ -1,0 +1,42 @@
+{
+  "synthetic/clean-rect :: room": {
+    "band": 1.0084,
+    "iou": 0.9902
+  },
+  "synthetic/hatched-room-vertical :: hatched room": {
+    "band": 1.0084,
+    "iou": 0.9902
+  },
+  "synthetic/crosshatch-tile-grid :: tile-grid room": {
+    "band": 1.0084,
+    "iou": 0.9902
+  },
+  "synthetic/poche-wall-riding-rhythm :: poche room": {
+    "band": 1.0084,
+    "iou": 0.9902
+  },
+  "synthetic/two-rooms-thin-wall :: left room": {
+    "band": 0.9638,
+    "iou": 0.989
+  },
+  "synthetic/two-rooms-thin-wall :: right room": {
+    "band": 0.9638,
+    "iou": 0.989
+  },
+  "synthetic/l-shaped-room :: L room": {
+    "band": 0.9541,
+    "iou": 0.9915
+  },
+  "synthetic/column-island :: room with column": {
+    "band": 3.0169,
+    "iou": 0.9662
+  },
+  "synthetic/finish-transition-divider :: left of divider": {
+    "band": 1.0036,
+    "iou": 0.9876
+  },
+  "synthetic/dashed-demising-wall :: left of dashed wall": {
+    "band": 87.5034,
+    "iou": 0.4978
+  }
+}
