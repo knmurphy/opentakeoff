@@ -637,6 +637,16 @@ Every shortcut in the app, verified against the code. Letter keys are suppressed
 
 **Browser support.** OpenTakeoff needs a current browser with IndexedDB and localStorage — recent Chromium-family, Firefox, and Safari releases all qualify. Private/incognito windows may cap or evict storage: fine for a look around, wrong for real work.
 
+## 17. Plugins (opt-in feature panels)
+
+OpenTakeoff has a small opt-in plugin seam. A plugin adds either an **overlay panel** — a launcher button at the bottom-left of the canvas (e.g. **✎ Notes**) — or an **export format** in the report's **Export ▾** menu (e.g. **Scope summary**). Plugins run against a fixed, read-mostly view of your takeoff; they never see your PDF or touch the canvas internals, and each is error-isolated, so a broken plugin degrades to a small "unavailable" notice instead of taking the app down. The host places every plugin panel for you, clear of the zoom/dark-mode controls, so a plugin can't cover them.
+
+Public builds ship only the two reference plugins above; a private or downstream build can drop more in.
+
+### Managing plugins (⚙ Plugins)
+
+The **⚙ Plugins** button (bottom-left, with the launchers) opens a manager listing every loaded plugin with an **Enable / Disable** toggle. **Disable** ("eject") a plugin to turn it off — its launcher, panel, and any export it added disappear immediately. The choice is remembered on this device and survives a reload, so if a plugin ever misbehaves you can switch it off and it stays off. When a plugin crashes or one of its actions fails, the notice that appears also carries a **Disable plugin** button so you can eject it on the spot. Re-enable it any time from the same manager.
+
 ---
 
 *OpenTakeoff is Apache-2.0 and the codebase is deliberately readable — when you outgrow the manual, [`FEATURES.md`](../FEATURES.md) maps every capability to its code.*

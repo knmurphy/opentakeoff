@@ -64,6 +64,8 @@ import PluginOverlayHost from "../components/PluginOverlayHost.jsx";   // #168 �
 import { downloadText as pluginDownloadText } from "../lib/totals.js";   // #168 — the ctx.download impl handed to plugins (additive)
 import { loadFeaturePlugins } from "../lib/plugins/registry.js";   // #169 — export-slot plugins for the report menu (additive)
 import { buildExportItems } from "../lib/plugins/exportItems.js";   // #169 — pre-bound, dispatch-isolated export items (additive)
+import { useDisabledPluginIds } from "../lib/plugins/useDisabledPlugins.js";   // per-user plugin disable — reactive disabled set (additive)
+import { setPluginDisabled } from "../lib/plugins/pluginPrefs.js";   // per-user plugin disable — eject from the action-error banner (additive)
 import AiSettings from "../components/AiSettings.jsx";
 import { AGENT_TOOL_DEFS, executeAgentTool, agentScaleGate } from "../lib/agentTools.js";
 import { runAgentLoop } from "../lib/agentLoop.js";
@@ -483,10 +485,14 @@ export default function TakeoffCanvas() {
   // in a try/catch (a React boundary can't catch a ToolMenu onClick throw), and
   // a caught throw surfaces this non-fatal notice instead of crashing the report.
   const [exportPlugins, setExportPlugins] = useState([]);
+  // Per-user disabled set (reactive): filters export slots below, so a disabled
+  // plugin contributes NO export item and it re-renders when toggled.
+  const disabledPlugins = useDisabledPluginIds();
   // One shared non-fatal notice for any dispatch-time plugin ACTION fault —
   // a throwing export onSelect (#169) OR an overlay plugin's command throwing
   // from its own event handler (#168 I-1). Both surface here; the banner below
-  // renders it.
+  // renders it. Carries the offending `pluginId` too, so the banner can offer a
+  // "Disable plugin" eject. null = no error.
   const [pluginActionError, setPluginActionError] = useState(null);
   useEffect(() => {
     let live = true;
@@ -500,10 +506,13 @@ export default function TakeoffCanvas() {
   // must close over the CURRENT api — a mount snapshot would make plugin reads
   // stale. The build is cheap (one closure per export slot).
   const extraExportItems = buildExportItems(
-    exportPlugins,
+    exportPlugins.filter((p) => !disabledPlugins.has(p.id)),
     pluginApi,
     (pluginId, exportId, err) =>
-      setPluginActionError(`Export “${pluginId}::${exportId}” failed: ${err instanceof Error ? err.message : String(err)}`),
+      setPluginActionError({
+        pluginId,
+        message: `Export “${pluginId}::${exportId}” failed: ${err instanceof Error ? err.message : String(err)}`,
+      }),
   );
 
   const containerRef = useRef(null);
@@ -6114,7 +6123,14 @@ export default function TakeoffCanvas() {
           report panel (z 60–70) so it is visible while the report is open. */}
       {pluginActionError && (
         <div role="alert" style={{ position: "fixed", left: "50%", bottom: 24, transform: "translateX(-50%)", zIndex: 200, display: "flex", alignItems: "center", gap: 12, maxWidth: 520, padding: "10px 14px", background: "var(--paper-bright)", border: "1px solid var(--c-danger)", boxShadow: "var(--shadow-2)", color: "var(--ink)", fontSize: 12.5 }}>
-          <span style={{ flex: 1 }}>{pluginActionError}</span>
+          <span style={{ flex: 1 }}>{pluginActionError.message}</span>
+          {/* Quick-eject: an action-time fault names its plugin, so the banner
+              can turn it off for good (filtered out of export slots + overlays)
+              and clear the stale notice. */}
+          {pluginActionError.pluginId && (
+            <button type="button" onClick={() => { setPluginDisabled(pluginActionError.pluginId, true); setPluginActionError(null); }} title="Disable this plugin"
+              style={{ border: "1px solid var(--c-danger)", background: "var(--paper-bright)", color: "var(--c-danger)", cursor: "pointer", fontSize: 11, padding: "3px 8px", whiteSpace: "nowrap" }}>Disable plugin</button>
+          )}
           <button type="button" onClick={() => setPluginActionError(null)} title="Dismiss"
             style={{ border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0 }}>✕</button>
         </div>
@@ -6143,7 +6159,10 @@ export default function TakeoffCanvas() {
       <PluginOverlayHost
         api={pluginApi}
         onActionError={(pluginId, _action, err) =>
-          setPluginActionError(`Plugin “${pluginId}” action failed: ${err instanceof Error ? err.message : String(err)}`)}
+          setPluginActionError({
+            pluginId,
+            message: `Plugin “${pluginId}” action failed: ${err instanceof Error ? err.message : String(err)}`,
+          })}
       />
     </div>
   );

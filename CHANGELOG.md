@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-22
+
+### Added
+- **Per-user plugin disable / "eject" toggle.** A **⚙ Plugins** manager (bottom-left) lists every loaded feature plugin with an Enable/Disable toggle, and a **Disable plugin** button now appears on a plugin's crash notice and its action-error banner — so a misbehaving plugin can be turned off on the spot. A disabled plugin contributes no launcher, overlay, or export item and stays off across reloads (device-scoped, persisted to `localStorage` `opentakeoff_plugins_disabled`; cross-tab aware via the `storage` event). Host-side only in `web/src/lib/plugins/pluginPrefs.js` + `useDisabledPlugins.js` — the frozen plugin `canvasContext` contract is untouched. ([#177](https://github.com/knmurphy/opentakeoff/issues/177))
+
 ## 2026-07-21
 
 ### Added
