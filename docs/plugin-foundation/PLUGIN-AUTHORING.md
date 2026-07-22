@@ -50,6 +50,14 @@ overlays: [{
 }]
 ```
 
+> **The host owns placement — render RELATIVE content, don't self-position.** Your
+> `render()` output is dropped into a host-positioned, width-bounded slot (a
+> ~300px panel that expands upward, clear of the canvas's own controls). Do **not**
+> set `position: fixed`/`absolute` with your own `top`/`left`/`bottom` on the root
+> — that escapes the safe zone and can cover app controls. Style the panel's
+> look (background, border, padding) but let the host place it. At most one
+> overlay is open at a time, and it shares its slot with the plugin manager.
+
 ### Export slots — action-time **void** `onSelect(ctx)`
 
 ```js
