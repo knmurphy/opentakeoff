@@ -5822,6 +5822,21 @@ export default function TakeoffCanvas() {
           </div>
         </div>
 
+        {/* #168 — opt-in plugin overlays. INSIDE the stage (a definite-height,
+            overflow:hidden box below the top chrome) so the overlay slot's
+            stage-relative height cap actually clamps and a tall overlay scrolls
+            within the stage instead of spilling over the toolbar. Renders nothing
+            when no feature folders are present. onActionError surfaces a plugin's
+            action-time command throw into the shared notice banner below. */}
+        <PluginOverlayHost
+          api={pluginApi}
+          onActionError={(pluginId, _action, err) =>
+            setPluginActionError({
+              pluginId,
+              message: `Plugin “${pluginId}” action failed: ${err instanceof Error ? err.message : String(err)}`,
+            })}
+        />
+
         {/* status line — the transient message bar (was the right end of the old
             conditions bar): floats bottom-center over the canvas, never blocks input */}
         {commitMsg && (
@@ -6150,20 +6165,6 @@ export default function TakeoffCanvas() {
           (the Agent panel links here; closing re-renders, so `configured`
           re-reads immediately). */}
       {showAiSettings && <AiSettings onClose={() => setShowAiSettings(false)} />}
-
-      {/* #168 — opt-in plugin overlays. Renders nothing when no feature folders
-          are present (public core ships none); each overlay is version-gated and
-          error-isolated inside the host. `onActionError` surfaces a plugin's
-          action-time command throw (uncatchable by the render boundary) into the
-          shared notice banner above. */}
-      <PluginOverlayHost
-        api={pluginApi}
-        onActionError={(pluginId, _action, err) =>
-          setPluginActionError({
-            pluginId,
-            message: `Plugin “${pluginId}” action failed: ${err instanceof Error ? err.message : String(err)}`,
-          })}
-      />
     </div>
   );
 }

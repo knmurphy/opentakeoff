@@ -7,6 +7,9 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 ### Added
 - **Per-user plugin disable / "eject" toggle.** A **⚙ Plugins** manager (bottom-left) lists every loaded feature plugin with an Enable/Disable toggle, and a **Disable plugin** button now appears on a plugin's crash notice and its action-error banner — so a misbehaving plugin can be turned off on the spot. A disabled plugin contributes no launcher, overlay, or export item and stays off across reloads (device-scoped, persisted to `localStorage` `opentakeoff_plugins_disabled`; cross-tab aware via the `storage` event). Host-side only in `web/src/lib/plugins/pluginPrefs.js` + `useDisabledPlugins.js` — the frozen plugin `canvasContext` contract is untouched. ([#177](https://github.com/knmurphy/opentakeoff/issues/177))
 
+### Changed
+- **Plugin UI placement is now host-owned (region protection).** Feature-plugin overlays no longer position themselves; the host renders each into a single bottom-left column and a size-bounded slot clear of the canvas's native zoom/dark-mode controls, and the ⚙ manager and an open overlay are mutually exclusive so they can't cover each other. The overlay is bounded to the canvas stage (a tall overlay scrolls within it instead of covering the top toolbar). Fixes plugin launchers covering the dark-mode/zoom buttons. `PluginOverlayHost` is mounted inside the canvas stage (`TakeoffCanvas.jsx`); the frozen contract stays untouched. ([#178](https://github.com/knmurphy/opentakeoff/issues/178))
+
 ## 2026-07-21
 
 ### Added
