@@ -5,10 +5,13 @@
 //
 // React error boundaries catch RENDER-PHASE throws only (render + the commit-
 // phase lifecycles + constructors of descendants). They do NOT catch throws in
-// event handlers or in async work scheduled from a useEffect — React has no
-// way to associate those with a subtree, so they surface as normal rejections.
-// This boundary contains what is structurally containable and is honest about
-// the rest; a plugin's onClick/async faults are its own to handle.
+// event handlers or in async work scheduled from a useEffect — React has no way
+// to associate those with a subtree. Such a throw is NOT swallowed: it escapes
+// as an uncaught error that React logs and isolates to that one handler, so the
+// app survives, but this boundary shows NO "unavailable" notice for it (there is
+// no render to intercept). Surfacing action-time plugin faults to the user would
+// need a host-level error channel — a deliberate follow-up, not attempted here.
+// A well-behaved plugin should guard its own onClick/async handlers.
 
 import React from "react";
 
