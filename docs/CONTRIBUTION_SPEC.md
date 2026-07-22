@@ -222,8 +222,25 @@ should rely on:
 | `hatch_filtered` | bool | one-click ran with hatch filtering |
 | `raster_traced` | bool | traced from scan pixels rather than vector linework |
 | `fill_sensitivity` | number | non-default one-click fill sensitivity |
+| `tier` | string | which flood path produced the region: `strict`, `strict_uncertain`, `moderate`, `predominant_soft`, or `trapped`. A receipt of how hard the fill leaned on removing hatch — never a gate, never a probability. Newer builds may write other tiers; consumers treat unrecognized values as opaque. Vector fills only. |
+| `soft_frac` | number | fraction of the accepted region's boundary that was hatch-classified (soft) rather than wall (hard), 0..1 |
+| `growth_ratio` | number | escalated area ÷ strict area; present only where a strict baseline exists (`strict`/`moderate`), omitted for the unbounded-escalation tiers |
 | `edits` | object | per-kind correction tally, e.g. `{"vertex": 2, "move": 1}` |
 | `evidence` | object | `agent_v1` only: the agent's cited basis for the proposal. **Deep-whitelisted** to exactly `{schedule_row_tag?, matched_text?, seed_norm?}` — never a spread. |
+
+**`confidence` is deliberately NOT registered.** The one-click engine also computes
+an ordinal `confidence` score from the tier, but it is uncalibrated and
+sensitivity-dependent (the same geometry yields a different value at different Fill
+sensitivity), so it stays **local to the app** and never enters the wire — banking a
+`[0,1]` field literally named "confidence" would invite reading it as P(correct). A
+calibrated field may be registered later, once the accuracy corpus can produce a
+calibration curve. `tier`/`soft_frac`/`growth_ratio` — the mechanical inputs that
+score is derived from — are registered above; the derived scalar is not.
+
+**Forward-only coverage.** Like every origin key, `tier`/`soft_frac`/`growth_ratio`
+are excluded from the dedup `_fingerprint` (§4), so a shape already banked from an
+older build dedup-skips on re-contribution and its row keeps the older columns; the
+new keys land on shapes fingerprinted after the upgrade.
 
 **`evidence` privacy note.** `evidence` carries only the matched TOKEN: the
 schedule row code (`schedule_row_tag`) and/or the room-tag/schedule text the

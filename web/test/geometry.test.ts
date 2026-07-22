@@ -261,6 +261,78 @@ test("escalation: Aggressive sensitivity accepts a larger growth that Balanced r
   assert.ok(aggressive.count > balanced.count, "Aggressive recovers the larger region");
 });
 
+// ── confidence / tier receipts (D, issue #175) ─────────────────────────────
+// The engine already knows which path produced a region and how hard it leaned
+// on removing hatch; these pin that it now SAYS so, without changing what it
+// accepts (refusal stays the only gate). Reuses twoRoomMask above, whose softFrac
+// and walls-only growth are exact.
+test("receipts: a plain no-hatch room reports tier strict, confidence 1, growth_ratio 1", () => {
+  const all = [...border, ...room];                     // no hatch family ⇒ softCount 0
+  const f = floodRegion(buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all)), 400, 300);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.tier, "strict");
+  assert.equal(f.softFrac, 0);
+  assert.equal(f.growthRatio, 1);
+  assert.equal(f.confidence, 1);
+  // NB (D4): floodRegion can't tell a vector-no-hatch mask from a raster mask —
+  // both have softCount 0 and both report tier "strict" here. The RASTER path is
+  // the least reliable, so the CALLER (proposeRegion) suppresses these receipts
+  // when raster; this test documents that contract boundary.
+});
+
+test("receipts: a moderate grow-but-verify escalation reports tier moderate + a growth_ratio + mid confidence", () => {
+  const { mo, seed } = twoRoomMask(8, 6, 48);
+  const f = floodRegion(mo, seed[0], seed[1]);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.tier, "moderate");
+  assert.equal(f.hatchFiltered, true);
+  assert.ok((f.growthRatio ?? 0) > 1, `moderate carries a real growth_ratio, got ${f.growthRatio}`);
+  assert.ok((f.confidence ?? 0) >= 0.4 && (f.confidence ?? 0) <= 0.7, `mid-band confidence, got ${f.confidence}`);
+});
+
+test("receipts: an escalation rejected for ballooning reports strict_uncertain at the floor (the purist-B1 fix)", () => {
+  // Previously this heavily-hatch-bounded, escalation-rejected fill was returned
+  // indistinguishable from a clean strict fill. It must now be labeled — and the
+  // ACCEPTED region is still byte-for-byte the strict fill (no behavior change).
+  const { mo, seed } = twoRoomMask(8, 40, 48);
+  const strict = floodRegion({ ...mo, softCount: 0 }, seed[0], seed[1]);
+  const f = floodRegion(mo, seed[0], seed[1]);
+  assert.equal(f.status, "ok"); assert.equal(strict.status, "ok");
+  if (f.status !== "ok" || strict.status !== "ok") return;
+  assert.equal(f.tier, "strict_uncertain");
+  assert.equal(f.confidence, 0.4, "pinned to the confidence floor");
+  assert.ok(!f.hatchFiltered, "the ballooning escalation was rejected");
+  assert.equal(f.count, strict.count, "the accepted region is unchanged from the strict fill");
+});
+
+test("receipts: a predominantly hatch-bounded room reports predominant_soft; growth_ratio omitted", () => {
+  const grid: number[] = [];                             // crosshatch: the seed cell is ok (not tiny), heavily hatch-bounded
+  for (let x = 100; x <= 700; x += 16) grid.push(x, 100, x, 500);
+  for (let y = 100; y <= 500; y += 16) grid.push(100, y, 700, y);
+  const all = [...border, ...room, ...grid];
+  const f = floodRegion(buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all)), 412, 312);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.tier, "predominant_soft");
+  assert.equal(f.confidence, 0.5);
+  assert.equal(f.growthRatio, undefined, "no meaningful strict baseline ⇒ growth_ratio omitted");
+});
+
+test("receipts: a trapped strict fill that escalates cleanly reports trapped; growth_ratio omitted", () => {
+  const grid: number[] = [];
+  for (let x = 100; x <= 700; x += 4) grid.push(x, 100, x, 500);
+  for (let y = 100; y <= 500; y += 4) grid.push(100, y, 700, y);   // fine tile grid ⇒ strict cell is tiny
+  const all = [...border, ...room, ...grid];
+  const f = floodRegion(buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all)), 410, 310);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.tier, "trapped");
+  assert.equal(f.confidence, 0.4);
+  assert.equal(f.growthRatio, undefined);
+});
+
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
 test("cloudBezier: closed loop of cubic segments, more segments for a longer perimeter", () => {
   const small = cloudBezier(0, 0, 100, 60);

@@ -61,6 +61,9 @@ const ORIGIN_FIELDS = [
   "hatch_filtered",       // one-click ran with hatch filtering
   "raster_traced",        // traced from scan pixels, not vector linework
   "fill_sensitivity",     // non-default one-click fill sensitivity
+  "tier",                 // which flood path produced the region (open string; unrecognized = opaque)
+  "soft_frac",            // hatch-bounded fraction of the accepted region's boundary
+  "growth_ratio",         // escalation area growth vs the strict fill (moderate/strict tiers only)
   "edits",                // per-kind correction tally, e.g. { vertex: 2, move: 1 }
   "evidence",             // agent_v1: cited basis — DEEP-whitelisted below, never passed through
 ];

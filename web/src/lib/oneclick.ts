@@ -35,11 +35,26 @@ export type OpsTable = Record<string, number>;
 export interface VectorGeometry { points: Point[]; segs: number[]; meta: Uint8Array; imageArea: number; }
 export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number; softCount: number; }
 export interface RegionResult { region: Uint8Array; mw: number; mh: number; ws: number; count?: number; }
+// Which flood path produced an accepted region — a receipt, not a gate (D / #175).
+// Open by convention: the wire echoes it as an opaque string and consumers treat
+// an unrecognized tier as opaque, so a future tier is an additive change.
+//   strict            no hatch, OR a wall-dominated strict fill (soft_frac < escalateFrac)
+//   moderate          grow-but-verify escalation accepted within the growth cap
+//   predominant_soft  ≥ HATCH_BOUND_FRAC hatch-bounded, unbounded escalation accepted
+//   trapped           strict found no room (tiny/boundary), unbounded escalation accepted
+//   strict_uncertain  strict was ok AND hatch-bounded, but the escalation leaked/ballooned
+//                     and was rejected — the highest-risk accepted fill (pinned to the floor)
+export type FloodTier = "strict" | "strict_uncertain" | "moderate" | "predominant_soft" | "trapped";
 export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean;
+      // ── receipts (D / #175): what the engine already knew, now said. Present
+      // on vector fills; the caller suppresses them on the raster path (no tier
+      // logic runs there). `confidence` is an ORDINAL triage score, NOT a
+      // calibrated probability and NEVER a gate — refusal stays the only gate.
+      tier?: FloodTier; softFrac?: number; growthRatio?: number; confidence?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -440,23 +455,64 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
 //     (removing linework only leaks more).
 // `sensitivity` (0..1) dials the moderate tier's escalateFrac/growthMax via
 // escalationParams; the default is the calibrated Balanced preset.
+type OkFlood = Extract<FloodResult, { status: "ok" }>;
+const softFracOf = (r: OkFlood): number => {
+  const b = (r.hardHits || 0) + (r.softHits || 0);
+  return b ? (r.softHits || 0) / b : 0;
+};
+// Ordinal confidence receipt (D3, #175). Categorical bands, NOT a continuous
+// scale and NOT a probability — a triage/receipt signal only. strict_uncertain
+// is pinned to the floor because it is the escalation-rejected, hatch-bounded fill.
+function confidenceFor(tier: FloodTier, softFrac: number, growthRatio: number | undefined, growthMax: number): number {
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  switch (tier) {
+    case "strict": return +clamp(1 - 0.3 * softFrac, 0, 1).toFixed(3);
+    case "moderate": {
+      const frac = growthMax > 1 ? clamp(((growthRatio ?? 1) - 1) / (growthMax - 1), 0, 1) : 0;
+      return +clamp(0.7 - 0.3 * frac, 0.4, 0.7).toFixed(3);
+    }
+    case "predominant_soft": return 0.5;
+    case "trapped": return 0.4;
+    case "strict_uncertain": return 0.4;
+  }
+}
+function stampReceipt(r: OkFlood, tier: FloodTier, softFrac: number, growthRatio: number | undefined, growthMax: number): OkFlood {
+  r.tier = tier;
+  r.softFrac = +softFrac.toFixed(4);
+  if (growthRatio !== undefined) r.growthRatio = +growthRatio.toFixed(4);
+  r.confidence = confidenceFor(tier, softFrac, growthRatio, growthMax);
+  return r;
+}
+
 export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED): FloodResult {
   const r1 = floodPass(maskObj, ix, iy, 3);
-  if (!maskObj.softCount) return r1;
-  if (r1.status === "leak") return r1;
   const { escalateFrac, growthMax } = escalationParams(sensitivity);
+  // No soft cells: a plain strict fill (vector-no-hatch; also the raster path,
+  // whose receipts the caller suppresses). growth_ratio 1, confidence ~full.
+  if (!maskObj.softCount) {
+    if (r1.status === "ok") stampReceipt(r1, "strict", 0, 1, growthMax);
+    return r1;
+  }
+  if (r1.status === "leak") return r1;
   let growthCap = Infinity;                            // unbounded unless we're in the moderate band
+  let sf1 = 0;
   if (r1.status === "ok") {
-    const blocks = (r1.hardHits || 0) + (r1.softHits || 0);
-    const softFrac = blocks ? (r1.softHits || 0) / blocks : 0;
-    if (softFrac < escalateFrac) return r1;            // lightly hatch-bounded ⇒ strict is right
-    if (softFrac < HATCH_BOUND_FRAC) growthCap = growthMax; // moderate ⇒ grow-but-verify
+    sf1 = softFracOf(r1);
+    if (sf1 < escalateFrac) return stampReceipt(r1, "strict", sf1, 1, growthMax); // wall-dominated ⇒ strict is right
+    if (sf1 < HATCH_BOUND_FRAC) growthCap = growthMax; // moderate ⇒ grow-but-verify
   }
   const r2 = floodPass(maskObj, ix, iy, 1);
   if (r2.status === "ok" && (r1.status !== "ok" || r2.count <= r1.count * growthCap)) {
     r2.hatchFiltered = true;
+    const sf2 = softFracOf(r2);                        // the ACCEPTED (walls-only) region's boundary
+    if (r1.status !== "ok") stampReceipt(r2, "trapped", sf2, undefined, growthMax);
+    else if (sf1 >= HATCH_BOUND_FRAC) stampReceipt(r2, "predominant_soft", sf2, undefined, growthMax);
+    else stampReceipt(r2, "moderate", sf2, r2.count / r1.count, growthMax);
     return r2;
   }
+  // Escalation attempted (sf1 ≥ escalateFrac) but rejected (leaked/ballooned): the
+  // strict fill stands, flagged as the highest-risk accepted fill.
+  if (r1.status === "ok") stampReceipt(r1, "strict_uncertain", sf1, 1, growthMax);
   return r1;
 }
 

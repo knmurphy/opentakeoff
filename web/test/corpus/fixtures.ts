@@ -87,7 +87,7 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
       const segs = [...border, ...room];
       return { segs, meta: zeroMeta(segs) };
     },
-    cases: [{ label: "room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" } }],
+    cases: [{ label: "room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectTier: "strict" }],
   },
   {
     id: "synthetic/hatched-room-vertical", bucket: "synthetic", imgW: W, imgH: H, regressionRef: "#32",
@@ -97,7 +97,7 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
       const segs = [...border, ...room, ...hatch];
       return { segs, meta: zeroMeta(segs) };
     },
-    cases: [{ label: "hatched room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectHatchFiltered: true }],
+    cases: [{ label: "hatched room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectHatchFiltered: true, expectTier: "predominant_soft" }],
   },
   {
     id: "synthetic/crosshatch-tile-grid", bucket: "synthetic", imgW: W, imgH: H, regressionRef: "#32",
@@ -107,7 +107,7 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
       const segs = [...border, ...room, ...grid];
       return { segs, meta: zeroMeta(segs) };
     },
-    cases: [{ label: "tile-grid room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectHatchFiltered: true }],
+    cases: [{ label: "tile-grid room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectHatchFiltered: true, expectTier: "predominant_soft" }],
   },
   {
     id: "synthetic/poche-wall-riding-rhythm", bucket: "synthetic", imgW: W, imgH: H, regressionRef: "#32",
@@ -122,7 +122,7 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
       for (let k = 0; k < 4; k++) meta[roomStart + k] = SEG_FILLONLY;
       return { segs, meta };
     },
-    cases: [{ label: "poche room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectHatchFiltered: true }],
+    cases: [{ label: "poche room", seed: [450, 375], golden: rectRing(200, 200, 700, 550), expect: { kind: "accept" }, expectHatchFiltered: true, expectTier: "predominant_soft" }],
   },
   {
     id: "synthetic/door-gap-no-swing", bucket: "synthetic", imgW: W, imgH: H, regressionRef: "#32",
@@ -149,8 +149,8 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
       return { segs, meta: zeroMeta(segs) };
     },
     cases: [
-      { label: "left room", seed: [370, 375], golden: rectRing(200, 200, 550, 550), expect: { kind: "accept" }, noBleedInto: rectRing(560, 210, 890, 540) },
-      { label: "right room", seed: [730, 375], golden: rectRing(550, 200, 900, 550), expect: { kind: "accept" }, noBleedInto: rectRing(210, 210, 540, 540) },
+      { label: "left room", seed: [370, 375], golden: rectRing(200, 200, 550, 550), expect: { kind: "accept" }, expectTier: "strict", noBleedInto: rectRing(560, 210, 890, 540) },
+      { label: "right room", seed: [730, 375], golden: rectRing(550, 200, 900, 550), expect: { kind: "accept" }, expectTier: "strict", noBleedInto: rectRing(210, 210, 540, 540) },
     ],
   },
   {
@@ -167,7 +167,7 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
     cases: [{
       label: "L room", seed: [300, 700],
       golden: [[200, 200], [500, 200], [500, 500], [800, 500], [800, 800], [200, 800]],
-      expect: { kind: "accept" },
+      expect: { kind: "accept" }, expectTier: "strict",
     }],
   },
   {
@@ -202,7 +202,7 @@ export const SYNTHETIC_FIXTURES: CorpusFixture[] = [
       const segs = [...border, ...room, ...divider];
       return { segs, meta: zeroMeta(segs) };
     },
-    cases: [{ label: "left of divider", seed: [340, 375], golden: rectRing(200, 200, 500, 550), expect: { kind: "accept" }, noBleedInto: rectRing(510, 210, 790, 540) }],
+    cases: [{ label: "left of divider", seed: [340, 375], golden: rectRing(200, 200, 500, 550), expect: { kind: "accept" }, expectTier: "strict", noBleedInto: rectRing(510, 210, 790, 540) }],
   },
   {
     id: "synthetic/dashed-demising-wall", bucket: "synthetic", imgW: W, imgH: H, regressionRef: "#32",

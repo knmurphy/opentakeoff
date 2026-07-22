@@ -63,6 +63,11 @@ export interface ShapeOrigin {
   hatch_filtered?: true;
   raster_traced?: true;
   fill_sensitivity?: number;
+  /** Flood receipts (D, #175): which path produced the region + its boundary
+   *  composition. `tier` is open — treat an unrecognized value as opaque. */
+  tier?: string;
+  soft_frac?: number;
+  growth_ratio?: number;
   /** Machine's original trace, frozen on first human edit (provenance.js). */
   proposed_verts_norm?: [number, number][];
   edited?: boolean;
@@ -70,6 +75,15 @@ export interface ShapeOrigin {
   copied?: boolean;
   /** Per-kind tally of human corrections (provenance.js). */
   edits?: Record<string, number>;
+}
+
+/** Flood receipts (D, #175) as an additive spread for replies and origins.
+ *  Vector-only — this server has no raster path — and confidence stays off the
+ *  wire (uncalibrated; see CONTRIBUTION_SPEC §5). Maps the engine's camelCase to
+ *  the wire's snake_case; growth_ratio is omitted when the tier had no baseline. */
+function floodReceipts(f: { tier?: string; softFrac?: number; growthRatio?: number }) {
+  if (!f.tier) return {};
+  return { tier: f.tier, soft_frac: f.softFrac, ...(f.growthRatio != null ? { growth_ratio: f.growthRatio } : {}) };
 }
 
 export interface Shape {
@@ -349,6 +363,7 @@ export class Session {
       status: "ok" as const,
       nverts: ring.length,
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
+      ...floodReceipts(f),
       ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
     };
     if (s.upp == null) {
@@ -373,6 +388,7 @@ export class Session {
         seed_norm: [x / s.widthPx, y / s.heightPx],
         reviewed: false,
         ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
+        ...floodReceipts(f),
       }).id;
     }
     return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
@@ -403,6 +419,7 @@ export class Session {
           label: r.str,
           nverts: ring.length,
           ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+          ...floodReceipts(r.flood),
           ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
         };
         if (s.upp == null) {
@@ -419,6 +436,7 @@ export class Session {
             seed_norm: [r.seed[0] / s.widthPx, r.seed[1] / s.heightPx],
             reviewed: false,
             ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+            ...floodReceipts(r.flood),
           }).id;
         }
         return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };

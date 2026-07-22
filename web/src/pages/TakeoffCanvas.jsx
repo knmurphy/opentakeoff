@@ -2912,7 +2912,11 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+        // tier/soft_frac/growth_ratio are the flood's honest receipts (D, #175);
+        // conf is a LOCAL ordinal chip only (never whitelisted). All vector-only —
+        // the raster path runs no tier logic, so it reports none of them.
+        const rcpt = !raster && f.tier ? { tier: f.tier, sf: f.softFrac, gr: f.growthRatio, conf: f.confidence } : {};
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster, ...rcpt }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
@@ -2989,7 +2993,7 @@ export default function TakeoffCanvas() {
       // an untouched region's verts ARE the proposal, so nothing extra rides.
       // Post-Create edits are stamped by stampEdit, which freezes the same
       // field from the pre-edit ring only when Create didn't already.
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.tier ? { tier: r.tier, soft_frac: r.sf, ...(r.gr != null ? { growth_ratio: r.gr } : {}) } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
     dispatchShape({ type: "add", shapes: made });   // Create is the creation gate — id/created_at minted by the command
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
@@ -3806,6 +3810,8 @@ export default function TakeoffCanvas() {
       seed_norm: [+xn.toFixed(5), +yn.toFixed(5)],
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
       ...(raster ? { raster_traced: true } : {}),
+      // flood receipts (D, #175) — vector-only; confidence stays local, not echoed
+      ...(!raster && f.tier ? { tier: f.tier, soft_frac: f.softFrac, ...(f.growthRatio != null ? { growth_ratio: f.growthRatio } : {}) } : {}),
     };
   }
 

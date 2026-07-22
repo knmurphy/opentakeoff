@@ -47,7 +47,7 @@ function goldenRings(g: CorpusCase["golden"]): Ring[] {
 const key = (fx: CorpusFixture, c: CorpusCase) => `${fx.id} :: ${c.label}`;
 
 // ── one pass over the whole corpus, collected once ──────────────────────────
-interface Row { fx: CorpusFixture; c: CorpusCase; k: string; status: string; band?: number; iou?: number; hatchFiltered?: boolean; bleedFrac?: number; }
+interface Row { fx: CorpusFixture; c: CorpusCase; k: string; status: string; band?: number; iou?: number; hatchFiltered?: boolean; tier?: string; bleedFrac?: number; }
 const rows: Row[] = [];
 for (const fx of SYNTHETIC_FIXTURES) {
   const { segs, meta } = fx.build();
@@ -57,6 +57,7 @@ for (const fx of SYNTHETIC_FIXTURES) {
     const row: Row = { fx, c, k: key(fx, c), status: f.status };
     if (f.status === "ok") {
       row.hatchFiltered = !!f.hatchFiltered;
+      row.tier = f.tier;
       const gold = goldenRings(c.golden);
       if (gold.length) {
         const ring = traceRegion(f);
@@ -90,8 +91,7 @@ for (const r of rows) {
     if (r.c.expectHatchFiltered !== undefined) {
       assert.equal(r.hatchFiltered, r.c.expectHatchFiltered, `hatchFiltered mismatch`);
     }
-    // expectTier activates automatically once D (#175) adds f.tier — a no-op until then
-    // (kept here so the escalation-rejected fixture asserts strict_uncertain when it lands).
+    if (r.c.expectTier) assert.equal(r.tier, r.c.expectTier, `tier mismatch: expected ${r.c.expectTier}, got ${r.tier}`);
 
     const base = baseline[r.k];
     assert.ok(base, `no committed baseline for "${r.k}" — run test/corpus/record.ts`);
