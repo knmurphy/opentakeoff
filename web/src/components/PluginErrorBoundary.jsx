@@ -47,18 +47,36 @@ export default class PluginErrorBoundary extends React.Component {
             Plugin “{this.props.label}” unavailable
           </strong>
           <div style={{ color: "var(--ink-muted)", marginTop: 4 }}>{detail}</div>
-          {this.props.onClose && (
-            <button
-              type="button"
-              onClick={this.props.onClose}
-              style={{
-                marginTop: 8, padding: "4px 10px", border: "1px solid var(--ink-faint)",
-                background: "var(--paper-bright)", cursor: "pointer", fontSize: 12,
-              }}
-            >
-              Dismiss
-            </button>
-          )}
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            {this.props.onClose && (
+              <button
+                type="button"
+                onClick={this.props.onClose}
+                style={{
+                  padding: "4px 10px", border: "1px solid var(--ink-faint)",
+                  background: "var(--paper-bright)", cursor: "pointer", fontSize: 12,
+                }}
+              >
+                Dismiss
+              </button>
+            )}
+            {/* Quick-eject: a render-crashed plugin can be turned off for good.
+                The host filters on the disabled set, so the crashed slot
+                disappears on the re-render and stays gone across reloads. */}
+            {this.props.onDisable && (
+              <button
+                type="button"
+                onClick={this.props.onDisable}
+                style={{
+                  padding: "4px 10px", border: "1px solid var(--c-danger)",
+                  background: "var(--paper-bright)", color: "var(--c-danger)",
+                  cursor: "pointer", fontSize: 12,
+                }}
+              >
+                Disable plugin
+              </button>
+            )}
+          </div>
         </div>
       );
     }
