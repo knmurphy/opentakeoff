@@ -60,6 +60,8 @@ import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
 // CAPABILITIES those tools close over and the review gate their proposals
 // pass through. AiSettings is the config surface for the ai.js seam.
 import AgentPanel from "../components/AgentPanel.jsx";
+import PluginOverlayHost from "../components/PluginOverlayHost.jsx";   // #168 — opt-in plugin overlay injection point (additive)
+import { downloadText as pluginDownloadText } from "../lib/totals.js";   // #168 — the ctx.download impl handed to plugins (additive)
 import AiSettings from "../components/AiSettings.jsx";
 import { AGENT_TOOL_DEFS, executeAgentTool, agentScaleGate } from "../lib/agentTools.js";
 import { runAgentLoop } from "../lib/agentLoop.js";
@@ -454,6 +456,23 @@ export default function TakeoffCanvas() {
   const [projectName, setProjectName] = useState("");   // optional label for the report header
   const [clientInfo, setClientInfo] = useState({});      // per-project client/job fields for branded output; additive payload field
   const fileInputRef = useRef(null);                    // hidden <input type=file> for "Open PDF"
+
+  // #168 — the ONLY canvas-side surface a plugin sees: a plain capability bag
+  // (#167's CanvasApi). Rebuilt each render so its accessors close over the
+  // current state (live reads, never a mount snapshot); dispatchShape is the
+  // real undo/redo + provenance chokepoint, download is the shared text export.
+  // Everything else — plugin UI, storage, error isolation — lives in
+  // PluginOverlayHost / the plugin, not here.
+  const pluginApi = {
+    units,
+    getConditions: () => conditions,
+    getShapes: () => shapes,
+    getActiveConditionId: () => activeCond || null,
+    getSelectedShapeId: () => selectedId,
+    getProjectName: () => projectName,
+    dispatchShape,
+    download: pluginDownloadText,
+  };
 
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -6070,6 +6089,11 @@ export default function TakeoffCanvas() {
           (the Agent panel links here; closing re-renders, so `configured`
           re-reads immediately). */}
       {showAiSettings && <AiSettings onClose={() => setShowAiSettings(false)} />}
+
+      {/* #168 — opt-in plugin overlays. Renders nothing when no feature folders
+          are present (public core ships none); each overlay is version-gated and
+          error-isolated inside the host. */}
+      <PluginOverlayHost api={pluginApi} />
     </div>
   );
 }
