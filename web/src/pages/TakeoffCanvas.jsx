@@ -62,6 +62,8 @@ import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
 import AgentPanel from "../components/AgentPanel.jsx";
 import PluginOverlayHost from "../components/PluginOverlayHost.jsx";   // #168 — opt-in plugin overlay injection point (additive)
 import { downloadText as pluginDownloadText } from "../lib/totals.js";   // #168 — the ctx.download impl handed to plugins (additive)
+import { loadFeaturePlugins } from "../lib/plugins/registry.js";   // #169 — export-slot plugins for the report menu (additive)
+import { buildExportItems } from "../lib/plugins/exportItems.js";   // #169 — pre-bound, dispatch-isolated export items (additive)
 import AiSettings from "../components/AiSettings.jsx";
 import { AGENT_TOOL_DEFS, executeAgentTool, agentScaleGate } from "../lib/agentTools.js";
 import { runAgentLoop } from "../lib/agentLoop.js";
@@ -473,6 +475,32 @@ export default function TakeoffCanvas() {
     dispatchShape,
     download: pluginDownloadText,
   };
+
+  // #169 — plugin export-format slots, injected into the report's Export ▾ menu.
+  // Descriptors load ONCE (static); the pre-bound items are rebuilt each render
+  // against the CURRENT pluginApi so a plugin's reads stay live (never a mount
+  // snapshot). Isolation is dispatch-time: buildExportItems wraps each onSelect
+  // in a try/catch (a React boundary can't catch a ToolMenu onClick throw), and
+  // a caught throw surfaces this non-fatal notice instead of crashing the report.
+  const [exportPlugins, setExportPlugins] = useState([]);
+  const [pluginExportError, setPluginExportError] = useState(null);
+  useEffect(() => {
+    let live = true;
+    loadFeaturePlugins()
+      .then((loaded) => { if (live) setExportPlugins(loaded.filter((p) => p.exports.length > 0)); })
+      .catch((err) => { console.error("[plugins] failed to load export plugins:", err); });
+    return () => { live = false; };
+  }, []);
+  // Rebuilt every render (plain compute, not memoized): pluginApi is a fresh
+  // object each render so its accessors read live state, and the pre-bound items
+  // must close over the CURRENT api — a mount snapshot would make plugin reads
+  // stale. The build is cheap (one closure per export slot).
+  const extraExportItems = buildExportItems(
+    exportPlugins,
+    pluginApi,
+    (pluginId, exportId, err) =>
+      setPluginExportError(`Export “${pluginId}::${exportId}” failed: ${err instanceof Error ? err.message : String(err)}`),
+  );
 
   const containerRef = useRef(null);
   const stageRef = useRef(null);
@@ -6071,8 +6099,21 @@ export default function TakeoffCanvas() {
           provenanceCounters={provCounters}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
+          extraExportItems={extraExportItems}
           onClose={() => setShowReport(false)}
         />
+      )}
+
+      {/* #169 — non-fatal plugin-export notice. A throwing export is caught at
+          dispatch time (buildExportItems), the report survives, and this banner
+          surfaces the failure. z-index sits above the report panel (z 60–70) so
+          it is visible while the report is open. */}
+      {pluginExportError && (
+        <div role="alert" style={{ position: "fixed", left: "50%", bottom: 24, transform: "translateX(-50%)", zIndex: 200, display: "flex", alignItems: "center", gap: 12, maxWidth: 520, padding: "10px 14px", background: "var(--paper-bright)", border: "1px solid var(--c-danger)", boxShadow: "var(--shadow-2)", color: "var(--ink)", fontSize: 12.5 }}>
+          <span style={{ flex: 1 }}>{pluginExportError}</span>
+          <button type="button" onClick={() => setPluginExportError(null)} title="Dismiss"
+            style={{ border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0 }}>✕</button>
+        </div>
       )}
 
       {showRevisions && (

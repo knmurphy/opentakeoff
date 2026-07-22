@@ -11,18 +11,8 @@
 
 import React, { useEffect, useState } from "react";
 import { loadFeaturePlugins } from "../lib/plugins/registry.js";
-import { buildCanvasContext } from "../lib/plugins/context.js";
-import { metaGet, metaPut, metaDelete } from "../lib/store.js";
+import { mintPluginCtx } from "../lib/plugins/host.js";
 import PluginErrorBoundary from "./PluginErrorBoundary.jsx";
-
-// Adapt the app's flat meta helpers to the MetaStore handle buildCanvasContext
-// injects into per-plugin storage. Device-scoped; the storage layer owns the
-// namespacing so a plugin can't climb into another's keys.
-const META_STORE = {
-  get: (key) => metaGet(key),
-  put: (key, value) => metaPut(key, value),
-  delete: (key) => metaDelete(key),
-};
 
 const launcherStyle = {
   padding: "6px 10px", border: "1px solid var(--ink-faint)",
@@ -90,7 +80,7 @@ export default function PluginOverlayHost({ api }) {
       {openSlot && (
         <PluginErrorBoundary key={openSlot.key} label={openSlot.plugin.id} onClose={close}>
           {openSlot.overlay.render({
-            ctx: buildCanvasContext(api, openSlot.plugin.id, META_STORE),
+            ctx: mintPluginCtx(api, openSlot.plugin.id),
             onClose: close,
           })}
         </PluginErrorBoundary>
