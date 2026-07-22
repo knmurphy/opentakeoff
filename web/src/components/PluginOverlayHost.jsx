@@ -23,6 +23,7 @@ import { setPluginDisabled } from "../lib/plugins/pluginPrefs.js";
 import PluginErrorBoundary from "./PluginErrorBoundary.jsx";
 
 const launcherStyle = {
+  flexShrink: 0, // launchers never shrink — only the panel gives way when tall
   padding: "6px 10px", border: "1px solid var(--ink-faint)",
   background: "var(--paper-bright)", color: "var(--ink)", cursor: "pointer",
   fontSize: 12, fontWeight: 600, boxShadow: "var(--shadow-1)", textAlign: "left",
@@ -99,6 +100,11 @@ export default function PluginOverlayHost({ api, onActionError }) {
     <div
       style={{
         position: "absolute", left: 58, bottom: 14, zIndex: 40,
+        // maxHeight binds to the STAGE — this column is a direct child of it (a
+        // definite-height ancestor, like the native panel at TakeoffCanvas:5925),
+        // so the cap actually clamps. The flex-shrinkable panel below then scrolls
+        // within it instead of the whole column growing over the top toolbar.
+        maxHeight: "calc(100% - 28px)",
         display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6,
       }}
     >
@@ -109,12 +115,12 @@ export default function PluginOverlayHost({ api, onActionError }) {
           the top toolbar. The per-slot error boundary contains a render throw
           (degrades to a notice); action-time throws surface via `onActionError`. */}
       {openSlot && (
-        // Bounded to the canvas STAGE (calc(100% - 28px), matching the native
-        // panels), not the viewport — so a tall overlay scrolls WITHIN the stage
-        // instead of spilling up over the top toolbar. Shadow on the wrapper: its
-        // own box-shadow isn't clipped by its own overflow (a descendant's would
-        // be), so the overlay keeps a drop shadow.
-        <div style={{ width: PANEL_WIDTH, maxHeight: "calc(100% - 28px)", overflowY: "auto", boxShadow: "var(--shadow-2)" }}>
+        // The flex-shrinkable panel: natural height when it fits, but once the
+        // column hits its stage-bound maxHeight a tall overlay shrinks (flex:0 1
+        // auto + minHeight:0) and SCROLLS here (overflowY:auto) instead of pushing
+        // the column over the top toolbar. Shadow on the wrapper — an element's
+        // own box-shadow isn't clipped by its own overflow (a descendant's would).
+        <div style={{ width: PANEL_WIDTH, flex: "0 1 auto", minHeight: 0, overflowY: "auto", boxShadow: "var(--shadow-2)" }}>
           <PluginErrorBoundary
             key={openSlot.key}
             label={openSlot.plugin.id}
@@ -139,7 +145,7 @@ export default function PluginOverlayHost({ api, onActionError }) {
           aria-label="Plugin manager"
           style={{
             width: PANEL_WIDTH, boxSizing: "border-box",
-            maxHeight: "calc(100% - 28px)", overflowY: "auto",
+            flex: "0 1 auto", minHeight: 0, overflowY: "auto",
             padding: "8px 10px", background: "var(--paper-bright)",
             border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-2)",
             display: "flex", flexDirection: "column", gap: 6,
