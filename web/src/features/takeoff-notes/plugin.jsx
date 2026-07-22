@@ -62,7 +62,9 @@ function NotesPanel({ ctx, onClose }) {
   return (
     <div
       style={{
-        position: "absolute", left: 58, bottom: 60, zIndex: 45, width: 300,
+        // Relative content: the host positions + sizes the overlay slot (Option
+        // A). A plugin overlay renders plain content and never self-positions.
+        width: "100%", boxSizing: "border-box",
         background: "var(--paper-bright)", border: "1px solid var(--ink)",
         boxShadow: "var(--shadow-2)", color: "var(--ink)", fontSize: 12.5,
       }}
