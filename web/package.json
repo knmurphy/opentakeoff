@@ -10,8 +10,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "emit-types": "tsc -p tsconfig.types.json",
     "test": "node --import tsx --test test/*.test.ts",
-    "check": "npm run typecheck && npm run lint && npm test && npm run build",
+    "check:axis-a": "node scripts/check-axis-a.mjs",
+    "check": "npm run typecheck && npm run emit-types && npm run lint && npm test && npm run build && npm run check:axis-a",
     "lint": "eslint src netlify/functions"
   },
   "engines": {

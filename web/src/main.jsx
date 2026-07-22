@@ -11,8 +11,17 @@ import { isGoogleConfigured, getAccessToken, signOut } from "./lib/google/auth.j
 import { cloudSyncEnabled } from "./lib/prefs.js";
 import { projectHomeFolderId } from "./lib/projectHome.js";
 import { initTheme } from "./lib/theme.js";
+import { loadFeaturePlugins } from "./lib/plugins/registry.ts";
 
 initTheme();   // index.html set data-theme pre-paint; this keeps it live
+
+// Plugin registry — slice 2a wires the loader in so the lazy `import.meta.glob`
+// over features/* stays live in the entry graph (each feature bundles to its own
+// chunk; the CI Axis-A guard asserts the __ci_probe__ canary is present). The
+// resolved descriptors are intentionally unused here — the overlay/export host
+// that consumes them lands in slice 2b. Fire-and-forget: a broken plugin is
+// logged and skipped inside the loader, never surfaced to the app.
+void loadFeaturePlugins();
 
 // Client-only SPA. By default there is no backend: the canvas runs entirely in
 // the browser and persists to IndexedDB / localStorage (anonymous local mode).
