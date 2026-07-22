@@ -40,7 +40,7 @@ export default class PluginErrorBoundary extends React.Component {
             // Relative content — the host positions the panel slot (Option A).
             width: "100%", boxSizing: "border-box",
             padding: "10px 12px", background: "var(--paper-bright)",
-            border: "1px solid var(--c-danger)", boxShadow: "var(--shadow-2)",
+            border: "1px solid var(--c-danger)", // shadow from the host slot wrapper
             fontSize: 12.5, color: "var(--ink)",
           }}
         >

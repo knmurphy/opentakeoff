@@ -66,7 +66,7 @@ function NotesPanel({ ctx, onClose }) {
         // A). A plugin overlay renders plain content and never self-positions.
         width: "100%", boxSizing: "border-box",
         background: "var(--paper-bright)", border: "1px solid var(--ink)",
-        boxShadow: "var(--shadow-2)", color: "var(--ink)", fontSize: 12.5,
+        color: "var(--ink)", fontSize: 12.5, // shadow comes from the host slot wrapper
       }}
     >
       <header

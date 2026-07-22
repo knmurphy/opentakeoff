@@ -3,9 +3,12 @@
 // the canvas hands it one `api` capability bag (#167's CanvasApi) and this host
 // does the rest — launcher buttons, per-plugin context minting, error
 // isolation, one-overlay-at-a-time enforcement, and PLACEMENT: overlays render
-// as relative content into a host-positioned safe zone (Option A), so a plugin
-// can't position its UI over the canvas's own controls or collide with the
-// manager.
+// as relative content into a host-positioned safe zone (Option A) — anchored at
+// left:58 clear of the native zoom/dark-mode column, and height-capped to the
+// canvas stage. So a well-behaved (relative) plugin can't cover those controls
+// or collide with the manager. (It does NOT sandbox: a plugin that sets its own
+// position:fixed/absolute can still escape — a documented convention, not a
+// clip.)
 //
 // The version gate + its plugin-naming console.warn live in loadFeaturePlugins
 // (registry.ts, via the pure selectRenderablePlugins) — this host consumes that
@@ -101,11 +104,17 @@ export default function PluginOverlayHost({ api, onActionError }) {
     >
       {/* PANEL SLOT — top of the column, expands upward. The plugin's overlay is
           plain RELATIVE content dropped into this host-positioned, width-bounded,
-          scroll-capped box, so it can never land over the canvas controls. The
-          per-slot error boundary contains a render throw (degrades to a notice);
-          action-time throws surface via `onActionError`. */}
+          stage-height-capped box, so a relative overlay stays clear of the
+          zoom/dark-mode column and scrolls within the stage instead of covering
+          the top toolbar. The per-slot error boundary contains a render throw
+          (degrades to a notice); action-time throws surface via `onActionError`. */}
       {openSlot && (
-        <div style={{ width: PANEL_WIDTH, maxHeight: "60vh", overflowY: "auto" }}>
+        // Bounded to the canvas STAGE (calc(100% - 28px), matching the native
+        // panels), not the viewport — so a tall overlay scrolls WITHIN the stage
+        // instead of spilling up over the top toolbar. Shadow on the wrapper: its
+        // own box-shadow isn't clipped by its own overflow (a descendant's would
+        // be), so the overlay keeps a drop shadow.
+        <div style={{ width: PANEL_WIDTH, maxHeight: "calc(100% - 28px)", overflowY: "auto", boxShadow: "var(--shadow-2)" }}>
           <PluginErrorBoundary
             key={openSlot.key}
             label={openSlot.plugin.id}
@@ -130,6 +139,7 @@ export default function PluginOverlayHost({ api, onActionError }) {
           aria-label="Plugin manager"
           style={{
             width: PANEL_WIDTH, boxSizing: "border-box",
+            maxHeight: "calc(100% - 28px)", overflowY: "auto",
             padding: "8px 10px", background: "var(--paper-bright)",
             border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-2)",
             display: "flex", flexDirection: "column", gap: 6,
