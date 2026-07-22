@@ -20,7 +20,7 @@ const launcherStyle = {
   fontSize: 12, fontWeight: 600, boxShadow: "var(--shadow-1)", textAlign: "left",
 };
 
-export default function PluginOverlayHost({ api }) {
+export default function PluginOverlayHost({ api, onActionError }) {
   const [plugins, setPlugins] = useState([]);
   // Single open slot — one overlay at a time in v1 (concurrent overlays are
   // explicitly deferred). Value is the "pluginId::overlayId" key, or null.
@@ -75,12 +75,14 @@ export default function PluginOverlayHost({ api }) {
       {/* At most ONE overlay is rendered — openSlot is a single slot or null, so
           one-overlay-at-a-time is enforced structurally, not just visually. Each
           render-time slot is wrapped in its own error boundary: a plugin that
-          throws in render degrades to a "feature unavailable" notice and the
-          canvas survives. */}
+          throws in RENDER degrades to a "feature unavailable" notice and the
+          canvas survives. Action-time throws (a plugin's own onClick calling a
+          ctx command) can't reach the boundary; `onActionError`, threaded into
+          the minted ctx, contains + surfaces those instead. */}
       {openSlot && (
         <PluginErrorBoundary key={openSlot.key} label={openSlot.plugin.id} onClose={close}>
           {openSlot.overlay.render({
-            ctx: mintPluginCtx(api, openSlot.plugin.id),
+            ctx: mintPluginCtx(api, openSlot.plugin.id, onActionError),
             onClose: close,
           })}
         </PluginErrorBoundary>

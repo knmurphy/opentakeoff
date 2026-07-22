@@ -483,7 +483,11 @@ export default function TakeoffCanvas() {
   // in a try/catch (a React boundary can't catch a ToolMenu onClick throw), and
   // a caught throw surfaces this non-fatal notice instead of crashing the report.
   const [exportPlugins, setExportPlugins] = useState([]);
-  const [pluginExportError, setPluginExportError] = useState(null);
+  // One shared non-fatal notice for any dispatch-time plugin ACTION fault —
+  // a throwing export onSelect (#169) OR an overlay plugin's command throwing
+  // from its own event handler (#168 I-1). Both surface here; the banner below
+  // renders it.
+  const [pluginActionError, setPluginActionError] = useState(null);
   useEffect(() => {
     let live = true;
     loadFeaturePlugins()
@@ -499,7 +503,7 @@ export default function TakeoffCanvas() {
     exportPlugins,
     pluginApi,
     (pluginId, exportId, err) =>
-      setPluginExportError(`Export “${pluginId}::${exportId}” failed: ${err instanceof Error ? err.message : String(err)}`),
+      setPluginActionError(`Export “${pluginId}::${exportId}” failed: ${err instanceof Error ? err.message : String(err)}`),
   );
 
   const containerRef = useRef(null);
@@ -6104,14 +6108,14 @@ export default function TakeoffCanvas() {
         />
       )}
 
-      {/* #169 — non-fatal plugin-export notice. A throwing export is caught at
-          dispatch time (buildExportItems), the report survives, and this banner
-          surfaces the failure. z-index sits above the report panel (z 60–70) so
-          it is visible while the report is open. */}
-      {pluginExportError && (
+      {/* Non-fatal plugin action notice. A throwing export (#169) or a throwing
+          overlay command (#168 I-1) is caught at dispatch time, the app survives,
+          and this shared banner surfaces the failure. z-index sits above the
+          report panel (z 60–70) so it is visible while the report is open. */}
+      {pluginActionError && (
         <div role="alert" style={{ position: "fixed", left: "50%", bottom: 24, transform: "translateX(-50%)", zIndex: 200, display: "flex", alignItems: "center", gap: 12, maxWidth: 520, padding: "10px 14px", background: "var(--paper-bright)", border: "1px solid var(--c-danger)", boxShadow: "var(--shadow-2)", color: "var(--ink)", fontSize: 12.5 }}>
-          <span style={{ flex: 1 }}>{pluginExportError}</span>
-          <button type="button" onClick={() => setPluginExportError(null)} title="Dismiss"
+          <span style={{ flex: 1 }}>{pluginActionError}</span>
+          <button type="button" onClick={() => setPluginActionError(null)} title="Dismiss"
             style={{ border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0 }}>✕</button>
         </div>
       )}
@@ -6133,8 +6137,14 @@ export default function TakeoffCanvas() {
 
       {/* #168 — opt-in plugin overlays. Renders nothing when no feature folders
           are present (public core ships none); each overlay is version-gated and
-          error-isolated inside the host. */}
-      <PluginOverlayHost api={pluginApi} />
+          error-isolated inside the host. `onActionError` surfaces a plugin's
+          action-time command throw (uncatchable by the render boundary) into the
+          shared notice banner above. */}
+      <PluginOverlayHost
+        api={pluginApi}
+        onActionError={(pluginId, _action, err) =>
+          setPluginActionError(`Plugin “${pluginId}” action failed: ${err instanceof Error ? err.message : String(err)}`)}
+      />
     </div>
   );
 }
