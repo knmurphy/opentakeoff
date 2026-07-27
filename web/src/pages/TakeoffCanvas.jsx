@@ -36,8 +36,9 @@ import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
+import { roomNameFromTokens } from "../lib/roomName";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { shapesInStageRect } from "../lib/marquee.js";
@@ -492,6 +493,7 @@ export default function TakeoffCanvas() {
   const sheetStatsRef = useRef(new Map()); // sheetKey → {segCount, imageFrac} — raster-fallback trigger signals
   const rasterMaskCacheRef = useRef(new Map()); // sheetKey → Promise<MaskObj|null> — scan-pixel mask (lazy, shared across clicks)
   const rasterMaskReadyRef = useRef(new Map()); // sheetKey → resolved MaskObj — sync view of the cache for the hover preview
+  const textContentCacheRef = useRef(new Map());// sheetKey → Promise<TextContent> — pdf.js text layer (auto-naming)
   const ocLiveRef = useRef(null);               // hover-preview state: pending cursor + last computed ring / failed seed
   const ocLivePolyRef = useRef(null);           // hover-preview DOM (imperative per-move, like rubberRef)
   const ocLiveTextRef = useRef(null);
@@ -1139,6 +1141,7 @@ export default function TakeoffCanvas() {
     sheetStatsRef.current.clear();
     rasterMaskCacheRef.current.clear();
     rasterMaskReadyRef.current.clear();
+    textContentCacheRef.current.clear();
     ocLiveHide();
     canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
@@ -2923,13 +2926,24 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, rt: !!raster }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
     else if (outcome === "needsPos") setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
+    else if (f.wedges) setCommitMsg("Measured through the drawn door to the wall opening — the swing area is included. ⏎ creates.");
     else if (f.sealedPx) setCommitMsg("That space wasn't fully enclosed — a small opening (a doorway or line gap) was sealed to bound it. Review the edge, then ⏎ creates.");
+    else if (!negative && area_sf < FIXTURE_HINT_SF) setCommitMsg(`Fixture-sized (${fa(area_sf)}) — likely casework, not a room. ⌫ removes it; ⏎ creates anyway.`);
     else setCommitMsg("");
+    if (outcome === "added" && !negative) {
+      roomNameAt(tp.key, ring).then((n) => {   // attach the drawing's own room tag to THIS region (seed identity)
+        if (!n) return;
+        setProposal((pr) => {
+          if (!pr || pr.key !== tp.key) return pr;
+          return { ...pr, regions: pr.regions.map((r) => (r.kind === "pos" && r.seed === local && !r.autoName ? { ...r, autoName: n } : r)) };
+        });
+      });
+    }
   }
   async function oneClickAt(p, negative) {
     ocLiveHide();     // the click commits (or errors); the next move re-previews against the new proposal state
@@ -2952,9 +2966,10 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(tp.key);
       if (!mo && !rasterEligible) { setCommitMsg("Still reading this sheet's linework — try again in a second."); return; }
       if (mo) {
-        // seal radii scale with the sheet: bridge up to a door-width opening
-        // (mask px per foot = mask-per-image-px / units-per-image-px)
-        const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp));
+        // seal radii + wedge cap scale with the sheet: bridge up to a door-width
+        // opening (mask px per foot = mask-per-image-px / units-per-image-px)
+        const mppf = mo.ws / upp;
+        const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mppf), doorWedgeCapPx(mppf));
         if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
@@ -2981,7 +2996,7 @@ export default function TakeoffCanvas() {
     // escalation — and with it the Fill sensitivity knob — is structurally
     // inert on scans; the default sensitivity rides along. Gap sealing still
     // applies — faded scan lines are the raster path's own flavor of open doorway.
-    const f = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp));
+    const f = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp));
     if (f.status !== "ok") {
       setCommitMsg(f.status === "leak"
         ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Click a more enclosed spot, or trace it with Area (A)."
@@ -2998,20 +3013,53 @@ export default function TakeoffCanvas() {
       measure_role: r.kind === "neg" ? "deduct" : "floor_area",
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
       computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
-      ...(activeLabel ? { label: activeLabel } : {}),
+      // an explicit active label is the estimator's call and always wins; else
+      // the drawing's own room tag (auto-named) labels the shape
+      ...(activeLabel ? { label: activeLabel } : r.autoName ? { label: r.autoName } : {}),
       // the provenance receipt: machine-proposed, human-reviewed at the Create
       // gate. A handle-corrected region (touched) records the machine's frozen
       // trace (poly0) as proposed_verts_norm — the one-click correction pair;
       // an untouched region's verts ARE the proposal, so nothing extra rides.
       // Post-Create edits are stamped by stampEdit, which freezes the same
       // field from the pre-edit ring only when Create didn't already.
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
     dispatchShape({ type: "add", shapes: made });   // Create is the creation gate — id/created_at minted by the command
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
     setCommitMsg(`Created ${made.length} takeoff${made.length === 1 ? "" : "s"} — ${fa(sf)} ${condById[activeCond]?.finish_tag || ""}. Click the next room.`);
     setProposal(null);
     ocLiveHide();
+  }
+
+  // ── One-Click auto-naming — the drawing labels its own takeoffs ────────────
+  // A vector plan already SAYS what each room is ("OFFICE 101" sits inside it).
+  // After a region is found, the pdf.js text tokens inside its ring are scored
+  // by roomNameFromTokens; the suggestion rides the hover readout and, unless
+  // the estimator has an explicit active label, becomes the shape's label at
+  // Create (origin.auto_named marks the provenance). Raster plans have no text
+  // layer — extractRegionText returns [] and everything degrades to unnamed.
+  const FIXTURE_HINT_SF = 4;   // below this, a region reads as casework, not a room
+  function ensureTextContent(key) {
+    let pr = textContentCacheRef.current.get(key);
+    if (!pr) {
+      const pageObj = pageObjsRef.current.get(key);
+      if (!pageObj) return null;
+      pr = pageObj.getTextContent().catch(() => { textContentCacheRef.current.delete(key); return null; });
+      textContentCacheRef.current.set(key, pr);
+    }
+    return pr;
+  }
+  async function roomNameAt(key, ring) {
+    const pr = ensureTextContent(key);
+    const pageObj = pageObjsRef.current.get(key);
+    if (!pr || !pageObj || !ring || ring.length < 3) return null;
+    const tc = await pr;
+    if (!tc) return null;
+    const rs = renderScalesRef.current.get(key) || RENDER_SCALE;
+    const vp = pageObj.getViewport({ scale: rs });
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of ring) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return roomNameFromTokens(extractRegionText(tc, vp, { x0, y0, x1, y1 }), ring);
   }
 
   // ── One-Click hover preview — the fill runs UNDER the cursor, pre-click ────
@@ -3070,12 +3118,12 @@ export default function TakeoffCanvas() {
     let f = null, raster = false;
     if (!rasterEligible || vectorViable) {
       const mo = ensureMask(tp.key);
-      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp));
+      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp), doorWedgeCapPx(mo.ws / upp));
     }
     if ((!f || f.status !== "ok") && rasterEligible) {
       const rmo = rasterMaskReadyRef.current.get(tp.key);
       if (rmo) {
-        const fr = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp));
+        const fr = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp));
         if (fr.status === "ok") { f = fr; raster = true; }
       } else ensureRasterMask(tp.key);   // warm the scan mask; preview engages when it resolves
     }
@@ -3087,8 +3135,14 @@ export default function TakeoffCanvas() {
       ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
     }
     if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
-    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
+    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, wedges: f.wedges || 0, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
     ocLiveDraw(tp, st.last, p);
+    if (kind === "pos") {
+      const cur = st.last;
+      roomNameAt(tp.key, ring).then((n) => {   // async: the readout upgrades in place when the drawing names the room
+        if (n && ocLiveRef.current && ocLiveRef.current.last === cur) { cur.name = n; ocLiveDraw(tp, cur, p); }
+      });
+    }
   }
   function ocLiveDraw(tp, res, p) {
     const el = ocLivePolyRef.current, tx = ocLiveTextRef.current;
@@ -3102,7 +3156,7 @@ export default function TakeoffCanvas() {
     el.setAttribute("stroke-dasharray", `${3.5 / s} ${3.5 / s}`);   // finer dash than the committed proposal — reads as "candidate"
     el.style.display = "block";
     if (tx) {
-      tx.textContent = `${fa(res.area_sf)}${res.sealed ? " · sealed a small opening" : ""}`;
+      tx.textContent = `${fa(res.area_sf)}${res.name ? ` · ${res.name}` : ""}${res.wedges ? " · incl. door swing" : res.sealed ? " · sealed a small opening" : ""}${res.area_sf < FIXTURE_HINT_SF ? " · fixture-sized?" : ""}`;
       tx.setAttribute("x", p[0] + 14 / s); tx.setAttribute("y", p[1] - 10 / s);
       tx.setAttribute("font-size", 12.5 / s);
       tx.setAttribute("fill", neg ? "#b03a26" : "#1f3fc7");
@@ -3887,7 +3941,7 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(key);
       if (!mo && !rasterEligible) return { error: "Still reading this sheet's linework — try again in a second." };
       if (mo) {
-        const r = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp));
+        const r = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp), doorWedgeCapPx(mo.ws / upp));
         if (r.status === "ok") f = r;
         else if (!rasterEligible) {
           return { error: r.status === "leak"
@@ -3899,7 +3953,7 @@ export default function TakeoffCanvas() {
     if (!f) {
       const rmo = await ensureRasterMask(key);
       if (!rmo) return { error: "Couldn't read this scan — the estimator will have to trace it by hand." };
-      const r = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp));
+      const r = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp));
       if (r.status !== "ok") {
         return { error: r.status === "leak"
           ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Seed a more enclosed spot."

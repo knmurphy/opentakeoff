@@ -6,7 +6,7 @@ import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
   SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE,
-  floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX,
+  floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX, doorWedgeCapPx,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier, cloudPath, arrowheadPath, reflectVertsNorm, closedMetrics } from "../src/lib/geometry.js";
@@ -439,14 +439,54 @@ test("door swing: drawn leaf + swing arc bounds the room WITHOUT sealing (the co
     const qx = 208 + R * Math.sin(a), qy = 280 - R * Math.cos(a);
     arc.push(px, py, qx, qy); px = qx; py = qy;
   }
-  const mask = buildMask([...squareSegs(2, 2, 998, 798), ...room, ...leaf, ...arc], 1000, 800);
+  // curve chords carry SEG_CURVE meta so buildMask can mark them bit-4
+  const all = [...squareSegs(2, 2, 998, 798), ...room, ...leaf, ...arc];
+  const meta = zeroMeta(all);
+  const arcStart = (all.length - arc.length) >> 2;
+  for (let k = 0; k < arc.length >> 2; k++) meta[arcStart + k] = SEG_CURVE;
+  const mask = buildMask(all, 1000, 800, 3000, meta);
+
+  // without a wedge cap: the arc bounds the fill, wedge excluded (pre-annex contract)
   const f = floodRegionSealed(mask, 200, 200, SENS_BALANCED, sealRadiiFor(18));
   assert.equal(f.status, "ok");
   if (f.status !== "ok") return;
   assert.equal(f.sealedPx, undefined, "the door linework bounds the fill — sealing must not fire");
+  const bare = ringArea(traceRegion(f));
+  const minusWedge = 214 * 178 - (Math.PI * R * R) / 4;
+  assert.ok(approx(bare, minusWedge, 0.05), `room minus swing wedge ≈ ${Math.round(minusWedge)}, got ${bare}`);
+
+  // with the scale-aware wedge cap: the swing pocket annexes — flooring runs
+  // under the door, so the measurement reads to the wall opening
+  const fw = floodRegionSealed(mask, 200, 200, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(fw.status, "ok");
+  if (fw.status !== "ok") return;
+  assert.equal(fw.wedges, 1, "exactly one swing wedge annexed");
+  const full = ringArea(traceRegion(fw));
+  assert.ok(approx(full, 214 * 178, 0.04), `wedge included ≈ full room ${214 * 178}, got ${full}`);
+});
+
+test("door wedge: a curved WALL does not annex the room behind it (cap holds)", () => {
+  // same room, but the curve is a partition arc bowing across the middle —
+  // the space beyond it is a half-room, far over the door-wedge cap
+  const room = squareSegs(100, 100, 316, 280);
+  const part: number[] = [];
+  let px = 208, py = 100;
+  for (let k = 1; k <= 8; k++) {                       // shallow arc from top wall to bottom wall
+    const t = k / 8;
+    const qx = 208 + Math.sin(t * Math.PI) * 24, qy = 100 + t * 180;
+    part.push(px, py, qx, qy); px = qx; py = qy;
+  }
+  const all = [...squareSegs(2, 2, 998, 798), ...room, ...part];
+  const meta = zeroMeta(all);
+  const partStart = (all.length - part.length) >> 2;
+  for (let k = 0; k < part.length >> 2; k++) meta[partStart + k] = SEG_CURVE;
+  const mask = buildMask(all, 1000, 800, 3000, meta);
+  const f = floodRegionSealed(mask, 150, 190, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.ok(!f.wedges, "the far half-room must NOT annex");
   const area = ringArea(traceRegion(f));
-  const expected = 214 * 178 - (Math.PI * R * R) / 4;  // room minus the swing wedge
-  assert.ok(approx(area, expected, 0.05), `room minus swing wedge ≈ ${Math.round(expected)}, got ${area}`);
+  assert.ok(area < 214 * 178 * 0.7, `one side of the partition only, got ${area}`);
 });
 
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────

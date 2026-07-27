@@ -82,6 +82,7 @@ const check = (ok, what) => {
   await hoverAt(ROOMS.officeA);
   let lp = await livePreview();
   check(lp.poly && /120(\.0)? SF/.test(lp.text || ""), `enclosed room previews 120 SF (got "${lp.text}")`);
+  check(/OFFICE 101/.test(lp.text || ""), `auto-naming reads the room tag (got "${lp.text}")`);
   await shot("02-hover-enclosed");
   await page.mouse.down(); await page.mouse.up();
   await page.waitForTimeout(400);
@@ -96,8 +97,10 @@ const check = (ok, what) => {
 
   await hoverAt(ROOMS.storC);
   lp = await livePreview();
-  check(lp.poly && /11[23](\.\d)? SF/.test(lp.text || ""), `door-swing room previews ~113 SF, wedge excluded (got "${lp.text}")`);
-  check(!/sealed/.test(lp.text || ""), "door-swing room does NOT trigger sealing");
+  check(lp.poly && /(119|120)(\.\d)? SF/.test(lp.text || ""), `door-swing room reads to the wall opening, swing wedge INCLUDED (got "${lp.text}")`);
+  check(/incl\. door swing/.test(lp.text || ""), `readout flags the door-swing inclusion (got "${lp.text}")`);
+  check(!/sealed a small opening/.test(lp.text || ""), "door-swing message wins over the raw seal note");
+  check(/STOR 103/.test(lp.text || ""), `door-swing room auto-names too (got "${lp.text}")`);
   await shot("04-hover-doorswing");
   await page.mouse.down(); await page.mouse.up();
   await page.waitForTimeout(400);

@@ -39,7 +39,7 @@ export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; wedges?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -335,7 +335,10 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
 // Bresenham; coincident endpoints round to the same cell so chained walls stay
 // continuous. Without meta the mask is bit-identical to the original (every
 // cell 1). With meta, wall cells carry bit 1 and suspected-hatch cells bit 2 —
-// a cell crossed by both keeps bit 1, so hard always wins.
+// a cell crossed by both keeps bit 1, so hard always wins. Curve chords (door
+// swings, curved walls) additionally carry bit 4: still hard, but identifiable
+// so annexDoorWedges can recognize a swing arc on a region's boundary.
+export const MASK_CURVE_BIT = 4;
 export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null): MaskObj {
   const ws = Math.min(1, maxDim / Math.max(imgW, imgH, 1));
   const mw = Math.max(2, Math.ceil(imgW * ws)), mh = Math.max(2, Math.ceil(imgH * ws));
@@ -343,7 +346,8 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
   const soft = meta ? classifyHatchSegs(segs, meta, ws) : null;
   let softCount = 0;
   for (let i = 0, si = 0; i + 3 < segs.length; i += 4, si++) {
-    const v = soft && soft[si] ? 2 : 1;
+    let v = soft && soft[si] ? 2 : 1;
+    if (v === 1 && meta && (meta[si] & SEG_CURVE)) v = 1 | MASK_CURVE_BIT;
     if (v === 2) softCount++;
     let x0 = Math.round(segs[i] * ws), y0 = Math.round(segs[i + 1] * ws);
     const x1 = Math.round(segs[i + 2] * ws), y1 = Math.round(segs[i + 3] * ws);
@@ -603,11 +607,84 @@ function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: 
   }
 }
 
-/** floodRegion, plus leak recovery: on any failure, retry against masks with
- *  walls dilated at each radius in `radii` (ascending — the smallest seal that
- *  bounds the space wins), grow the result back to the true linework, and stamp
- *  `sealedPx`. If no radius bounds it, the original failure stands. */
-export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII): FloodResult {
+// ── 4c. door-swing inclusion — measure to the wall opening ─────────────────
+// A drawn door (leaf + swing arc) bounds the flood, which keeps rooms from
+// merging through their doorways — but the swing wedge behind the arc IS floor
+// the estimator must count: flooring runs under the door. The wedge is NOT an
+// enclosed pocket (its far edge is the open doorway itself), so it cannot be
+// annexed by flooding "behind the arc" — that walks straight out the opening.
+//
+// Instead, doorways UNIFY: re-flood with CURVE cells (bit 4) transparent so
+// the arc no longer bounds the room, and let gap sealing close the doorway at
+// the wall plane exactly as it would a cased opening. The result reads to the
+// threshold, wedge included, neighbor still excluded — with every sealing
+// sanity gate in force. Grow-but-verify keeps curved WALLS honest: making a
+// real curved wall transparent merges a neighboring space and blows the
+// growth cap, so the original arc-bounded result stands.
+export const WEDGE_SLACK = 1.3;        // growth head-room over the ideal quarter-circle
+export const WEDGE_GROWTH_FRAC = 0.30; // or this fraction of the region — corridors touch many doors
+/** Per-door growth allowance (mask cells) at maskPxPerFt: a DOOR_SEAL_MAX_FT
+ *  leaf's swing wedge, with slack. 0 (skip the door retry) when the scale is
+ *  unknown. */
+export function doorWedgeCapPx(maskPxPerFt: number): number {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return 0;
+  return Math.round((Math.PI / 4) * (DOOR_SEAL_MAX_FT * maskPxPerFt) ** 2 * WEDGE_SLACK);
+}
+
+const curveSoftCache = new WeakMap<Uint8Array, MaskObj>();
+/** The mask with curve linework demoted from barrier to marker-only. */
+function curveSoftMask(mo: MaskObj): MaskObj {
+  let m2 = curveSoftCache.get(mo.mask);
+  if (!m2) {
+    const src = mo.mask;
+    const out = new Uint8Array(src.length);
+    for (let i = 0; i < src.length; i++) out[i] = (src[i] & MASK_CURVE_BIT) ? (src[i] & ~1) : src[i];
+    m2 = { mask: out, mw: mo.mw, mh: mo.mh, ws: mo.ws, softCount: mo.softCount };
+    curveSoftCache.set(mo.mask, m2);
+  }
+  return m2;
+}
+
+/** Does the region's edge touch curve linework anywhere? Cheap gate for the
+ *  curve-transparent retry — most rooms have no drawn door on their boundary. */
+function regionTouchesCurve(f: { region: Uint8Array; mw: number; mh: number }, mo: MaskObj): boolean {
+  const { region, mw, mh } = f;
+  const mask = mo.mask;
+  for (let y = 1; y < mh - 1; y++) {
+    const row = y * mw;
+    for (let x = 1; x < mw - 1; x++) {
+      const i = row + x;
+      if (!region[i]) continue;
+      if ((mask[i - 1] & MASK_CURVE_BIT) || (mask[i + 1] & MASK_CURVE_BIT) || (mask[i - mw] & MASK_CURVE_BIT) || (mask[i + mw] & MASK_CURVE_BIT)) return true;
+    }
+  }
+  return false;
+}
+
+// Walk the seed up the distance field until it clears the dilation radius —
+// a click near a wall lands inside the dilated barrier, where floodPass's
+// 3-px nudge can't rescue it. Strict ascent never crosses a wall (dt = 0), so
+// the walk stays in the seed's own open component; if it stalls on a ridge
+// before clearing r, the original seed stands and the attempt fails as before.
+function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: number, iy: number, r: number): [number, number] {
+  let cx = Math.max(0, Math.min(mw - 1, Math.round(ix * ws)));
+  let cy = Math.max(0, Math.min(mh - 1, Math.round(iy * ws)));
+  for (let step = 0; step < 2 * r && dt[cy * mw + cx] <= r; step++) {
+    let bx = cx, by = cy, bd = dt[cy * mw + cx];
+    if (cx > 0 && dt[cy * mw + cx - 1] > bd) { bd = dt[cy * mw + cx - 1]; bx = cx - 1; by = cy; }
+    if (cx < mw - 1 && dt[cy * mw + cx + 1] > bd) { bd = dt[cy * mw + cx + 1]; bx = cx + 1; by = cy; }
+    if (cy > 0 && dt[(cy - 1) * mw + cx] > bd) { bd = dt[(cy - 1) * mw + cx]; bx = cx; by = cy - 1; }
+    if (cy < mh - 1 && dt[(cy + 1) * mw + cx] > bd) { bd = dt[(cy + 1) * mw + cx]; bx = cx; by = cy + 1; }
+    if (bx === cx && by === cy) break;                 // stalled on a ridge
+    cx = bx; cy = by;
+  }
+  return [cx / ws, cy / ws];
+}
+
+// One base-flood + seal-ladder attempt against a specific mask. The dt used
+// for growback/virtual-boundary checks is the ATTEMPT mask's own transform, so
+// the curve-transparent retry measures distance to walls-without-arcs.
+function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[]): FloodResult {
   const base = floodRegion(mo, ix, iy, sensitivity);
   if (base.status === "ok") return base;
   let sc = sealCache.get(mo.mask);
@@ -615,7 +692,8 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   for (const r of radii) {
     let dm = sc.byR.get(r);
     if (!dm) { dm = dilateHardMask(mo, r, sc.dt); sc.byR.set(r, dm); }
-    const f = floodRegion(dm, ix, iy, sensitivity);
+    const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
+    const f = floodRegion(dm, ax, ay, sensitivity);
     if (f.status !== "ok") continue;
     growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3, sc.dt);
     // Two sanity gates keep sealing honest — without them, dilating hard enough
@@ -632,6 +710,32 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
     return f;
   }
   return base;
+}
+
+/** floodRegion, plus leak recovery (see sealAttempt), plus door-swing
+ *  inclusion: when `wedgeCapPx` > 0 and the result is bounded by drawn door
+ *  linework, a curve-transparent retry re-measures to the wall opening; it is
+ *  kept only when the growth stays wedge-scale. */
+export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII, wedgeCapPx = 0): FloodResult {
+  const r1 = sealAttempt(mo, ix, iy, sensitivity, radii);
+  if (!wedgeCapPx || r1.status !== "ok" || !regionTouchesCurve(r1, mo)) return r1;
+  // retry from the ROOM'S most interior cell, not the click — the retry's
+  // sealed floods dilate the walls, and a click near a wall (or a hover
+  // sweeping in from a neighbor) would start inside the dilated barrier.
+  // Any cell of r1's region floods the same space, so pick the deepest one;
+  // this also makes the retry deterministic per room instead of per click.
+  const m2 = curveSoftMask(mo);
+  let sc2 = sealCache.get(m2.mask);
+  if (!sc2) { sc2 = { dt: hardDT(m2.mask, m2.mw, m2.mh), byR: new Map() }; sealCache.set(m2.mask, sc2); }
+  let bi = -1, bd = -1;
+  for (let i = 0; i < r1.region.length; i++) if (r1.region[i] && sc2.dt[i] > bd) { bd = sc2.dt[i]; bi = i; }
+  const sx = bi < 0 ? ix : (bi % mo.mw) / mo.ws, sy = bi < 0 ? iy : Math.floor(bi / mo.mw) / mo.ws;
+  const r2 = sealAttempt(m2, sx, sy, sensitivity, radii);
+  if (r2.status !== "ok" || r2.count <= r1.count) return r1;
+  const allowance = Math.max(wedgeCapPx, Math.round(r1.count * WEDGE_GROWTH_FRAC));
+  if (r2.count - r1.count > allowance) return r1;      // that was a curved wall, not a door
+  r2.wedges = 1;
+  return r2;
 }
 
 // Fraction of a region's boundary cells that do NOT hug original linework
