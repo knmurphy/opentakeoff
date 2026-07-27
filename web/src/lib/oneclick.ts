@@ -623,6 +623,8 @@ function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: 
 // growth cap, so the original arc-bounded result stands.
 export const WEDGE_SLACK = 1.3;        // growth head-room over the ideal quarter-circle
 export const WEDGE_GROWTH_FRAC = 0.30; // or this fraction of the region — corridors touch many doors
+export const WEDGE_MAX_DOORS = 12;     // absolute ceiling on the fractional allowance — 30% of a
+                                       // giant region (sheet-margin space) is not a door's worth
 /** Per-door growth allowance (mask cells) at maskPxPerFt: a DOOR_SEAL_MAX_FT
  *  leaf's swing wedge, with slack. 0 (skip the door retry) when the scale is
  *  unknown. */
@@ -631,18 +633,37 @@ export function doorWedgeCapPx(maskPxPerFt: number): number {
   return Math.round((Math.PI / 4) * (DOOR_SEAL_MAX_FT * maskPxPerFt) ** 2 * WEDGE_SLACK);
 }
 
-const curveSoftCache = new WeakMap<Uint8Array, MaskObj>();
-/** The mask with curve linework demoted from barrier to marker-only. */
-function curveSoftMask(mo: MaskObj): MaskObj {
-  let m2 = curveSoftCache.get(mo.mask);
-  if (!m2) {
-    const src = mo.mask;
-    const out = new Uint8Array(src.length);
-    for (let i = 0; i < src.length; i++) out[i] = (src[i] & MASK_CURVE_BIT) ? (src[i] & ~1) : src[i];
-    m2 = { mask: out, mw: mo.mw, mh: mo.mh, ws: mo.ws, softCount: mo.softCount };
-    curveSoftCache.set(mo.mask, m2);
+/** The mask with curve linework demoted from barrier to marker-only — but
+ *  ONLY the curves hugging THIS region's boundary (Chebyshev ≤ 3, covering a
+ *  2-px arc raster). Locality is what makes the retry work on dense plans: a
+ *  hospital wing has dozens of drawn doors, and opening every arc at once
+ *  merges spaces through doorways the seal ladder can't all close — the
+ *  growth guard then rejects the lot and the clicked room loses its own
+ *  wedge. Opening only the clicked room's arcs leaves every other door on
+ *  the sheet shut. (Per-click build, no cache — the retry only runs on
+ *  curve-adjacent rooms, and the hover path already caches per room.) */
+function curveSoftMask(mo: MaskObj, region: Uint8Array): MaskObj {
+  const { mw, mh } = mo;
+  const src = mo.mask;
+  const out = src.slice();
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!(src[i] & MASK_CURVE_BIT)) continue;
+      let near = false;
+      for (let dy = -3; dy <= 3 && !near; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= mh) continue;
+        for (let dx = -3; dx <= 3; dx++) {
+          const nx = x + dx;
+          if (nx >= 0 && nx < mw && region[ny * mw + nx]) { near = true; break; }
+        }
+      }
+      if (near) out[i] = src[i] & ~1;
+    }
   }
-  return m2;
+  return { mask: out, mw, mh, ws: mo.ws, softCount: mo.softCount };
 }
 
 /** Does the region's edge touch curve linework anywhere? Cheap gate for the
@@ -724,7 +745,7 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   // sweeping in from a neighbor) would start inside the dilated barrier.
   // Any cell of r1's region floods the same space, so pick the deepest one;
   // this also makes the retry deterministic per room instead of per click.
-  const m2 = curveSoftMask(mo);
+  const m2 = curveSoftMask(mo, r1.region);
   let sc2 = sealCache.get(m2.mask);
   if (!sc2) { sc2 = { dt: hardDT(m2.mask, m2.mw, m2.mh), byR: new Map() }; sealCache.set(m2.mask, sc2); }
   let bi = -1, bd = -1;
@@ -732,8 +753,8 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   const sx = bi < 0 ? ix : (bi % mo.mw) / mo.ws, sy = bi < 0 ? iy : Math.floor(bi / mo.mw) / mo.ws;
   const r2 = sealAttempt(m2, sx, sy, sensitivity, radii);
   if (r2.status !== "ok" || r2.count <= r1.count) return r1;
-  const allowance = Math.max(wedgeCapPx, Math.round(r1.count * WEDGE_GROWTH_FRAC));
-  if (r2.count - r1.count > allowance) return r1;      // that was a curved wall, not a door
+  const allowance = Math.max(wedgeCapPx, Math.min(Math.round(r1.count * WEDGE_GROWTH_FRAC), WEDGE_MAX_DOORS * wedgeCapPx));
+  if (r2.count - r1.count > allowance) return r1;      // that was a curved wall (or open paper), not a door
   // Absorb the door LEAF: the straight leaf line stays a barrier through the
   // retry, leaving a 1–2 px slit between the room and the annexed wedge. The
   // outer contour would dive up that slit and back, inflating perimeter_lf by
