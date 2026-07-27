@@ -488,6 +488,7 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
 export const SEAL_RADII = [1, 2, 4];    // fallback — seals gaps up to 2/4/8 px wide
 export const DOOR_SEAL_MAX_FT = 5;      // widest opening sealing will bridge (3'-0" doors + margin)
 export const SEAL_R_MAX = 128;          // absolute radius cap (cost + the Uint8 distance transform)
+export const SEAL_VIRTUAL_MAX = 0.25;   // a sealed region's boundary must be ≥75% real linework
 
 /** The escalation ladder for a sheet where one foot spans `maskPxPerFt` mask px:
  *  1, 2, 4, … doubling up to the radius that bridges a DOOR_SEAL_MAX_FT opening
@@ -617,10 +618,40 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
     const f = floodRegion(dm, ix, iy, sensitivity);
     if (f.status !== "ok") continue;
     growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3, sc.dt);
+    // Two sanity gates keep sealing honest — without them, dilating hard enough
+    // eventually STARVES any big open space (a lobby, the sheet itself) under
+    // the leak cap and reports a giant "sealed" blob:
+    //   • the grown region must still satisfy the room-size cap the plain
+    //     flood enforces (a room is never 30% of the sheet);
+    //   • the seal must be LOCAL — most of the region's boundary must hug real
+    //     linework (dt ≤ 3), with only door-width virtual runs. A starved blob
+    //     ends at descent watersheds in open space and fails this immediately.
+    if (f.count > f.mw * f.mh * 0.30) continue;
+    if (virtualBoundaryFrac(f, sc.dt) > SEAL_VIRTUAL_MAX) continue;
     f.sealedPx = r;
     return f;
   }
   return base;
+}
+
+// Fraction of a region's boundary cells that do NOT hug original linework
+// (dt > 3): 0 for a fully wall-bounded room, ≈ door/perimeter for a legit
+// seal, large for a dilation-starved blob whose edges sit in open space.
+function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, dt: Uint8Array): number {
+  const { region, mw, mh } = f;
+  let boundary = 0, virtual = 0;
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!region[i]) continue;
+      if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) {
+        boundary++;
+        if (dt[i] > 3) virtual++;
+      }
+    }
+  }
+  return boundary ? virtual / boundary : 1;
 }
 
 // ── 5. contour trace + simplify ────────────────────────────────────────────

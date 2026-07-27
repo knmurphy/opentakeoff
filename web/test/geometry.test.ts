@@ -390,6 +390,65 @@ test("seal: a DOOR-scale opening seals with scale-aware radii — and growback s
   }
 });
 
+test("seal guards: dilation must not resurrect a too-big space the leak cap rejected", () => {
+  // A 260×260 enclosure on a 300×300 sheet: 75% of the mask, so the plain
+  // flood correctly calls it a leak (not a room). Aggressive dilation starves
+  // the interior under the cap mid-flood — but the grown-back region busts the
+  // room-size gate, so sealing must decline rather than mint a giant blob.
+  const mask = buildMask(squareSegs(20, 20, 280, 280), 300, 300);
+  assert.equal(floodRegion(mask, 150, 150).status, "leak", "75% of the sheet is not a room");
+  assert.equal(floodRegionSealed(mask, 150, 150, SENS_BALANCED, [64]).status, "leak", "sealing must not resurrect it");
+});
+
+test("seal: a room with TWO doorways seals both at once (virtual boundary stays small)", () => {
+  const twoGaps = [
+    20, 20, 50, 20, 57, 20, 100, 20,                   // north wall, 6-cell gap
+    100, 20, 100, 100,
+    100, 100, 62, 100, 55, 100, 20, 100,               // south wall, 6-cell gap
+    20, 100, 20, 20,
+  ];
+  const mask = buildMask(twoGaps, 300, 300);
+  assert.equal(floodRegion(mask, 60, 60).status, "leak");
+  const f = floodRegionSealed(mask, 60, 60);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.sealedPx, 4, "one radius bridges both openings");
+  const area = ringArea(traceRegion(f));
+  assert.ok(area > 5600 && area < 6800, `both doors sealed, room area intact, got ${area}`);
+});
+
+test("door swing: drawn leaf + swing arc bounds the room WITHOUT sealing (the common doorway)", () => {
+  // Same room and 53-px opening as the door-scale fixture, but with the usual
+  // door symbol drawn: leaf at the open position (perpendicular, into the
+  // room) + a quarter-circle swing arc from leaf tip to the strike jamb —
+  // fed as chords, exactly how extractVectorGeometry emits beziers. The plain
+  // flood must bound at the arc: no sealing, area ≈ room minus the swing wedge.
+  const room = [
+    100, 100, 316, 100,
+    316, 100, 316, 280,
+    316, 280, 262, 280,
+    208, 280, 100, 280,
+    100, 280, 100, 100,
+  ];
+  const R = 54;                                        // swing radius = the opening width
+  const leaf = [208, 280, 208, 280 - R];               // hinge at the left jamb, leaf into the room
+  const arc: number[] = [];
+  let px = 208, py = 280 - R;                          // tip → strike jamb, quarter circle about the hinge
+  for (let k = 1; k <= 8; k++) {
+    const a = (k / 8) * (Math.PI / 2);
+    const qx = 208 + R * Math.sin(a), qy = 280 - R * Math.cos(a);
+    arc.push(px, py, qx, qy); px = qx; py = qy;
+  }
+  const mask = buildMask([...squareSegs(2, 2, 998, 798), ...room, ...leaf, ...arc], 1000, 800);
+  const f = floodRegionSealed(mask, 200, 200, SENS_BALANCED, sealRadiiFor(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.sealedPx, undefined, "the door linework bounds the fill — sealing must not fire");
+  const area = ringArea(traceRegion(f));
+  const expected = 214 * 178 - (Math.PI * R * R) / 4;  // room minus the swing wedge
+  assert.ok(approx(area, expected, 0.05), `room minus swing wedge ≈ ${Math.round(expected)}, got ${area}`);
+});
+
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
 test("cloudBezier: closed loop of cubic segments, more segments for a longer perimeter", () => {
   const small = cloudBezier(0, 0, 100, 60);

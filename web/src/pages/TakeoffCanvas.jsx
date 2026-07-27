@@ -3054,8 +3054,14 @@ export default function TakeoffCanvas() {
     const regions = prop ? prop.regions : [];
     if (regions.some((r) => r.kind === kind && pointInPoly(local[0], local[1], r.poly))) { ocLiveHide(); return; }
     if (kind === "neg" && !regions.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) { ocLiveHide(); return; }
+    // reuse test runs on the region BITMAP, not the traced ring — a ring can
+    // enclose islands (rooms inside an open-space fill) whose interiors flood
+    // to something entirely different, so point-in-ring would serve stale results
     const last = st.last;
-    if (last && last.key === tp.key && last.kind === kind && last.ring && pointInPoly(local[0], local[1], last.ring)) { ocLiveDraw(tp, last, p); return; }
+    if (last && last.key === tp.key && last.kind === kind && last.reg) {
+      const cx = Math.round(local[0] * last.ws), cy = Math.round(local[1] * last.ws);
+      if (cx >= 0 && cy >= 0 && cx < last.mw && cy < last.mh && last.reg[cy * last.mw + cx]) { ocLiveDraw(tp, last, p); return; }
+    }
     if (last && last.key === tp.key && last.fail && Math.hypot(local[0] - last.fail[0], local[1] - last.fail[1]) < 24 / tfRef.current.scale) return;
     // trigger policy verbatim from oneClickAt, minus the async raster wait
     const stats = sheetStatsRef.current.get(tp.key);
@@ -3081,7 +3087,7 @@ export default function TakeoffCanvas() {
       ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
     }
     if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
-    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0 };
+    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
     ocLiveDraw(tp, st.last, p);
   }
   function ocLiveDraw(tp, res, p) {
@@ -5780,8 +5786,8 @@ export default function TakeoffCanvas() {
               {/* One-Click hover preview — the candidate fill under the cursor, pre-click
                   (ocLiveDraw moves these imperatively; a finer dash than the committed
                   proposal so it reads as "what a click would select", not a selection) */}
-              <polygon ref={ocLivePolyRef} strokeOpacity={0.9} strokeLinejoin="round" style={{ display: "none", pointerEvents: "none" }} />
-              <text ref={ocLiveTextRef} fontWeight="600" paintOrder="stroke" strokeLinejoin="round" style={{ display: "none", pointerEvents: "none" }} />
+              <polygon ref={ocLivePolyRef} data-oc="live-poly" strokeOpacity={0.9} strokeLinejoin="round" style={{ display: "none", pointerEvents: "none" }} />
+              <text ref={ocLiveTextRef} data-oc="live-text" fontWeight="600" paintOrder="stroke" strokeLinejoin="round" style={{ display: "none", pointerEvents: "none" }} />
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               {/* multi-select marquee — stage-px frame so one lasso spans side-by-side panels */}
               <rect ref={marqueeRectRef} fill="rgba(31,63,199,.06)" stroke="#1f3fc7" strokeWidth={1.5 / tf.scale} strokeDasharray={`${6 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />
