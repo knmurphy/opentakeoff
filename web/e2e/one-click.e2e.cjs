@@ -83,6 +83,7 @@ const check = (ok, what) => {
   let lp = await livePreview();
   check(lp.poly && /120(\.0)? SF/.test(lp.text || ""), `enclosed room previews 120 SF (got "${lp.text}")`);
   check(/OFFICE 101/.test(lp.text || ""), `auto-naming reads the room tag (got "${lp.text}")`);
+  check(!/%/.test(lp.text || ""), "verbatim vector trace shows no confidence deduction");
   await shot("02-hover-enclosed");
   await page.mouse.down(); await page.mouse.up();
   await page.waitForTimeout(400);
@@ -91,6 +92,7 @@ const check = (ok, what) => {
   lp = await livePreview();
   check(lp.poly && /sealed a small opening/.test(lp.text || ""), `cased opening previews sealed (got "${lp.text}")`);
   check(/120(\.0)? SF/.test(lp.text || ""), `sealed room still reads 120 SF (got "${lp.text}")`);
+  check(/· 9\d%/.test(lp.text || ""), `sealed trace surfaces its confidence (got "${lp.text}")`);
   await shot("03-hover-cased-sealed");
   await page.mouse.down(); await page.mouse.up();
   await page.waitForTimeout(400);
