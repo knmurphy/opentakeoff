@@ -33,21 +33,60 @@ export type OpsTable = Record<string, number>;
 /** meta: one byte per segment — SEG_* bits + device line width in the high nibble.
  *  imageArea: total placed image area in device px² (scan/photo underlay detection). */
 export interface VectorGeometry { points: Point[]; segs: number[]; meta: Uint8Array; imageArea: number; }
-export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number; softCount: number; }
+export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number; softCount: number; mppf?: number; }  // mppf: mask px per foot (0/absent = scale unknown)
 export interface RegionResult { region: Uint8Array; mw: number; mh: number; ws: number; count?: number; }
 export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
 export const MASK_MAX_DIM = 3000;   // working raster cap (Uint8 ≈ 6–7 MB)
-const LEAK_FRACTION = 0.30;         // fill > 30% of the sheet ⇒ not an enclosed space
-const TINY_PX = 30;                 // fill < 30 mask px ⇒ landed in dense linework
-const MIN_THICK = 4;                // region bbox thinner than 4 mask px ⇒ hatch sliver, not a room
+const LEAK_FRACTION = 0.30;         // fill > 30% of the sheet ⇒ not an enclosed space (ws-invariant: a fraction)
 const CURVE_STEPS = 8;              // chords per bezier (door swings stay closed)
+
+// ── resolution-independent thresholds (RFC failure mode #3) ─────────────────
+// A verdict must not depend on the working raster's resolution, so every
+// threshold that MEANS something physical is denominated in FEET and converted
+// through the sheet scale (MaskObj.mppf). The px values are (a) the exact
+// calibration point — all four ft constants reproduce the historical px
+// behavior bit-for-bit at 18 mask px/ft, the corpus convention — and (b) the
+// fallback when the scale is unknown, plus raster-honesty FLOORS below which
+// a threshold can't shrink (you cannot tell a 1-cell room from noise no
+// matter what the feet say).
+const CAL_MPPF = 18;                    // calibration resolution (mask px per foot)
+const TINY_PX = 30;                     // fill < this many mask px ⇒ landed in dense linework
+export const TINY_SF = TINY_PX / (CAL_MPPF * CAL_MPPF);        // ≈ 0.093 SF
+const TINY_PX_FLOOR = 8;
+const MIN_THICK = 4;                    // region bbox thinner than this ⇒ hatch sliver, not a room
+export const MIN_THICK_FT = MIN_THICK / CAL_MPPF;              // ≈ 0.22 ft
+const MIN_THICK_FLOOR = 2;
+const NUDGE_PX = 3;                     // seed nudge: nearest open cell (clicks land on hatch lines)
+export const NUDGE_FT = NUDGE_PX / CAL_MPPF;                   // = 2 inches
+// Openings narrower than this never connect two spaces — a slit between an
+// annotation leader tip and a wall corner, a hairline drafting gap. Without a
+// feet-true rule the answer depends on which side of a cell boundary the
+// linework rounds to at the current resolution (bench: ward-room-294sf lost
+// its vestibule through exactly such a slit at ws × 0.5 only).
+export const MIN_PASS_FT = 0.5;
+/** Dilation radius that closes sub-MIN_PASS_FT passages at maskPxPerFt.
+ *  0 (rule off) when the scale is unknown or the mask is too coarse to say. */
+export function minPassRadiusFor(maskPxPerFt: number): number {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return 0;
+  return Math.min(SEAL_R_MAX, Math.floor((MIN_PASS_FT * maskPxPerFt) / 2));
+}
+// The engine's honesty line, not a tunable: every topology decision on a
+// raster carries ±1 cell of quantization, which is ±(1/mppf) ft. Below this
+// resolution that error band rivals MIN_PASS_FT itself — whether a half-foot
+// waist between two open door leaves connects or separates two spaces is
+// genuinely UNDECIDABLE from the mask (a cell is wider than 2"), and verdicts
+// near the threshold may differ from a finer mask's. Above it, the feet-true
+// constants keep verdicts resolution-independent. Consumers: traceConfidence
+// deducts on coarser masks; the bench gates cross-resolution agreement only
+// at-or-above the floor (coarser runs are tracked, non-gating).
+export const DETERMINISM_MIN_MPPF = 6;   // mask px per foot (a cell ≤ 2 inches)
 
 // segment meta bits (extractVectorGeometry emits, classifyHatchSegs consumes)
 export const SEG_CURVE = 1;         // bezier chord — never classified as hatch (door swings close gaps)
@@ -59,7 +98,8 @@ export const SEG_FILLONLY = 4;      // filled-not-stroked path (solid poché out
 // stacking tangentially; walls don't do that (see classifyHatchSegs)
 export const HATCH_ANGLE_TOL = 2;      // deg — CAD hatch angle jitter is ≪ 1°
 export const HATCH_MIN_RUN = 10;       // rows — fewer evenly-spaced parallels is plausibly walls
-export const HATCH_MAX_PITCH = 24;     // mask px — keeps room-scale rhythm (demising walls) hard
+export const HATCH_MAX_PITCH = 24;     // mask px — scale-unknown fallback for the pitch cap
+export const HATCH_MAX_PITCH_FT = HATCH_MAX_PITCH / 18;  // = 4/3 ft at the 18 px/ft calibration — keeps room-scale rhythm (demising walls) hard, at every resolution
 export const HATCH_PITCH_TOL = 0.35;   // regularity band around the median pitch
 export const HATCH_MIN_REGULAR = 0.7;  // fraction of gaps that must sit inside the band
 export const HATCH_OVERLAP_FRAC = 0.5; // successive rows must overlap tangentially this much
@@ -230,7 +270,7 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
 // coincide with walls), and heavier-pen members stay hard (wall overprint).
 interface HatchCand { i: number; ang: number; x1: number; y1: number; x2: number; y2: number; w: number; }
 interface HatchRow { d: number; t0: number; t1: number; segs: HatchCand[]; }
-export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number): Uint8Array {
+export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, pitchCapPx: number = HATCH_MAX_PITCH): Uint8Array {
   const n = segs.length >> 2;
   const soft = new Uint8Array(n);
   if (!meta || !n) return soft;
@@ -328,7 +368,7 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
       // pitch sits exactly ON the cap would otherwise split its run on that
       // noise at some resolutions — stranding a sub-run too short to classify
       // (found by the benchmark corpus: tile-grid at ws=1 vs ws=0.5)
-      if (gap > HATCH_MAX_PITCH + 0.5 || ov < need) { flushRun(runStart, k - 1); runStart = k; }
+      if (gap > pitchCapPx + 0.5 || ov < need) { flushRun(runStart, k - 1); runStart = k; }
     }
     flushRun(runStart, rows.length - 1);
   }
@@ -344,11 +384,15 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
 // swings, curved walls) additionally carry bit 4: still hard, but identifiable
 // so annexDoorWedges can recognize a swing arc on a region's boundary.
 export const MASK_CURVE_BIT = 4;
-export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null): MaskObj {
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0): MaskObj {
   const ws = Math.min(1, maxDim / Math.max(imgW, imgH, 1));
   const mw = Math.max(2, Math.ceil(imgW * ws)), mh = Math.max(2, Math.ceil(imgH * ws));
   const mask = new Uint8Array(mw * mh);
-  const soft = meta ? classifyHatchSegs(segs, meta, ws) : null;
+  // pxPerFt = IMAGE px per foot (the sheet scale at this render). When known,
+  // the hatch pitch cap converts to mask px through it, so whether a rhythm
+  // reads as hatch or as walls is a property of the DRAWING, not of ws.
+  const mppf = Number.isFinite(pxPerFt) && pxPerFt > 0 ? pxPerFt * ws : 0;
+  const soft = meta ? classifyHatchSegs(segs, meta, ws, mppf > 0 ? HATCH_MAX_PITCH_FT * mppf : HATCH_MAX_PITCH) : null;
   let softCount = 0;
   for (let i = 0, si = 0; i + 3 < segs.length; i += 4, si++) {
     let v = soft && soft[si] ? 2 : 1;
@@ -367,7 +411,7 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
       if (e2 <= dx) { e += dx; y0 += sy; }
     }
   }
-  return { mask, mw, mh, ws, softCount };
+  return { mask, mw, mh, ws, softCount, mppf };
 }
 
 // ── 4. flood fill ──────────────────────────────────────────────────────────
@@ -377,12 +421,19 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
 // region from a hatch-bounded one.
 function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): FloodResult {
   const { mask, mw, mh, ws } = maskObj;
+  // feet-true guards when the scale is known (identical to the px values at
+  // the 18 px/ft calibration), px fallbacks + floors otherwise — see the
+  // resolution-independence block up top
+  const mppf = maskObj.mppf || 0;
+  const tinyPx = mppf > 0 ? Math.max(TINY_PX_FLOOR, Math.round(TINY_SF * mppf * mppf)) : TINY_PX;
+  const minThick = mppf > 0 ? Math.max(MIN_THICK_FLOOR, Math.round(MIN_THICK_FT * mppf)) : MIN_THICK;
+  const nudge = mppf > 0 ? Math.max(NUDGE_PX, Math.round(NUDGE_FT * mppf)) : NUDGE_PX;
   let sx = Math.round(ix * ws), sy = Math.round(iy * ws);
   if (sx < 0 || sy < 0 || sx >= mw || sy >= mh) return { status: "boundary" };
   if (mask[sy * mw + sx] & barrier) {
-    // nudge: nearest open cell within 3 px (clicks often land on hatch lines)
+    // nudge: nearest open cell (clicks often land on hatch lines)
     let found: Point | null = null;
-    for (let r = 1; r <= 3 && !found; r++) {
+    for (let r = 1; r <= nudge && !found; r++) {
       for (let dy = -r; dy <= r && !found; dy++) for (let dx = -r; dx <= r; dx++) {
         const nx = sx + dx, ny = sy + dy;
         if (nx >= 0 && ny >= 0 && nx < mw && ny < mh && !(mask[ny * mw + nx] & barrier)) { found = [nx, ny]; break; }
@@ -427,8 +478,8 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
   }
   if (leaked) return { status: "leak" };
   // hatch/text slivers: plenty of cells but no room-like thickness
-  if (count < TINY_PX || bx1 - bx0 + 1 < MIN_THICK || by1 - by0 + 1 < MIN_THICK) return { status: "tiny", count };
-  return { status: "ok", region, count, mw, mh, ws, hardHits, softHits };
+  if (count < tinyPx || bx1 - bx0 + 1 < minThick || by1 - by0 + 1 < minThick) return { status: "tiny", count };
+  return { status: "ok", region, count, mw, mh, ws, mppf: mppf || undefined, hardHits, softHits };
 }
 
 // The escalating fill. Pass 1 is the strict mask (walls + hatch — exactly the
@@ -562,12 +613,12 @@ function hardDT(mask: Uint8Array, mw: number, mh: number): Uint8Array {
  *  `dt` lets floodRegionSealed reuse its cached distance transform; standalone
  *  callers may omit it. */
 export function dilateHardMask(mo: MaskObj, r: number, dt?: Uint8Array): MaskObj {
-  const { mask, mw, mh, ws, softCount } = mo;
+  const { mask, mw, mh, ws, softCount, mppf } = mo;
   const n = mw * mh;
   const d = dt || hardDT(mask, mw, mh);
   const out = new Uint8Array(n);
   for (let i = 0; i < n; i++) out[i] = (d[i] <= r ? 1 : 0) | (mask[i] & 2);
-  return { mask: out, mw, mh, ws, softCount };
+  return { mask: out, mw, mh, ws, softCount, mppf };
 }
 
 // Grow the sealed-mask region back toward the true linework (4-connected BFS,
@@ -668,7 +719,7 @@ function curveSoftMask(mo: MaskObj, region: Uint8Array): MaskObj {
       if (near) out[i] = src[i] & ~1;
     }
   }
-  return { mask: out, mw, mh, ws: mo.ws, softCount: mo.softCount };
+  return { mask: out, mw, mh, ws: mo.ws, softCount: mo.softCount, mppf: mo.mppf };
 }
 
 /** Does the region's edge touch curve linework anywhere? Cheap gate for the
@@ -710,12 +761,37 @@ function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: numb
 // One base-flood + seal-ladder attempt against a specific mask. The dt used
 // for growback/virtual-boundary checks is the ATTEMPT mask's own transform, so
 // the curve-transparent retry measures distance to walls-without-arcs.
-function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[]): FloodResult {
+//
+// `minPassPx` > 0 turns on the feet-true minimum-passage rule: the PRIMARY
+// flood runs against walls dilated by that radius (closing sub-MIN_PASS_FT
+// slits — see minPassRadiusFor), grown back onto the true linework. This is a
+// SEMANTIC default, not a repair: whether a hair-width slit connects two
+// spaces must be a property of the drawing, never of the mask resolution. If
+// the dilated flood fails (open space still leaks; the dilation ate a
+// sliver-sized region), everything falls back exactly to the old behavior:
+// raw flood first, then the seal ladder — sealing still only ever improves.
+function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], minPassPx = 0): FloodResult {
+  const scratch = (): SealScratch => {
+    let s = sealCache.get(mo.mask);
+    if (!s) { s = { dt: hardDT(mo.mask, mo.mw, mo.mh), byR: new Map() }; sealCache.set(mo.mask, s); }
+    return s;
+  };
+  if (minPassPx > 0) {
+    const s = scratch();
+    let dm = s.byR.get(minPassPx);
+    if (!dm) { dm = dilateHardMask(mo, minPassPx, s.dt); s.byR.set(minPassPx, dm); }
+    const [ax, ay] = ascendSeed(s.dt, mo.mw, mo.mh, mo.ws, ix, iy, minPassPx);
+    const f = floodRegion(dm, ax, ay, sensitivity);
+    if (f.status === "ok") {
+      growRegionBack(f, mo, minPassPx, f.hatchFiltered ? 1 : 3, s.dt);
+      return f;
+    }
+  }
   const base = floodRegion(mo, ix, iy, sensitivity);
   if (base.status === "ok") return base;
-  let sc = sealCache.get(mo.mask);
-  if (!sc) { sc = { dt: hardDT(mo.mask, mo.mw, mo.mh), byR: new Map() }; sealCache.set(mo.mask, sc); }
+  const sc = scratch();
   for (const r of radii) {
+    if (r <= minPassPx) continue;   // a subset of the primary's dilation — already failed harder
     let dm = sc.byR.get(r);
     if (!dm) { dm = dilateHardMask(mo, r, sc.dt); sc.byR.set(r, dm); }
     const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
@@ -744,8 +820,8 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
  *  inclusion: when `wedgeCapPx` > 0 and the result is bounded by drawn door
  *  linework, a curve-transparent retry re-measures to the wall opening; it is
  *  kept only when the growth stays wedge-scale. */
-export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII, wedgeCapPx = 0): FloodResult {
-  const r1 = sealAttempt(mo, ix, iy, sensitivity, radii);
+export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII, wedgeCapPx = 0, minPassPx = 0): FloodResult {
+  const r1 = sealAttempt(mo, ix, iy, sensitivity, radii, minPassPx);
   if (!wedgeCapPx || r1.status !== "ok" || !regionTouchesCurve(r1, mo)) return r1;
   // retry from the ROOM'S most interior cell, not the click — the retry's
   // sealed floods dilate the walls, and a click near a wall (or a hover
@@ -758,7 +834,7 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   let bi = -1, bd = -1;
   for (let i = 0; i < r1.region.length; i++) if (r1.region[i] && sc2.dt[i] > bd) { bd = sc2.dt[i]; bi = i; }
   const sx = bi < 0 ? ix : (bi % mo.mw) / mo.ws, sy = bi < 0 ? iy : Math.floor(bi / mo.mw) / mo.ws;
-  const r2 = sealAttempt(m2, sx, sy, sensitivity, radii);
+  const r2 = sealAttempt(m2, sx, sy, sensitivity, radii, minPassPx);
   if (r2.status !== "ok" || r2.count <= r1.count) return r1;
   const allowance = Math.max(wedgeCapPx, Math.min(Math.round(r1.count * WEDGE_GROWTH_FRAC), WEDGE_MAX_DOORS * wedgeCapPx));
   if (r2.count - r1.count > allowance) return r1;      // that was a curved wall (or open paper), not a door

@@ -12,10 +12,15 @@
 //                   of the boundary (how much is synthetic seal line):  ×(1 − virtualFrac)
 //                   guards cap virtualFrac at 0.25, so this floors ×0.75
 //   wedges        — door linework was crossed under grow-but-verify     ×0.97
+//   mppf          — mask coarser than the determinism floor (a cell is
+//                   wider than ~2", so half-foot topology — doorway vs
+//                   slit — quantizes; see DETERMINISM_MIN_MPPF)          ×0.90
 //
 // The deductions compose: a raster-traced, sealed room multiplies both. The
 // score is a REVIEW PRIORITIZER, not a probability — 1.0 traces need a
 // glance, low scores deserve the estimator's eyes on the flagged edge.
+import { DETERMINISM_MIN_MPPF } from "./oneclick";
+
 export interface ConfidenceInput {
   raster?: boolean;
   hatchFiltered?: boolean;
@@ -23,12 +28,14 @@ export interface ConfidenceInput {
   virtualFrac?: number;
   wedges?: number;
   wedgeGrowth?: number;
+  mppf?: number;               // mask px per foot; 0/absent = scale unknown (no deduction)
 }
 export interface Confidence { score: number; factors: string[]; }
 
 export const CONF_RASTER = 0.90;
 export const CONF_HATCH = 0.95;
 export const CONF_WEDGE = 0.97;
+export const CONF_COARSE = 0.90;
 export const SEAL_VIRTUAL_DEFAULT = 0.10;   // sealed result missing its fraction (old data): assume a door's worth
 
 export function traceConfidence(s: ConfidenceInput): Confidence {
@@ -42,5 +49,6 @@ export function traceConfidence(s: ConfidenceInput): Confidence {
     factors.push(`sealed-opening(${Math.round(vf * 100)}% synthetic boundary)`);
   }
   if (s.wedges) { score *= CONF_WEDGE; factors.push("door-swing-crossed"); }
+  if (typeof s.mppf === "number" && s.mppf > 0 && s.mppf < DETERMINISM_MIN_MPPF) { score *= CONF_COARSE; factors.push("coarse-mask"); }
   return { score: +score.toFixed(2), factors };
 }

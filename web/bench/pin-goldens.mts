@@ -8,7 +8,7 @@ import { createRequire } from "module";
 import { writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
 const req = createRequire(import.meta.url);
 const pdfjs = await import(req.resolve("pdfjs-dist/legacy/build/pdf.mjs"));
 const here = dirname(fileURLToPath(import.meta.url));
@@ -32,7 +32,14 @@ const PINNED = [
     probes: [
       { name: "patient-room-137", seed: [2592, 756], expect: "golden" as const, tags: ["door-swing"] },
       { name: "elevator-e01", seed: [2538, 1566], expect: "golden" as const, tags: ["door-swing"] },
+      // ward room + its vestibule are TWO probes since the min-passage rule:
+      // the old single 294 SF trace reached the vestibule only through a
+      // sub-half-foot slit between an annotation leader tip and a wall corner
+      // (a raster accident that flipped with resolution — bench round 7).
+      // Deterministically they are two spaces behind a double door, clicked
+      // separately; nothing the reviewer approved is lost, it's just two rows.
       { name: "ward-room-294sf", seed: [4050, 486], expect: "golden" as const, tags: ["door-swing"] },
+      { name: "ward-vestibule", seed: [4045, 1230], expect: "golden" as const, tags: ["door-swing", "vestibule"] },
       { name: "cloud-corridor", seed: [1814, 1814], expect: "golden" as const, tags: ["cloud-boundary", "corridor"] },
       { name: "shaded-wing-office", seed: [659, 1551], expect: "golden" as const, tags: ["shaded-wing"] },
       { name: "open-margin", seed: [5443, 3737], expect: "refusal" as const, tags: ["sheet-margin", "known-limit"], knownFail: true },
@@ -46,12 +53,12 @@ for (const c of PINNED) {
   const vp = page.getViewport({ scale: c.scale });
   const ops = await page.getOperatorList();
   const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
-  const mo = buildMask(g.segs, vp.width, vp.height, MASK_MAX_DIM, g.meta);
+  const mo = buildMask(g.segs, vp.width, vp.height, MASK_MAX_DIM, g.meta, c.ptPerFt);
   const mppf = mo.ws * c.ptPerFt;
   const probes: object[] = [];
   for (const p of c.probes) {
     if (p.expect === "refusal") { probes.push(p); continue; }
-    const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf));
+    const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
     if (f.status !== "ok") { console.error(`  ${c.file} ${p.name}: engine refused (${f.status}) — cannot pin`); continue; }
     const ring = traceRegion(f).map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
     probes.push({ ...p, golden: ring });

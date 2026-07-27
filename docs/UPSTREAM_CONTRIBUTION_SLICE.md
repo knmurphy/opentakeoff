@@ -15,14 +15,25 @@ here and may become their own proposals later.
 | **B** — gap-closing tolerance | Seal ladder: scale-aware radii (`sealRadiiFor`), Manhattan distance-transform dilation, never-ascending growback, room-size + virtual-boundary gates; `gap_sealed_px` provenance | `web/src/lib/oneclick.ts` |
 | **B-adjacent** — failure mode #2 ("unclosed door swings") | Curve marking (mask bit 4 from `SEG_CURVE`), LOCAL curve-transparent retry with grow-but-verify, leaf absorption for perimeter integrity, `door_wedges` provenance. **Note for the PR description:** "swing wedge included, measured to the wall plane" is a measurement-policy choice — call it out explicitly as a review point, with the flooring-practice rationale | `web/src/lib/oneclick.ts` |
 | **D** — confidence + metadata | `traceConfidence`: transparent 0–1 score with named factors over engine signals; `virtualFrac` / `wedgeGrowth` surfaced on `FloodResult`; `origin.confidence` + `confidence_factors` | `web/src/lib/confidence.ts`, `web/src/lib/oneclick.ts` |
-| **E** — scored benchmark corpus | Golden fixtures (synthetic truth-by-construction + pinned reviewed real-plan traces), rasterized-IoU scorer, gating runner reporting mean/floor IoU, refusal rate, leak rate, correct-refusal rate, per-probe confidence | `web/bench/**` |
+| **E** — scored benchmark corpus | Golden fixtures (synthetic truth-by-construction + pinned reviewed real-plan traces), rasterized-IoU scorer, gating runner reporting mean/floor IoU, refusal rate, leak rate, correct-refusal rate, per-probe confidence; **cross-resolution runs** (ws × 1/0.75/0.5) gated on verdict agreement + pairwise ring IoU at-or-above the determinism floor | `web/bench/**` |
+| **Failure mode #3** — cross-resolution determinism | Feet-true thresholds through `MaskObj.mppf` (tiny/thin-region guards, seed nudge, hatch pitch cap — px behavior preserved bit-for-bit at the 18 px/ft calibration and as the scale-unknown fallback); the **minimum-passage rule** (`MIN_PASS_FT` / `minPassRadiusFor`: sub-half-foot slits never connect spaces, at any resolution); `DETERMINISM_MIN_MPPF` honesty floor + `coarse-mask` confidence factor | `web/src/lib/oneclick.ts`, `web/src/lib/confidence.ts` |
 | Engine fixes the work surfaced | Hatch pitch-run float-noise tolerance (corpus catch); dilated-seed ascent + deepest-cell retry seeding; region-bitmap semantics | `web/src/lib/oneclick.ts` |
-| Tests for all of the above | Seal/wedge/curve suites, scorer + confidence tests | `web/test/geometry.test.ts` (additions), `web/test/confidence.test.ts`, `web/test/benchScore.test.ts` |
+| Tests for all of the above | Seal/wedge/curve suites, scorer + confidence tests, resolution-invariance suite | `web/test/geometry.test.ts` (additions), `web/test/confidence.test.ts`, `web/test/benchScore.test.ts`, `web/test/resolutionInvariance.test.ts` |
 
 Plus a **minimal integration diff** for upstream's canvas: `floodRegion` →
-`floodRegionSealed(..., sealRadiiFor(mppf), doorWedgeCapPx(mppf))` at the
-click/probe sites, the new provenance fields, and (optionally) the readout
-suffixes. Nothing else from our `TakeoffCanvas.jsx` goes upstream.
+`floodRegionSealed(..., sealRadiiFor(mppf), doorWedgeCapPx(mppf),
+minPassRadiusFor(mppf))` at the click/probe sites, the sheet scale passed into
+`buildMask` (with mask-cache eviction on recalibration), the new provenance
+fields, and (optionally) the readout suffixes. Nothing else from our
+`TakeoffCanvas.jsx` goes upstream.
+
+**Measurement-policy note for the PR (like the wedge policy):** the
+minimum-passage rule means a space reachable only through a sub-half-foot
+drawn gap (annotation leader tips, drafting slits) is measured as its own
+room, not annexed — that changed one pinned golden (`ward-room-294sf`, whose
+old 294 SF trace annexed a vestibule through a leader-tip slit that flipped
+with resolution; it is now two probes, room + vestibule, deterministic at
+every scale — see `docs/evidence/one-click/va-plan-ward-room-repin-min-passage.png`).
 
 ## Fork extensions — NOT in the RFC, stay out of the PR
 

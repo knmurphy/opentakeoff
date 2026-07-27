@@ -78,9 +78,10 @@ export interface CrossScore {
   expect: "golden" | "refusal";
   resolutions: number[];       // ws factors probed (1 = production cap)
   statuses: string[];          // engine status per resolution
-  statusAgree: boolean;        // same verdict at every resolution
-  minPairIoU?: number;         // worst pairwise ring agreement (≥2 traced)
-  iouByRes?: number[];         // per-resolution IoU vs the golden (diagnostic)
+  statusAgree: boolean;        // same verdict at every GATING resolution
+  minPairIoU?: number;         // worst pairwise ring agreement (≥2 traced, gating res only)
+  iouByRes?: number[];         // per-resolution IoU vs the golden (diagnostic, all res)
+  subFloorRes?: number[];      // resolutions below the engine's determinism floor — tracked, non-gating
   knownFail?: boolean;
   tags?: string[];
 }

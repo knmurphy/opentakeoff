@@ -16,7 +16,7 @@ import { createRequire } from "module";
 import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM, DETERMINISM_MIN_MPPF } from "../src/lib/oneclick.ts";
 import type { FloodResult, Point } from "../src/lib/oneclick.ts";
 import { syntheticCorpus } from "./corpus.ts";
 import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, type ProbeScore, type CrossScore, type CrossRun } from "./score.ts";
@@ -37,11 +37,11 @@ interface CaseProbe { name: string; seed: Point; expect: "golden" | "refusal"; g
 function runCase(caseName: string, segs: number[], imgW: number, imgH: number, meta: Uint8Array | null, ptPerFt: number, probes: CaseProbe[]) {
   // factor 1 reproduces the production mask exactly: min(cap, image dim)
   const baseDim = Math.min(MASK_MAX_DIM, Math.max(imgW, imgH, 2));
-  const masks = RES_FACTORS.map((f) => buildMask(segs, imgW, imgH, Math.max(2, Math.round(baseDim * f)), meta));
+  const masks = RES_FACTORS.map((f) => buildMask(segs, imgW, imgH, Math.max(2, Math.round(baseDim * f)), meta, ptPerFt));
   for (const p of probes) {
     const runs: Array<CrossRun & { flood: FloodResult }> = masks.map((mo, k) => {
       const mppf = mo.ws * ptPerFt;
-      const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf));
+      const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
       return { res: RES_FACTORS[k], status: f.status, ring: f.status === "ok" ? traceRegion(f) : null, flood: f };
     });
 
@@ -52,14 +52,18 @@ function runCase(caseName: string, segs: number[], imgW: number, imgH: number, m
     } else {
       const f = base.flood;
       const s = scoreGolden(f.status, base.ring, p.golden!);
-      const conf = f.status === "ok" ? traceConfidence({ hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score : undefined;
+      const conf = f.status === "ok" ? traceConfidence({ hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf }).score : undefined;
       scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf, knownFail: p.knownFail, tags: p.tags } as ProbeScore);
     }
 
-    // cross-resolution agreement
-    const ca = crossAgreement(runs, CROSS_CELL);
+    // cross-resolution agreement — gate only where the mask is at or above the
+    // engine's determinism floor (below it, half-foot topology quantizes and
+    // the engine itself says so via confidence); coarser runs stay visible
+    const gatingRuns = runs.filter((_, k) => (masks[k].mppf ?? Infinity) >= DETERMINISM_MIN_MPPF);
+    const subFloorRes = RES_FACTORS.filter((_, k) => (masks[k].mppf ?? Infinity) < DETERMINISM_MIN_MPPF);
+    const ca = crossAgreement(gatingRuns.length >= 2 ? gatingRuns : runs.slice(0, 1), CROSS_CELL);
     const iouByRes = p.expect === "golden" ? runs.map((r) => (r.ring && r.ring.length >= 3 ? polyIoU(r.ring, p.golden!, CROSS_CELL) : 0)) : undefined;
-    crossScores.push({ caseName, probeName: p.name, expect: p.expect, resolutions: RES_FACTORS, ...ca, iouByRes, knownFail: p.knownFail, tags: p.tags });
+    crossScores.push({ caseName, probeName: p.name, expect: p.expect, resolutions: RES_FACTORS, ...ca, statuses: runs.map((r) => r.status), iouByRes, subFloorRes: subFloorRes.length ? subFloorRes : undefined, knownFail: p.knownFail, tags: p.tags });
   }
 }
 
@@ -102,6 +106,7 @@ for (const s of crossScores) {
     s.statusAgree ? `statuses ${s.statuses.join("/")}` : `DISAGREE ${s.statuses.join("/")}`,
     s.minPairIoU !== undefined ? `pair IoU ${s.minPairIoU.toFixed(3)}` : "",
     s.iouByRes ? `vs-golden ${s.iouByRes.map((v) => v.toFixed(3)).join("/")}` : "",
+    s.subFloorRes?.length ? `[sub-floor: ×${s.subFloorRes.join(",×")}]` : "",
     s.knownFail ? "[known-fail]" : "",
   ].filter(Boolean).join("  ");
   console.log(`${(s.caseName + " / " + s.probeName).padEnd(44)} ${bits}`);

@@ -36,7 +36,7 @@ import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { roomNameFromTokens } from "../lib/roomName";
 import { traceConfidence } from "../lib/confidence";
@@ -2658,6 +2658,9 @@ export default function TakeoffCanvas() {
       setPrevScale({ key, upp: prior, source: scaleSources[key] || "standard" });
     }
     setScales((s) => ({ ...s, [key]: upp }));
+    // the boundary mask bakes the scale in (feet-true hatch pitch cap + flood
+    // guards) — a recalibrated sheet needs its mask rebuilt on next use
+    maskCacheRef.current.delete(key);
     // STRICT panel lookup — the panelByKey wrapper falls back to panels[0], so
     // it can't detect an off-canvas sheet: a future off-canvas caller would
     // silently re-price that sheet's shapes against the wrong panel's bitmap
@@ -2806,7 +2809,11 @@ export default function TakeoffCanvas() {
       const segs = vectorSegsRef.current.get(key);
       const dims = panelImgs[key];
       if (!segs || !segs.length || !dims?.w) return null;
-      mo = buildMask(segs, dims.w, dims.h, MASK_MAX_DIM, segMetaRef.current.get(key));
+      // sheet scale (image px per foot) rides into the mask so the hatch pitch
+      // cap and the flood's size guards are feet-true — resolution-independent.
+      // rescaleSheet evicts this cache entry when the calibration changes.
+      const upp = uppFor(key);
+      mo = buildMask(segs, dims.w, dims.h, MASK_MAX_DIM, segMetaRef.current.get(key), upp ? 1 / upp : 0);
       maskCacheRef.current.set(key, mo);
     }
     return mo;
@@ -2877,7 +2884,7 @@ export default function TakeoffCanvas() {
     if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
-    const conf = traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges });
+    const conf = traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf });
     // Decide accept/dup/carve-reject INSIDE the functional updater, against
     // its own authoritative `prev` — not proposalRef, which only catches up
     // on the next render's passive-effect flush (a macrotask). proposeRegion
@@ -2971,7 +2978,7 @@ export default function TakeoffCanvas() {
         // seal radii + wedge cap scale with the sheet: bridge up to a door-width
         // opening (mask px per foot = mask-per-image-px / units-per-image-px)
         const mppf = mo.ws / upp;
-        const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mppf), doorWedgeCapPx(mppf));
+        const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
         if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
@@ -2998,7 +3005,7 @@ export default function TakeoffCanvas() {
     // escalation — and with it the Fill sensitivity knob — is structurally
     // inert on scans; the default sensitivity rides along. Gap sealing still
     // applies — faded scan lines are the raster path's own flavor of open doorway.
-    const f = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp));
+    const f = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp), minPassRadiusFor(rmo.ws / upp));
     if (f.status !== "ok") {
       setCommitMsg(f.status === "leak"
         ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Click a more enclosed spot, or trace it with Area (A)."
@@ -3120,12 +3127,12 @@ export default function TakeoffCanvas() {
     let f = null, raster = false;
     if (!rasterEligible || vectorViable) {
       const mo = ensureMask(tp.key);
-      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp), doorWedgeCapPx(mo.ws / upp));
+      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp), doorWedgeCapPx(mo.ws / upp), minPassRadiusFor(mo.ws / upp));
     }
     if ((!f || f.status !== "ok") && rasterEligible) {
       const rmo = rasterMaskReadyRef.current.get(tp.key);
       if (rmo) {
-        const fr = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp));
+        const fr = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp), minPassRadiusFor(rmo.ws / upp));
         if (fr.status === "ok") { f = fr; raster = true; }
       } else ensureRasterMask(tp.key);   // warm the scan mask; preview engages when it resolves
     }
@@ -3137,7 +3144,7 @@ export default function TakeoffCanvas() {
       ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
     }
     if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
-    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, wedges: f.wedges || 0, cf: traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
+    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, wedges: f.wedges || 0, cf: traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf }).score, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
     ocLiveDraw(tp, st.last, p);
     if (kind === "pos") {
       const cur = st.last;
@@ -3943,7 +3950,7 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(key);
       if (!mo && !rasterEligible) return { error: "Still reading this sheet's linework — try again in a second." };
       if (mo) {
-        const r = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp), doorWedgeCapPx(mo.ws / upp));
+        const r = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp), doorWedgeCapPx(mo.ws / upp), minPassRadiusFor(mo.ws / upp));
         if (r.status === "ok") f = r;
         else if (!rasterEligible) {
           return { error: r.status === "leak"
@@ -3955,7 +3962,7 @@ export default function TakeoffCanvas() {
     if (!f) {
       const rmo = await ensureRasterMask(key);
       if (!rmo) return { error: "Couldn't read this scan — the estimator will have to trace it by hand." };
-      const r = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp));
+      const r = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp), doorWedgeCapPx(rmo.ws / upp), minPassRadiusFor(rmo.ws / upp));
       if (r.status !== "ok") {
         return { error: r.status === "leak"
           ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Seed a more enclosed spot."
@@ -3975,7 +3982,7 @@ export default function TakeoffCanvas() {
       area_sf: +(ringArea(ring) * upp * upp).toFixed(2),
       perimeter_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
       seed_norm: [+xn.toFixed(5), +yn.toFixed(5)],
-      confidence: traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score,
+      confidence: traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf }).score,
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
       ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
       ...(f.wedges ? { door_wedges: f.wedges } : {}),
