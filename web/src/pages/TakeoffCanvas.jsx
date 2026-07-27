@@ -36,7 +36,7 @@ import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
-import { extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegionSealed, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
@@ -491,6 +491,10 @@ export default function TakeoffCanvas() {
   const maskCacheRef = useRef(new Map());  // sheetKey → built boundary mask (lazy, dropped on re-render)
   const sheetStatsRef = useRef(new Map()); // sheetKey → {segCount, imageFrac} — raster-fallback trigger signals
   const rasterMaskCacheRef = useRef(new Map()); // sheetKey → Promise<MaskObj|null> — scan-pixel mask (lazy, shared across clicks)
+  const rasterMaskReadyRef = useRef(new Map()); // sheetKey → resolved MaskObj — sync view of the cache for the hover preview
+  const ocLiveRef = useRef(null);               // hover-preview state: pending cursor + last computed ring / failed seed
+  const ocLivePolyRef = useRef(null);           // hover-preview DOM (imperative per-move, like rubberRef)
+  const ocLiveTextRef = useRef(null);
   const snapMarkRef = useRef(null);    // SVG snap indicator
   const angleRef = useRef(null);       // current angle-locked image point (or null) — the click commits it
   const aimMarkRef = useRef(null);     // four floating liquid-glass pickets thickening the crosshair crossing
@@ -1040,7 +1044,8 @@ export default function TakeoffCanvas() {
   // already requires it) — discard it on tool switch, like the stamp above.
   // Also keeps Create out of the ACTION slot while Finish occupies it, so the
   // slot's reserved width always fits its content (issue #61).
-  useEffect(() => { if (tool !== "oneclick") setProposal(null); }, [tool]);
+  useEffect(() => { if (tool !== "oneclick") setProposal(null); ocLiveHide(); }, [tool]);
+  useEffect(() => { if (ocLiveRef.current) ocLiveRef.current.last = null; }, [fillSens]);   // knob moved — the cached preview no longer reflects it
   // Proposal gone (created, discarded, sheet changed) ⇒ drop any handle selection/hover.
   useEffect(() => { if (!proposal) { setOcSel(null); ocHoverRef.current = -1; setOcHover(-1); } }, [proposal]);
   // Switching to a different shape (or clearing the selection) drops the vertex pick.
@@ -1133,6 +1138,8 @@ export default function TakeoffCanvas() {
     maskCacheRef.current.clear();
     sheetStatsRef.current.clear();
     rasterMaskCacheRef.current.clear();
+    rasterMaskReadyRef.current.clear();
+    ocLiveHide();
     canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
     renderScalesRef.current.clear();
@@ -2407,8 +2414,9 @@ export default function TakeoffCanvas() {
     updateHover(e);
     // One-Click proposal editing: dragging a corner/edge grip, else revealing
     // handles on the region under the cursor. Both work in panel-LOCAL px.
-    if (ocDragRef.current) { ocDragMove(e); return; }
+    if (ocDragRef.current) { ocLiveHide(); ocDragMove(e); return; }   // a grip drag owns the cursor — no candidate preview underneath
     if (tool === "oneclick" && proposal && !panRef.current && !pendingClickRef.current) ocHoverUpdate(e);
+    if (tool === "oneclick" && !panRef.current && !pendingClickRef.current) ocLiveMove(e);
     if (dragRef.current) {
       const d = dragRef.current;
       // dragRef is armed only by selectAt (Select tool), where snapRef is stale
@@ -2829,7 +2837,9 @@ export default function TakeoffCanvas() {
         }
         const px = ctx.getImageData(0, 0, mw, mh);
         cv.width = cv.height = 0;   // drop the backing store
-        return buildRasterMask(px.data, mw, mh, ws);
+        const built = buildRasterMask(px.data, mw, mh, ws);
+        rasterMaskReadyRef.current.set(key, built);   // sync view for the hover preview
+        return built;
       })().catch(() => {
         // A rejection here (pdf.js render failure — worker restart, a lazily-
         // fetched embedded image erroring; getImageData allocation failure
@@ -2838,6 +2848,7 @@ export default function TakeoffCanvas() {
         // this sheet show the permanent failure message even though a retry
         // would succeed. Evict so the next ensureRasterMask call rebuilds.
         rasterMaskCacheRef.current.delete(key);
+        rasterMaskReadyRef.current.delete(key);
         return null;
       });
       rasterMaskCacheRef.current.set(key, pr);
@@ -2912,14 +2923,16 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, rt: !!raster }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, rt: !!raster }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
     else if (outcome === "needsPos") setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
+    else if (f.sealedPx) setCommitMsg("That space wasn't fully enclosed — a small opening (a doorway or line gap) was sealed to bound it. Review the edge, then ⏎ creates.");
     else setCommitMsg("");
   }
   async function oneClickAt(p, negative) {
+    ocLiveHide();     // the click commits (or errors); the next move re-previews against the new proposal state
     const tp = panelAt(p[0]);
     const upp = uppFor(tp.key);
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
@@ -2939,7 +2952,7 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(tp.key);
       if (!mo && !rasterEligible) { setCommitMsg("Still reading this sheet's linework — try again in a second."); return; }
       if (mo) {
-        const f = floodRegion(mo, local[0], local[1], fillSens);
+        const f = floodRegionSealed(mo, local[0], local[1], fillSens);
         if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
@@ -2964,8 +2977,9 @@ export default function TakeoffCanvas() {
     if (!rmo) { setCommitMsg("Couldn't read this scan — trace it with Area (A)."); return; }
     // The raster mask is single-tier (softCount 0), so floodRegion's hatch
     // escalation — and with it the Fill sensitivity knob — is structurally
-    // inert on scans; no sensitivity is passed.
-    const f = floodRegion(rmo, local[0], local[1]);
+    // inert on scans; no sensitivity is passed. Gap sealing still applies —
+    // faded scan lines are the raster path's own flavor of open doorway.
+    const f = floodRegionSealed(rmo, local[0], local[1]);
     if (f.status !== "ok") {
       setCommitMsg(f.status === "leak"
         ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Click a more enclosed spot, or trace it with Area (A)."
@@ -2989,12 +3003,105 @@ export default function TakeoffCanvas() {
       // an untouched region's verts ARE the proposal, so nothing extra rides.
       // Post-Create edits are stamped by stampEdit, which freezes the same
       // field from the pre-edit ring only when Create didn't already.
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
     dispatchShape({ type: "add", shapes: made });   // Create is the creation gate — id/created_at minted by the command
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
     setCommitMsg(`Created ${made.length} takeoff${made.length === 1 ? "" : "s"} — ${fa(sf)} ${condById[activeCond]?.finish_tag || ""}. Click the next room.`);
     setProposal(null);
+    ocLiveHide();
+  }
+
+  // ── One-Click hover preview — the fill runs UNDER the cursor, pre-click ────
+  // The candidate region (same sealed flood + trace + snap the click commits)
+  // draws live while the One-Click tool is armed, so a click just confirms
+  // what's already on screen — no click → error → retry loop. All DOM-imperative
+  // per move (the rubberRef pattern): React renders the two elements once,
+  // hidden; ocLiveDraw moves them. Throttled to one flood per animation frame,
+  // and cached so scrubbing INSIDE a found room (or near a failed probe) costs a
+  // point-in-poly test, not a re-flood:
+  //   • last.ring hit — cursor still inside the last found region → redraw only.
+  //   • last.fail — cursor within a screen-constant radius of a failed seed →
+  //     stay hidden (open corridors would otherwise re-flood every frame).
+  // The raster path previews only once ensureRasterMask has RESOLVED (a hover
+  // kicks the render off, so the first click on a scan no longer stalls);
+  // until then the preview simply stays hidden.
+  function ocLiveHide() {
+    if (ocLivePolyRef.current) ocLivePolyRef.current.style.display = "none";
+    if (ocLiveTextRef.current) ocLiveTextRef.current.style.display = "none";
+    if (ocLiveRef.current) ocLiveRef.current.last = null;
+  }
+  function ocLiveMove(e) {
+    const st = ocLiveRef.current || (ocLiveRef.current = {});
+    st.cx = e.clientX; st.cy = e.clientY; st.alt = !!e.altKey;
+    if (!st.raf) st.raf = requestAnimationFrame(() => { st.raf = 0; ocLiveRun(); });
+  }
+  function ocLiveRun() {
+    const st = ocLiveRef.current;
+    if (!st || toolRef.current !== "oneclick" || panRef.current || pendingClickRef.current || ocDragRef.current) return;
+    const p = toImage(st.cx, st.cy);
+    const tp = panelAt(p[0]);
+    if (!tp?.img?.w || !uppFor(tp.key)) { ocLiveHide(); return; }
+    const prop = proposalRef.current;
+    if (prop && prop.key !== tp.key) { ocLiveHide(); return; }   // finish the other panel's selection first
+    const local = [p[0] - tp.xOffset, p[1]];
+    const kind = st.alt ? "neg" : "pos";
+    // dup/carve gates mirror proposeRegion — where a click would refuse, preview nothing
+    // (inside an existing region the handle-hover UX owns the cursor anyway)
+    const regions = prop ? prop.regions : [];
+    if (regions.some((r) => r.kind === kind && pointInPoly(local[0], local[1], r.poly))) { ocLiveHide(); return; }
+    if (kind === "neg" && !regions.some((r) => r.kind === "pos" && pointInPoly(local[0], local[1], r.poly))) { ocLiveHide(); return; }
+    const last = st.last;
+    if (last && last.key === tp.key && last.kind === kind && last.ring && pointInPoly(local[0], local[1], last.ring)) { ocLiveDraw(tp, last, p); return; }
+    if (last && last.key === tp.key && last.fail && Math.hypot(local[0] - last.fail[0], local[1] - last.fail[1]) < 24 / tfRef.current.scale) return;
+    // trigger policy verbatim from oneClickAt, minus the async raster wait
+    const stats = sheetStatsRef.current.get(tp.key);
+    const rasterEligible = !!stats && stats.imageFrac >= RASTER_MIN_IMG_FRAC;
+    const vectorViable = !!stats && stats.segCount >= RASTER_MIN_SEGS;
+    let f = null, raster = false;
+    if (!rasterEligible || vectorViable) {
+      const mo = ensureMask(tp.key);
+      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens);
+    }
+    if ((!f || f.status !== "ok") && rasterEligible) {
+      const rmo = rasterMaskReadyRef.current.get(tp.key);
+      if (rmo) {
+        const fr = floodRegionSealed(rmo, local[0], local[1]);
+        if (fr.status === "ok") { f = fr; raster = true; }
+      } else ensureRasterMask(tp.key);   // warm the scan mask; preview engages when it resolves
+    }
+    if (!f || f.status !== "ok") { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }   // hide first — ocLiveHide clears last
+    let ring;
+    if (raster) ring = traceRegion(f, RASTER_RDP_EPS);
+    else {
+      const grid = snapGridsRef.current.get(tp.key);
+      ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
+    }
+    if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
+    const upp = uppFor(tp.key);
+    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0 };
+    ocLiveDraw(tp, st.last, p);
+  }
+  function ocLiveDraw(tp, res, p) {
+    const el = ocLivePolyRef.current, tx = ocLiveTextRef.current;
+    if (!el) return;
+    const s = tfRef.current.scale;
+    const neg = res.kind === "neg";
+    el.setAttribute("points", res.ring.map(([x, y]) => `${x + tp.xOffset},${y}`).join(" "));
+    el.setAttribute("fill", neg ? "rgba(176,58,38,.12)" : "rgba(31,63,199,.08)");
+    el.setAttribute("stroke", neg ? "#b03a26" : "#1f3fc7");
+    el.setAttribute("stroke-width", 2 / s);
+    el.setAttribute("stroke-dasharray", `${3.5 / s} ${3.5 / s}`);   // finer dash than the committed proposal — reads as "candidate"
+    el.style.display = "block";
+    if (tx) {
+      tx.textContent = `${fa(res.area_sf)}${res.sealed ? " · sealed a small opening" : ""}`;
+      tx.setAttribute("x", p[0] + 14 / s); tx.setAttribute("y", p[1] - 10 / s);
+      tx.setAttribute("font-size", 12.5 / s);
+      tx.setAttribute("fill", neg ? "#b03a26" : "#1f3fc7");
+      tx.setAttribute("stroke", darkMode ? "#0b0e14" : "#faf6ea");
+      tx.setAttribute("stroke-width", 3 / s);
+      tx.style.display = "block";
+    }
   }
 
   // ── One-Click proposal geometry editing — correct a fill BEFORE Create ──────
@@ -3772,7 +3879,7 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(key);
       if (!mo && !rasterEligible) return { error: "Still reading this sheet's linework — try again in a second." };
       if (mo) {
-        const r = floodRegion(mo, local[0], local[1], fillSens);
+        const r = floodRegionSealed(mo, local[0], local[1], fillSens);
         if (r.status === "ok") f = r;
         else if (!rasterEligible) {
           return { error: r.status === "leak"
@@ -3784,7 +3891,7 @@ export default function TakeoffCanvas() {
     if (!f) {
       const rmo = await ensureRasterMask(key);
       if (!rmo) return { error: "Couldn't read this scan — the estimator will have to trace it by hand." };
-      const r = floodRegion(rmo, local[0], local[1]);
+      const r = floodRegionSealed(rmo, local[0], local[1]);
       if (r.status !== "ok") {
         return { error: r.status === "leak"
           ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Seed a more enclosed spot."
@@ -3805,6 +3912,7 @@ export default function TakeoffCanvas() {
       perimeter_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
       seed_norm: [+xn.toFixed(5), +yn.toFixed(5)],
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
+      ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
       ...(raster ? { raster_traced: true } : {}),
     };
   }
@@ -5667,6 +5775,11 @@ export default function TakeoffCanvas() {
                   (deduct keeps its danger red). Committed shapes wear the condition's own
                   color; the draft never mimics anyone's takeoff look. Solid, no dashes. */}
               <line ref={rubberRef} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={1.5 / tf.scale} strokeOpacity={0.85} strokeLinecap="round" style={{ display: "none" }} />
+              {/* One-Click hover preview — the candidate fill under the cursor, pre-click
+                  (ocLiveDraw moves these imperatively; a finer dash than the committed
+                  proposal so it reads as "what a click would select", not a selection) */}
+              <polygon ref={ocLivePolyRef} strokeOpacity={0.9} strokeLinejoin="round" style={{ display: "none", pointerEvents: "none" }} />
+              <text ref={ocLiveTextRef} fontWeight="600" paintOrder="stroke" strokeLinejoin="round" style={{ display: "none", pointerEvents: "none" }} />
               <rect ref={rectRef} fill={tool === "deduct" ? "rgba(176,58,38,.22)" : shapeFill(aCond)} stroke={tool === "deduct" ? "#b03a26" : "#1f3fc7"} strokeWidth={2 / tf.scale} style={{ display: "none" }} />
               {/* multi-select marquee — stage-px frame so one lasso spans side-by-side panels */}
               <rect ref={marqueeRectRef} fill="rgba(31,63,199,.06)" stroke="#1f3fc7" strokeWidth={1.5 / tf.scale} strokeDasharray={`${6 / tf.scale} ${4 / tf.scale}`} style={{ display: "none" }} />

@@ -6,6 +6,7 @@ import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
   SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE,
+  floodRegionSealed, dilateHardMask, SEAL_RADII,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier, cloudPath, arrowheadPath, reflectVertsNorm, closedMetrics } from "../src/lib/geometry.js";
@@ -259,6 +260,95 @@ test("escalation: Aggressive sensitivity accepts a larger growth that Balanced r
   assert.ok(!balanced.hatchFiltered, "Balanced rejects the ~2.8× growth");
   assert.equal(aggressive.hatchFiltered, true, "Aggressive accepts it");
   assert.ok(aggressive.count > balanced.count, "Aggressive recovers the larger region");
+});
+
+// ── leak recovery: door-gap sealing (floodRegionSealed) ────────────────────
+// A room whose top wall has an OPEN gap (an undrawn doorway). At ws=1 the open
+// run is (gapTo − gapFrom − 1) cells; a seal radius r closes runs ≤ 2r.
+function gappedRoomSegs(gapFrom: number, gapTo: number): number[] {
+  return [
+    20, 20, gapFrom, 20,
+    gapTo, 20, 100, 20,
+    100, 20, 100, 100,
+    100, 100, 20, 100,
+    20, 100, 20, 20,
+  ];
+}
+
+test("seal: a doorway gap leaks the plain flood but seals — smallest radius wins", () => {
+  const mask = buildMask(gappedRoomSegs(55, 58), 300, 300);   // 2 open cells
+  assert.equal(floodRegion(mask, 60, 60).status, "leak", "plain flood escapes the doorway");
+  const f = floodRegionSealed(mask, 60, 60);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.sealedPx, 1, "a 2-cell gap seals at the smallest radius");
+});
+
+test("seal: a wider doorway escalates the radius; growback restores the true room area", () => {
+  const mask = buildMask(gappedRoomSegs(55, 63), 300, 300);   // 7 open cells → needs r=4
+  const f = floodRegionSealed(mask, 60, 60);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.sealedPx, 4);
+  const ring = traceRegion(f);
+  const area = ringArea(ring);
+  // growback recovers the 4-px band the dilation stole along every wall: the
+  // ring must land in the same band as an intact room (~6400), not (80−2r)²
+  assert.ok(area > 5600 && area < 6800, `sealed+grown area ≈ intact room, got ${area}`);
+  for (const [x, y] of ring) {
+    assert.ok(x > 17 && x < 103 && y > 15 && y < 103, `ring stays on the room's walls, got ${x},${y}`);
+  }
+});
+
+test("seal: an opening wider than the largest radius still refuses — the leak stands", () => {
+  const mask = buildMask(gappedRoomSegs(55, 68), 300, 300);   // 12 open cells > 2×max(SEAL_RADII)
+  assert.ok(2 * Math.max(...SEAL_RADII) < 12, "fixture must exceed the seal reach");
+  assert.equal(floodRegionSealed(mask, 60, 60).status, "leak");
+});
+
+test("seal: a non-leak result passes through untouched (no sealedPx, identical fill)", () => {
+  const mask = buildMask(squareSegs(20, 20, 100, 100), 300, 300);
+  const plain = floodRegion(mask, 60, 60);
+  const sealed = floodRegionSealed(mask, 60, 60);
+  assert.equal(plain.status, "ok"); assert.equal(sealed.status, "ok");
+  if (plain.status !== "ok" || sealed.status !== "ok") return;
+  assert.equal(sealed.sealedPx, undefined);
+  assert.equal(sealed.count, plain.count);
+});
+
+test("dilateHardMask: hard cells fatten by r, soft (hatch) cells are never dilated", () => {
+  const mw = 9, mh = 9;
+  const mask = new Uint8Array(mw * mh);
+  mask[4 * mw + 4] = 1;                               // one hard cell, center
+  mask[1 * mw + 1] = 2;                               // one soft cell, corner-ish
+  const d = dilateHardMask({ mask, mw, mh, ws: 1, softCount: 1 }, 2);
+  assert.equal(d.mask[4 * mw + 6] & 1, 1, "hard reaches Chebyshev distance 2");
+  assert.equal(d.mask[2 * mw + 2] & 1, 1, "diagonal within the square element");
+  assert.equal(d.mask[4 * mw + 7] & 1, 0, "distance 3 stays open");
+  assert.equal(d.mask[1 * mw + 1], 2, "soft cell survives, un-fattened");
+  assert.equal(d.mask[1 * mw + 2] & 2, 0, "soft never dilates");
+  assert.equal(d.softCount, 1, "soft bookkeeping carries over");
+});
+
+test("seal: hatch semantics survive sealing — a hatched room behind a doorway still escalates", () => {
+  // the hatched-room fixture from the hatch suite, but with a doorway gap in the
+  // top wall: strict flood leaks; the sealed retry must still run the tiered
+  // escalation (hatch transparent) and come back hatchFiltered.
+  const gapped = [
+    100, 100, 380, 100, 388, 100, 700, 100,           // 7-image-px gap → ~3 mask px at ws=0.5 → r=2
+    700, 100, 700, 500, 700, 500, 100, 500, 100, 500, 100, 100,
+  ];
+  const hatch: number[] = [];
+  for (let x = 104; x <= 696; x += 4) hatch.push(x, 100, x, 500);
+  const all = [...border, ...gapped, ...hatch];
+  const m = buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all));
+  assert.notEqual(floodRegion(m, 400, 300).status, "ok", "unsealed: the doorway defeats the fill");
+  const f = floodRegionSealed(m, 400, 300);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.hatchFiltered, true, "escalation still fires on the sealed mask");
+  assert.ok(f.sealedPx! >= 1 && f.sealedPx! <= 4, `sealed at a small radius, got ${f.sealedPx}`);
+  assert.ok(approx(ringArea(traceRegion(f)), 240000, 0.04), "ring ≈ room area");
 });
 
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────

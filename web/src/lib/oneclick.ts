@@ -39,7 +39,7 @@ export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -458,6 +458,110 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
     return r2;
   }
   return r1;
+}
+
+// ── 4b. leak recovery — seal door-width gaps ───────────────────────────────
+// A room with an open doorway (no door swing drawn, or a faded line on a scan)
+// is the flood's classic dead end: the fill escapes through the opening and the
+// whole click comes back "leak". Sealing recovers it: re-flood with the HARD
+// (wall) cells dilated by an escalating radius r — a square dilation closes any
+// passage up to 2r mask px wide — then grow the bounded region back r steps
+// against the ORIGINAL mask so the boundary still sits on the true linework
+// everywhere except across the sealed opening (where the fill may reach up to
+// r px past the wall ends — sub-inch at plan scales, and the seed star + review
+// gate still apply). Soft (hatch) cells are never dilated: thickening a hatch
+// family would fuse the pattern into a solid block and starve the fill.
+//
+// Every non-"ok" status gets a sealing attempt — not just "leak". A hatched
+// room behind a doorway reads as TINY, not leak: the strict pass is trapped by
+// the hatch, and the escalated walls-only pass leaks through the door and is
+// discarded. On the sealed mask that same escalation is bounded and succeeds.
+// A genuine dense-linework tiny/boundary just fails again on every radius
+// (dilation only adds barrier) and the original status stands — the retries
+// cost little because trapped floods are small and dilated masks are cached.
+export const SEAL_RADII = [1, 2, 4];    // mask px — seals gaps up to 2/4/8 px wide
+// dilated masks are pure functions of (mask, r); memoized per mask identity so
+// hover-preview and click share the work (a sheet's mask object is cached upstream)
+const sealCache = new WeakMap<Uint8Array, Map<number, MaskObj>>();
+
+/** Square (Chebyshev) dilation of the HARD cells by r, via r separable 3×1/1×3
+ *  max passes. Soft (bit 2) cells carry over untouched; a soft cell swallowed by
+ *  the dilation becomes 3, and hard wins every barrier test. */
+export function dilateHardMask(mo: MaskObj, r: number): MaskObj {
+  const { mask, mw, mh, ws, softCount } = mo;
+  const n = mw * mh;
+  let hard = new Uint8Array(n);
+  for (let i = 0; i < n; i++) hard[i] = mask[i] & 1;
+  let tmp = new Uint8Array(n);
+  for (let pass = 0; pass < r; pass++) {
+    for (let y = 0; y < mh; y++) {                     // horizontal
+      const row = y * mw;
+      for (let x = 0; x < mw; x++) {
+        const i = row + x;
+        tmp[i] = hard[i] | (x > 0 ? hard[i - 1] : 0) | (x < mw - 1 ? hard[i + 1] : 0);
+      }
+    }
+    for (let y = 0; y < mh; y++) {                     // vertical
+      const row = y * mw;
+      for (let x = 0; x < mw; x++) {
+        const i = row + x;
+        hard[i] = tmp[i] | (y > 0 ? tmp[i - mw] : 0) | (y < mh - 1 ? tmp[i + mw] : 0);
+      }
+    }
+  }
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = hard[i] | (mask[i] & 2);
+  return { mask: out, mw, mh, ws, softCount };
+}
+
+// Grow the sealed-mask region back r steps (4-connected BFS) into cells open on
+// the ORIGINAL mask, recovering the r-px band the dilation stole along every
+// true wall. `barrier` mirrors the fill that produced the region: walls-only
+// when it escalated past hatch, walls+hatch otherwise.
+function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: number }, orig: MaskObj, r: number, barrier: number): void {
+  const { region, mw, mh } = f;
+  const mask = orig.mask;
+  let frontier: number[] = [];
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!region[i]) continue;
+      if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) frontier.push(i);
+    }
+  }
+  for (let step = 0; step < r && frontier.length; step++) {
+    const next: number[] = [];
+    for (const i of frontier) {
+      const x = i % mw, y = (i / mw) | 0;
+      if (x > 0 && !region[i - 1] && !(mask[i - 1] & barrier)) { region[i - 1] = 1; f.count++; next.push(i - 1); }
+      if (x < mw - 1 && !region[i + 1] && !(mask[i + 1] & barrier)) { region[i + 1] = 1; f.count++; next.push(i + 1); }
+      if (y > 0 && !region[i - mw] && !(mask[i - mw] & barrier)) { region[i - mw] = 1; f.count++; next.push(i - mw); }
+      if (y < mh - 1 && !region[i + mw] && !(mask[i + mw] & barrier)) { region[i + mw] = 1; f.count++; next.push(i + mw); }
+    }
+    frontier = next;
+  }
+}
+
+/** floodRegion, plus leak recovery: on any failure, retry against masks with
+ *  walls dilated at each radius in `radii` (ascending — the smallest seal that
+ *  bounds the space wins), grow the result back to the true linework, and stamp
+ *  `sealedPx`. If no radius bounds it, the original failure stands. */
+export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII): FloodResult {
+  const base = floodRegion(mo, ix, iy, sensitivity);
+  if (base.status === "ok") return base;
+  let byR = sealCache.get(mo.mask);
+  if (!byR) { byR = new Map(); sealCache.set(mo.mask, byR); }
+  for (const r of radii) {
+    let dm = byR.get(r);
+    if (!dm) { dm = dilateHardMask(mo, r); byR.set(r, dm); }
+    const f = floodRegion(dm, ix, iy, sensitivity);
+    if (f.status !== "ok") continue;
+    growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3);
+    f.sealedPx = r;
+    return f;
+  }
+  return base;
 }
 
 // ── 5. contour trace + simplify ────────────────────────────────────────────
