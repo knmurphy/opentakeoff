@@ -4,39 +4,68 @@
 // goldens) through the production pipeline and reports mean IoU, floor IoU,
 // refusal rate, leak rate, and correct-refusal rate. Non-zero exit when a
 // gating threshold fails — wire it into CI next to the unit suite.
+//
+// CROSS-RESOLUTION (RFC failure mode #3): every case also runs at reduced mask
+// resolutions (ws × 0.75, × 0.5 of the production cap — exactly what a bigger
+// sheet or a different render scale does to the working raster). The verdict
+// must not flip and the traced rings must pairwise-agree by IoU, or the bench
+// fails: a measurement that changes with raster resolution is not a
+// measurement. Baseline metrics are always scored at factor 1 so the headline
+// numbers stay comparable across runs.
 import { createRequire } from "module";
 import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
-import type { MaskObj, Point } from "../src/lib/oneclick.ts";
+import type { FloodResult, Point } from "../src/lib/oneclick.ts";
 import { syntheticCorpus } from "./corpus.ts";
-import { scoreGolden, aggregate, type ProbeScore } from "./score.ts";
+import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, type ProbeScore, type CrossScore, type CrossRun } from "./score.ts";
 import { traceConfidence } from "../src/lib/confidence.ts";
 
-const THRESHOLDS = { floorIoU: 0.90, meanIoU: 0.95, maxRefusalRate: 0, maxLeakRate: 0, minCorrectRefusal: 1 };
+const THRESHOLDS = {
+  floorIoU: 0.90, meanIoU: 0.95, maxRefusalRate: 0, maxLeakRate: 0, minCorrectRefusal: 1,
+  maxCrossDisagreements: 0, crossFloorIoU: 0.90,
+};
+const RES_FACTORS = [1, 0.75, 0.5];  // ws multipliers; [0] must stay 1 (production baseline)
+const CROSS_CELL = 2;                // image-px sampling cell for cross-scale IoU (4× faster, ±~0.005)
 const here = dirname(fileURLToPath(import.meta.url));
 const scores: ProbeScore[] = [];
+const crossScores: CrossScore[] = [];
 
-function runProbes(caseName: string, mo: MaskObj, ptPerFt: number, probes: Array<{ name: string; seed: Point; expect: "golden" | "refusal"; golden?: Point[]; tags?: string[]; knownFail?: boolean }>) {
-  const mppf = mo.ws * ptPerFt;
+interface CaseProbe { name: string; seed: Point; expect: "golden" | "refusal"; golden?: Point[]; tags?: string[]; knownFail?: boolean }
+
+function runCase(caseName: string, segs: number[], imgW: number, imgH: number, meta: Uint8Array | null, ptPerFt: number, probes: CaseProbe[]) {
+  // factor 1 reproduces the production mask exactly: min(cap, image dim)
+  const baseDim = Math.min(MASK_MAX_DIM, Math.max(imgW, imgH, 2));
+  const masks = RES_FACTORS.map((f) => buildMask(segs, imgW, imgH, Math.max(2, Math.round(baseDim * f)), meta));
   for (const p of probes) {
-    const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf));
+    const runs: Array<CrossRun & { flood: FloodResult }> = masks.map((mo, k) => {
+      const mppf = mo.ws * ptPerFt;
+      const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf));
+      return { res: RES_FACTORS[k], status: f.status, ring: f.status === "ok" ? traceRegion(f) : null, flood: f };
+    });
+
+    // baseline (production resolution) — the headline metrics
+    const base = runs[0];
     if (p.expect === "refusal") {
-      scores.push({ caseName, probeName: p.name, expect: "refusal", status: f.status, correctRefusal: f.status !== "ok", knownFail: p.knownFail, tags: p.tags });
-      continue;
+      scores.push({ caseName, probeName: p.name, expect: "refusal", status: base.status, correctRefusal: base.status !== "ok", knownFail: p.knownFail, tags: p.tags });
+    } else {
+      const f = base.flood;
+      const s = scoreGolden(f.status, base.ring, p.golden!);
+      const conf = f.status === "ok" ? traceConfidence({ hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score : undefined;
+      scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf, knownFail: p.knownFail, tags: p.tags } as ProbeScore);
     }
-    const traced = f.status === "ok" ? traceRegion(f) : null;
-    const s = scoreGolden(f.status, traced, p.golden!);
-    const conf = f.status === "ok" ? traceConfidence({ hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score : undefined;
-    scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf, knownFail: p.knownFail, tags: p.tags } as ProbeScore);
+
+    // cross-resolution agreement
+    const ca = crossAgreement(runs, CROSS_CELL);
+    const iouByRes = p.expect === "golden" ? runs.map((r) => (r.ring && r.ring.length >= 3 ? polyIoU(r.ring, p.golden!, CROSS_CELL) : 0)) : undefined;
+    crossScores.push({ caseName, probeName: p.name, expect: p.expect, resolutions: RES_FACTORS, ...ca, iouByRes, knownFail: p.knownFail, tags: p.tags });
   }
 }
 
 // synthetic cases — goldens by construction
 for (const c of syntheticCorpus()) {
-  const mo = buildMask(c.segs, c.imgW, c.imgH, MASK_MAX_DIM, c.meta ?? null);
-  runProbes(c.name, mo, c.ptPerFt, c.probes);
+  runCase(c.name, c.segs, c.imgW, c.imgH, c.meta ?? null, c.ptPerFt, c.probes);
 }
 
 // pinned real-PDF cases
@@ -49,8 +78,7 @@ for (const file of readdirSync(join(here, "corpus")).filter((f) => f.endsWith(".
   const vp = page.getViewport({ scale: c.scale });
   const ops = await page.getOperatorList();
   const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
-  const mo = buildMask(g.segs, vp.width, vp.height, MASK_MAX_DIM, g.meta);
-  runProbes(file.replace(".json", ""), mo, c.ptPerFt, c.probes);   // ptPerFt is image px/ft at the pinned scale
+  runCase(file.replace(".json", ""), g.segs, vp.width, vp.height, g.meta, c.ptPerFt, c.probes);   // ptPerFt is image px/ft at the pinned scale
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
@@ -67,7 +95,20 @@ for (const s of scores) {
 const agg = aggregate(scores);
 console.log(`\ngolden probes: ${agg.goldenProbes} | mean IoU ${agg.meanIoU.toFixed(3)} | floor IoU ${agg.floorIoU.toFixed(3)} | refusal ${(agg.refusalRate * 100).toFixed(1)}% | leak ${(agg.leakRate * 100).toFixed(1)}%`);
 console.log(`refusal probes: ${agg.refusalProbes} | correct ${(agg.correctRefusalRate * 100).toFixed(1)}% | known-fail tracked: ${agg.knownFails}`);
-writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg }, null, 1));
+
+console.log(`\n── cross-resolution (ws × ${RES_FACTORS.join(" / ")}) ──`);
+for (const s of crossScores) {
+  const bits = [
+    s.statusAgree ? `statuses ${s.statuses.join("/")}` : `DISAGREE ${s.statuses.join("/")}`,
+    s.minPairIoU !== undefined ? `pair IoU ${s.minPairIoU.toFixed(3)}` : "",
+    s.iouByRes ? `vs-golden ${s.iouByRes.map((v) => v.toFixed(3)).join("/")}` : "",
+    s.knownFail ? "[known-fail]" : "",
+  ].filter(Boolean).join("  ");
+  console.log(`${(s.caseName + " / " + s.probeName).padEnd(44)} ${bits}`);
+}
+const xagg = aggregateCross(crossScores);
+console.log(`\ncross probes: ${xagg.crossProbes} | disagreements ${xagg.disagreements} | pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} | pair-IoU mean ${xagg.crossMeanIoU.toFixed(3)}`);
+writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, crossScores, crossAggregate: xagg, resFactors: RES_FACTORS }, null, 1));
 
 const failures: string[] = [];
 if (agg.floorIoU < THRESHOLDS.floorIoU) failures.push(`floor IoU ${agg.floorIoU.toFixed(3)} < ${THRESHOLDS.floorIoU}`);
@@ -75,5 +116,7 @@ if (agg.meanIoU < THRESHOLDS.meanIoU) failures.push(`mean IoU ${agg.meanIoU.toFi
 if (agg.refusalRate > THRESHOLDS.maxRefusalRate) failures.push(`refusal rate ${(agg.refusalRate * 100).toFixed(1)}%`);
 if (agg.leakRate > THRESHOLDS.maxLeakRate) failures.push(`leak rate ${(agg.leakRate * 100).toFixed(1)}%`);
 if (agg.correctRefusalRate < THRESHOLDS.minCorrectRefusal) failures.push(`correct-refusal ${(agg.correctRefusalRate * 100).toFixed(1)}%`);
+if (xagg.disagreements > THRESHOLDS.maxCrossDisagreements) failures.push(`${xagg.disagreements} cross-resolution verdict flip(s)`);
+if (xagg.crossFloorIoU < THRESHOLDS.crossFloorIoU) failures.push(`cross-resolution pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} < ${THRESHOLDS.crossFloorIoU}`);
 if (failures.length) { console.error(`\nBENCH FAILED: ${failures.join("; ")}`); process.exit(1); }
 console.log("\nbench passed");

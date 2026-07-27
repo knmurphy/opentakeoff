@@ -63,6 +63,63 @@ export function scoreGolden(status: string, traced: Point[] | null, golden: Poin
   return { iou, leak, refused: false };
 }
 
+// ── cross-resolution agreement (RFC failure mode #3) ────────────────────────
+// The same click must mean the same thing at every mask resolution: a room the
+// engine traces at the production cap but refuses (or traces differently) on a
+// half-resolution mask is resolution-dependent behavior, not measurement. Each
+// probe runs at several ws factors; agreement is two-part — every resolution
+// reaches the same VERDICT (traced vs refused), and the rings traced agree
+// pairwise by IoU (rings are in image px, so they compare directly).
+
+export interface CrossRun { res: number; status: string; ring: Point[] | null; }
+export interface CrossScore {
+  caseName: string;
+  probeName: string;
+  expect: "golden" | "refusal";
+  resolutions: number[];       // ws factors probed (1 = production cap)
+  statuses: string[];          // engine status per resolution
+  statusAgree: boolean;        // same verdict at every resolution
+  minPairIoU?: number;         // worst pairwise ring agreement (≥2 traced)
+  iouByRes?: number[];         // per-resolution IoU vs the golden (diagnostic)
+  knownFail?: boolean;
+  tags?: string[];
+}
+
+export function crossAgreement(runs: CrossRun[], cell = 1): { statuses: string[]; statusAgree: boolean; minPairIoU?: number } {
+  const statuses = runs.map((r) => r.status);
+  // agreement = same VERDICT everywhere (all traced or all refused) — whether
+  // that verdict is CORRECT is the baseline gate's job, not this one's
+  const traced = runs.filter((r) => r.status === "ok" && r.ring && r.ring.length >= 3);
+  const statusAgree = traced.length === runs.length || runs.every((r) => r.status !== "ok");
+  let minPairIoU: number | undefined;
+  for (let i = 0; i < traced.length; i++)
+    for (let j = i + 1; j < traced.length; j++) {
+      const iou = polyIoU(traced[i].ring!, traced[j].ring!, cell);
+      if (minPairIoU === undefined || iou < minPairIoU) minPairIoU = iou;
+    }
+  return { statuses, statusAgree, minPairIoU };
+}
+
+export interface CrossAggregate {
+  crossProbes: number;         // gating probes compared across resolutions
+  disagreements: number;       // gating probes whose verdict flips with resolution
+  crossFloorIoU: number;       // worst pairwise ring agreement among gating golden probes
+  crossMeanIoU: number;
+  knownFails: number;
+}
+
+export function aggregateCross(scores: CrossScore[]): CrossAggregate {
+  const gating = scores.filter((s) => !s.knownFail);
+  const ious = gating.filter((s) => s.minPairIoU !== undefined).map((s) => s.minPairIoU!);
+  return {
+    crossProbes: gating.length,
+    disagreements: gating.filter((s) => !s.statusAgree).length,
+    crossFloorIoU: ious.length ? Math.min(...ious) : 1,
+    crossMeanIoU: ious.length ? ious.reduce((a, b) => a + b, 0) / ious.length : 1,
+    knownFails: scores.filter((s) => s.knownFail).length,
+  };
+}
+
 export function aggregate(scores: ProbeScore[]): Aggregate {
   const gating = scores.filter((s) => !s.knownFail);
   const golden = gating.filter((s) => s.expect === "golden");

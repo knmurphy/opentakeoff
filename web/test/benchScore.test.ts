@@ -1,7 +1,7 @@
 // Benchmark scorer — the IoU/aggregate math the corpus gate stands on.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { polyIoU, scoreGolden, aggregate, type ProbeScore } from "../bench/score.ts";
+import { polyIoU, scoreGolden, aggregate, crossAgreement, aggregateCross, type ProbeScore, type CrossScore } from "../bench/score.ts";
 import type { Point } from "../src/lib/oneclick.ts";
 
 const sq = (x0: number, y0: number, x1: number, y1: number): Point[] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
@@ -37,4 +37,51 @@ test("aggregate: known-fail probes are tracked but never gate", () => {
   assert.equal(agg.leakRate, 0);
   assert.equal(agg.correctRefusalRate, 1, "the known-fail wrong refusal must not drag the gate");
   assert.equal(agg.knownFails, 1);
+});
+
+test("crossAgreement: same verdict everywhere agrees; a flip disagrees; rings score pairwise", () => {
+  const ring = sq(0, 0, 100, 100);
+  const allTraced = crossAgreement([
+    { res: 1, status: "ok", ring },
+    { res: 0.5, status: "ok", ring: sq(1, 1, 99, 99) },
+  ]);
+  assert.ok(allTraced.statusAgree);
+  assert.ok((allTraced.minPairIoU ?? 0) > 0.9);
+
+  const allRefused = crossAgreement([
+    { res: 1, status: "leak", ring: null },
+    { res: 0.5, status: "tiny", ring: null },
+  ]);
+  assert.ok(allRefused.statusAgree, "leak vs tiny is the same verdict: refused");
+  assert.equal(allRefused.minPairIoU, undefined);
+
+  const flip = crossAgreement([
+    { res: 1, status: "ok", ring },
+    { res: 0.5, status: "tiny", ring: null },
+  ]);
+  assert.ok(!flip.statusAgree, "traced at one resolution, refused at another = disagreement");
+});
+
+test("crossAgreement: divergent rings drive minPairIoU down", () => {
+  const three = crossAgreement([
+    { res: 1, status: "ok", ring: sq(0, 0, 100, 100) },
+    { res: 0.75, status: "ok", ring: sq(0, 0, 100, 100) },
+    { res: 0.5, status: "ok", ring: sq(0, 0, 100, 50) },   // half the room lost
+  ]);
+  assert.ok(three.statusAgree);
+  assert.ok((three.minPairIoU ?? 1) < 0.6, `worst pair must reflect the loss, got ${three.minPairIoU}`);
+});
+
+test("aggregateCross: known-fail excluded from gating; floor is the worst gating pair", () => {
+  const scores: CrossScore[] = [
+    { caseName: "a", probeName: "p1", expect: "golden", resolutions: [1, 0.5], statuses: ["ok", "ok"], statusAgree: true, minPairIoU: 0.98 },
+    { caseName: "a", probeName: "p2", expect: "golden", resolutions: [1, 0.5], statuses: ["ok", "ok"], statusAgree: true, minPairIoU: 0.92 },
+    { caseName: "b", probeName: "r1", expect: "refusal", resolutions: [1, 0.5], statuses: ["leak", "leak"], statusAgree: true },
+    { caseName: "c", probeName: "kf", expect: "golden", resolutions: [1, 0.5], statuses: ["ok", "tiny"], statusAgree: false, minPairIoU: 0.10, knownFail: true },
+  ];
+  const x = aggregateCross(scores);
+  assert.equal(x.crossProbes, 3);
+  assert.equal(x.disagreements, 0, "the known-fail flip must not gate");
+  assert.equal(x.crossFloorIoU, 0.92);
+  assert.equal(x.knownFails, 1);
 });
