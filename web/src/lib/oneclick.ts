@@ -323,7 +323,12 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
       const gap = rows[k].d - rows[k - 1].d;
       const ov = Math.min(rows[k].t1, rows[k - 1].t1) - Math.max(rows[k].t0, rows[k - 1].t0);
       const need = HATCH_OVERLAP_FRAC * Math.min(rows[k].t1 - rows[k].t0, rows[k - 1].t1 - rows[k - 1].t0);
-      if (gap > HATCH_MAX_PITCH || ov < need) { flushRun(runStart, k - 1); runStart = k; }
+      // half-cell tolerance on the pitch cap: row offsets carry ~1e-14 float
+      // noise (the family angle's cosine is never exactly 0), and a grid whose
+      // pitch sits exactly ON the cap would otherwise split its run on that
+      // noise at some resolutions — stranding a sub-run too short to classify
+      // (found by the benchmark corpus: tile-grid at ws=1 vs ws=0.5)
+      if (gap > HATCH_MAX_PITCH + 0.5 || ov < need) { flushRun(runStart, k - 1); runStart = k; }
     }
     flushRun(runStart, rows.length - 1);
   }

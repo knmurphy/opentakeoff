@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "e2e": "node e2e/run.cjs",
+    "bench": "node --import tsx bench/run.mts",
     "check": "npm run typecheck && npm run lint && npm test && npm run build",
     "lint": "eslint src netlify/functions"
   },
