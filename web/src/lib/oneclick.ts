@@ -734,6 +734,26 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   if (r2.status !== "ok" || r2.count <= r1.count) return r1;
   const allowance = Math.max(wedgeCapPx, Math.round(r1.count * WEDGE_GROWTH_FRAC));
   if (r2.count - r1.count > allowance) return r1;      // that was a curved wall, not a door
+  // Absorb the door LEAF: the straight leaf line stays a barrier through the
+  // retry, leaving a 1–2 px slit between the room and the annexed wedge. The
+  // outer contour would dive up that slit and back, inflating perimeter_lf by
+  // ~2 leaf lengths per door — a baseboard over-count. The leaf is exactly
+  // the barrier pinched between r1's region and the annexed delta, so absorb
+  // only that: real wall stubs (pinched between r1 and r1) keep their slit —
+  // baseboard genuinely runs around those.
+  const reg = r2.region, reg1 = r1.region, mask = mo.mask, mw = r2.mw, mh = r2.mh;
+  const isDelta = (i: number) => reg[i] && !reg1[i];
+  for (let pass = 0; pass < 2; pass++) {               // Bresenham lines raster up to 2 px thick
+    for (let y = 1; y < mh - 1; y++) {
+      const row = y * mw;
+      for (let x = 1; x < mw - 1; x++) {
+        const i = row + x;
+        if (reg[i] || !(mask[i] & 1)) continue;
+        const pinchH = reg[i - 1] && reg[i + 1], pinchV = reg[i - mw] && reg[i + mw];
+        if ((pinchH && (isDelta(i - 1) || isDelta(i + 1))) || (pinchV && (isDelta(i - mw) || isDelta(i + mw)))) { reg[i] = 1; r2.count++; }
+      }
+    }
+  }
   r2.wedges = 1;
   return r2;
 }

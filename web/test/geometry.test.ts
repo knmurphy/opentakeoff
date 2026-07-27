@@ -461,8 +461,13 @@ test("door swing: drawn leaf + swing arc bounds the room WITHOUT sealing (the co
   assert.equal(fw.status, "ok");
   if (fw.status !== "ok") return;
   assert.equal(fw.wedges, 1, "exactly one swing wedge annexed");
-  const full = ringArea(traceRegion(fw));
+  const ringFull = traceRegion(fw);
+  const full = ringArea(ringFull);
   assert.ok(approx(full, 214 * 178, 0.04), `wedge included ≈ full room ${214 * 178}, got ${full}`);
+  // the leaf line must be absorbed, not left as a slit — a crack would send
+  // the ring up and back down the leaf, inflating perimeter by ~2 leaf lengths
+  const perim = closedMetrics(ringFull).perim;
+  assert.ok(approx(perim, 2 * (214 + 178), 0.03), `perimeter ≈ the walls (${2 * (214 + 178)}), got ${perim}`);
 });
 
 test("door wedge: a curved WALL does not annex the room behind it (cap holds)", () => {
