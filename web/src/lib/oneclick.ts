@@ -39,7 +39,7 @@ export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; wedges?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -731,8 +731,10 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     //     linework (dt ≤ 3), with only door-width virtual runs. A starved blob
     //     ends at descent watersheds in open space and fails this immediately.
     if (f.count > f.mw * f.mh * 0.30) continue;
-    if (virtualBoundaryFrac(f, sc.dt) > SEAL_VIRTUAL_MAX) continue;
+    const vf = virtualBoundaryFrac(f, sc.dt);
+    if (vf > SEAL_VIRTUAL_MAX) continue;
     f.sealedPx = r;
+    f.virtualFrac = +vf.toFixed(3);   // confidence signal: how much boundary is synthetic
     return f;
   }
   return base;
@@ -781,6 +783,7 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
     }
   }
   r2.wedges = 1;
+  r2.wedgeGrowth = +(r2.count / r1.count).toFixed(3);   // confidence signal: how much the door retry grew
   return r2;
 }
 

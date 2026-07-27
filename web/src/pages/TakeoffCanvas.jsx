@@ -39,6 +39,7 @@ import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDom
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { roomNameFromTokens } from "../lib/roomName";
+import { traceConfidence } from "../lib/confidence";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { shapesInStageRect } from "../lib/marquee.js";
@@ -2876,6 +2877,7 @@ export default function TakeoffCanvas() {
     if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    const conf = traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges });
     // Decide accept/dup/carve-reject INSIDE the functional updater, against
     // its own authoritative `prev` — not proposalRef, which only catches up
     // on the next render's passive-effect flush (a macrotask). proposeRegion
@@ -2926,7 +2928,7 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster, cf: conf.score, cff: conf.factors }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
@@ -3022,7 +3024,7 @@ export default function TakeoffCanvas() {
       // an untouched region's verts ARE the proposal, so nothing extra rides.
       // Post-Create edits are stamped by stampEdit, which freezes the same
       // field from the pre-edit ring only when Create didn't already.
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}), ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
     dispatchShape({ type: "add", shapes: made });   // Create is the creation gate — id/created_at minted by the command
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
@@ -3135,7 +3137,7 @@ export default function TakeoffCanvas() {
       ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
     }
     if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
-    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, wedges: f.wedges || 0, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
+    st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0, wedges: f.wedges || 0, cf: traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
     ocLiveDraw(tp, st.last, p);
     if (kind === "pos") {
       const cur = st.last;
@@ -3156,7 +3158,7 @@ export default function TakeoffCanvas() {
     el.setAttribute("stroke-dasharray", `${3.5 / s} ${3.5 / s}`);   // finer dash than the committed proposal — reads as "candidate"
     el.style.display = "block";
     if (tx) {
-      tx.textContent = `${fa(res.area_sf)}${res.name ? ` · ${res.name}` : ""}${res.wedges ? " · incl. door swing" : res.sealed ? " · sealed a small opening" : ""}${res.area_sf < FIXTURE_HINT_SF ? " · fixture-sized?" : ""}`;
+      tx.textContent = `${fa(res.area_sf)}${res.name ? ` · ${res.name}` : ""}${res.wedges ? " · incl. door swing" : res.sealed ? " · sealed a small opening" : ""}${res.cf != null && res.cf < 1 ? ` · ${Math.round(res.cf * 100)}%` : ""}${res.area_sf < FIXTURE_HINT_SF ? " · fixture-sized?" : ""}`;
       tx.setAttribute("x", p[0] + 14 / s); tx.setAttribute("y", p[1] - 10 / s);
       tx.setAttribute("font-size", 12.5 / s);
       tx.setAttribute("fill", neg ? "#b03a26" : "#1f3fc7");
@@ -3973,8 +3975,10 @@ export default function TakeoffCanvas() {
       area_sf: +(ringArea(ring) * upp * upp).toFixed(2),
       perimeter_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
       seed_norm: [+xn.toFixed(5), +yn.toFixed(5)],
+      confidence: traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score,
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
       ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+      ...(f.wedges ? { door_wedges: f.wedges } : {}),
       ...(raster ? { raster_traced: true } : {}),
     };
   }

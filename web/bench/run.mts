@@ -12,6 +12,7 @@ import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, door
 import type { MaskObj, Point } from "../src/lib/oneclick.ts";
 import { syntheticCorpus } from "./corpus.ts";
 import { scoreGolden, aggregate, type ProbeScore } from "./score.ts";
+import { traceConfidence } from "../src/lib/confidence.ts";
 
 const THRESHOLDS = { floorIoU: 0.90, meanIoU: 0.95, maxRefusalRate: 0, maxLeakRate: 0, minCorrectRefusal: 1 };
 const here = dirname(fileURLToPath(import.meta.url));
@@ -27,7 +28,8 @@ function runProbes(caseName: string, mo: MaskObj, ptPerFt: number, probes: Array
     }
     const traced = f.status === "ok" ? traceRegion(f) : null;
     const s = scoreGolden(f.status, traced, p.golden!);
-    scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, knownFail: p.knownFail, tags: p.tags });
+    const conf = f.status === "ok" ? traceConfidence({ hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges }).score : undefined;
+    scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf, knownFail: p.knownFail, tags: p.tags } as ProbeScore);
   }
 }
 
@@ -55,7 +57,7 @@ for (const file of readdirSync(join(here, "corpus")).filter((f) => f.endsWith(".
 for (const s of scores) {
   const bits = [
     s.expect === "golden"
-      ? (s.refused ? "REFUSED" : `IoU ${(s.iou ?? 0).toFixed(3)}${s.leak ? " LEAK" : ""}`)
+      ? (s.refused ? "REFUSED" : `IoU ${(s.iou ?? 0).toFixed(3)}${s.leak ? " LEAK" : ""}${(s as { confidence?: number }).confidence != null ? `  conf ${(s as { confidence?: number }).confidence!.toFixed(2)}` : ""}`)
       : (s.correctRefusal ? "refused ✓" : `NOT refused (${s.status})`),
     s.knownFail ? "[known-fail]" : "",
     s.tags?.length ? `(${s.tags.join(",")})` : "",

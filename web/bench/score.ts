@@ -42,6 +42,7 @@ export interface ProbeScore {
   iou?: number;                // golden probes that traced
   leak?: boolean;              // traced but ballooned past the golden
   refused?: boolean;           // golden probe the engine declined
+  confidence?: number;         // engine's own 0–1 confidence for the trace
   correctRefusal?: boolean;    // refusal probe the engine declined
   knownFail?: boolean;         // tracked but not gating
   tags?: string[];
