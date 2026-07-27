@@ -479,46 +479,102 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
 // A genuine dense-linework tiny/boundary just fails again on every radius
 // (dilation only adds barrier) and the original status stands — the retries
 // cost little because trapped floods are small and dilated masks are cached.
-export const SEAL_RADII = [1, 2, 4];    // mask px — seals gaps up to 2/4/8 px wide
-// dilated masks are pure functions of (mask, r); memoized per mask identity so
-// hover-preview and click share the work (a sheet's mask object is cached upstream)
-const sealCache = new WeakMap<Uint8Array, Map<number, MaskObj>>();
+//
+// RADII ARE SCALE-DEPENDENT. A doorway is feet wide, and how many mask px that
+// is depends on the sheet's scale and render resolution — at 1/4" = 1'-0" a
+// 3'-0" door can be anywhere from ~20 to ~160 mask px. Callers that know the
+// scale should pass sealRadiiFor(maskPxPerFt); the exported SEAL_RADII default
+// is the scale-blind floor (hairline drafting gaps only).
+export const SEAL_RADII = [1, 2, 4];    // fallback — seals gaps up to 2/4/8 px wide
+export const DOOR_SEAL_MAX_FT = 5;      // widest opening sealing will bridge (3'-0" doors + margin)
+export const SEAL_R_MAX = 128;          // absolute radius cap (cost + the Uint8 distance transform)
 
-/** Square (Chebyshev) dilation of the HARD cells by r, via r separable 3×1/1×3
- *  max passes. Soft (bit 2) cells carry over untouched; a soft cell swallowed by
- *  the dilation becomes 3, and hard wins every barrier test. */
-export function dilateHardMask(mo: MaskObj, r: number): MaskObj {
-  const { mask, mw, mh, ws, softCount } = mo;
-  const n = mw * mh;
-  let hard = new Uint8Array(n);
-  for (let i = 0; i < n; i++) hard[i] = mask[i] & 1;
-  let tmp = new Uint8Array(n);
-  for (let pass = 0; pass < r; pass++) {
-    for (let y = 0; y < mh; y++) {                     // horizontal
-      const row = y * mw;
-      for (let x = 0; x < mw; x++) {
-        const i = row + x;
-        tmp[i] = hard[i] | (x > 0 ? hard[i - 1] : 0) | (x < mw - 1 ? hard[i + 1] : 0);
-      }
-    }
-    for (let y = 0; y < mh; y++) {                     // vertical
-      const row = y * mw;
-      for (let x = 0; x < mw; x++) {
-        const i = row + x;
-        hard[i] = tmp[i] | (y > 0 ? tmp[i - mw] : 0) | (y < mh - 1 ? tmp[i + mw] : 0);
-      }
+/** The escalation ladder for a sheet where one foot spans `maskPxPerFt` mask px:
+ *  1, 2, 4, … doubling up to the radius that bridges a DOOR_SEAL_MAX_FT opening
+ *  (a dilation of r closes gaps ≤ 2r). Falls back to SEAL_RADII when the scale
+ *  is unknown or degenerate. */
+export function sealRadiiFor(maskPxPerFt: number): number[] {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return SEAL_RADII;
+  const maxR = Math.min(SEAL_R_MAX, Math.ceil((DOOR_SEAL_MAX_FT * maskPxPerFt) / 2));
+  const radii: number[] = [];
+  for (let r = 1; r < maxR; r *= 2) radii.push(r);
+  radii.push(maxR);
+  return radii;
+}
+
+// Distance transforms + dilated masks are pure functions of the mask; memoized
+// per mask identity so hover-preview and click share the work (a sheet's mask
+// object is cached upstream).
+interface SealScratch { dt: Uint8Array; byR: Map<number, MaskObj>; }
+const sealCache = new WeakMap<Uint8Array, SealScratch>();
+
+// MANHATTAN (city-block) distance to the nearest HARD cell, two-pass chamfer,
+// saturating at 255 (radii are capped far below). One O(n) pass pair makes
+// every dilation radius an O(n) threshold instead of r erosion sweeps.
+//
+// Manhattan, not chessboard, deliberately: growRegionBack walks this field by
+// STRICT descent, and the city-block metric has no plateau faces — every open
+// cell at distance d has a 4-neighbor at d−1 (step toward its wall), so the
+// stolen band is fully recoverable, while the ridge in front of a sealed
+// doorway (where two jamb fronts tie) stays a strict-descent dead end.
+// Chessboard contours are squares whose flat faces plateau for r cells at a
+// stretch — descent stalls inside rooms and creeps through doorways instead.
+function hardDT(mask: Uint8Array, mw: number, mh: number): Uint8Array {
+  const dt = new Uint8Array(mw * mh).fill(255);
+  for (let y = 0; y < mh; y++) {                       // forward: W, N
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (mask[i] & 1) { dt[i] = 0; continue; }
+      let d = 255;
+      if (x > 0) d = Math.min(d, dt[i - 1] + 1);
+      if (y > 0) d = Math.min(d, dt[i - mw] + 1);
+      dt[i] = Math.min(255, d);
     }
   }
+  for (let y = mh - 1; y >= 0; y--) {                  // backward: E, S
+    const row = y * mw;
+    for (let x = mw - 1; x >= 0; x--) {
+      const i = row + x;
+      let d = dt[i];
+      if (x < mw - 1) d = Math.min(d, dt[i + 1] + 1);
+      if (y < mh - 1) d = Math.min(d, dt[i + mw] + 1);
+      dt[i] = Math.min(255, d);
+    }
+  }
+  return dt;
+}
+
+/** Diamond (Manhattan) dilation of the HARD cells by r — every cell within
+ *  city-block distance r of a wall becomes barrier; along a wall's axis a gap
+ *  of ≤ 2r closes. Soft (bit 2) cells carry over untouched; a soft cell
+ *  swallowed by the dilation becomes 3, and hard wins every barrier test.
+ *  `dt` lets floodRegionSealed reuse its cached distance transform; standalone
+ *  callers may omit it. */
+export function dilateHardMask(mo: MaskObj, r: number, dt?: Uint8Array): MaskObj {
+  const { mask, mw, mh, ws, softCount } = mo;
+  const n = mw * mh;
+  const d = dt || hardDT(mask, mw, mh);
   const out = new Uint8Array(n);
-  for (let i = 0; i < n; i++) out[i] = hard[i] | (mask[i] & 2);
+  for (let i = 0; i < n; i++) out[i] = (d[i] <= r ? 1 : 0) | (mask[i] & 2);
   return { mask: out, mw, mh, ws, softCount };
 }
 
-// Grow the sealed-mask region back r steps (4-connected BFS) into cells open on
-// the ORIGINAL mask, recovering the r-px band the dilation stole along every
-// true wall. `barrier` mirrors the fill that produced the region: walls-only
-// when it escalated past hatch, walls+hatch otherwise.
-function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: number }, orig: MaskObj, r: number, barrier: number): void {
+// Grow the sealed-mask region back toward the true linework (4-connected BFS,
+// ≤ r layers) into cells open on the ORIGINAL mask. Two constraints keep the
+// growth honest at door-scale radii:
+//   • dt[cell] ≤ r — only cells the dilation actually stole are recoverable;
+//   • dt never INCREASES along a growth path — the region descends (or moves
+//     level) toward the walls it was pushed off of. Plateau moves are what
+//     recover corner blocks and wall-hugging runs (their dt is min-of-two-walls
+//     and holds constant along one axis). The doorway still can't be crossed:
+//     past the wall plane the Manhattan distance to the jambs strictly RISES,
+//     so every path out of the opening would have to ascend — forbidden. That
+//     asymmetry (plateaus inside, ascent outside) is the whole trick.
+// With ascent forbidden the walk is naturally confined; no step budget needed.
+// `barrier` mirrors the fill that produced the region: walls-only when it
+// escalated past hatch, walls+hatch otherwise.
+function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: number }, orig: MaskObj, r: number, barrier: number, dt: Uint8Array): void {
   const { region, mw, mh } = f;
   const mask = orig.mask;
   let frontier: number[] = [];
@@ -530,14 +586,17 @@ function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: 
       if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) frontier.push(i);
     }
   }
-  for (let step = 0; step < r && frontier.length; step++) {
+  const tryGrow = (from: number, to: number, next: number[]) => {
+    if (!region[to] && !(mask[to] & barrier) && dt[to] <= r && dt[to] <= dt[from]) { region[to] = 1; f.count++; next.push(to); }
+  };
+  while (frontier.length) {
     const next: number[] = [];
     for (const i of frontier) {
       const x = i % mw, y = (i / mw) | 0;
-      if (x > 0 && !region[i - 1] && !(mask[i - 1] & barrier)) { region[i - 1] = 1; f.count++; next.push(i - 1); }
-      if (x < mw - 1 && !region[i + 1] && !(mask[i + 1] & barrier)) { region[i + 1] = 1; f.count++; next.push(i + 1); }
-      if (y > 0 && !region[i - mw] && !(mask[i - mw] & barrier)) { region[i - mw] = 1; f.count++; next.push(i - mw); }
-      if (y < mh - 1 && !region[i + mw] && !(mask[i + mw] & barrier)) { region[i + mw] = 1; f.count++; next.push(i + mw); }
+      if (x > 0) tryGrow(i, i - 1, next);
+      if (x < mw - 1) tryGrow(i, i + 1, next);
+      if (y > 0) tryGrow(i, i - mw, next);
+      if (y < mh - 1) tryGrow(i, i + mw, next);
     }
     frontier = next;
   }
@@ -550,14 +609,14 @@ function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: 
 export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII): FloodResult {
   const base = floodRegion(mo, ix, iy, sensitivity);
   if (base.status === "ok") return base;
-  let byR = sealCache.get(mo.mask);
-  if (!byR) { byR = new Map(); sealCache.set(mo.mask, byR); }
+  let sc = sealCache.get(mo.mask);
+  if (!sc) { sc = { dt: hardDT(mo.mask, mo.mw, mo.mh), byR: new Map() }; sealCache.set(mo.mask, sc); }
   for (const r of radii) {
-    let dm = byR.get(r);
-    if (!dm) { dm = dilateHardMask(mo, r); byR.set(r, dm); }
+    let dm = sc.byR.get(r);
+    if (!dm) { dm = dilateHardMask(mo, r, sc.dt); sc.byR.set(r, dm); }
     const f = floodRegion(dm, ix, iy, sensitivity);
     if (f.status !== "ok") continue;
-    growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3);
+    growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3, sc.dt);
     f.sealedPx = r;
     return f;
   }

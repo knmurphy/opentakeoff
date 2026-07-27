@@ -6,7 +6,7 @@ import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
   SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE,
-  floodRegionSealed, dilateHardMask, SEAL_RADII,
+  floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier, cloudPath, arrowheadPath, reflectVertsNorm, closedMetrics } from "../src/lib/geometry.js";
@@ -316,15 +316,16 @@ test("seal: a non-leak result passes through untouched (no sealedPx, identical f
   assert.equal(sealed.count, plain.count);
 });
 
-test("dilateHardMask: hard cells fatten by r, soft (hatch) cells are never dilated", () => {
+test("dilateHardMask: hard cells fatten by r (diamond), soft (hatch) cells are never dilated", () => {
   const mw = 9, mh = 9;
   const mask = new Uint8Array(mw * mh);
   mask[4 * mw + 4] = 1;                               // one hard cell, center
   mask[1 * mw + 1] = 2;                               // one soft cell, corner-ish
   const d = dilateHardMask({ mask, mw, mh, ws: 1, softCount: 1 }, 2);
-  assert.equal(d.mask[4 * mw + 6] & 1, 1, "hard reaches Chebyshev distance 2");
-  assert.equal(d.mask[2 * mw + 2] & 1, 1, "diagonal within the square element");
-  assert.equal(d.mask[4 * mw + 7] & 1, 0, "distance 3 stays open");
+  assert.equal(d.mask[4 * mw + 6] & 1, 1, "hard reaches city-block distance 2 on-axis");
+  assert.equal(d.mask[3 * mw + 3] & 1, 1, "diagonal at city-block distance 2 is in the diamond");
+  assert.equal(d.mask[2 * mw + 2] & 1, 0, "diagonal at city-block distance 4 stays open");
+  assert.equal(d.mask[4 * mw + 7] & 1, 0, "on-axis distance 3 stays open");
   assert.equal(d.mask[1 * mw + 1], 2, "soft cell survives, un-fattened");
   assert.equal(d.mask[1 * mw + 2] & 2, 0, "soft never dilates");
   assert.equal(d.softCount, 1, "soft bookkeeping carries over");
@@ -349,6 +350,44 @@ test("seal: hatch semantics survive sealing — a hatched room behind a doorway 
   assert.equal(f.hatchFiltered, true, "escalation still fires on the sealed mask");
   assert.ok(f.sealedPx! >= 1 && f.sealedPx! <= 4, `sealed at a small radius, got ${f.sealedPx}`);
   assert.ok(approx(ringArea(traceRegion(f)), 240000, 0.04), "ring ≈ room area");
+});
+
+test("sealRadiiFor: doubling ladder up to the door-bridging radius, capped, fallback on junk", () => {
+  // 20 mask px per foot → max radius ceil(5·20/2) = 50 → 1,2,4,…,32,50
+  assert.deepEqual(sealRadiiFor(20), [1, 2, 4, 8, 16, 32, 50]);
+  assert.equal(sealRadiiFor(20).at(-1), Math.ceil((DOOR_SEAL_MAX_FT * 20) / 2));
+  assert.equal(sealRadiiFor(1e6).at(-1), SEAL_R_MAX, "absurd resolution hits the hard cap");
+  assert.deepEqual(sealRadiiFor(0), SEAL_RADII, "unknown scale falls back");
+  assert.deepEqual(sealRadiiFor(NaN), SEAL_RADII);
+});
+
+test("seal: a DOOR-scale opening seals with scale-aware radii — and growback stays out of the corridor", () => {
+  // 3-ft door at ~18 px/ft: a 54-px opening in the south wall of a 216×180 room
+  // floating on a 1000×800 sheet (ws=1 under the default mask cap). The old
+  // fixed 1/2/4 ladder can't bridge it; sealRadiiFor(18) reaches r=45.
+  const room = [
+    100, 100, 316, 100,                      // top
+    316, 100, 316, 280,                      // right
+    316, 280, 262, 280,                      // bottom, right of the door
+    208, 280, 100, 280,                      // bottom, left of the door (gap 209..261 = 53 open cells)
+    100, 280, 100, 100,                      // left
+  ];
+  const mask = buildMask([...squareSegs(2, 2, 998, 798), ...room], 1000, 800);
+  assert.equal(floodRegionSealed(mask, 200, 200).status, "leak", "the fallback ladder cannot bridge a door");
+  const f = floodRegionSealed(mask, 200, 200, SENS_BALANCED, sealRadiiFor(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.ok(f.sealedPx! >= 27 && f.sealedPx! <= 45, `bridged at a door-scale radius, got ${f.sealedPx}`);
+  const ring = traceRegion(f);
+  const area = ringArea(ring);
+  // interior ≈ 214×178 = 38,092; monotone growback must recover the wall band
+  // WITHOUT annexing a lobe of the sheet beyond the doorway (naive growback
+  // at r≈32 would add thousands of px² outside the south wall)
+  assert.ok(approx(area, 214 * 178, 0.04), `sealed room ≈ its true area, got ${area}`);
+  for (const [x, y] of ring) {
+    assert.ok(x > 97 && x < 319 && y > 97, `ring stays on the room, got ${x},${y}`);
+    assert.ok(y < 280 + 6, `growback must not dive through the doorway, got ${x},${y}`);
+  }
 });
 
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────

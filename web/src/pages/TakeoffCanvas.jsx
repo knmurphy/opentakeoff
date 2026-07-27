@@ -36,7 +36,7 @@ import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
-import { extractVectorGeometry, buildMask, floodRegionSealed, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
@@ -2952,7 +2952,9 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(tp.key);
       if (!mo && !rasterEligible) { setCommitMsg("Still reading this sheet's linework — try again in a second."); return; }
       if (mo) {
-        const f = floodRegionSealed(mo, local[0], local[1], fillSens);
+        // seal radii scale with the sheet: bridge up to a door-width opening
+        // (mask px per foot = mask-per-image-px / units-per-image-px)
+        const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp));
         if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
@@ -2977,9 +2979,9 @@ export default function TakeoffCanvas() {
     if (!rmo) { setCommitMsg("Couldn't read this scan — trace it with Area (A)."); return; }
     // The raster mask is single-tier (softCount 0), so floodRegion's hatch
     // escalation — and with it the Fill sensitivity knob — is structurally
-    // inert on scans; no sensitivity is passed. Gap sealing still applies —
-    // faded scan lines are the raster path's own flavor of open doorway.
-    const f = floodRegionSealed(rmo, local[0], local[1]);
+    // inert on scans; the default sensitivity rides along. Gap sealing still
+    // applies — faded scan lines are the raster path's own flavor of open doorway.
+    const f = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp));
     if (f.status !== "ok") {
       setCommitMsg(f.status === "leak"
         ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Click a more enclosed spot, or trace it with Area (A)."
@@ -3041,7 +3043,8 @@ export default function TakeoffCanvas() {
     if (!st || toolRef.current !== "oneclick" || panRef.current || pendingClickRef.current || ocDragRef.current) return;
     const p = toImage(st.cx, st.cy);
     const tp = panelAt(p[0]);
-    if (!tp?.img?.w || !uppFor(tp.key)) { ocLiveHide(); return; }
+    const upp = uppFor(tp.key);
+    if (!tp?.img?.w || !upp) { ocLiveHide(); return; }
     const prop = proposalRef.current;
     if (prop && prop.key !== tp.key) { ocLiveHide(); return; }   // finish the other panel's selection first
     const local = [p[0] - tp.xOffset, p[1]];
@@ -3061,12 +3064,12 @@ export default function TakeoffCanvas() {
     let f = null, raster = false;
     if (!rasterEligible || vectorViable) {
       const mo = ensureMask(tp.key);
-      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens);
+      if (mo) f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp));
     }
     if ((!f || f.status !== "ok") && rasterEligible) {
       const rmo = rasterMaskReadyRef.current.get(tp.key);
       if (rmo) {
-        const fr = floodRegionSealed(rmo, local[0], local[1]);
+        const fr = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp));
         if (fr.status === "ok") { f = fr; raster = true; }
       } else ensureRasterMask(tp.key);   // warm the scan mask; preview engages when it resolves
     }
@@ -3078,7 +3081,6 @@ export default function TakeoffCanvas() {
       ring = snapVertices(traceRegion(f), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
     }
     if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
-    const upp = uppFor(tp.key);
     st.last = { key: tp.key, kind, ring, area_sf: +(ringArea(ring) * upp * upp).toFixed(2), sealed: f.sealedPx || 0 };
     ocLiveDraw(tp, st.last, p);
   }
@@ -3879,7 +3881,7 @@ export default function TakeoffCanvas() {
       const mo = ensureMask(key);
       if (!mo && !rasterEligible) return { error: "Still reading this sheet's linework — try again in a second." };
       if (mo) {
-        const r = floodRegionSealed(mo, local[0], local[1], fillSens);
+        const r = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mo.ws / upp));
         if (r.status === "ok") f = r;
         else if (!rasterEligible) {
           return { error: r.status === "leak"
@@ -3891,7 +3893,7 @@ export default function TakeoffCanvas() {
     if (!f) {
       const rmo = await ensureRasterMask(key);
       if (!rmo) return { error: "Couldn't read this scan — the estimator will have to trace it by hand." };
-      const r = floodRegionSealed(rmo, local[0], local[1]);
+      const r = floodRegionSealed(rmo, local[0], local[1], undefined, sealRadiiFor(rmo.ws / upp));
       if (r.status !== "ok") {
         return { error: r.status === "leak"
           ? "That space isn't enclosed on the scan — the fill escaped through a gap (faded line or open doorway). Seed a more enclosed spot."
