@@ -2,6 +2,12 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-28
+
+### Added
+- **Plan-set search — find any sheet by its text.** A search box in the plan navigator searches the text of **every sheet in the set** at once: `CPT-1`, `corridor`, a room number like `139A`. The gallery filters to matching sheets in relevance order with the matched terms chipped on each card. Multi-word queries mean "sheets carrying all of them"; prefix matching finds a half-typed code (`CPT` → `CPT-1`); exact hits outrank prefix ones and codes outrank prose. It costs no new PDF work on a vector plan set: two full-document text passes **already ran** — the canvas' per-page loop and the gallery's thumbnail pump, both reading only a sheet number and a scale note off `getTextContent()` — so the index is filled from text that was previously discarded, with an on-demand pass (text only, no rendering) covering whatever neither reached. No new dependency, no OCR, and no CSP change: the inverted index is ~50 lines of `web/src/lib/planIndex.ts` rather than a search library, which at ~1k terms per sheet is the right trade against this repo's 7-runtime-dep budget. Index entries are source-tagged `text` | `ocr` and an OCR-derived sheet ranks below a text-layer one, so scanned sheets can join the index later without being trusted like exact text. `sheetCodes()` already splits finish tags from room numbers off the same terms — the groundwork for a browsable tag index. **Scanned sheets have no text layer and are not searchable yet**; the measured case for (and against) client-side OCR is written up in `docs/CLIENT_SIDE_OCR_RESEARCH.md`, including a real tesseract.js run on the bundled sample plan.
+- **`docs/CLIENT_SIDE_OCR_RESEARCH.md`** — research + a measured spike on whether client-side OCR can back a search and symbol index. Engine landscape with real sizes and licenses (self-hosted tesseract.js ≈ 4.9 MB lazy and fits the existing CSP unchanged; PaddleOCR/ORT-web is 20–33 MB and its threaded build needs `COOP: same-origin`, which breaks the Google sign-in popup; Scribe.js ruled out on AGPL-3.0), a survey of emerging replacements (none displace tesseract.js today), and §9: tesseract.js run against the sample plan, scored against its own text layer as ground truth — 26.1 MP at 144 DPI, ~80% of searchable terms from one 12 s pass, higher DPI measurably *worse*, and the dominant failure mode identified as boxed room tags rather than resolution.
+
 ## 2026-07-21
 
 ### Added
