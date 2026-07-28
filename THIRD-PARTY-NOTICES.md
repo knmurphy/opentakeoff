@@ -26,19 +26,32 @@ available at <https://github.com/mozilla/pdf.js/blob/master/LICENSE>.
 ## Bundled binary artifacts
 
 Redistributed in this repository and served from the app's own origin (not a
-CDN). Each is unmodified apart from Google Fonts' `latin` / `latin-ext`
-subsetting.
+CDN). Each is a **Google Fonts `latin` / `latin-ext` woff2 subset** of the
+upstream release — under OFL 1.1 §1 that makes them Modified Versions (glyphs
+removed, format changed). They remain under OFL 1.1, and no Reserved Font Name
+is used by a renamed derivative.
 
-| Artifact | Family | Source | License |
-|---|---|---|---|
-| `web/public/fonts/bricolage-grotesque-*.woff2` | Bricolage Grotesque | Google Fonts | SIL OFL 1.1 |
-| `web/public/fonts/inter-*.woff2` | Inter | Google Fonts | SIL OFL 1.1 |
-| `web/public/fonts/jetbrains-mono-*.woff2` | JetBrains Mono | Google Fonts | SIL OFL 1.1 |
-| `web/public/fonts/space-mono-*.woff2` | Space Mono | Google Fonts | SIL OFL 1.1 |
-| `web/public/fonts/ibm-plex-mono-*.woff2` | IBM Plex Mono | Google Fonts | SIL OFL 1.1 |
+| Family | Version | Copyright | Upstream | License |
+|---|---|---|---|---|
+| Bricolage Grotesque | 1.001 | The Bricolage Grotesque Project Authors, 2022 | [ateliertriay/bricolage](https://github.com/ateliertriay/bricolage) | SIL OFL 1.1 |
+| Inter | 4.001 | The Inter Project Authors, 2016 | [rsms/inter](https://github.com/rsms/inter) | SIL OFL 1.1 |
+| JetBrains Mono | 2.211 | The JetBrains Mono Project Authors, 2020 | [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono) | SIL OFL 1.1 |
+| Space Mono | 1.003 | The Space Mono Project Authors, 2016 | [googlefonts/spacemono](https://github.com/googlefonts/spacemono) | SIL OFL 1.1 |
+| IBM Plex Mono | 2.3 | IBM Corp., 2017 — **Reserved Font Name "Plex"** | [IBM/plex](https://github.com/IBM/plex) | SIL OFL 1.1 |
 
-The SIL Open Font License 1.1 text ships alongside them at
-[`web/public/fonts/OFL.txt`](web/public/fonts/OFL.txt) and is served with the
-app. The `@font-face` declarations that load them are generated into
-[`web/src/styles/fonts.css`](web/src/styles/fonts.css), which documents how to
-regenerate the set.
+**On the IBM Plex family name.** OFL §3 bars a Modified Version from presenting
+a Reserved Font Name as its primary font name. These subsets are produced and
+published by Google Fonts, IBM's own distribution channel for Plex, so what we
+redistribute is the holder's distributed form rather than a third-party
+derivative — and every self-hosting toolchain ships these under the original
+family names. We keep `font-family: 'IBM Plex Mono'` on that basis. Recorded
+here so it is a considered position, not an oversight.
+
+The SIL Open Font License 1.1 text and the per-family copyright notices ship
+beside the fonts at [`web/public/fonts/OFL.txt`](web/public/fonts/OFL.txt) and
+are served with the app. Per-file SHA-256 hashes, versions and source URLs are
+in [`web/public/fonts/MANIFEST.txt`](web/public/fonts/MANIFEST.txt); check them
+with `python3 scripts/fetch-fonts.py --verify`. The `@font-face` declarations
+are generated into [`web/src/styles/fonts.css`](web/src/styles/fonts.css) by
+[`scripts/fetch-fonts.py`](scripts/fetch-fonts.py), which is also how the set is
+regenerated.

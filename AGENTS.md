@@ -37,8 +37,8 @@ So:
    **`capture` job** (`python3 capture/capture_server.py selftest`). A green
    `check` predicts the `web` job only — if you touched `mcp/` or `capture/`,
    run those locally too.
-3. **Open a PR** and wait for the `web` check to pass. Don't merge red or
-   pending.
+3. **Open a PR** and wait for **all three** checks — `web`, `mcp` (Ubuntu and
+   Windows), `capture` — to pass. Don't merge red or pending.
 4. **Squash-merge with branch delete**
    (`gh pr merge <n> --squash --delete-branch`), then
    `git checkout main && git pull --ff-only` and delete the local branch

@@ -7,9 +7,9 @@
 # intersecting them back out. (That happened once — see CHANGELOG.)
 #
 # script/style/font/frame-src are containment: they only allow origins that
-# map to real code (the Google Identity Services SDK + its auth iframe, the
+# map to real code (the Google Identity Services SDK + its auth iframe, and
 # pdf.js's own WASM codec). Webfonts are self-hosted (web/public/fonts), so no
-# font/style origin is allowed beyond 'self'. connect-src is deliberately
+# third-party font or style ORIGIN is allowed. connect-src is deliberately
 # OPEN — the BYO-AI agent endpoint and the optional /ai/* contribute path are
 # user-configured to *any* origin (your own server, localhost, a local
 # runtime) by design (see docs re: "AI-native, not a flooring freebie"), so it
@@ -33,10 +33,20 @@
 #   connect-src  *  data:  blob:                 open by design — see above
 #   frame-src    https://accounts.google.com      the GIS auth iframe
 #   img-src      'self' data: blob:               PDF thumbnails + logo/preview images
-#   style-src / font-src  'self' only — webfonts are self-hosted under
-#                          web/public/fonts (see web/src/styles/fonts.css); do NOT
-#                          re-add a font CDN, it is a third-party request on every load
+#   style-src    'self' 'unsafe-inline'          no third-party ORIGIN — webfonts are
+#                                              self-hosted under web/public/fonts (see
+#                                              web/src/styles/fonts.css). Do NOT re-add a
+#                                              font CDN: that is a third-party request on
+#                                              every page load. 'unsafe-inline' is
+#                                              load-bearing (React inline styles) — the
+#                                              directive is not, and cannot be, bare 'self'
 #   worker-src   'self' blob:                     the bundled pdf.js worker
+#   font-src     'self' data:                    'self' is our own woff2. `data:` is kept
+#                                              for pdf.js, which can construct faces from
+#                                              fonts embedded IN a plan PDF — it is NOT for
+#                                              our webfonts. Grepping our source won't show
+#                                              a data: font because the use is inside the
+#                                              library; don't drop it on that evidence
 #
 # 'unsafe-inline' is intentionally absent from script-src — don't add it; it
 # would undo the containment the other directives still provide.
@@ -47,3 +57,11 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
   Strict-Transport-Security: max-age=31536000
+
+# Self-hosted webfonts. Deliberately NOT `immutable`: files under web/public/
+# keep their authored names (Vite content-hashes only what it bundles from
+# src/), so an immutable response would pin returning users to a stale font
+# across a regeneration. A week is long enough to matter and short enough to
+# recover from.
+/fonts/*
+  Cache-Control: public, max-age=604800

@@ -1,8 +1,23 @@
-Copyright (c) <dates>, <Copyright Holder> (<URL|email>),
-with Reserved Font Name <Reserved Font Name>.
-Copyright (c) <dates>, <additional Copyright Holder> (<URL|email>),
-with Reserved Font Name <additional Reserved Font Name>.
-Copyright (c) <dates>, <additional Copyright Holder> (<URL|email>).
+This directory redistributes five font families, each licensed under the SIL
+Open Font License, Version 1.1. The full licence text follows. Copyright
+notices, per family:
+
+Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
+Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
+Copyright (c) 2017 IBM Corp., with Reserved Font Name "Plex".
+
+"Plex" is a Reserved Font Name of IBM Corp. No other family here declares a
+Reserved Font Name. Google Fonts' subsetted binaries drop the OFL text and the
+Reserved Font Name clause from their own `name` tables, which is why both are
+restated here.
+
+These files are Google Fonts' `latin` / `latin-ext` woff2 subsets of the
+upstream releases. Under OFL 1.1 §1 that makes them Modified Versions (glyphs
+removed, format changed); they remain under OFL 1.1, and no Reserved Font Name
+is used by a renamed derivative. See THIRD-PARTY-NOTICES.md for versions,
+hashes and the reasoning on family naming.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
