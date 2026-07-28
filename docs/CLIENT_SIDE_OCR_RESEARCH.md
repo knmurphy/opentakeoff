@@ -153,7 +153,66 @@ erodes most of Paddle's reason to exist here.
 - **Any server/VLM OCR** — reintroduces exactly the login gate and upload step
   that #129 died on, and contradicts the README's "no server in the loop".
 
-### 4.4 CSP impact (either engine)
+### 4.4 Emerging options — checked 2026-07-28
+
+The browser-ML landscape moves fast, so this is the "is tesseract.js about to be
+obsolete?" pass. **Verdict: no. Nothing here displaces it for this use case
+today** — but two are worth tracking, and the fact that steps 1–2 in §8 need no
+OCR at all means the engine decision can be deferred cheaply.
+
+**`ocrs` — the most interesting one, not ready.** Rust OCR engine by the author
+of `tesseract-wasm`, Apache-2.0/MIT, running its own `RTen` inference engine
+rather than ONNX Runtime. Philosophically the right successor: ML-based
+throughout, explicitly designed to need "zero or much less preprocessing effort
+compared to earlier engines like Tesseract", and its detection model
+post-processes text-pixel clusters into **oriented** word bounding boxes — which
+is exactly the rotated-text weakness this app would hit on plans (§7.1). But:
+
+- **No npm package and no published browser build.** WASM is a stated goal
+  ("easy to compile and run across a variety of platforms, including
+  WebAssembly"), not a shipped artifact. You would build and maintain the WASM
+  bundle yourself.
+- **Models are 12.2 MB** (2.5 MB detection + 9.7 MB recognition, `.rten`) —
+  ~2.5× the tesseract.js payload, so it isn't a size win either.
+- Engine crate is alive (`ocrs@0.12.2`, 2026-03-27), but the **published models
+  have not been updated since 2024-01-30**, and the README still says "currently
+  in an early preview. Expect more errors than commercial OCR engines."
+- Latin-only.
+
+Watch it; revisit if a browser package lands.
+
+**PP-OCRv6** — genuinely newer models than the v5 generation (`ppu-paddle-ocr`
+shipped 2026-07-22, tiny ≈ 6 MB). Doesn't change the §4.2 verdict: the cost is
+the ORT-web runtime (13.5–26.8 MB) and the COOP/Google-sign-in conflict, neither
+of which a better model fixes.
+
+**transformers.js v4** (`@huggingface/transformers@4.2.0`, 2026-04-22,
+Apache-2.0) — real runtime progress, including a new C++ WebGPU backend. The
+blocker is the model catalogue, not the runtime: the transformers.js-compatible
+image-to-text models are dominated by TrOCR variants, which are **line
+recognition only with no text detector** — on a plan sheet you'd still have to
+build detection yourself. Florence-2 / SmolVLM / SmolDocling / GOT-OCR are not
+in the browser-ready ONNX set. Not a path today.
+
+**Chrome built-in AI (Prompt API / Gemini Nano, multimodal)** — the tempting
+one, because the bundle cost is *zero*: the model ships with the browser and
+does OCR-ish work on-device from Chrome 138+. Three reasons it's wrong here, the
+third decisive:
+
+1. ~4 GB first-use model download and ~20 GB disk.
+2. Chromium-only — no Safari/Firefox story, and this app has no other
+   browser-gated feature.
+3. **It's generative.** This is a takeoff tool whose headline promise is that
+   every measurement records how it was made. A hallucinating model silently
+   populating a search index is a provenance problem, not just an accuracy one.
+   Defensible at most as an opt-in, badged enrichment — never as the index's
+   source of truth.
+
+**WebNN** — W3C Candidate Recommendation updated 2026-01-22, Chrome 146 origin
+trial. Chromium-only, explicitly not production-ready. Watch only; it changes
+the *runtime* story for §4.2-style models, not the model story.
+
+### 4.5 CSP impact (either engine)
 
 `web/public/_headers` is already close to ready — `'wasm-unsafe-eval'` and
 `worker-src 'self' blob:` are both present and documented. But
@@ -318,6 +377,13 @@ Each step is independently shippable and each one is useful without the next.
    spike.
 5. **Symbol index Tier 2**, gated on the spike.
 
+A note on why this order matters beyond risk: steps 1–2 deliver most of the
+value and need **no OCR engine at all**, so the §4 engine choice is deferred, not
+skipped. Given §4.4 — `ocrs` plausibly one browser package away from being the
+better answer, PP-OCRv6 blocked only by a headers conflict that FedCM migration
+would clear — deferring is worth real money. Don't buy into an engine before
+step 3 forces the question.
+
 ---
 
 ## Sources
@@ -326,6 +392,10 @@ Each step is independently shippable and each one is useful without the next.
 - [tesseract-wasm](https://github.com/robertknight/tesseract-wasm)
 - [Tesseract page segmentation modes explained](https://pyimagesearch.com/2021/11/15/tesseract-page-segmentation-modes-psms-explained-how-to-improve-your-ocr-accuracy/) · [Tesseract: improving output quality](https://tesseract-ocr.github.io/tessdoc/ImproveQuality.html)
 - [ppu-paddle-ocr](https://github.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr) · [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
+- [ocrs](https://github.com/robertknight/ocrs) · [ocrs-models](https://github.com/robertknight/ocrs-models) · [pre-trained models on Hugging Face](https://huggingface.co/robertknight/ocrs) (sizes + 2024-01-30 mtime read from the HF API) · [crates.io `ocrs`](https://crates.io/crates/ocrs)
+- [transformers.js](https://github.com/huggingface/transformers.js/) · [transformers.js image-to-text model catalogue](https://huggingface.co/models?library=transformers.js&pipeline_tag=image-to-text&sort=downloads)
+- [Chrome Prompt API](https://developer.chrome.com/docs/ai/prompt-api) · [Built-in AI at Chrome I/O 2026](https://developer.chrome.com/blog/build-new-features-using-built-in-ai-in-chrome-io2026) · [Multimodal support in Chrome's built-in AI](https://www.raymondcamden.com/2025/05/22/multimodal-support-in-chromes-built-in-ai)
+- [W3C Web Neural Network API](https://www.w3.org/TR/webnn/) · [Chrome 146 WebNN origin trial](https://www.phoronix.com/news/Chrome-146-Beta)
 - npm registry + [jsDelivr data API](https://data.jsdelivr.com/) for `onnxruntime-web@1.27.0`, `@paddleocr/paddleocr-js@0.4.2`, `scribe.js-ocr@0.14.1`, `minisearch@7.2.0`, `flexsearch@0.8.212` sizes and licenses
 - [mozilla/pdf.js `src/core/evaluator.js`](https://github.com/mozilla/pdf.js/blob/master/src/core/evaluator.js) — `paintFormXObjectBegin` argument shape
 - [MDN: Cross-Origin-Opener-Policy](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Opener-Policy) · [COOP/COEP/CORP cross-origin isolation guide](https://uper.pl/en/blog/coop-coep-corp-cross-origin-isolation/)
