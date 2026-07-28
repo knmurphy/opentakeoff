@@ -1,0 +1,103 @@
+// Batch-fill detection metrics runner — what a whole sheet of unprompted
+// proposals looks like:
+//   npm run bench:batch                 (every corpus case with a PDF)
+//   npm run bench:batch va-finish-plan
+//   npm run bench:batch -- --jitter     (also re-measure each seed ±1 ft; slow)
+//
+// REPORTS, NEVER GATES, exits 0 always: RFC item F isn't built yet. These are
+// the numbers to build it against (issue #184 item 4). Room-level PRECISION —
+// "is this proposal a real room?" — is deliberately absent: it needs a full
+// room census, which is human truth we don't have (item 2).
+import { createRequire } from "module";
+import { readFileSync, readdirSync, writeFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
+import { roomLabelSeeds, detectRegions } from "../src/lib/detectRooms.ts";
+import { polyIoU, ringAreaAbs } from "./score.ts";
+import type { Point } from "../src/lib/oneclick.ts";
+import { batchMetrics, batchReach, seedStability, TINY_PROPOSAL_SF, type Proposal } from "./batch.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const argv = process.argv.slice(2);
+const jitter = argv.includes("--jitter");
+const only = argv.filter((a) => !a.startsWith("--"));
+const req = createRequire(import.meta.url);
+const pdfjs = await import(req.resolve("pdfjs-dist/legacy/build/pdf.mjs"));
+
+const files = readdirSync(join(here, "corpus"))
+  .filter((f) => f.endsWith(".json"))
+  .filter((f) => !only.length || only.includes(f.replace(".json", "")))
+  .map((f) => join(here, "corpus", f));
+
+const out: unknown[] = [];
+for (const file of files) {
+  const c = JSON.parse(readFileSync(file, "utf8"));
+  if (!c.pdf) continue;
+  const caseName = file.replace(/^.*[\\/]/, "").replace(".json", "");
+  const doc = await pdfjs.getDocument({ url: join(dirname(file), c.pdf), useSystemFonts: true }).promise;
+  const page = await doc.getPage(c.page || 1);
+  const vp = page.getViewport({ scale: c.scale });
+  const ops = await page.getOperatorList();
+  const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
+  const tc = await page.getTextContent();
+  const items: { str: string; x: number; y: number }[] = [];
+  for (const it of tc.items as Array<{ str?: string; transform: number[] }>) {
+    const str = it.str || "";
+    if (!str.trim()) continue;
+    const t = pdfjs.Util.transform(vp.transform, it.transform);
+    items.push({ str, x: +t[4].toFixed(1), y: +t[5].toFixed(1) });
+  }
+
+  const pxPerFt = c.ptPerFt;
+  const baseDim = Math.min(MASK_MAX_DIM, Math.max(vp.width, vp.height, 2));
+  const mo = buildMask(g.segs, vp.width, vp.height, baseDim, g.meta, pxPerFt);
+  const mppf = mo.ws * pxPerFt;
+  const radii = sealRadiiFor(mppf), wedgeCap = doorWedgeCapPx(mppf), minPass = minPassRadiusFor(mppf);
+
+  // the shipped batch path, verbatim
+  const seeds = roomLabelSeeds(items);
+  const regions = detectRegions(mo, seeds);
+  const proposals: Proposal[] = [];
+  for (const r of regions) {
+    const ring = traceRegion(r.flood) as Point[] | null;
+    if (ring && ring.length >= 3) proposals.push({ label: r.str, seed: r.seed, ring });
+  }
+
+  const m = batchMetrics(proposals, seeds.length, pxPerFt);
+  const goldens = (c.probes as Array<{ expect: string; golden?: Point[]; knownFail?: boolean }>)
+    .filter((p) => p.expect === "golden" && !p.knownFail && p.golden)
+    .map((p) => p.golden!);
+  const reach = batchReach(proposals, goldens, seeds.map((s) => s.seed), (a, b) => polyIoU(a, b, 8));
+
+  console.log(`\n══ ${caseName} ══  ${items.length} text items`);
+  console.log(`  seeding    ${m.labels} room-number labels → ${m.proposals} proposals (${m.refused} refused by the engine)`);
+  console.log(`  floor      Σ ${m.sumProposedSF.toFixed(0)} SF | double-counted ${m.overlapSF.toFixed(0)} SF (${(m.overlapFrac * 100).toFixed(1)}%)  [the bench gates human-measured cases at 0.5%]`);
+  if (m.duplicates.length) console.log(`  duplicates ${m.duplicates.length} label pair(s) proposing the same space: ${m.duplicates.slice(0, 6).map(([a, b]) => `${a}/${b}`).join(", ")}${m.duplicates.length > 6 ? " …" : ""}`);
+  console.log(`  sizes      min ${m.minSF.toFixed(0)} SF · median ${m.medianSF.toFixed(0)} SF · max ${m.maxSF.toFixed(0)} SF${m.maxSF > 10 * Math.max(m.medianSF, 1) ? "   ← an outlier this far above the median is usually paper space, not a room" : ""}`);
+  if (m.tiny.length) console.log(`  sub-${TINY_PROPOSAL_SF}-SF   ${m.tiny.length} of ${m.proposals} proposals under the fixture-sized threshold — a seed that landed INSIDE the label\u0027s own stroke-text glyphs: ${m.tiny.slice(0, 10).join(", ")}${m.tiny.length > 10 ? " …" : ""}`);
+  console.log(`  reach      ${reach.withLabel}/${reach.goldens} pinned rooms contain a label anchor — the recall ceiling for tag seeding`);
+  console.log(`  recall     ${reach.recallHalf}/${reach.goldens} pinned rooms matched at IoU ≥ 0.5 · ${reach.recallNine}/${reach.goldens} at ≥ 0.9`);
+
+  let stability: ReturnType<typeof seedStability> | undefined;
+  if (jitter) {
+    const d = pxPerFt;                                     // one foot
+    const offs: Array<[number, number]> = [[d, 0], [-d, 0], [0, d], [0, -d]];
+    const remeasure = (x: number, y: number): number | null => {
+      const f = floodRegionSealed(mo, x, y, 0.5, radii, wedgeCap, minPass);
+      if (f.status !== "ok") return null;
+      const ring = traceRegion(f) as Point[] | null;
+      return ring && ring.length >= 3 ? ringAreaAbs(ring) / (pxPerFt * pxPerFt) : null;
+    };
+    stability = seedStability(proposals, (p) => ringAreaAbs(p.ring) / (pxPerFt * pxPerFt), remeasure, offs);
+    const solid = stability.filter((s) => s.held === s.tried).length;
+    const brittle = stability.filter((s) => s.held <= 1);
+    console.log(`  stability  ${solid}/${stability.length} proposals survive a ±1 ft seed move unchanged; ${brittle.length} hold ≤1 of 4${brittle.length ? `: ${brittle.slice(0, 8).map((s) => s.label).join(", ")}` : ""}`);
+  }
+  out.push({ caseName, metrics: m, reach, stability });
+}
+
+writeFileSync(join(here, "batch-results.json"), JSON.stringify({ cases: out }, null, 1));
+console.log(`\nWhat these numbers cannot tell you: whether a proposal is a REAL room. That is`);
+console.log(`precision against a full room census — human truth (bench/from-takeoff.mts).`);
+console.log(`Everything above is measurable on any plan, today, and is where batch fill fails first.`);

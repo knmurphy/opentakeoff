@@ -51,3 +51,4 @@ mcp/dist-mcpb/
 web/e2e/out/
 web/bench/results.json
 web/bench/callout-results.json
+web/bench/batch-results.json
