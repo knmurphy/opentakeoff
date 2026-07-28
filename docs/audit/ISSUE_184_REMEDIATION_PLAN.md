@@ -3,6 +3,16 @@
 Companion to [`ISSUE_184_AUDIT.md`](./ISSUE_184_AUDIT.md). Finding IDs (A1, B3, …) refer to
 that document.
 
+**Revision 4.** A second cycle-2 reviewer ran against rev 2 in parallel. Its findings against
+rev 2's Phase 1 (`TARGET_MPPF = 36` changes resolution on every under-cap sheet in both
+directions; the bench cannot see it) are **already dissolved by rev 3's formula**, which
+reduces to `min(cap/imgmax, 1)` at the default render — today's rule exactly, on every sheet
+rather than two. Its remaining findings are new and are applied here: the min-passage factor
+conflicts with 2.4's floor (B5), both named bias remedies miss their own exit criterion (B6),
+Phase 3 cannot exit before the bias fix lands (B8), the raster proposal introduces a
+stale-cache bug (H1), and 1.1e reds the bench today (H2). Plus four citation corrections and
+an over-correction of my own in 2.1b.
+
 **Revision 3.** Rev 2 was reviewed and failed. Three of its criteria were falsifiable in
 minutes with commands already in the repo, and all three were wrong — the fairest summary
 being that rev 2 asked for a verification ledger it had not run against itself. Corrected
@@ -20,6 +30,14 @@ here, each verified by execution:
 - **Rev 2's two SF-error figures were wrong.** Measured from `bench/results.json`:
   `two-doorways/center` is **4.33%** (not 4.43%) and `curved-partition/left-half` is **3.20%**
   (not 2.81%).
+
+**On exit criteria coverage.** 0.8 states the rule *"a criterion with no command is not one"*.
+Review found the converse unpoliced: ~17 tasks (0.5, 0.6, 0.8, 1.3, 2.1b–2.1d, 2.3, 2.5, 2.6,
+3.3, 3.4, 4.2, 4.4, 4.5, 5.4, 5.5) carry no exit criterion at all. Rather than manufacture one
+per task, the rule is narrowed and stated honestly: **every task that changes measured output
+or a gate must have an exit criterion; small mechanical tasks are verified by the ledger row
+alone.** 0.8's `check-ledger.mjs` enforces the first class. Tasks in the second class are marked
+`ledger-only` when the ledger is written.
 
 **Attribution convention** (absent from rev 2, and the omission is the audit's own core sin):
 figures carry a named source — `round 9`, `review`, or `audit`. Figures with no named source
@@ -128,8 +146,49 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 | 0.6 | Label the refusal denominator (`3 synthetic probes`); `correctRefusalRate` returns `n/a` on an empty set, not `1`. | B5 | S |
 | 0.7 | Split the headline: `synthetic (independent truth): n=9 …` and `engine-pinned (regression-only): n=12 …`. Never print a blended accuracy figure. | B1 | S |
 | 0.8 | **Verification ledger** — `ISSUE_184_REMEDIATION_LEDGER.md`. Every exit criterion gets: criterion, the exact command that checks it, the commit checked at, and who checked it. A criterion with no command is not one — delete it or make it one. Self-checked rows marked `self`, so the record shows what carries independent weight. Rev 1 specified no reviewer for any of its own work, which is finding D6 one level up. | D6 | S |
-| 0.9 | **Re-pin protocol. Blocks Phases 1, 2, 3, 4.0 and 5.** `pin-goldens.mts` emits a per-probe diff on every re-pin: old SF, new SF, Δ%, old-vs-new set-difference render, IoU(old,new). Any probe moving >±2.5% fails unless the commit body carries a per-probe adjudication. Add the adjacency-tiling invariant: for `wholePlan` cases, pairwise overlap ≤0.5% **and** the case total must not move >2.5% without adjudication. | B1, bug #17 | M |
+| 0.9 | **Re-pin protocol. Blocks 0.11 and Phases 1, 2, 3, 4 and 5.** `pin-goldens.mts` emits a per-probe diff on every re-pin: old SF, new SF, Δ%, old-vs-new set-difference render, IoU(old,new). Any probe moving >±2.5% fails unless the commit body carries a per-probe adjudication. Add the adjacency-tiling invariant: for `wholePlan` cases, pairwise overlap ≤0.5% **and** the case total must not move >2.5% without adjudication. | B1, bug #17 | M |
 | 0.10 | **Callout cross-check harness** (round 9). Report engine SF vs the plan's own printed `NNN SF` callouts. **Reported, never gated** — the convention is unknown. Reproduce round 9's method: 25-seed jitter per anchor (callout text often sits inside stroke glyphs), modal region, and **report the agreement fraction beside each error**. Done = the harness reproduces round 9's five rows within 1 percentage point at `21e57a0`, which also validates the harness. | round 9 | M |
+
+| 0.11 | **Correct the structural measurement bias. Blocks Phase 3's exit, Phase 4's human gates, and D-6.** *(Rev 2 numbered it 4.7, rev 3 moved it to 4.0; it belongs in Phase 0 because Phase 3's tolerances and Phase 4's gates are both unreachable while it stands.)* Detail below. | new, from review | M |
+
+**0.11 in detail.** `enclosed-room`'s golden is exactly 120.0 SF (216×180 px @ 18 px/ft); the
+engine reads **117.568 SF**. Traced directly: the flood drops the wall raster (217→215 cells)
+**and** the Moore contour drops a further cell by running through cell centres (215→214), so
+the ring is 214×178. Two independent single-cell losses, not one — rev 2's `(216−2)×(180−2)`
+arithmetic reached the right total by attributing both to the wall raster, which hid that a
+half-cell remedy recovers only one of them.
+
+**Both remedies rev 2 and rev 3 named miss 0.11's own exit criterion:**
+
+| remedy | result | error | vs ≤0.5% |
+|---|---|---|---|
+| as-traced (cell centres) | 214×178 = 117.568 SF | −2.03% | — |
+| "trace on cell edges" | 215×179 = 118.781 SF | −1.02% | **fails** |
+| "a documented half-cell outset" | 215×179 = 118.781 SF | −1.02% | **fails** |
+| **full-cell outset from cell centres** | 216×180 = 120.000 SF | **0.00%** | passes |
+
+**And −2.0% is the 18 px/ft figure, not the one that matters.** The bias is
+`1 − (1 − 2/(mppf·W))(1 − 2/(mppf·H))`, verified against all three bench resolutions. At the VA
+plan's production **8.929 px/ft**, where the answer key will actually be measured: a 12×10 ft
+room **−4.06%**, a toilet-sized 6.3×6.2 ft **−7.04%**, a 30×8 ft corridor **−3.53%**. So rev
+3's "consumes ~80–100% of the 2.5% gate" understated it — at production resolution it consumes
+**160–280%**, and `humanMaxSfErr` cannot pass on any VA-scale room regardless of engine
+quality. That is why this cannot wait for Phase 4.
+
+**A uniform outset is not correct everywhere, and the task must prove rather than assume it:**
+- Correct only if the golden's wall-line semantics are **centreline** — which is what 4.5
+  decides, so **0.11 depends on D-8** (4.5's semantics decision, promoted to Phase 0 with it).
+  Rev 3 had 0.11 preceding the decision it depends on.
+- On a **diagonal** boundary the Moore ring is a Bresenham staircase up to √2× the true edge; a
+  uniform half-cell normal outset adds ~41% too much area.
+- For **holes** the sign inverts — moot today only because `traceRegion` returns the outer
+  contour only, which is C7 and itself open.
+- The min-passage dilation is **not** a contributor: review measured 0.00% delta on every
+  synthetic probe, so growback is area-neutral at 18 px/ft on rectilinear rooms. Rev 3 implied
+  an interaction; there is no evidence for one.
+
+**0.11 is a whole-corpus re-pin** — it changes every ring, so all 12 pinned goldens move
+together and each needs adjudication under 0.9. It is the largest re-pin in the plan.
 
 **Exit criteria**
 - CI goes red on each of four committed mutation tests: a deleted corpus file; a known-fail
@@ -151,6 +210,8 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
   or any row lacks a command. **At least the Phase 0 and Phase 2 rows carry a named non-`self`
   checker** — otherwise 0.8 re-commits D6 in the task that diagnoses it, which is what rev 2
   did.
+- 0.11: `enclosed-room` within 0.5% of 120.0 SF, **and** the same tolerance on a diagonal-wall
+  fixture and a concave fixture. A rectangle proves nothing about an outset.
 - `npm run bench` prints the synthetic/pinned split and the callout table.
 
 ---
@@ -203,6 +264,16 @@ the test call sites. Rev 2 contorted the formula specifically to avoid a signatu
 got a wrong formula for it. The signature change is the cheaper price; it is stated here
 rather than dodged.
 
+- **1.1g** — **`rescaleSheet` must also evict `rasterMaskCacheRef`/`rasterMaskReadyRef`.**
+  Today the raster mask's `ws` (`TakeoffCanvas.jsx:2831`) depends only on `dims`, so nothing
+  needs invalidating on recalibration — `rescaleSheet` evicts only `maskCacheRef` (`:2663`).
+  Making raster `ws` a function of `pxPerFt` without adding eviction leaves a recalibrated
+  scanned sheet holding a mask built at the old scale, and that stale `ws` is what converts
+  mask px back to image px — so the SF is silently wrong. **That would be a new instance of
+  A1's own failure class, introduced by A1's fix.** Regression test required. (S)
+- **1.1h** — raster `ws > 1` renders above the source scan's DPI for no information gain and 4×
+  the memory. Detect and clamp; the limit was named in rev 2 and left unaddressed. (S)
+
 *(Edge case: if `rs < RENDER_SCALE` — a very large page where `auto < 2` — the ratio exceeds 1.
 Clamp `ws ≤ 1`; the cap term binds on such pages anyway.)*
 
@@ -222,16 +293,26 @@ option and makes decision D-2 a false choice** (see 5.3).
 
 **Sub-tasks rev 1 omitted:**
 
-- **1.1b** — update `bench/run.mts:45-47`, whose comment says *"factor 1 reproduces the
-  production mask exactly"*. It pins `baseDim = min(MASK_MAX_DIM, max(imgW,imgH))`, so after
-  1.1 the bench would keep testing the old rule and **Phase 1 would be invisible to it.** (S)
+- **1.1b** — ~~update `bench/run.mts:45-47`~~ **not needed under the corrected formula.** The
+  bench pins `baseDim = min(MASK_MAX_DIM, max(imgW,imgH))`, which is exactly what 1.1 computes
+  at the default render, so factor 1 continues to reproduce production. *(This task existed
+  only because rev 2's formula diverged from the bench; review confirmed that divergence would
+  have moved every synthetic reading 1–2 percentage points while Phase 1's exit criterion
+  claimed 0.1%. Both problems vanish with the target set to baseline-render px/ft.)* Verify the
+  comment still holds after 1.1 and leave it. (S)
 - **1.1c** — rewrite `resolutionInvariance.test.ts:123-127` ("MASK_MAX_DIM export still caps
   ws at 1"), which asserts `mo.ws === 1` and fails once `ws > 1` is allowed. (S)
 - **1.1d** — `TakeoffCanvas.jsx:2831` **duplicates the `ws` formula inline** for the raster
   path; update in lockstep or vector and raster masks silently diverge. (S)
 - **1.1e** — add an **upward** factor (e.g. 1.25) to `RES_FACTORS` (`run.mts:35`). The cross
   gate currently tests only downward. Under the corrected formula Phase 1 introduces no upward
-  direction, but 4.0 and 5.4 change measured SF and the gate should be two-sided regardless. (S)
+  direction, but 0.11 and 5.4 change measured SF and the gate should be two-sided regardless.
+  **Not (S): it reds the bench today.** Because ×1.25 lands *above* `DETERMINISM_MIN_MPPF`
+  while ×0.75/×0.5 sit below, adding it is what finally makes the VA plan cross-gated — and it
+  immediately fails: `patient-room-137` pairIoU **0.844**, `patient-toilet-137a` **0.835**,
+  against a 0.90 floor. Two consequences: on synthetic probes ×1.25 is a no-op until 1.1
+  lands, so 1.1e is untestable before it; and **5.2 becomes false the moment 1.1e lands** —
+  a real plan *would* then be cross-checked, and failing. Fold into D-6. (M)
 - **1.1f** — **add a sub-cap probe to the corpus.** Both existing real-plan cases are blind to
   Phase 1: `va-finish-plan` is cap-bound and `sample-plan` sits at `ptPerFt` 36. Pin the e2e
   792×1224 pt fixture (`rs` 2, `pxPerFt` 18) as a golden so `ws`-clamp behaviour is exercised
@@ -240,7 +321,7 @@ option and makes decision D-2 a false choice** (see 5.3).
 
 **The raster carve-out is withdrawn.** Rev 1 claimed `buildRasterMask` is tied to render scale
 and cannot be decoupled. It is not: `ensureRasterMask` does an **independent pdf.js render** at
-`scale: rs*ws` (`TakeoffCanvas.jsx:2843`), never a resample of the panel bitmap. Set its
+`scale: rs*ws` (`TakeoffCanvas.jsx:2842`), never a resample of the panel bitmap. Set its
 viewport scale from `pxPerFt` and `TARGET_MPPF` exactly as the vector path does; the only real
 limit is the source scan's DPI. Rev 1's "mark raster takeoffs for re-verification" workaround
 would have left A1 live on scans.
@@ -291,10 +372,14 @@ deferred in the same document.
 | min-passage | absent | new factor (2.2) |
 | coarse mask | never fires on scans | fix via 2.3 |
 
-- **2.1b** — rev 1 said `wedgeGrowth` was "already plumbed and simply never read". **False**:
-  it is declared at `confidence.ts:30` but **no caller supplies it** — all four call sites omit
-  it (`TakeoffCanvas.jsx:2887`, `:3147`, `:3994`, `bench/run.mts:63`). This is plumbing at four
-  sites, not a one-line read. (S)
+- **2.1b** — `wedgeGrowth` is declared at `confidence.ts:30` and **no caller supplies it** —
+  all four call sites omit it (`TakeoffCanvas.jsx:2887`, `:3147`, `:3994`, `bench/run.mts:63`).
+  *But rev 2 over-corrected in calling rev 1's "already plumbed" flatly false: the **producer**
+  side is fully plumbed — `oneclick.ts:1166` sets `out.wedgeGrowth` with the comment "confidence
+  signal", and it is on the public `FloodResult` union at `:42`. The fix is four identical
+  `wedgeGrowth: f.wedgeGrowth,` additions plus a read — no signature change, no new data path.
+  Costing it as real work was the mirror of the error this plan criticises.* Contrast 2.1d,
+  where the plumbing genuinely does not exist and the (M) label is right. (S)
 - **2.1c** — **escalation growth is anti-correlated with correctness and must not be used.**
   Measured:
 
@@ -346,11 +431,26 @@ with IoU 0.957 — it sits in the dead zone between rev 2's ceiling and floor an
 the gate forever while failing 5.1 in the same run.
 
 Evaluated over **all probes including known-fails** (explicitly bypassing the `!s.knownFail`
-filter at `score.ts:200` — otherwise it cannot fire at all):
+filter at `score.ts:201` — **and the second one at `:188`** in `aggregateCross`
+(`!s.knownFail && !s.ungated`), plus the exclusion at `run.mts:65`; bypassing only one leaves
+the cross metrics still filtered):
 
 - **Ceiling:** no probe with `|ΔSF|/SF > 0.025` may report `confidence > 0.90`.
-- **Floor:** no probe with `|ΔSF|/SF ≤ 0.005` may report `confidence < 0.90`. *This is what
-  stops the ceiling being satisfied by deflating every score.*
+- **Floor:** no probe with `|ΔSF|/SF ≤ 0.005` may report `confidence` below a threshold that
+  is **calibrated after 2.1b, 2.2 and 2.3 land, not before.** *This is what stops the ceiling
+  being satisfied by deflating every score — but a flat 0.90 floor is in direct, measured
+  conflict with 2.2.*
+
+  Review measured the min-passage delta per probe: **0.00% on all 12 synthetic and all 4
+  `sample-plan` probes**, and non-zero only on six VA probes — `shaded-wing-office` −0.78%,
+  `cloud-corridor` −2.12%, `patient-toilet-137a` −2.69%, `patient-room-137` −8.41%,
+  `ward-room-294sf` −29.01%, `ward-vestibule` **−78.93%**. Every probe with a non-zero signal
+  has IoU ≥ 0.997 — i.e. every one sits inside the floor. A factor honest about −78.9% cannot
+  leave `ward-vestibule` above 0.90; one honest about −8.41% cannot leave `patient-room-137`
+  (headroom 0.02) above it either. **Phase 2's whole purpose is to add magnitude-scaled
+  deductions, so a fixed floor set beforehand guarantees a collision with its own tasks.**
+  Set the floor from what 2.1b/2.2/2.3 actually produce, or express it relatively (no probe in
+  the accurate population may score below the median of the inaccurate one).
 - **Refusal probes:** a refusal probe that returns `ok` fails the ceiling regardless of
   confidence. `run.mts` computes `traceConfidence` only in the golden branch, so all four
   refusal probes report `conf = None` — meaning the one live real-plan failure
@@ -360,8 +460,19 @@ filter at `score.ts:200` — otherwise it cannot fire at all):
   verbatim vector trace that stopped at the wrong boundary — `raster` false, `hatchFiltered`
   false, `sealedPx` undefined, `wedges` undefined, `mppf` above floor, **min-passage delta
   0.00%**. No engine-internal signal distinguishes it from a trace that stopped at a wall.
-  **This is the RFC-item-A gap, and no amount of confidence tuning closes it.** The exemption
-  is recorded in the corpus with this reason attached.
+  **This is the RFC-item-A gap, and no amount of confidence tuning closes it.**
+
+  **The exemption must not recreate B3** (`knownFail` as unbounded exclusion with no xpass
+  detection). Three requirements, absent from rev 3:
+  - **xfail with a direction** — assert `annotation-ring-room` reports conf > 0.90 and **fail
+    the run when that stops being true**, so a future signal that does fire is detected rather
+    than silently absorbed. 0.3's xpass detection is scoped to `knownFail`, a different flag on
+    a different gate, and does not cover this.
+  - **A bound** — a test asserting the exemption list has exactly the expected number of
+    entries. Otherwise "one `exempt: true`" neutralises any inconvenient probe, which is B3
+    verbatim.
+  - **An expiry** — the reason must name the signal set it was evaluated against, since
+    2.1c/2.2/2.3 are all attempts to change that set.
 
 Rev 1's exit criterion "every known-fail scores below 0.90" is **withdrawn as unreachable**.
 
@@ -376,12 +487,12 @@ to provenance — corrected in the audit too.
 
 `traceConfidence({sealedPx: 4, virtualFrac: NaN})` → `score: NaN` (serialising as `null`). Rev
 1's repro omitted `sealedPx` and would not have reproduced it — the branch is guarded at
-`confidence.ts:44`.
+`confidence.ts:46`.
 
 ### 2.7 A6 — make the batch and MCP surfaces call the same engine (M) — **promoted from "unscheduled"; this is what actually blocks item F**
 
-`mcp/src/session.ts:246` calls `buildMask` with no `pxPerFt`; `:341`/`:394-395` call raw
-`floodRegion`; `detectRegions` (`detectRooms.ts:76-89`, the `floodRegion` call at `:83`) likewise. Round 9 measured the cost: raw
+`mcp/src/session.ts:246` calls `buildMask` with no `pxPerFt`; `:341` calls raw `floodRegion` and `:395` calls
+`detectRegions`, which reaches it via `detectRooms.ts:83`; `detectRegions` (`detectRooms.ts:76-89`, the `floodRegion` call at `:83`) likewise. Round 9 measured the cost: raw
 0.817 vs sealed 0.999 mean IoU on the 8 VA seeds, and **560 SF double-counted (16.6%)** across
 56 label seeds, against a 0.5% gate. An MCP `one_click` and a canvas One-Click on the same seed
 return different SF under the same `origin.method: "one_click_v1"`.
@@ -422,6 +533,14 @@ no answer key.**
   - **(ii)** 2.1c reports that none exists, the flat deduction stays, and
     `partition-bank-15in` and `tile-demising-same-pen` join `annotation-ring-room` in the
     written exemption list — with their exemption reasons recorded the same way.
+  *(Correction to rev 2: the floor's binding population is **14** probes, not "the 4
+  `sample-plan` probes and the 8 gated VA probes" — it omitted `hatched-room/center` and
+  `tile-grid-room/in-cell`, both IoU 0.9917 at conf 0.95, which are the two probes most at risk
+  from 2.1c. "Gated" is also wrong: all 9 VA probes print `NO GATED PAIR`. And five further
+  probes sit at IoU 0.97973, a hair under the line — once 0.11 lands their IoU goes to ~1.000
+  and they enter scope at 0.02–0.04 headroom, so **Phase 0 tightens a Phase 2 gate already in
+  CI**. 0.9 covers goldens, not confidence; this hazard needs its own note.)*
+
   The algebra makes (ii) the likely branch, and rev 2 did not state it: the ceiling needs
   `hatch_factor ≤ 0.90` on the two known-fails, while the floor needs
   `hatch_factor × 0.97 ≥ 0.90` → `≥ 0.928` on `patient-room-137` (today conf 0.92). **Those
@@ -479,10 +598,20 @@ bubbles are overwhelmingly `curveTo` beziers. So the discriminators must **also*
    hard/soft classification has not run at `markPolylineArcs` time, so "terminates at hard
    linework" is not yet knowable. **Deferred — not scoped** (see deferral list).
 
-**Side effect rev 1 missed:** `classifyHatchSegs` skips `SEG_CURVE` outright
-(`oneclick.ts:477`), and the comment at `:458-459` says the exemption is load-bearing.
-Un-marking chords returns them to hatch eligibility, and a large tessellated circle has many
-near-parallel chord pairs. Add a fixture asserting a rejected column stays a hard barrier.
+**Mechanism — decided, because rev 3 assumed two contradictory ones.** Rev 3's side-effect note
+described rejection as *un-marking* `SEG_CURVE`, while 3.3 assumed rejected arcs still form
+clusters that need ranking. Both cannot hold: `boundaryCurveClusters` (`oneclick.ts:954, :990`)
+builds clusters **only** from `MASK_CURVE_BIT` cells, so un-marking means no cluster, which
+would make 3.3 dead code.
+
+**Decision: keep the `SEG_CURVE` mark, carry door-likelihood separately.** Then the
+hatch-eligibility side effect never arises — but note that also removes the justification for
+rev 3's "rejected column stays a hard barrier" fixture, which is dropped.
+
+*(If instead un-marking is chosen, `classifyHatchSegs` skips `SEG_CURVE` outright at
+`oneclick.ts:477` with a load-bearing comment at `:458-459`, and a large tessellated circle has
+many near-parallel chord pairs — so the fixture becomes necessary again. Pick one and state the
+consequence for the other task; rev 3 asserted both.)*
 
 ### 3.3 Wedge budget starvation (S) — A5 — **blocked on D-7**
 
@@ -506,7 +635,11 @@ wedge.
   round column; callout bubble; **double door**; small-scale cloud; room with curved fixtures +
   one real door.
 - Each asserts `IoU ≥ 0.95` **and** `|ΔSF|/SF ≤ 0.025` against its by-construction golden, at
-  all `RES_FACTORS`.
+  all `RES_FACTORS`. **Unreachable until 0.11 lands** — a 120 SF rectangle already burns 82% of
+  the 2.5% budget on rasterisation alone (`enclosed-room` 117.6/116.8/115.2 across factors), a
+  ~20 SF fixture blows through it (`two-doorways` 4.33%), and Phase 3's fixtures are dominated
+  by *small* features. With the Hold requiring Phases 0–3 green, leaving this in Phase 4 made
+  the Hold self-blocking.
 - Independence from the growth allowance is proven by a run with the per-arc allowance set to
   0, asserting the same fixtures still measure within tolerance. Without that second run the
   claim is untested.
@@ -537,6 +670,11 @@ eventually, (b) immediately" already conceded this; the deferral list now says s
 `run.mts:104` truthiness → `=== "1"`. Gitignore `bench/corpus/sealed/`. Stop writing sealed
 goldens into `results.json` (`:155`). **Run-once is discipline, not tooling** — state that
 plainly rather than implying enforcement.
+
+### 4.8 Make the human gates negative-testable (S) — C6
+
+Export `THRESHOLDS` (`run.mts:25`, currently a non-exported local no test imports) and add a
+test that a human case at 3% room error exits 1. Pairs with 6.17.
 
 ### 4.4 Seed independence (M) — C5
 
@@ -570,33 +708,12 @@ is C3/C4 one level up.
 `bench/fixtures/fake-human-takeoff.json` and prove each gate fires on it. That is what 4.1–4.5
 are verified by until a real key exists.
 
-### 4.0 Characterise the structural measurement bias (M) — **new, found in review; runs FIRST in this phase**
-
-`enclosed-room`'s golden is exactly 120.0 SF (216×180 px @ 18 px/ft); the engine reads **117.6
-SF (−2.0%)**. The cause is structural: the flood excludes the 1-cell wall raster and Moore
-traces cell centres, giving (216−2)×(180−2)/324 = 117.55 — matching to 0.05 SF. The bias is
-resolution- and scale-dependent (at the VA's 8.929 px/ft one mask px = 1.34").
-
-**This consumes ~80–100% of the `humanMaxSfErr` 2.5% and `humanCoverageBand` 2% gates before
-any real engine error.** Correct it (trace on cell edges, or a documented half-cell outset)
-**before** any human key is measured, or the first real answer key fails for a reason that is
-not an engine error. Rev 2 numbered this 4.7 while ordering it *after* 4.6, the campaign it
-says it must precede — hence the renumber.
-
-**This is a corpus-wide re-pin and is gated on 0.9.** It changes how every ring is traced, so
-every golden moves ~+2% at 18 px/ft and more at the VA's 8.93 px/ft — a larger movement than
-anything in Phases 1–3, and it retroactively invalidates Phase 1's no-movement criterion and
-Phase 3's ≤2.5% fixture tolerances. Verify the fix on concave regions, regions with holes, and
-diagonal walls before accepting: a half-cell outset is not obviously correct for any of them.
-
 **Exit criteria**
 - ≥1 case with `humanMeasured: true` produced from a payload with zero machine-origin shapes,
   and `npm run bench` evaluating all three human gates on it — proved by a deliberate 3%
   perturbation exiting non-zero, committed as a test.
 - `from-takeoff.mts` exits non-zero on a payload whose shapes carry no `origin`.
 - `git check-ignore bench/corpus/sealed/` succeeds.
-- `enclosed-room` measures within 0.5% of its 120.0 SF by-construction golden (4.0), verified
-  on concave, holed and diagonal-wall fixtures too.
 - A fixture whose deducts are 5% of floor passes the ±2% coverage gate (4.5).
 
 ---
@@ -650,8 +767,11 @@ the entanglement audit.)*
 **Exit criteria**
 - The cross gate reports `|ΔSF|/SF` per pair and fails above 2.5%; the ring-IoU number is
   **removed** from the summary, not merely supplemented.
-- Every probe prints either a pair count ≥2 or `NOT cross-checked`; the summary states the
-  real-plan count on the same line as the floor.
+- ~~Every probe prints either a pair count ≥2 or `NOT cross-checked`~~ — **already true at
+  `21e57a0`**; the bench prints `[NO GATED PAIR — not cross-checked]` on all 9 VA rows today, so
+  this was not a criterion for new work. Replaced by: `run.mts:78`'s hardcoded `statusAgree:
+  true` is gone (5.1b), and the summary states the real-plan count on the same line as the
+  floor.
 - D-2 closed in writing here, with the cost stated.
 
 ---
@@ -689,8 +809,10 @@ This file matters for the same reason the issue does: §5 is a "Recommended buil
 session reads. A measured-backwards storage decision left in it is re-inherited exactly like a
 wrong figure in the issue — and unlike the issue, it is a file this plan can edit directly.
 
-**Also: 4.8** — export `THRESHOLDS` (`run.mts:25`) and add a test that a human case at 3% room
-error exits 1. (S) — C6's other half.
+*(**4.8** — export `THRESHOLDS` (`run.mts:25`) and add a test that a human case at 3% room
+error exits 1 — is a **Phase 4** task and lives there, not here. Rev 3 left it orphaned at the
+bottom of the Phase 6 table, Phase-4-numbered, with no exit criterion in either phase, while
+6.17 pointed at it.)*
 
 **Exit criteria**
 - For each retired number (`249.3`, `20.8`, `1,718`, `837`, `847`, `0.04 SF`, `294`,
@@ -718,6 +840,8 @@ list:
 | D16 | `roomName.ts:79` returns a bare number line as a room name — keynote "213" becomes a label. | Mislabelled takeoffs |
 | — | The `fflate` dynamic-import build failure, seen once, unreproduced. | Unknown; may surface in CI once 0.1 lands |
 | — | Perf harness for D8's *historical* numbers (23 s → 0.39 s, ~285 ms). `bench/perf.mts` is scheduled under 1.4 for the hover path only; it does not re-measure D8's claims. | D8's figures stay unrepeatable; 6.9 marks them as such |
+| A2 / 2.1c | **2.1c's failure branch is itself a deferral** — "if none exists, say so and leave the flat deduction" means the plan's #2 priority may end up unfixed. Rev 3 stated the branch but did not list it here, which is the most consequential omission the table could have. | The two hatch known-fails keep reporting 0.95 while measuring +384% and +97% |
+| — | The raster path's **source-DPI limit** (1.1h detects and clamps, but nothing tells the user a scan is too coarse to measure at the requested precision). | Silent over-confidence on low-DPI scans |
 | C6 | Run-once enforcement for sealed cases — no counter, ledger or marker. 4.3 documents it as discipline rather than building it. | The one sealed holdout gets rerun and overfit, making the accuracy number it produces worthless |
 | A2 | **The annotation-ring class ships at conf 1.00.** 2.4 exempts it because review proved no engine-internal signal exists (min-passage delta 0.00%). Correct engineering, but it is an accepted risk, not merely an exit-criterion adjustment — rev 2 booked it as the latter. | An estimator sees a verbatim-confidence trace that is 35% short. Consider recording the exemption class in `origin` even where the score cannot move |
 | — | **Four escape-hatch tasks permit the null action**: 3.4 ("fix *or* correct the comment"), 5.5 ("fix *or* retract"), 6.12 ("add the test *or state it is unguarded*"), 6.14 ("write the check *or drop it*"). | Taking the null branch each time leaves: px thresholds still mislabelled dimensionless, bit-identity still overclaimed, **the O(N²) lattice fix still unguarded** (D7: a revert passes 843/843 + bench), and the slice check still unwritten |
@@ -746,9 +870,18 @@ measurement, and D3 shows at least one "verified visually" claim was wrong.
 - **D-5 (new).** 3.2's radius test: thread `pxPerFt` into `extractVectorGeometry` and re-run arc
   marking on `rescaleSheet`, or move the test to cluster time where `mppf` exists?
 - **D-6.** 5.1 turns the bench red on two synthetic probes today — `two-doorways/center`
-  **4.33%** and `curved-partition/left-half` **3.20%** against a 2.5% gate. Fix, raise the
-  threshold, or track as known-fail? Note 4.0's structural −2.0% bias is a likely contributor
-  to both, so **sequence D-6 after 4.0** rather than deciding it blind.
+  **4.33%** and `curved-partition/left-half` **3.20%** against a 2.5% gate. **This is not the
+  trilemma rev 3 posed** ("fix the probes, raise the threshold, or known-fail"): review showed
+  0.11's bias is not "a likely contributor" but essentially the whole effect — the model
+  `(W−2/mppf)(H−2/mppf)` reproduces `enclosed-room` at all three factors to 0.05 SF, and fitting
+  it to `two-doorways` drives the residual to second order. With 0.11 landed, both probes fall
+  well under 2.5%. **So: land 0.11, re-measure, then decide — and fold in 1.1e's measured
+  failures (pairIoU 0.844 / 0.835) at the same time.** Rev 3 offered three options none of which
+  was "do the thing already in the plan", which is the same shape as rev 1's D-2.
+- **D-8 (new).** 4.5's wall-line semantics for the answer key: **centreline or face?**
+  Promoted to Phase 0 because **0.11 depends on it** — a full-cell outset is correct only under
+  centreline semantics. Rev 3 left it as prose inside 4.5 with no decision ID while ordering
+  0.11 ahead of it.
 - **D-7 (new).** 3.3's door-likelihood channel: `MASK_DOORLIKE_BIT` (bit 8 free), per-cluster
   circle re-fit, or an intrinsic cluster property? Recommend bit 8. **3.2 and 3.3 cannot start
   until D-5 and D-7 are answered** — marked in the tasks themselves.
