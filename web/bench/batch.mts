@@ -13,7 +13,7 @@ import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
-import { roomLabelSeeds, detectRegions } from "../src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, sheetBounds, ROOM_LABEL_RE } from "../src/lib/detectRooms.ts";
 import { polyIoU, ringAreaAbs } from "./score.ts";
 import type { Point } from "../src/lib/oneclick.ts";
 import { batchMetrics, batchReach, batchCoverage, seedStability, TINY_PROPOSAL_SF, type Proposal } from "./batch.ts";
@@ -57,7 +57,9 @@ for (const file of files) {
   const radii = sealRadiiFor(mppf), wedgeCap = doorWedgeCapPx(mppf), minPass = minPassRadiusFor(mppf);
 
   // the shipped batch path, verbatim
-  const seeds = roomLabelSeeds(items);
+  const patternOnly = items.filter((it) => (it.str || "").trim().split(/\s+/).some((t) => ROOM_LABEL_RE.test(t))).length;
+  const seedsRaw = roomLabelSeeds(items);                       // text filters, no spatial gate
+  const seeds = roomLabelSeeds(items, { bounds: sheetBounds(vp.width, vp.height) });
   const regions = detectRegions(mo, seeds);
   const proposals: Proposal[] = [];
   for (const r of regions) {
@@ -83,6 +85,7 @@ for (const file of files) {
 
   console.log(`\n══ ${caseName} ══  ${items.length} text items`);
   console.log(`  seeding    ${m.labels} room-number labels → ${m.proposals} proposals (${m.refused} refused by the engine)`);
+  if (patternOnly !== seeds.length) console.log(`             ${patternOnly} numerals matched the room pattern → ${patternOnly - seedsRaw.length} rejected as text (printed areas, dimensions, drawing numbers, title-block words), ${seedsRaw.length - seeds.length} more outside the drawing extent`);
   console.log(`  floor      Σ ${m.sumProposedSF.toFixed(0)} SF | double-counted ${m.overlapSF.toFixed(0)} SF (${(m.overlapFrac * 100).toFixed(1)}%)  [per-cell, blind under ~4 px of shared width; the bench gates human-measured cases at 0.5%]`);
   if (m.duplicates.length) console.log(`  duplicates ${m.duplicates.length} label pair(s) proposing the same space: ${m.duplicates.slice(0, 6).map(([a, b]) => `${a}/${b}`).join(", ")}${m.duplicates.length > 6 ? " …" : ""}`);
   if (m.nested.length) console.log(`  nested     ${m.nested.length} pair(s) one-inside-another (a closet in a suite is fine; a hole read as floor is not): ${m.nested.slice(0, 6).map(([a, b]) => `${a}/${b}`).join(", ")}${m.nested.length > 6 ? " …" : ""}`);

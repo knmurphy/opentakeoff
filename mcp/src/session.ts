@@ -13,7 +13,7 @@ import {
   traceRegion, snapVertices, ringArea,
   MASK_MAX_DIM, type MaskObj, type VectorGeometry, type Point,
 } from "../../web/src/lib/oneclick.ts";
-import { roomLabelSeeds, detectRegions } from "../../web/src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, sheetBounds } from "../../web/src/lib/detectRooms.ts";
 import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
 
@@ -426,7 +426,13 @@ export class Session {
     const s = this.sheet(name);
     const mask = await this.ensureMask(name);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    const seeds = roomLabelSeeds(s.text);
+    // Matching the room-number pattern isn't enough: a sheet's printed areas
+    // ("557 SF"), dimensions, drawing numbers and title-block text all carry
+    // 2-3 digit numerals, and the paper-space ones flood the margin — on the
+    // VA test plan that produced the largest "room" on the sheet, 847 SF of
+    // title block. The spatial gate needs the drawing extent, which only we
+    // know, so it is passed rather than assumed.
+    const seeds = roomLabelSeeds(s.text, { bounds: sheetBounds(s.widthPx, s.heightPx) });
     const regions = detectRegions(mask, seeds);
     const rooms = regions
       .map((r) => {

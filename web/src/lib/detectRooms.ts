@@ -38,6 +38,31 @@ export interface RoomLabelSeed {
   seed: [number, number];
 }
 
+/** Text that carries a number matching the room pattern but is NOT a room tag.
+ *  Measured on a real VA finish plan: of 56 items matching the bare pattern,
+ *  16 (29%) were not rooms — the plan's OWN printed areas ("557 SF", whose
+ *  numeric token survives tokenization), a dimension string ("58'-5\""), a
+ *  drawing number ("08 - 6231"), and title-block text ("RENOVATE BUILDING
+ *  28"). The paper-space numerals among them produced the largest "room" on
+ *  the sheet, 847 SF of title block (issue #184 round 9). */
+const UNIT_OR_DIM_RE = /\d\s*(?:SF|S\.F\.|SQ\.?\s*FT|GSF|NSF|["'′″]|-\s*\d+["'])/i;
+/** A second numeric token that is NOT a room number means this is a code or a
+ *  measurement, not "OFFICE 101" — "08 - 6231", "1 OF 12", "A-101 3". */
+const OTHER_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+/** Title-block / sheet vocabulary. A room tag never sits in a sentence. */
+const NON_ROOM_WORDS = new Set([
+  "BUILDING", "BLDG", "SHEET", "DRAWING", "DWG", "PROJECT", "NO", "NUMBER",
+  "SCALE", "DATE", "REV", "REVISION", "PHASE", "CONTRACT", "OF", "DETAIL",
+  "SECTION", "PLAN", "NORTH", "KEY", "NOTE", "NOTES", "TOTAL", "AREA",
+]);
+
+export interface RoomLabelOptions {
+  /** Drawing extent in seed-space px. Text outside it — title block, sheet
+   *  margin, revision cloud legend — is not a room tag. Supply the sheet
+   *  dimensions and an inset, or omit to skip the spatial gate entirely. */
+  bounds?: { x0: number; y0: number; x1: number; y1: number };
+}
+
 /** Scan positioned text items for room-number labels, returning each as a
  *  seed point. An item's string may be JUST the number ("134") or a
  *  name+number ("OFFICE 101", "CORRIDOR 104") — a single text run often
@@ -45,15 +70,35 @@ export interface RoomLabelSeed {
  *  the item if ANY token matches the room-number pattern. The seed is the
  *  item's own anchor point (its text-matrix origin, already resolved by the
  *  caller) — for a left-aligned room label that sits inside the room's
- *  floodable area; the flood's own few-px nudge absorbs landing near a wall. */
-export function roomLabelSeeds(items: PositionedTextItem[]): RoomLabelSeed[] {
+ *  floodable area; the flood's own few-px nudge absorbs landing near a wall.
+ *
+ *  Matching the number is not enough: a plan is full of two- and three-digit
+ *  numerals that are not rooms. The rejections above are all textual and cheap;
+ *  the spatial one (`opts.bounds`) is opt-in because only the caller knows
+ *  where the drawing ends and the paper begins. */
+export function roomLabelSeeds(items: PositionedTextItem[], opts: RoomLabelOptions = {}): RoomLabelSeed[] {
   const out: RoomLabelSeed[] = [];
+  const b = opts.bounds;
   for (const it of items) {
-    const num = (it.str || "").trim().split(/\s+/).find((tok) => ROOM_LABEL_RE.test(tok));
+    const raw = (it.str || "").trim();
+    if (!raw) continue;
+    const toks = raw.split(/\s+/);
+    const num = toks.find((tok) => ROOM_LABEL_RE.test(tok));
     if (!num) continue;
+    if (UNIT_OR_DIM_RE.test(raw)) continue;                       // "557 SF", "58'-5\""
+    if (toks.some((t) => t !== num && OTHER_NUMBER_RE.test(t))) continue;   // "08 - 6231"
+    if (toks.some((t) => NON_ROOM_WORDS.has(t.replace(/[^A-Z]/gi, "").toUpperCase()))) continue;
+    if (b && (it.x < b.x0 || it.x > b.x1 || it.y < b.y0 || it.y > b.y1)) continue;
     out.push({ str: num, seed: [it.x, it.y] });
   }
   return out;
+}
+
+/** The conventional drawing extent: the sheet inset by `frac` on every side.
+ *  Crude but honest — the title block, border numerals and sheet index all
+ *  live in that band, and a room tag essentially never does. */
+export function sheetBounds(widthPx: number, heightPx: number, frac = 0.06): NonNullable<RoomLabelOptions["bounds"]> {
+  return { x0: widthPx * frac, y0: heightPx * frac, x1: widthPx * (1 - frac), y1: heightPx * (1 - frac) };
 }
 
 /** A detected region: the label seed and the CLEAN flood it produced. The

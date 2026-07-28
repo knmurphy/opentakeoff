@@ -1,7 +1,7 @@
 // Detect Rooms core tests — pure, DOM-free, pdfjs-free. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roomLabelSeeds, detectRegions, ROOM_LABEL_RE } from "../src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, sheetBounds, ROOM_LABEL_RE } from "../src/lib/detectRooms.ts";
 import { buildMask, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
 
 // a closed square room, as flat boundary segments in image px
@@ -103,4 +103,50 @@ test("detectRegions: a sub-half-foot slit does not merge two rooms into double-c
   assert.ok(a !== b, `merged regions would be identical (got ${a} and ${b})`);
   assert.ok(a > b, "the 12 ft room must read larger than the 8 ft one");
   assert.ok(a + b < interior, "neither room may swallow the other's floor");
+});
+
+// ── label precision (issue #184 round 9) ──────────────────────────────────
+// Matching the number is not enough. On a real VA finish plan, 16 of 56
+// pattern-matching numerals were not rooms, and the paper-space ones produced
+// the largest "room" on the sheet — 847 SF of title block.
+
+test("roomLabelSeeds: the plan's own printed areas are not room tags", () => {
+  const items = [
+    { str: "137", x: 10, y: 10 },
+    { str: "557 SF", x: 20, y: 20 },        // the numeric token would survive tokenizing
+    { str: "250 S.F.", x: 30, y: 30 },
+    { str: "706 GSF", x: 40, y: 40 },
+    { str: "OFFICE 101", x: 50, y: 50 },    // still a room
+  ];
+  assert.deepEqual(roomLabelSeeds(items).map((s) => s.str), ["137", "101"]);
+});
+
+test("roomLabelSeeds: dimensions, drawing numbers and title-block text are not room tags", () => {
+  const items = [
+    { str: "58'-5\"", x: 10, y: 10 },                 // dimension string
+    { str: "08 - 6231", x: 20, y: 20 },               // drawing number
+    { str: "RENOVATE BUILDING 28", x: 30, y: 30 },    // title-block sentence
+    { str: "SHEET 12", x: 40, y: 40 },
+    { str: "1 OF 12", x: 50, y: 50 },
+    { str: "CORRIDOR 104", x: 60, y: 60 },            // still a room
+    { str: "139A", x: 70, y: 70 },                    // still a room
+  ];
+  assert.deepEqual(roomLabelSeeds(items).map((s) => s.str), ["104", "139A"]);
+});
+
+test("roomLabelSeeds: the spatial gate drops sheet-margin numerals, and is opt-in", () => {
+  const items = [
+    { str: "10", x: 5, y: 5 },              // sheet corner
+    { str: "33", x: 995, y: 795 },          // title block
+    { str: "134", x: 500, y: 400 },         // a real room, mid-sheet
+  ];
+  assert.deepEqual(roomLabelSeeds(items).map((s) => s.str), ["10", "33", "134"], "no bounds ⇒ no spatial filtering");
+  assert.deepEqual(
+    roomLabelSeeds(items, { bounds: sheetBounds(1000, 800) }).map((s) => s.str),
+    ["134"],
+  );
+});
+
+test("sheetBounds: a symmetric inset of the sheet", () => {
+  assert.deepEqual(sheetBounds(1000, 800, 0.1), { x0: 100, y0: 80, x1: 900, y1: 720 });
 });

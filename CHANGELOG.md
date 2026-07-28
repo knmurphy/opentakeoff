@@ -2,6 +2,16 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-28 — opentakeoff-mcp 0.6.0
+
+### Changed
+- **`one_click` and `detect_rooms` now measure what the browser canvas measures — quantities WILL differ from 0.5.0.** Both tools ran the raw flood, so every agent-side measurement was made with the pre-sealing engine while a click in the app got gap sealing (cased openings), per-arc door-swing wedges and the minimum-passage rule. Measured on a real VA finish plan, that gap was mean IoU 0.817 vs 0.999 against the reviewed goldens, and 16.6% of a sheet's batch-proposed floor was double-counted through unsealed doorways (0.0% after). **What changes for you:** a room bounded by a cased opening that previously failed with *"isn't enclosed on the plan linework"* now measures; a room with a drawn door reads larger, because the swing wedge is included to the wall plane (a deliberate measurement policy — flooring runs under the door); and two rooms sharing an open doorway no longer flood into one region. Saved quantities from 0.5.0 will not match a re-run. Replies and committed shapes now carry `gap_sealed_px` and `door_wedges`, so a partly-synthetic boundary is distinguishable from a clean vector-bounded trace on export (`mcp/src/session.ts`, `mcp/src/outputs.ts`).
+- **The working raster is built with the sheet scale and rebuilt when the scale changes.** Previously the mask was cached on first use — before `set_scale` — and the engine's feet-true thresholds (`MaskObj.mppf`) were absent for the rest of the session, so the seal radii, door-wedge cap and minimum-passage radius could never engage at all. The same eviction the canvas does on recalibration. Note the pre-existing limitation this does NOT change: `set_scale` still doesn't re-price already-committed shapes.
+- **`detect_rooms` no longer treats every 2–3 digit numeral as a room.** A sheet's printed areas ("557 SF"), dimension strings ("58'-5\""), drawing numbers ("08 - 6231") and title-block text ("RENOVATE BUILDING 28") all carry matching numerals, and the paper-space ones flooded the sheet margin — on the test plan the largest "room" detected was 847 SF of title block. Rejections are textual plus a drawing-extent gate. On that plan: 56 candidate numerals → 41 seeds, and the margin proposals are gone.
+
+### Fixed
+- **`one_click` and `detect_rooms` replies could be rejected outright by a spec-compliant MCP client.** The two new provenance fields were emitted without being declared in the tools' `outputSchema`, which publishes with `additionalProperties: false` — so a strict client raised `-32602: Structured content does not match the tool's output schema` for exactly the rooms that seal or wedge, and a single such room failed an entire `detect_rooms` batch. Caught by the round-9 adversarial review before release; the conformance suite now validates strictly and exercises a sealing room, since its previous non-strict check silently stripped undeclared keys.
+
 ## 2026-07-21
 
 ### Added
