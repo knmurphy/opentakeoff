@@ -360,12 +360,16 @@ One-Click already uses:
 
 Each step is independently shippable and each one is useful without the next.
 
-1. **Vector search index.** `lib/planIndex.ts` + capture in the existing
-   full-document loop + a search box in `PlanNavigator`. No new dependency, no
-   OCR, no CSP change. This is most of the value.
-2. **Tag index (symbol Tier 1).** Finish tags / room numbers / door tags off the
-   same tokens, surfaced as "where does CPT-1 appear?" Reuses `scheduleParse`'s
-   clustering.
+1. ~~**Vector search index.**~~ **SHIPPED** — `web/src/lib/planIndex.ts`
+   (pure, 22 node tests), capture in both text passes that already run (the
+   canvas' full-document loop and `PlanNavigator`'s thumbnail pump), plus an
+   on-demand pass for sheets neither has reached, and a search box in
+   `PlanNavigator` that filters the gallery in relevance order. No new
+   dependency, no OCR, no CSP change — exactly as scoped.
+2. **Tag index (symbol Tier 1).** `sheetCodes()` in `planIndex.ts` already
+   splits finish tags from room numbers off the indexed terms and is tested;
+   what is left is the UI — "where does CPT-1 appear?" as a browsable list
+   rather than a search you have to think to type.
 3. **Measurement spike — no code shipped.** Two questions, both cheap:
    (a) ~~run tesseract.js over real sheets and record wall-clock, accuracy, and
    whether tiling is needed~~ — **done, see §9**; still worth repeating on

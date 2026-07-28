@@ -22,7 +22,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { Icon } from "../brand/icons.jsx";
 import AuthChip from "./AuthChip.jsx";
 import { useGoogleAuth } from "../lib/google/AuthContext.jsx";
-import { parseSheetKey, extractSheetNumber, detectScale, RENDER_SCALE, MAX_GROUP } from "../lib/sheets";
+import { parseSheetKey, extractSheetNumber, detectScale, extractRegionText, RENDER_SCALE, MAX_GROUP } from "../lib/sheets";
+import { buildSheetIndex, searchPlan } from "../lib/planIndex";
 import { isGoogleConfigured } from "../lib/google/auth.js";
 import { projectHomeFolderId } from "../lib/projectHome.js";
 import { groupSheetsByLevel, sortGalleryGroups } from "../lib/sheetLevels.js";
@@ -51,7 +52,7 @@ export default function PlanNavigator({
   canClose, onExit, initialMode = "plan", cloudMode,
   // plan-set (gallery) data
   sheets, getDoc, scales, detectedScales, shapes, labels, onLabel, onDetect,
-  thumbCacheRef, busyRef, openTabs, onOpen,
+  thumbCacheRef, busyRef, planIndexRef, openTabs, onOpen,
   onAddFiles, onClosePdf, onRemoveFromProject, onTransferShapes,
   onCloseProject, onBrowseProjects,
   levels = {}, onAssignLevel,
@@ -221,13 +222,14 @@ export default function PlanNavigator({
         await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
         thumbCacheRef.current.set(key, c.toDataURL("image/jpeg", 0.72));
         bump((n) => n + 1);
-        if (!labels[key] || !detectedScales[key]) {
+        if (!labels[key] || !detectedScales[key] || !planIndexRef?.current.has(key)) {
           const tc = await pg.getTextContent();
           const vpL = pg.getViewport({ scale: RENDER_SCALE });
           const lbl = extractSheetNumber(tc, vpL);
           if (lbl) onLabel(key, lbl);
           const det = detectScale(tc, vpL);
           if (det) onDetect(key, det);
+          indexSheet(key, tc, vpL);   // free: the text layer is already in hand
         }
       } catch { /* destroyed doc on unmount / render-cancel — skip */ }
     }
@@ -248,6 +250,55 @@ export default function PlanNavigator({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── plan-set search (docs/CLIENT_SIDE_OCR_RESEARCH.md §8 step 1) ─────────
+  // "which sheet says CPT-1?" over the whole set. The index is built from the
+  // text layer only — no rendering, no OCR — so a sheet costs one getTextContent
+  // (~10-50ms), not a raster. The thumbnail pump above fills it for free as
+  // cards scroll into view; this pass covers the rest, on demand.
+  const [find, setFind] = useState("");
+  const [indexedN, setIndexedN] = useState(0);   // bumped in batches to refresh results as the pass runs
+  const indexingRef = useRef(false);
+
+  const indexSheet = useCallback((key, tc, vp) => {
+    if (!planIndexRef || planIndexRef.current.has(key)) return;
+    const items = extractRegionText(tc, vp, { x0: 0, y0: 0, x1: vp.width, y1: vp.height });
+    if (items.length) planIndexRef.current.set(key, buildSheetIndex(key, items, "text", Date.now()));
+  }, [planIndexRef]);
+
+  // Index every sheet the pump hasn't reached. Triggered by typing, not by
+  // mounting: a user who never searches should never pay for it. Progress is
+  // published every 8 sheets rather than every sheet — the label pass upstream
+  // batches the same way, and a 200-sheet set would otherwise re-render the
+  // whole grid 200 times.
+  const ensureIndexed = useCallback(async () => {
+    if (!planIndexRef || indexingRef.current) return;
+    indexingRef.current = true;
+    try {
+      let done = 0;
+      for (const key of allKeys) {
+        if (planIndexRef.current.has(key)) continue;
+        try {
+          const { file, page } = parseSheetKey(key);
+          const pdf = await getDoc(file);
+          const pg = await pdf.getPage(page);
+          const tc = await pg.getTextContent();
+          indexSheet(key, tc, pg.getViewport({ scale: RENDER_SCALE }));
+        } catch { /* unreadable page — it just stays unsearchable */ }
+        if (++done % 8 === 0) setIndexedN((n) => n + 1);
+      }
+      setIndexedN((n) => n + 1);
+    } finally { indexingRef.current = false; }
+  }, [allKeys, getDoc, planIndexRef, indexSheet]);
+
+  const query = find.trim();
+  // indexedN is a real dependency even though the body never reads it: the index
+  // lives in a REF (deliberately non-reactive — it must not re-render the canvas),
+  // so the counter is the only signal that there are new entries worth searching.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hits = useMemo(() => (query && planIndexRef ? searchPlan(planIndexRef.current.values(), query) : null), [query, indexedN, planIndexRef]);
+  const hitByKey = useMemo(() => new Map((hits ?? []).map((h) => [h.key, h])), [hits]);
+  const unindexed = planIndexRef ? allKeys.filter((k) => !planIndexRef.current.has(k)).length : 0;
+
   const toggleSel = (key) => setSel((g) => (g.includes(key) ? g.filter((k) => k !== key) : [...g, key]));
   const shapeCount = (key) => shapes.reduce((n, s) => n + (s.sheet_id === key ? 1 : 0), 0);
   const pdfShapeCount = (file) => shapes.reduce((n, s) => n + (parseSheetKey(s.sheet_id).file === file ? 1 : 0), 0);
@@ -262,7 +313,12 @@ export default function PlanNavigator({
   // read in drawing order. The Unassigned group keeps stable file/page order
   // regardless of whether other groups have levels — see sortGalleryGroups's
   // comment for why this must be a PER-GROUP gate, not a whole-gallery one.
-  const groups = sortGalleryGroups(groupSheetsByLevel(allKeys, levels), labelOf);
+  // While searching, results are one flat list in RELEVANCE order — level
+  // grouping is a browsing aid and would fight the ranking. Restored the moment
+  // the query is cleared.
+  const groups = hits
+    ? [{ level: null, keys: hits.map((h) => h.key) }]
+    : sortGalleryGroups(groupSheetsByLevel(allKeys, levels), labelOf);
   const assignLevel = () => {
     const label = window.prompt('Level for the selected sheets (e.g. "L1", "Level 2", "Garage") — empty clears:', "");
     if (label === null) return;
@@ -287,9 +343,10 @@ export default function PlanNavigator({
   useEffect(() => {
     escRef.current = () => {
       if (mode === "browse") { setMode("plan"); return; }
+      if (find) { setFind(""); return; }   // clear the search before leaving the set
       if (canClose) onExit();
     };
-  }, [mode, canClose, onExit]);
+  }, [mode, canClose, onExit, find]);
 
   // ── close / remove a PDF from the working set ───────────────────────────
   const requestClose = (file) => setConfirmClose({ file, shapeCount: pdfShapeCount(file) });
@@ -324,7 +381,28 @@ export default function PlanNavigator({
   const title = mode === "browse" ? "Add sheets from Drive" : "Plan set";
   const subtitle = mode === "browse"
     ? "pick the PDFs to open — specs & as-builts stay unopened"
-    : `${allKeys.length || "…"} sheets · pick one or several — the order you pick is the left-to-right order`;
+    : hits
+      ? `${hits.length} of ${allKeys.length} sheets match “${query}”${indexingRef.current ? ` · reading ${unindexed} more…` : ""}`
+      : `${allKeys.length || "…"} sheets · pick one or several — the order you pick is the left-to-right order`;
+
+  // Plan-set search. Indexing starts on the first keystroke, not on mount, and
+  // results refill live as it runs — so a big set is usable before it finishes
+  // rather than blocking behind a spinner.
+  const searchBox = mode !== "plan" ? null : (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <input
+        name="plan-search" value={find} autoComplete="off"
+        onFocus={ensureIndexed}
+        onChange={(e) => { setFind(e.target.value); if (e.target.value.trim()) ensureIndexed(); }}
+        placeholder="Search every sheet — CPT-1, corridor, 139A…"
+        title="Searches the text on every sheet in the set. Scanned sheets have no text layer, so they can't be searched yet."
+        style={{ width: 280, padding: "6px 9px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", color: "var(--ink)", fontFamily: "var(--f-mono)", fontSize: 12 }} />
+      {find && (
+        <button onClick={() => setFind("")} title="Clear the search (Esc)"
+          style={{ ...ctrlBtn, padding: "6px 8px" }}>✕</button>
+      )}
+    </div>
+  );
 
   const header = (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 18px", borderBottom: "1px solid var(--ink)", background: "var(--paper-bright)", flexWrap: "wrap" }}>
@@ -358,6 +436,8 @@ export default function PlanNavigator({
       )}
 
       <div style={{ flex: 1 }} />
+
+      {searchBox}
 
       {/* RIGHT: source toggle · browse filters · add plans · account */}
       {browseEnabled && (
@@ -490,6 +570,14 @@ export default function PlanNavigator({
   const planBody = (
     <>
       <div style={{ flex: 1, overflow: "auto", padding: 18 }}>
+        {hits && hits.length === 0 && (
+          <div style={{ padding: "28px 8px", fontFamily: "var(--f-mono)", fontSize: 12.5, color: "var(--ink-muted)", lineHeight: 1.7 }}>
+            No sheet's text matches “{query}”.
+            {unindexed > 0
+              ? <> Still reading {unindexed} sheet{unindexed === 1 ? "" : "s"} — results will fill in.</>
+              : <> Scanned sheets have no text layer, so they can't be searched yet.</>}
+          </div>
+        )}
         {groups.map((grp) => (
         <div key={grp.level ?? "__all"} style={{ marginBottom: grp.level !== null ? 22 : 0 }}>
         {grp.level !== null && (
@@ -528,6 +616,13 @@ export default function PlanNavigator({
                 <div style={{ padding: "8px 10px", display: "flex", alignItems: "baseline", gap: 8 }}>
                   <strong style={{ fontFamily: "var(--f-mono)", fontSize: 12.5, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }} title={key}>{labelOf(key)}</strong>
                   {levels[key] && <span title="Level" style={{ fontSize: 9.5, fontFamily: "var(--f-mono)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", padding: "1px 5px" }}>{levels[key]}</span>}
+                  {hitByKey.get(key) && (
+                    <span title={`Matched: ${hitByKey.get(key).matched.join(", ")}`}
+                      style={{ fontSize: 9.5, fontFamily: "var(--f-mono)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", padding: "1px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 110 }}>
+                      {hitByKey.get(key).matched.join(" ")}
+                      {hitByKey.get(key).source === "ocr" && " ~"}
+                    </span>
+                  )}
                   {isOpenTab && <span title="Already open as a tab" style={{ fontSize: 9.5, fontFamily: "var(--f-mono)", color: "var(--cobalt)", textTransform: "uppercase", letterSpacing: "0.08em" }}>open</span>}
                   {cnt > 0 && <span style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, color: "var(--ink-muted)" }}>{cnt}▦</span>}
                   <span style={{ fontSize: 10, fontWeight: 600, whiteSpace: "nowrap", color: scales[key] ? "var(--c-positive)" : detectedScales[key] ? "var(--c-warning)" : "var(--c-danger)" }}>

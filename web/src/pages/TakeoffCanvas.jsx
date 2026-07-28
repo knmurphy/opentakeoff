@@ -30,6 +30,7 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
+import { buildSheetIndex } from "../lib/planIndex";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
@@ -92,6 +93,20 @@ import { nowIso, mintUuid } from "../lib/provenance.js";
 import { applyShapeCommand, geomSnapshot, vertsEqual, recordCommand } from "../lib/shapeCommands.js";
 import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
+
+// Feed one sheet's text layer into the plan-set search index. Module-scope and
+// map-in/map-out so it adds nothing to any hook's dependency list — this is
+// called from inside the render effect, which already holds the textContent and
+// viewport for sheet numbers and scale notes. Rebuilding an existing entry is
+// pointless work but never wrong, so the guard is a cheap early-out, not a
+// correctness gate. Best-effort throughout: a sheet that throws just stays
+// unsearchable (the caller's .catch swallows it), exactly like a missing
+// title-block label.
+function indexSheetText(map, key, textContent, viewport) {
+  if (!key || map.has(key)) return;
+  const items = extractRegionText(textContent, viewport, { x0: 0, y0: 0, x1: viewport.width, y1: viewport.height });
+  if (items.length) map.set(key, buildSheetIndex(key, items, "text", Date.now()));
+}
 
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
@@ -517,6 +532,12 @@ export default function TakeoffCanvas() {
   // arrow here would re-count an open menu on every canvas render
   const onMenuDepth = useCallback((o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }, []);
   const thumbCacheRef = useRef(new Map()); // sheetKey → thumbnail dataURL — survives gallery close
+  // sheetKey → SheetIndex for plan-set search. Filled by the text passes that
+  // ALREADY run for sheet numbers and scale notes (below, and PlanNavigator's
+  // thumbnail pump), so a vector plan set costs no extra PDF work — see
+  // docs/CLIENT_SIDE_OCR_RESEARCH.md §1. A ref, like thumbCacheRef: it survives
+  // gallery close and must never re-render the canvas.
+  const planIndexRef = useRef(new Map());
   const legacyPinnedRef = useRef(null);    // old `pinned` page numbers awaiting their one-shot tab migration
   const tabInitRef = useRef(false);        // snap to the first restored tab exactly once
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
@@ -1217,6 +1238,7 @@ export default function TakeoffCanvas() {
         if (stale()) return;
         const lbl = extractSheetNumber(tc, lead.viewport);
         if (lbl) setPageLabels((m) => (m[lead.pageNum] === lbl ? m : { ...m, [lead.pageNum]: lbl }));
+        indexSheetText(planIndexRef.current, lead.key, tc, lead.viewport);
       }).catch(() => {});
       if (labeledFileRef.current !== active) {
         labeledFileRef.current = active;
@@ -1233,11 +1255,10 @@ export default function TakeoffCanvas() {
               const vp2 = p2.getViewport({ scale: RENDER_SCALE });
               const lbl = extractSheetNumber(tc, vp2);
               if (lbl) { found[n] = lbl; if (Object.keys(found).length % 8 === 0) setPageLabels((m) => ({ ...found, ...m })); }
+              const key = n > 1 ? `${active}#${n}` : active;
               const det = detectScale(tc, vp2);
-              if (det) {
-                const key = n > 1 ? `${active}#${n}` : active;
-                setDetectedScales((d) => (d[key]?.label === det.label ? d : { ...d, [key]: det }));
-              }
+              if (det) setDetectedScales((d) => (d[key]?.label === det.label ? d : { ...d, [key]: det }));
+              indexSheetText(planIndexRef.current, key, tc, vp2);
             } catch { /* skip */ }
           }
           if (!stale() && Object.keys(found).length) setPageLabels((m) => ({ ...found, ...m }));
@@ -6002,7 +6023,7 @@ export default function TakeoffCanvas() {
           shapes={shapes} labels={galleryLabels}
           onLabel={(k, lbl) => setGalleryLabels((m) => (m[k] === lbl ? m : { ...m, [k]: lbl }))}
           onDetect={(k, det) => setDetectedScales((d) => (d[k]?.label === det.label ? d : { ...d, [k]: det }))}
-          thumbCacheRef={thumbCacheRef} busyRef={statusRef}
+          thumbCacheRef={thumbCacheRef} busyRef={statusRef} planIndexRef={planIndexRef}
           openTabs={openTabs} onOpen={openSheets}
           onAddFiles={handleFiles}
           levels={sheetLevels}
