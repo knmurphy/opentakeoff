@@ -67,9 +67,12 @@ can act on" is the largest cheap-value surface in the app.
 pdf.js hands back `items[]` of
 `{ str, dir, width, height, transform, fontName, hasEOL }` plus a `styles` map
 (`fontName → { fontFamily, ascent, descent, vertical }`). With
-`{ includeMarkedContent: true }` the stream is interleaved with
-marked-content begin/end items, which is how text gets attributed to a layer
-(§2.4).
+`{ includeMarkedContent: true }` the stream is interleaved with marked-content
+begin/end items — but note what those do **not** give you: on the text path
+pdf.js derives the item's `id` from `/MCID` alone and reports `tag: "OC"` with
+no group, so you learn *that* an optional-content section started, never
+*which* layer it is. Layer-attributed **text** is reachable only through the op
+list (§2.2, §2.4), not through `getTextContent()`.
 
 | Field | Used today | Where |
 |---|---|---|
