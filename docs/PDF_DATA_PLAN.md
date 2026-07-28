@@ -11,11 +11,10 @@ and the *what*, sized so each task is a single reviewable PR.
    Anything that needs one is an optional escalation the app works without —
    and that a fork can delete without losing a feature.
 2. **No plan bytes leave the browser, and no runtime dependency on a
-   third-party origin.** Note this is an *aspiration with a known live
-   violation*: `web/src/styles/tokens.css:3` `@import`s five webfont families
-   from Google on every page load. Until that is fixed (see
-   [Repo drift](#repo-drift--separate-prs)) the app does not clear its own bar,
-   and no task here may cite the rule as though it already holds.
+   third-party origin.** The webfonts that used to violate this are self-hosted
+   as of PR #188. One gap remains — there is no service worker, so a cold load
+   with no network still fails — so the rule binds anything new rather than
+   describing a finished state. §8.0 of the research doc is where it bites.
 
 ## Definition of done — every task
 
@@ -451,12 +450,12 @@ Found during review; independent of this plan and not blocked by it.
 2. **`AGENTS.md` says `npm run check` is "exactly what CI runs."** It isn't —
    see the DoD above. The claim invites shipping a green local check against a
    red CI.
-3. **Self-host the webfonts.** `tokens.css:3` `@import`s five families from
-   Google on every page load: an IP+UA leak before the user opens a plan, a hard
-   failure offline, and the reason ground rule 2 does not currently hold. A few
-   hundred KB under `web/public/fonts/` with `font-display: swap`, then drop
-   `fonts.googleapis.com`/`fonts.gstatic.com` from the CSP. Also a prerequisite
-   for COOP/COEP if threading is ever wanted (D1a, D2).
+3. ~~**Self-host the webfonts.**~~ **Done — PR #188.** `tokens.css` `@import`ed
+   five families from Google on every page load: an IP+UA leak before the user
+   opened a plan, and a hard offline failure. Now 425 KB of woff2 under
+   `web/public/fonts/`, with `fonts.googleapis.com`/`fonts.gstatic.com` dropped
+   from the CSP. Also a prerequisite for COOP/COEP if threading is ever wanted
+   (D1a, D2).
 
 ---
 

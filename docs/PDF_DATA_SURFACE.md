@@ -27,13 +27,12 @@ Two constraints govern every proposal below. They are not preferences.
    losing a feature.
 2. **No plan bytes leave the browser, and no runtime dependency on a
    third-party origin.** `AGENTS.md` establishes "no backend, no database, no
-   auth" — but that is not the same as offline, and this rule does **not**
-   currently hold: `web/src/styles/tokens.css:3` `@import`s five webfont
-   families from Google on every page load, so the app makes a third-party
-   request before a plan is opened and fails with the network off. There is no
-   service worker. Rule 2 is therefore an *aspiration with a known live
-   violation*, and no proposal below may cite it as though it were already
-   true.
+   auth" — but that is not the same as offline. Until the webfont self-hosting
+   change (PR #188), the rule did **not** hold: `tokens.css` `@import`ed five
+   families from Google on every page load, so the app made a third-party
+   request before a plan was opened. With that landed, the *font* violation is
+   gone; there is still no service worker, so a cold load with no network
+   fails. Treat the rule as binding on anything new — §8.0 is where it bites.
 
 Where a proposal falls outside these rules it is marked **deferred**, not
 scheduled.
