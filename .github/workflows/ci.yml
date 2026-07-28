@@ -31,6 +31,42 @@ jobs:
       - run: npm run bench
       - run: npm run build
 
+  # Browser E2E lives in its own job on purpose (audit 0.1b). It is the only job
+  # that needs a ~150 MB Chromium download plus apt system libs, and it drives a
+  # real vite dev server, so folding it into `web` would put a minute of browser
+  # provisioning in front of typecheck/lint/test feedback that costs seconds.
+  # Split, it runs in parallel, fails with its own attributable red X, can be
+  # re-run alone when a browser flakes, and carries a timeout that suits a
+  # browser run rather than one that would have to cover linting too.
+  web-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # playwright is a pinned devDependency now; this only fetches the browser
+      # binary + its system libs, which npm cannot carry.
+      - run: npx playwright install --with-deps chromium
+      # `npm run e2e` exits non-zero on any failed check, a crashed driver, or a
+      # dev server that never came up — so a red suite is a red job.
+      - run: npm run e2e
+      - name: Upload e2e artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-out
+          path: web/e2e/out/
+          retention-days: 7
+          if-no-files-found: ignore
+
   mcp:
     runs-on: ${{ matrix.os }}
     strategy:
