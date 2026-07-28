@@ -212,6 +212,14 @@ test("searchPlan: an OCR'd sheet loses a tie to a text-layer sheet", () => {
   assert.equal(hits[1].source, "ocr", "but the scan is still findable, and says so");
 });
 
+test("searchPlan: ties break on canonical sheet order, not raw string compare", () => {
+  // localeCompare would put page 10 before page 2 and drift from sheetKey.ts's
+  // comparator, which every other sheet-ordered surface in the app shares
+  const p2 = buildSheetIndex("plan.pdf#2", runs(["LOBBY", 0, 0]));
+  const p10 = buildSheetIndex("plan.pdf#10", runs(["LOBBY", 0, 0]));
+  assert.deepEqual(searchPlan([p10, p2], "lobby").map((h) => h.key), ["plan.pdf#2", "plan.pdf#10"]);
+});
+
 test("searchPlan: results are stable across identical searches", () => {
   const once = searchPlan([A, B, C], "corridor").map((h) => h.key);
   const twice = searchPlan([C, B, A], "corridor").map((h) => h.key);

@@ -11,7 +11,7 @@
 // their keep. web/package.json runs on 6 runtime deps; an inverted Map is not
 // worth a seventh. See docs/CLIENT_SIDE_OCR_RESEARCH.md §6.
 //
-import { parseSheetKey } from "./sheetKey";
+import { parseSheetKey, compareSheetKeys } from "./sheetKey";
 
 // The index is deliberately SOURCE-TAGGED. A vector sheet's text layer is exact;
 // an OCR'd scan is ~80% of searchable terms with junk mixed in (measured, §9 of
@@ -222,7 +222,11 @@ export function searchPlan(indexes: Iterable<SheetIndex>, query: string): SheetH
       anchor: anchors?.length ? [anchors[0], anchors[1]] : null,
     });
   }
-  return hits.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  // Ties break on the repo's CANONICAL sheet order, not a raw string compare:
+  // localeCompare puts "plan.pdf#10" before "plan.pdf#2", and sheetKey.ts exists
+  // so every sheet-ordered surface (by-sheet totals, the report, the Marked Set
+  // PDF) can never drift apart. Search results are one more such surface.
+  return hits.sort((a, b) => b.score - a.score || compareSheetKeys(a.key, b.key));
 }
 
 /** Drop every page of one file from an index map.
