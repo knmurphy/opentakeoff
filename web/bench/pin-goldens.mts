@@ -17,7 +17,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 // reviewed on screen — see docs/evidence/one-click/ for the captures.
 const PINNED = [
   {
-    file: "sample-plan.json", pdf: "../../demo/sample-plan.pdf", scale: 2, ptPerFt: 18 * 2,
+    file: "sample-plan.json", pdf: "../../../demo/sample-plan.pdf", scale: 2, ptPerFt: 18 * 2,
     note: "4 identical quadrant rooms; traces reviewed as exact rectangles (issue #184 round 3)",
     probes: [
       { name: "break-103", seed: [432, 216], expect: "golden" as const },
@@ -27,7 +27,7 @@ const PINNED = [
     ],
   },
   {
-    file: "va-finish-plan.json", pdf: "../../demo/sample-finish-plan.pdf", scale: 2, ptPerFt: 9 * 2,
+    file: "va-finish-plan.json", pdf: "../../../demo/sample-finish-plan.pdf", scale: 2, ptPerFt: 9 * 2,
     note: "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor.",
     probes: [
       // Round-8 re-pin (item C): the patient room no longer annexes its
@@ -70,7 +70,8 @@ const PINNED = [
 ];
 
 for (const c of PINNED) {
-  const doc = await pdfjs.getDocument({ url: join(here, c.pdf), useSystemFonts: true }).promise;
+  // case pdf paths are relative to the CASE FILE's directory (bench/corpus/)
+  const doc = await pdfjs.getDocument({ url: join(here, "corpus", c.pdf), useSystemFonts: true }).promise;
   const page = await doc.getPage(1);
   const vp = page.getViewport({ scale: c.scale });
   const ops = await page.getOperatorList();

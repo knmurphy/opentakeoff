@@ -1,5 +1,5 @@
 {
- "pdf": "../../demo/sample-finish-plan.pdf",
+ "pdf": "../../../demo/sample-finish-plan.pdf",
  "scale": 2,
  "ptPerFt": 18,
  "note": "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor.",

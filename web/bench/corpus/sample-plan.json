@@ -1,5 +1,5 @@
 {
- "pdf": "../../demo/sample-plan.pdf",
+ "pdf": "../../../demo/sample-plan.pdf",
  "scale": 2,
  "ptPerFt": 36,
  "note": "4 identical quadrant rooms; traces reviewed as exact rectangles (issue #184 round 3)",

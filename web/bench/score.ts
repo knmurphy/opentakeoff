@@ -40,12 +40,81 @@ export interface ProbeScore {
   expect: "golden" | "refusal";
   status: string;              // engine status ("ok" / "leak" / "tiny" / "boundary")
   iou?: number;                // golden probes that traced
+  sfErr?: number;              // |engine area − golden area| / golden area — what a bid actually buys
   leak?: boolean;              // traced but ballooned past the golden
   refused?: boolean;           // golden probe the engine declined
   confidence?: number;         // engine's own 0–1 confidence for the trace
   correctRefusal?: boolean;    // refusal probe the engine declined
   knownFail?: boolean;         // tracked but not gating
   tags?: string[];
+}
+
+/** Area (px²) of the overlap between two rings — sampled only over the
+ *  intersection of their bounding boxes, so disjoint rooms cost nothing.
+ *  Used for the per-case tiling check: two probes' engine regions claiming
+ *  the same floor is double-counted square footage. */
+export function polyOverlapPx2(a: Point[], b: Point[], cell = 1): number {
+  if (a.length < 3 || b.length < 3) return 0;
+  let ax0 = Infinity, ay0 = Infinity, ax1 = -Infinity, ay1 = -Infinity;
+  for (const [x, y] of a) { ax0 = Math.min(ax0, x); ax1 = Math.max(ax1, x); ay0 = Math.min(ay0, y); ay1 = Math.max(ay1, y); }
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (const [x, y] of b) { bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); by0 = Math.min(by0, y); by1 = Math.max(by1, y); }
+  const x0 = Math.max(ax0, bx0), x1 = Math.min(ax1, bx1), y0 = Math.max(ay0, by0), y1 = Math.min(ay1, by1);
+  if (x0 >= x1 || y0 >= y1) return 0;
+  let inter = 0;
+  for (let y = y0 + cell / 2; y <= y1; y += cell) {
+    for (let x = x0 + cell / 2; x <= x1; x += cell) {
+      if (pointInPoly(x, y, a) && pointInPoly(x, y, b)) inter++;
+    }
+  }
+  return inter * cell * cell;
+}
+
+export interface CaseCoverage {
+  caseName: string;
+  probes: number;              // golden probes contributing
+  sumGoldenSF: number;         // Σ golden areas (the answer key's total floor)
+  sumEngineSF: number;         // Σ engine areas
+  ratio: number;               // sumEngine / sumGolden — missed or phantom floor shows here
+  overlapSF: number;           // Σ pairwise engine-region overlap — double-counted floor
+  maxSfErr: number;            // worst per-probe SF error
+  humanMeasured: boolean;      // hard gates apply only where truth is human-authored
+}
+
+/** Whole-case accounting from golden probes' rings: per-room SF error alone
+ *  can't see floor that NO probe covers or floor counted twice — the case's
+ *  totals and pairwise overlaps can. pxPerFt converts ring px² to SF;
+ *  deductsSF (columns, casework the human deducted) reduces the golden total. */
+export function caseCoverage(caseName: string, rows: Array<{ golden: Point[]; ring: Point[] | null }>, pxPerFt: number, humanMeasured: boolean, deductsSF = 0, cell = 2): CaseCoverage {
+  const sf = (px2: number) => px2 / (pxPerFt * pxPerFt);
+  let sumG = 0, sumE = 0, maxErr = 0;
+  const rings: Point[][] = [];
+  for (const r of rows) {
+    const g = sf(ringAreaAbs(r.golden));
+    sumG += g;
+    if (r.ring && r.ring.length >= 3) {
+      const e = sf(ringAreaAbs(r.ring));
+      sumE += e;
+      rings.push(r.ring);
+      if (g > 0) maxErr = Math.max(maxErr, Math.abs(e - g) / g);
+    } else {
+      maxErr = Math.max(maxErr, 1);        // refused probe: 100% of that room missing
+    }
+  }
+  let overlapPx2 = 0;
+  for (let i = 0; i < rings.length; i++)
+    for (let j = i + 1; j < rings.length; j++) overlapPx2 += polyOverlapPx2(rings[i], rings[j], cell);
+  const g = Math.max(0, sumG - deductsSF);
+  return {
+    caseName,
+    probes: rows.length,
+    sumGoldenSF: g,
+    sumEngineSF: sumE,
+    ratio: g > 0 ? sumE / g : 1,
+    overlapSF: sf(overlapPx2),
+    maxSfErr: maxErr,
+    humanMeasured,
+  };
 }
 
 export interface Aggregate {
@@ -56,11 +125,13 @@ export interface Aggregate {
 }
 
 /** Classify one golden probe: refused, leaked (IoU < 0.5 with area overshoot), or scored. */
-export function scoreGolden(status: string, traced: Point[] | null, golden: Point[]): { iou: number; leak: boolean; refused: boolean } {
+export function scoreGolden(status: string, traced: Point[] | null, golden: Point[]): { iou: number; sfErr?: number; leak: boolean; refused: boolean } {
   if (status !== "ok" || !traced || traced.length < 3) return { iou: 0, leak: false, refused: true };
   const iou = polyIoU(traced, golden);
-  const leak = iou < 0.5 && ringAreaAbs(traced) > ringAreaAbs(golden) * 1.5;
-  return { iou, leak, refused: false };
+  const ag = ringAreaAbs(golden);
+  const sfErr = ag > 0 ? Math.abs(ringAreaAbs(traced) - ag) / ag : undefined;
+  const leak = iou < 0.5 && ringAreaAbs(traced) > ag * 1.5;
+  return { iou, sfErr, leak, refused: false };
 }
 
 // ── cross-resolution agreement (RFC failure mode #3) ────────────────────────

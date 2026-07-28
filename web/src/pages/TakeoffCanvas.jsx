@@ -3631,6 +3631,15 @@ export default function TakeoffCanvas() {
     const data = JSON.stringify({ schema: "opentakeoff.stamp_library.v1", ...stampLibRef.current }, null, 2);
     downloadBytes("opentakeoff-stamps.json", new TextEncoder().encode(data), "application/json");
   }
+  // The full takeoff as a JSON file — the same payload the autosave persists
+  // (shapes with verts_norm, conditions, per-sheet scales), so a manual
+  // takeoff can become a benchmark answer key (bench/from-takeoff.mts) or
+  // feed external tooling without devtools archaeology.
+  function exportTakeoffJson() {
+    const data = JSON.stringify(buildPayload(), null, 1);
+    const stem = (projectName || "takeoff").replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "") || "takeoff";
+    downloadBytes(`${stem}-takeoff.json`, new TextEncoder().encode(data), "application/json");
+  }
   async function importStamps(file) {
     try {
       const parsed = JSON.parse(await file.text());
@@ -6238,6 +6247,7 @@ export default function TakeoffCanvas() {
           provenanceCounters={provCounters}
           sheetLabel={(k) => tabLabel(k)}
           onMarkedSet={exportMarkedSet} markedSetDark={darkMode}
+          onExportTakeoff={exportTakeoffJson}
           onClose={() => setShowReport(false)}
         />
       )}

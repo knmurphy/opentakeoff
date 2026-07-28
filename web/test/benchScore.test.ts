@@ -1,7 +1,7 @@
 // Benchmark scorer — the IoU/aggregate math the corpus gate stands on.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { polyIoU, scoreGolden, aggregate, crossAgreement, aggregateCross, type ProbeScore, type CrossScore } from "../bench/score.ts";
+import { polyIoU, scoreGolden, aggregate, crossAgreement, aggregateCross, polyOverlapPx2, caseCoverage, type ProbeScore, type CrossScore } from "../bench/score.ts";
 import type { Point } from "../src/lib/oneclick.ts";
 
 const sq = (x0: number, y0: number, x1: number, y1: number): Point[] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
@@ -84,4 +84,43 @@ test("aggregateCross: known-fail excluded from gating; floor is the worst gating
   assert.equal(x.disagreements, 0, "the known-fail flip must not gate");
   assert.equal(x.crossFloorIoU, 0.92);
   assert.equal(x.knownFails, 1);
+});
+
+// ── SF error + case coverage (round-8 metric additions) ─────────────────────
+
+test("scoreGolden: SF error is the relative area difference", () => {
+  const golden: [number, number][] = [[0, 0], [100, 0], [100, 100], [0, 100]];      // 10,000
+  const traced: [number, number][] = [[0, 0], [98, 0], [98, 100], [0, 100]];        // 9,800
+  const s = scoreGolden("ok", traced, golden);
+  assert.ok(Math.abs((s.sfErr ?? 0) - 0.02) < 1e-9, `2% SF error, got ${s.sfErr}`);
+});
+
+test("polyOverlapPx2: disjoint rooms cost nothing; a known overlap measures", () => {
+  const a: [number, number][] = [[0, 0], [100, 0], [100, 100], [0, 100]];
+  const b: [number, number][] = [[200, 0], [300, 0], [300, 100], [200, 100]];
+  assert.equal(polyOverlapPx2(a, b), 0, "disjoint");
+  const c: [number, number][] = [[80, 0], [180, 0], [180, 100], [80, 100]];         // 20×100 overlap
+  const ov = polyOverlapPx2(a, c, 1);
+  assert.ok(Math.abs(ov - 2000) / 2000 < 0.05, `≈2000 px², got ${ov}`);
+});
+
+test("caseCoverage: totals, ratio, overlap, refused-room penalty, deducts", () => {
+  const sq = (x0: number, y0: number, s: number): [number, number][] => [[x0, y0], [x0 + s, y0], [x0 + s, y0 + s], [x0, y0 + s]];
+  // two 10×10 ft rooms at 10 px/ft; engine returns one exact, one 2% small
+  const cv = caseCoverage("t", [
+    { golden: sq(0, 0, 100), ring: sq(0, 0, 100) },
+    { golden: sq(200, 0, 100), ring: [[200, 0], [298, 0], [298, 100], [200, 100]] },
+  ], 10, true);
+  assert.equal(cv.sumGoldenSF, 200);
+  assert.ok(Math.abs(cv.sumEngineSF - 198) < 1e-9);
+  assert.ok(Math.abs(cv.ratio - 0.99) < 1e-9);
+  assert.equal(cv.overlapSF, 0);
+  assert.ok(Math.abs(cv.maxSfErr - 0.02) < 1e-9);
+  // a refused room counts as 100% error — missing floor can't hide in the mean
+  const refused = caseCoverage("t2", [{ golden: sq(0, 0, 100), ring: null }], 10, true);
+  assert.equal(refused.maxSfErr, 1);
+  assert.equal(refused.sumEngineSF, 0);
+  // deducts reduce the golden total (human deducted a column; engine floods around it)
+  const ded = caseCoverage("t3", [{ golden: sq(0, 0, 100), ring: sq(0, 0, 100) }], 10, true, 2);
+  assert.equal(ded.sumGoldenSF, 98);
 });
