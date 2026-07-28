@@ -3,6 +3,14 @@
 Companion to [`ISSUE_184_AUDIT.md`](./ISSUE_184_AUDIT.md). Finding IDs (A1, B3, …) refer to
 that document.
 
+**Revision 7 (final).** Cycle 5 returned a single blocking item and judged Phases 0 and 1
+otherwise executable. Blocking findings per cycle ran 10 → 10 → 7 → 6 → 1, and the character
+shifted from "this claim is false" to "this task is half-specified" — the substance has
+converged. The last item: 0.11's exit criterion existed in two divergent versions, the operative
+one naming an unreachable command and the replacement going vacuous once 0.11d lands
+(`oneClickRing == oneClickRing`). Both are replaced with two runnable checks. The remaining
+cycle-5 items were non-blocking and are applied.
+
 **Revision 6.** Cycle 4 found six blocking defects, four of them inside the 0.11 that rev 5 had
 just rewritten. The two that change the audit: **(a) pinning `mppf` does not fix A1** — the mask
 quantizes with `Math.round(segs[i]·ws)`, so identical `mppf` still yields different cells at
@@ -182,8 +190,8 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 | 0.7 | Split the headline: `synthetic (independent truth): n=9 …` and `engine-pinned (regression-only): n=12 …`. Never print a blended accuracy figure. | B1 | S |
 | 0.8 | **Verification ledger** — `ISSUE_184_REMEDIATION_LEDGER.md`. Every exit criterion gets: criterion, the exact command that checks it, the commit checked at, and who checked it. A criterion with no command is not one — delete it or make it one. Self-checked rows marked `self`, so the record shows what carries independent weight. Rev 1 specified no reviewer for any of its own work, which is finding D6 one level up. | D6 | S |
 | 0.9 | **Re-pin protocol. Blocks 0.11 and Phases 1, 2, 3, 4 and 5.** `pin-goldens.mts` emits a per-probe diff on every re-pin: old SF, new SF, Δ%, old-vs-new set-difference render, IoU(old,new). Any probe moving >±2.5% fails unless the commit body carries a per-probe adjudication. Add the adjacency-tiling invariant: for `wholePlan` cases, pairwise overlap ≤0.5% **and** the case total must not move >2.5% without adjudication. | B1, bug #17 | M |
-| 0.10 | **Callout cross-check harness** (round 9). Report engine SF vs the plan's own printed `NNN SF` callouts. **Reported, never gated** — the convention is unknown. Reproduce round 9's method: 25-seed jitter per anchor (callout text often sits inside stroke glyphs), modal region, and **report the agreement fraction beside each error**. Done = the harness reproduces round 9's five rows within 1 percentage point at `21e57a0`, which also validates the harness. | round 9 | M |
-| 0.12 | **Decide wall-line semantics (centreline vs face) and whether snapping is correct. Blocks 0.11.** Merged D-8 + D-9, promoted from Phase 4. Method: 0.10's callout harness plus the interior-clear-vs-centreline arithmetic in 0.11's note. Record the answer in the corpus files. | C7, D-8/D-9 | M |
+| 0.10 | **Callout cross-check harness** (round 9). Report engine SF vs the plan's own printed `NNN SF` callouts. **Reported, never gated** — the convention is unknown. Reproduce round 9's method: 25-seed jitter per anchor (callout text often sits inside stroke glyphs), modal region, and **report the agreement fraction beside each error**. Done = with a **specified deterministic seed sequence**, the harness reproduces round 9's four *majority* rows within 1 percentage point at `21e57a0`; the 8/25-plurality row is reported with its fraction, ungated. (Gating a plurality result on an unspecified RNG would be unsatisfiable through no fault of the harness.) | round 9 | M |
+| 0.12 | **Decide wall-line semantics (centreline vs face) and whether snapping is correct. Blocks 0.11.** Merged D-8 + D-9, promoted from Phase 4. Method: the interior-clear-vs-centreline arithmetic in 0.11's note (plus the human-authored 120 SF e2e golden) is **decisive**; 0.10's callout harness is **corroborative only** — centreline-vs-face is a ~1.6% question and the callout residuals run +11.1% to −43.8% with mixed signs, so it cannot resolve it. Record the answer in the corpus files. | C7, D-8/D-9 | M |
 | 0.11 | **Bench↔production parity: the bench scores a quantity the product never returns.** Blocks Phase 3's exit, Phase 4's human gates, and D-6. *(Rev 2 called this a rasterisation bias and numbered it 4.7; rev 3 moved it to 4.0; rev 4 to 0.11; rev 5 rewrote it after review showed production snaps and reads exactly 120.000 SF.)* Detail below. | **A5b** | M |
 
 **0.11 in detail — rewritten in rev 5; the previous version fixed the wrong layer.**
@@ -238,7 +246,7 @@ blocking 0.11** — with an owning task, a method (0.10's callout harness plus t
 arithmetic above), and the semantics recorded in the corpus files. Deferring it while 0.11
 re-pins is the ordering error §Sequencing-3 forbids.
 
-**One thing 0.11 still does not settle:**
+**0.11 still does not settle:**
 - **Is snapping correct as a measurement policy?** It inflated the 19 SF annotation band by
   8.5%. Folded into **D-8** above.
 - **The raster path genuinely skips snapping** (`TakeoffCanvas.jsx:2870-2871`, `:2879`), so it
@@ -263,7 +271,7 @@ Two consequences:
 - The cross-resolution gate (RFC failure mode #3) **goes vacuous on those 8 probes** — a 4%
   mask-resolution regression becomes undetectable there.
 
-So 0.11 ships with three companions:
+So 0.11 ships with four companions:
 - **0.11a** — keep an **un-snapped mask-fidelity metric**, reported alongside and ungated, so
   rasterisation error stays visible. (S)
 - **0.11b** — add at least one by-construction fixture whose corners are **not** PDF endpoints.
@@ -272,21 +280,31 @@ So 0.11 ships with three companions:
 - **0.11c** — restate 0.7 so the synthetic headline cannot be read as accuracy post-0.11. (S)
 
 **Implementability — two source-level gaps rev 5 assumed away:**
-- **`bench/corpus.ts:21-27` `SyntheticCase` has no `points` field**, so the 9 synthetic probes
+- **`bench/corpus.ts:21-28` `SyntheticCase` has no `points` field**, so the 9 synthetic probes
   cannot be snapped at all without extending the interface. (`pin-goldens.mts:78` and
-  `run.mts:112` already have `g.points` — one line each.)
+  `run.mts:115` already have `g.points` — one line each.)
 - **The point set is a real choice, not a detail.** `extractVectorGeometry`'s `visit()`
-  (`oneclick.ts:253-283`) records moveTo/lineTo/bezier **endpoint only**/rect corners — it skips
+  (`oneclick.ts:251-283`) records moveTo/lineTo/bezier **endpoint only**/rect corners — it skips
   bezier chord vertices and the `closePath` vertex. Deriving points from all segment endpoints
   is faithful for `corpus.ts`'s lineTo geometry but **not** for bezier-tessellated arcs, which
   is exactly `curved-partition` and `door-swing-3ft`. State the point set explicitly, author it
   per case to mirror a real PDF op-list, and **do not re-pin the synthetic goldens** — they are
   truth by construction and must stay fixed while the engine moves toward them.
 
-**Exit criteria for 0.11:** the bench and the canvas produce identical rings for the same seed
-and mask, asserted by a test that runs both paths **through the shared helper of 0.11d**; all 12
-pinned goldens re-pinned under 0.9 with per-probe adjudication; the un-snapped mask-fidelity
-metric reported; residual re-measured.
+**Exit criteria for 0.11 — two runnable checks.** *(Rev 6 had "a test that runs both paths
+through the shared helper", which is vacuous post-0.11d: both call sites **are** the helper, so
+the test asserts `oneClickRing == oneClickRing`. A fresh tautology inside the task whose whole
+subject is a tautological gate.)*
+- **(a) Single-pipeline assertion:** no site in `src/`, `bench/` or `mcp/` calls `traceRegion`
+  outside `oneClickRing` — grep-able, and it is what "the same pipeline" actually means.
+- **(b) Cross-surface agreement:** `npm run bench` reads `enclosed-room` = 120.000 SF while
+  `e2e/one-click.e2e.cjs:84` asserts 120 SF in Chromium. Two independent surfaces, both
+  runnable today.
+- All 12 pinned goldens re-pinned under 0.9 with per-probe adjudication; the un-snapped
+  mask-fidelity metric reported (0.11a); residual re-measured.
+- **0.11b:** the non-endpoint fixture is in the corpus and reads its by-construction golden to
+  the stated tolerance. **0.11c:** `npm run bench` no longer prints a synthetic headline that
+  can be read as accuracy.
 
 - **0.11d** — **extract trace+snap into an exported helper** (e.g. `oneClickRing(mo, seed,
   snapGrid, raster)` in `oneclick.ts`) called by `TakeoffCanvas.jsx:2882/:3144/:3986`,
@@ -316,8 +334,10 @@ metric reported; residual re-measured.
   or any row lacks a command. **At least the Phase 0 and Phase 2 rows carry a named non-`self`
   checker** — otherwise 0.8 re-commits D6 in the task that diagnoses it, which is what rev 2
   did.
-- 0.11: a test asserts the bench and `TakeoffCanvas.jsx:2882` produce identical rings for the
-  same seed and mask; all 12 pinned goldens re-pinned under 0.9; the residual re-measured.
+- 0.11: see 0.11's own two runnable checks (single-pipeline assertion; bench 120.000 SF vs the
+  e2e's 120 SF in Chromium). *(Rev 6 left an older version here naming `TakeoffCanvas.jsx:2882`
+  — the criterion 0.11d proves has no reachable command, sitting in the very gate list 0.8
+  enumerates.)*
 - `npm run bench` prints the synthetic/pinned split and the callout table.
 
 ---
@@ -328,7 +348,7 @@ metric reported; residual re-measured.
 
 Before the refactor lands, make the Hi-Res toggle not change measurement: hide it behind a
 flag, or force the mask path to a render-independent resolution regardless of `hiResKeys`. A
-one-line mitigation today beats an exact fix after Phase 0. Revert when 1.1 lands.
+one-line mitigation today beats an exact fix after Phase 0. Revert when 1.1 **and 1.1i** land — 1.1 alone does not fix A1 on cap-bound sheets, so reverting in between re-exposes it.
 
 ### 1.1 Decouple mask resolution from render scale (M)
 
@@ -404,8 +424,8 @@ option and makes decision D-2 a false choice** (see 5.3).
   at the default render, so factor 1 continues to reproduce production. *(This task existed
   only because rev 2's formula diverged from the bench; review confirmed that divergence would
   have moved every synthetic reading 1–2 percentage points while Phase 1's exit criterion
-  claimed 0.1%. Both problems vanish with the target set to baseline-render px/ft.)* Verify the
-  comment still holds after 1.1 and leave it. (S)
+  claimed 0.1%. Both problems vanish with the target set to baseline-render px/ft.)* Verify the comment still holds after 1.1 and leave it. **Note this strike concerns the
+  `baseDim` rule only** — `run.mts:47`'s `buildMask` call still needs 1.1's new argument. (S)
 - **1.1c** — ~~rewrite `resolutionInvariance.test.ts:123-127`~~ **no-op under the corrected
   formula**, which retains the `ws ≤ 1` clamp, so the test still passes. Carried from rev 2,
   where `ws > 1` was allowed. Verify and drop. (S)
@@ -453,15 +473,17 @@ patient-room-137-band     20.667     21.743    +5.21%  (snapped)
 ```
 
 That is A1's exact symptom on a **cap-bound** sheet — the case both the audit and every prior
-revision of this plan treated as immune. **Round in baseline-render px, not render px.** The
-audit's A1 has been corrected accordingly.
+revision of this plan treated as immune. **Round in baseline-render px, not render px** — and the mask *dimensions* must become
+baseline-derived too (`mw = ceil(imgW_base·ws_base)`), or the two renders still land on
+different grids. The audit's A1 has been corrected accordingly.
 
 ### 1.2 Regression test (S)
 
 Build masks at two render scales, **one non-dyadic** (e.g. `rs = 5.374`); assert identical
-`mppf` and measured SF to 0.01 SF. Rev 1's "byte-identical masks" is withdrawn — cells come
-from `Math.round(segs[i]*ws)` where `segs ∝ rs` and `ws ∝ 1/rs`, which is not bitwise
-equivalent in IEEE754, and `mw = ceil(imgW·ws)` can differ by 1.
+`mppf` and measured SF to 0.01 SF. *(Rev 1 withdrew "byte-identical masks" because `Math.round(segs[i]*ws)` is not bitwise
+equivalent across `rs`. **1.1i restores bit-identity by construction** — that is precisely its
+job — so the reasoning is now inverted; 0.01 SF remains the acceptance because float summation
+order can still differ.)*
 
 ### 1.3 Provenance (S)
 
@@ -841,7 +863,7 @@ contour only, so any plan deducting >2% of floor fails the ±2% gate for a non-e
 Rev 2's whole remedy was "state the wall-line semantics", which is not a remedy. **Do one of:**
 subtract deduct polygons from the engine ring as well as the golden (island subtraction in
 `caseCoverage`), or exclude deduct-bearing cases from `humanCoverageBand`. Also state the
-answer key's wall-line semantics (centreline vs face) — it interacts directly with 0.11 and D-9.
+answer key's wall-line semantics (centreline vs face) — it interacts directly with 0.11 and 0.12.
 
 ### 4.6 Get real plans measured (L — needs you) — C1
 
@@ -974,7 +996,7 @@ bottom of the Phase 6 table, Phase-4-numbered, with no exit criterion in either 
 
 **Exit criteria**
 - For each retired number (`249.3`, `20.8`, `1,718`, `837`, `847`, `0.04 SF`, `294`,
-  `1,751.9`, `133.7`): zero hits, or a hit adjacent to an explicit retraction. Runnable —
+  `133.7` — **not** `1,751.9`, which 6.6 establishes is correct): zero hits, or a hit adjacent to an explicit retraction. Runnable —
   `gh api repos/knmurphy/opentakeoff/issues/184/comments --paginate | jq -r '.[].body'`
   plus the body, piped to grep. *(Rev 2 wrote "a grep of…" with no command, violating 0.8's
   own rule.)*
