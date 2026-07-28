@@ -89,8 +89,27 @@ Other resolution paths were checked and cleared: zoom touches only the detail-vi
 resize is transform-only, recalibration evicts the mask but preserves `dims`, group change
 leaves `rs` a pure function of page point-size. Hi-Res is the one hole — and it is enough.
 
-The honest statement: *the working raster is pinned per sheet only when the render exceeds
-`MASK_MAX_DIM`; below the cap it follows render scale, which the Hi-Res toggle changes.*
+**Correction (cycle-4 review): A1 is broader than this section originally stated.** Above the
+cap, `mppf` is pinned — but the mask *content* is not. `buildMask` quantizes with
+`Math.round(segs[i]·ws)` (`oneclick.ts:633`), so the same wall lands on a different cell at a
+different render scale even when `ws·pxPerFt` is bit-identical. Measured on the VA sheet
+(`autoRenderScale` 2.070, so Hi-Res is reachable there), at identical `mppf` 8.9286 and
+identical 3000×2143 mask dims:
+
+```
+probe                    rs 2.000   rs 2.070      Δ
+patient-toilet-137a       39.256     37.701    −3.96%
+ward-vestibule            65.812     67.706    +2.88%
+patient-room-137-band     20.667     21.743    +5.21%  (snapped)
+```
+
+So the same-click-different-SF symptom occurs on **cap-bound sheets too** — including the VA
+plan, which this section and the remediation plan both treated as immune. Pinning `mppf` does
+not fix it; the quantization must round in baseline-render px, not render px.
+
+The honest statement: *the working raster is not pinned per sheet at all. Above
+`MASK_MAX_DIM` the resolution is pinned but the cell quantization still follows render scale;
+below the cap the resolution follows it too.*
 
 ### A2 — CRITICAL: confidence scores 0.95–1.00 on the three worst known failure modes
 
@@ -200,7 +219,8 @@ floor is a 3–15% residual tolerance, far looser than the advertised 3%.
 
 **Found in cycle-3 review of the remediation plan; missed by all six auditors.**
 
-Production applies vertex snapping to every traced ring — `TakeoffCanvas.jsx:2882` (commit),
+Production applies vertex snapping to every **vector**-traced ring (the raster path
+deliberately skips it, `TakeoffCanvas.jsx:2869-2872`, `:2879`) — `TakeoffCanvas.jsx:2882` (commit),
 `:3144` (hover), `:3986` (agent), and `mcp/src/session.ts:344`, `:398` — computing `area_sf`
 from the *snapped* ring. **`bench/run.mts:53` and `bench/pin-goldens.mts:86` call bare
 `traceRegion(f)`; neither imports `snapVertices` at all.**
@@ -554,7 +574,11 @@ committed**.
   reviewer-approved 50.3 SF, but the remediated pin is **65.8 SF — 30.8% *above* it**. The
   overshoot is never adjudicated.
 - **Sample-plan total**: round 1's 1,751.9 SF vs round 3's 4×436.2 = 1,744.8 vs the bench's
-  1,744.7. Never reconciled.
+  1,744.7. **Correction (cycle-4 review): this is not an error and must not be retracted.**
+  1,751.9 is the *production* (snapped) reading — 4 × 437.978 = 1,751.91 — and 1,744.7 is the
+  *un-snapped bench* reading. The discrepancy is **A5b, visible in the project's own history
+  since round 1** and mistaken for sloppiness ever since. It is the best independent
+  corroboration A5b has.
 - Round 3's headless-vs-browser gap "133.7 vs 127.8" is 4.4%, not "~3–4%", and both are
   superseded by 136.8.
 

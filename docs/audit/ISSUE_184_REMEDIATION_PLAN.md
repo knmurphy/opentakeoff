@@ -3,6 +3,23 @@
 Companion to [`ISSUE_184_AUDIT.md`](./ISSUE_184_AUDIT.md). Finding IDs (A1, B3, …) refer to
 that document.
 
+**Revision 6.** Cycle 4 found six blocking defects, four of them inside the 0.11 that rev 5 had
+just rewritten. The two that change the audit: **(a) pinning `mppf` does not fix A1** — the mask
+quantizes with `Math.round(segs[i]·ws)`, so identical `mppf` still yields different cells at
+different render scales, measured on the *cap-bound* VA sheet at −3.96% / +2.88% / +5.21%, the
+case both documents treated as immune (new task 1.1i; audit A1 corrected); and **(b) round 1's
+"1,751.9 SF", which 6.6 was scheduled to retract, is correct** — it is 4 × 437.978, the snapped
+production reading against the un-snapped bench's 1,744.7, i.e. A5b visible in the project's own
+history since round 1 and mistaken for sloppiness ever since.
+
+Also: 0.11 alone would have made 8 of 9 synthetic probes byte-identical across resolutions,
+turning the "independent truth" bucket into a tautology and voiding the failure-mode-#3 gate — it
+now ships with 0.11a–0.11d; snapping *is* the wall-line-semantics decision, so D-8 and D-9 merge
+and become blocking task 0.12; 0.11's exit criterion had no reachable command (`proposeRegion` is
+an unexported closure), hence the shared-helper extraction; `SyntheticCase` has no `points` field
+so the synthetic corpus cannot be snapped as written; and D-10's relative floor was non-strict, so
+a constant-score stub passed it.
+
 **Revision 5.** Cycle 3 found that rev 4's highest-priority task measured the harness instead
 of the product. **`snapVertices` is applied at all three canvas call sites and both MCP sites,
 and is absent from `bench/` entirely** — so the −2.03% "structural bias" rev 4 promoted to
@@ -11,7 +28,8 @@ real Chromium. Rev 4's outset remedy would have pushed the shipped answer *above
 defect underneath is larger and is now audit finding **A5b**: every engine-pinned golden pins a
 quantity the product never returns, off +2.2% to +8.5% on the VA plan, and the answer-key
 pipeline compares snapped human geometry to un-snapped engine rings against a 2.5% gate. 0.11 is
-rewritten as bench↔production parity; D-6 and Phase 3's exit note are retracted with it.
+rewritten as bench↔production parity; D-6's **premise** and Phase 3's exit note are retracted
+with it (D-6 itself remains a live decision).
 
 Also fixed: Phase 2's exit criterion could not fire under its own likely branch (ceiling
 population empties, floor calibrates below the anti-gaming stub) — now D-10; rev 4's "14 probes"
@@ -154,7 +172,7 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 
 | # | Task | Finding | Size |
 |---|---|---|---|
-| 0.1a | Add `lint` and `bench` to CI. Extend `check` to `typecheck && lint && test && bench && build` and have CI call it, so the definition lives in one place. Rev 1's "prefer `npm run check`" was wrong — `check` contains neither `bench` nor `e2e`, so it would have added lint only. Also extend `lint` (`eslint src netlify/functions`) to cover `bench test e2e`, which are currently unlinted. | B2 | S |
+| 0.1a | Add `lint` and `bench` to CI. Extend `check` to `typecheck && lint && test && bench && build` and have CI call it, so the definition lives in one place. Rev 1's "prefer `npm run check`" was wrong — `check` contains neither `bench` nor `e2e`, so it would have added lint only. Also extend `lint` (`eslint src netlify/functions`) to cover `bench test e2e`. Note this is a **policy reversal**, not an oversight: `eslint.config.mjs:5` documents the `.ts` exclusion as deliberate ("tsc --noEmit already checks them strictly"). | B2 | S |
 | 0.1b | Add `e2e` to CI. **Not S.** `playwright` is in neither `dependencies` nor `devDependencies` and is not in `node_modules`; `e2e/one-click.e2e.cjs:14-20` falls back to a *global* install. Needs a devDependency, `npx playwright install --with-deps chromium`, a vite dev server on 5199, and a flake budget. | B2 | M |
 | 0.2 | Assert an expected probe count in `bench/run.mts`; fail on mismatch. | B4 | S |
 | 0.3 | **Xpass detection**: a `knownFail` probe that now passes fails the run. | B3 | S |
@@ -165,7 +183,7 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 | 0.8 | **Verification ledger** — `ISSUE_184_REMEDIATION_LEDGER.md`. Every exit criterion gets: criterion, the exact command that checks it, the commit checked at, and who checked it. A criterion with no command is not one — delete it or make it one. Self-checked rows marked `self`, so the record shows what carries independent weight. Rev 1 specified no reviewer for any of its own work, which is finding D6 one level up. | D6 | S |
 | 0.9 | **Re-pin protocol. Blocks 0.11 and Phases 1, 2, 3, 4 and 5.** `pin-goldens.mts` emits a per-probe diff on every re-pin: old SF, new SF, Δ%, old-vs-new set-difference render, IoU(old,new). Any probe moving >±2.5% fails unless the commit body carries a per-probe adjudication. Add the adjacency-tiling invariant: for `wholePlan` cases, pairwise overlap ≤0.5% **and** the case total must not move >2.5% without adjudication. | B1, bug #17 | M |
 | 0.10 | **Callout cross-check harness** (round 9). Report engine SF vs the plan's own printed `NNN SF` callouts. **Reported, never gated** — the convention is unknown. Reproduce round 9's method: 25-seed jitter per anchor (callout text often sits inside stroke glyphs), modal region, and **report the agreement fraction beside each error**. Done = the harness reproduces round 9's five rows within 1 percentage point at `21e57a0`, which also validates the harness. | round 9 | M |
-
+| 0.12 | **Decide wall-line semantics (centreline vs face) and whether snapping is correct. Blocks 0.11.** Merged D-8 + D-9, promoted from Phase 4. Method: 0.10's callout harness plus the interior-clear-vs-centreline arithmetic in 0.11's note. Record the answer in the corpus files. | C7, D-8/D-9 | M |
 | 0.11 | **Bench↔production parity: the bench scores a quantity the product never returns.** Blocks Phase 3's exit, Phase 4's human gates, and D-6. *(Rev 2 called this a rasterisation bias and numbered it 4.7; rev 3 moved it to 4.0; rev 4 to 0.11; rev 5 rewrote it after review showed production snaps and reads exactly 120.000 SF.)* Detail below. | **A5b** | M |
 
 **0.11 in detail — rewritten in rev 5; the previous version fixed the wrong layer.**
@@ -183,7 +201,7 @@ not have that bias.** It applies vertex snapping to every traced ring —
 | `curved-partition/left-half` | 68.379 | 66.191 (−3.20%) | 67.931 (−0.65%) |
 | `patient-room-137` | 161.37 | 161.33 | 167.99 (**+4.10%**) |
 | `patient-room-137-band` | 19.04 | 19.04 | 20.67 (**+8.52%**) |
-| `elevator-e01` | 136.79 | 136.75 | 142.67 (**+4.30%**) |
+| `elevator-e01` | 136.79 | 136.76 | 142.67 (**+4.30%**) |
 
 `e2e/one-click.e2e.cjs:84` asserts 120 SF through real Chromium and passes — independent proof
 that production is exact where the bench reads −2.03%. Had rev 4's outset landed, it would have
@@ -201,9 +219,28 @@ rings, a systematic ~4% offset against a 2.5% gate.
 goldens under 0.9 and **re-measure the residual before deciding anything downstream.** It is
 still the largest re-pin in the plan.
 
-**Two things it does not settle:**
-- **Is snapping correct?** It inflated the 19 SF annotation band by 8.5%. Open question
-  (**D-9**), and it must be answered before the re-pin is adjudicated, not after.
+**0.11 IS the wall-line-semantics decision — it does not merely depend on one.** Rev 5 demoted
+D-8 back to Phase 4 on the grounds that withdrawing the outset removed the dependency. Review
+showed the dependency moved rather than vanished: `snapVertices` pulls corners onto
+`extractVectorGeometry`'s `points`, which are **PDF path vertices — wall centrelines**, not
+faces. Confirmed from the fixture generators: `demo/make_sample_plan.py:16-20` draws
+`"3 w"` / `"120 110 980 580 re"`, so per room interior-clear is 431.39 SF against centreline
+438.58 SF (measured: raw 436.176, snapped 437.978); and `e2e/make-fixture.cjs:23,37` draws the
+216×180 pt rectangle at 1.6 pt thickness, so **the 120 SF golden is the centreline rectangle** —
+interior-clear would be 118.05 SF. That is precisely why snapping reads exactly 120.000 and the
+e2e passes.
+
+So 0.11 re-pins the whole corpus to centreline semantics **in Phase 0**. The VA case total moves
+**2511.5 → 2580.4 SF (+2.74%)**, which trips 0.9's own ±2.5% case-total invariant.
+
+**Therefore D-8 and D-9 are the same decision, merged and promoted to Phase 0 as task 0.12,
+blocking 0.11** — with an owning task, a method (0.10's callout harness plus the interior-clear
+arithmetic above), and the semantics recorded in the corpus files. Deferring it while 0.11
+re-pins is the ordering error §Sequencing-3 forbids.
+
+**One thing 0.11 still does not settle:**
+- **Is snapping correct as a measurement policy?** It inflated the 19 SF annotation band by
+  8.5%. Folded into **D-8** above.
 - **The raster path genuinely skips snapping** (`TakeoffCanvas.jsx:2870-2871`, `:2879`), so it
   *does* carry the rasterisation bias rev 4 described. A narrowed version of the old 0.11
   survives for scans only — where `mppf` is also absent (2.3), so it compounds.
@@ -212,10 +249,52 @@ still the largest re-pin in the plan.
 0.00% and −0.65% in production), and Phase 3's "a 120 SF rectangle burns 82% of the 2.5% budget
 on rasterisation alone" (in production it burns 0%). Both corrected below.
 
-**Exit criteria for 0.11:** `bench/run.mts` and `pin-goldens.mts` produce rings identical to
-`TakeoffCanvas.jsx:2882`'s for the same seed and mask, asserted by a test that runs both paths;
-all 12 pinned goldens re-pinned under 0.9 with per-probe adjudication; residual re-measured and
-reported.
+**0.11 must not ship alone — it destroys the corpus's only independent accuracy signal.**
+Review measured that after snapping, **8 of the 9 non-known-fail synthetic probes produce a
+byte-identical ring at every mask resolution** (all four corners land on the same PDF endpoints
+whatever the mask did), scoring IoU **1.0000** against their by-construction goldens and
+pairIoU 1.0000 across resolutions. Today those same probes read −2.03% at ×1 and −4.03% at ×0.5.
+Two consequences:
+- The "9 synthetic, truth-by-construction" bucket becomes ~1.000 **by construction of the
+  snap**, not by engine accuracy — a fresh tautology of exactly the class audit B1 exists to
+  name, introduced by a Phase-0 task. Task **0.7** would then print
+  `synthetic (independent truth): n=9 … 1.000`, which is worse than the blended figure 0.7 was
+  written to abolish.
+- The cross-resolution gate (RFC failure mode #3) **goes vacuous on those 8 probes** — a 4%
+  mask-resolution regression becomes undetectable there.
+
+So 0.11 ships with three companions:
+- **0.11a** — keep an **un-snapped mask-fidelity metric**, reported alongside and ungated, so
+  rasterisation error stays visible. (S)
+- **0.11b** — add at least one by-construction fixture whose corners are **not** PDF endpoints.
+  The repo already has the pattern: `sample-plan`'s rooms have three snappable corners and one
+  un-snappable cross-intersection, reading **+0.41%** snapped where raw is exactly 0.00%. (S)
+- **0.11c** — restate 0.7 so the synthetic headline cannot be read as accuracy post-0.11. (S)
+
+**Implementability — two source-level gaps rev 5 assumed away:**
+- **`bench/corpus.ts:21-27` `SyntheticCase` has no `points` field**, so the 9 synthetic probes
+  cannot be snapped at all without extending the interface. (`pin-goldens.mts:78` and
+  `run.mts:112` already have `g.points` — one line each.)
+- **The point set is a real choice, not a detail.** `extractVectorGeometry`'s `visit()`
+  (`oneclick.ts:253-283`) records moveTo/lineTo/bezier **endpoint only**/rect corners — it skips
+  bezier chord vertices and the `closePath` vertex. Deriving points from all segment endpoints
+  is faithful for `corpus.ts`'s lineTo geometry but **not** for bezier-tessellated arcs, which
+  is exactly `curved-partition` and `door-swing-3ft`. State the point set explicitly, author it
+  per case to mirror a real PDF op-list, and **do not re-pin the synthetic goldens** — they are
+  truth by construction and must stay fixed while the engine moves toward them.
+
+**Exit criteria for 0.11:** the bench and the canvas produce identical rings for the same seed
+and mask, asserted by a test that runs both paths **through the shared helper of 0.11d**; all 12
+pinned goldens re-pinned under 0.9 with per-probe adjudication; the un-snapped mask-fidelity
+metric reported; residual re-measured.
+
+- **0.11d** — **extract trace+snap into an exported helper** (e.g. `oneClickRing(mo, seed,
+  snapGrid, raster)` in `oneclick.ts`) called by `TakeoffCanvas.jsx:2882/:3144/:3986`,
+  `mcp/src/session.ts:344/:398`, `run.mts:53` and `pin-goldens.mts:86`. **Without this 0.11's
+  exit criterion has no command and cannot be given one**: `proposeRegion` is an unexported
+  closure inside the default-exported React component (`TakeoffCanvas.jsx:2875`; `:162` is the
+  file's only `export`), and nothing in `web/test/` can reach line 2882. It also makes 2.7
+  cheaper. (M)
 
 **Exit criteria**
 - CI goes red on each of four committed mutation tests: a deleted corpus file; a known-fail
@@ -358,6 +437,25 @@ the source scan's DPI. Rev 1's "mark raster takeoffs for re-verification" workar
 left A1 live on scans. *(Rev 4 still said "`pxPerFt` and `TARGET_MPPF`" here — a constant
 withdrawn 90 lines earlier in the same revision.)*
 
+### 1.1i Make the mask quantization render-independent (M) — **1.1 alone does not fix A1**
+
+Review measured that pinning `mppf` is not sufficient. `buildMask` quantizes with
+`Math.round(segs[i]·ws)` (`oneclick.ts:633`), so the same wall lands on a different cell at a
+different render scale **even when `ws·pxPerFt` is bit-identical**. On the VA sheet
+(`autoRenderScale` 2.070, so Hi-Res is reachable), at identical `mppf` 8.9286 and identical
+3000×2143 mask dims:
+
+```
+probe                    rs 2.000   rs 2.070      Δ
+patient-toilet-137a       39.256     37.701    −3.96%
+ward-vestibule            65.812     67.706    +2.88%
+patient-room-137-band     20.667     21.743    +5.21%  (snapped)
+```
+
+That is A1's exact symptom on a **cap-bound** sheet — the case both the audit and every prior
+revision of this plan treated as immune. **Round in baseline-render px, not render px.** The
+audit's A1 has been corrected accordingly.
+
 ### 1.2 Regression test (S)
 
 Build masks at two render scales, **one non-dyadic** (e.g. `rs = 5.374`); assert identical
@@ -381,10 +479,11 @@ deferred in the same document.
 
 **Exit criteria**
 - 1.2 passes and fails if 1.1 is reverted.
-- Hi-Res ON and OFF produce identical `mppf` and SF — checked by 1.2 (two `rs` values through
-  `buildMask`) and by an e2e assertion. *(Rev 4 stated this "on the 1.1f sub-cap probe", which
-  has no command: the bench has no render scale and the Hi-Res toggle exists only in the
-  browser.)*
+- Hi-Res ON and OFF produce identical SF **on a real-plan probe**, to a stated tolerance —
+  checked by 1.2 and an e2e assertion. **Not on a clean rectangle**: `sample-plan` snapped reads
+  437.978 at `rs` ×1, ×2 and ×2.687 — 0.00% throughout — so a rectangle-only criterion is
+  satisfiable by choosing an easy fixture, the failure this plan diagnoses in three earlier
+  revisions.
 - `npm run bench` shows **no golden moving at all** — under the corrected formula the mask is
   bit-identical at the default render, so any movement is a bug, not a tolerance.
 - Hover-path timing on a **sub-cap** sheet (the 1.1f fixture), measured by `bench/perf.mts`,
@@ -561,18 +660,28 @@ no answer key.**
   fails the ceiling" becomes untestable. Meanwhile a floor calibrated to admit
   `ward-vestibule` (−78.93% min-passage signal at 0.021% SF error) sits near 0.2, which a
   `() => 0.5` stub clears — so the anti-gaming test cannot fire either.
-  **Resolve as D-10:** adopt the relative floor the plan already names — *no probe in the
-  accurate population may score below the median of the inaccurate population* — and restate
-  both mutations against it (a constant-score stub fails because it collapses the separation).
-  Add a vacuous-gate assertion: if the ceiling population is empty, the run says so, the way
-  0.2 does for probe count.
+  **Resolve as D-10**, and specify it properly — rev 5's one-line version was under-defined and
+  its anti-gaming argument was **false**. "May not score below the median" is non-strict, so a
+  `() => 0.5` stub puts every probe at 0.5, makes the inaccurate median 0.5, and **passes**. It
+  does not collapse the separation into a failure; it collapses it into a pass. Required:
+  - **Both populations defined explicitly**, including how exempt probes and the dead zone
+    between `≤0.005` and `>0.025` are treated.
+  - **A strict margin**: `min(accurate population) ≥ median(inaccurate population) + δ`, with δ
+    named. Without δ the stub passes.
+  - **An explicit empty-population rule.** Post-0.11 every non-exempt probe sits at 0.00% except
+    `curved-partition` (0.65%), so under branch (ii) the inaccurate population is **empty and
+    the median undefined** — Phase 2 unexitable again, one level up. If exempt probes are
+    instead counted, the median is 0.95 and the floor immediately fails `cased-opening` (0.94),
+    `door-swing-3ft`, `two-door-room`, `patient-room-137`, `patient-toilet-137a` (all 0.92),
+    which 2.2's −8.41% deduction makes strictly worse. The rule must say what it *does*, not
+    merely report.
 - 2.7: MCP and canvas return SF within 0.1% on all 8 VA probe seeds; double-counted floor
   across the 56 label seeds drops from 16.6% to ≤0.5%.
 - 2.8: label precision, duplicate coverage and seed stability reported; no proposal from
   outside the drawing frame.
 - **Phase 2 exits on one of two branches** — rev 2 admitted only the first, which reproduced
   rev 1's self-block, because 2.1c is research the plan explicitly permits to fail:
-  - **(i)** 2.1c finds a signal satisfying both directions of 2.4 on all 21 probes; **or**
+  - **(i)** 2.1c finds a signal satisfying both directions of 2.4 on the full population 2.4 names — 24 golden rows (21 gating + 3 of the 4 known-fails are golden) plus the 4 refusal rows its third bullet brings into scope, **not** the 21 gating probes; **or**
   - **(ii)** 2.1c reports that none exists, the flat deduction stays, and
     `partition-bank-15in` and `tile-demising-same-pen` join `annotation-ring-room` in the
     written exemption list — with their exemption reasons recorded the same way.
@@ -580,10 +689,13 @@ no answer key.**
   and `tile-grid-room/in-cell` — but those sit at **0.832% SF error**, outside the ≤0.5% floor.
   Rev 4 reverted to IoU keying to correct a statement that was right on SF keying. The
   population is **12**, as rev 2/3 had it. "Gated" was the only wrong word: all 9 VA probes
-  print `NO GATED PAIR`. The algebra below is unaffected. Five further
-  probes sit at IoU 0.97973, a hair under the line — once 0.11 lands their IoU goes to ~1.000
-  and they enter scope at 0.02–0.04 headroom, so **Phase 0 tightens a Phase 2 gate already in
-  CI**. 0.9 covers goldens, not confidence; this hazard needs its own note.)*
+  print `NO GATED PAIR`. The algebra below is unaffected. Post-0.11 the floor
+  population goes **12 → 20**, not "five further probes": the five at 2.03%, plus
+  `hatched-room` and `tile-grid-room` at 0.832%, plus `two-doorways` at 4.33% — all become
+  0.00%. Only `curved-partition` (0.65%) stays out. **Phase 0 therefore tightens a Phase 2 gate
+  already in CI**, and 0.9 covers goldens, not confidence, so this hazard needs its own note.
+  State the mechanism in **SF**, not IoU — rev 4 explained entry by "their IoU goes to ~1.000"
+  two sentences after insisting the gate is SF-keyed, the same slip it was correcting.)*
 
   The algebra makes (ii) the likely branch, and rev 2 did not state it: the ceiling needs
   `hatch_factor ≤ 0.90` on the two known-fails, while the floor needs
@@ -715,11 +827,6 @@ eventually, (b) immediately" already conceded this; the deferral list now says s
 goldens into `results.json` (`:155`). **Run-once is discipline, not tooling** — state that
 plainly rather than implying enforcement.
 
-### 4.8 Make the human gates negative-testable (S) — C6
-
-Export `THRESHOLDS` (`run.mts:25`, currently a non-exported local no test imports) and add a
-test that a human case at 3% room error exits 1. Pairs with 6.17.
-
 ### 4.4 Seed independence (M) — C5
 
 `interiorSeed` picks maximum boundary clearance — the engine's easiest case, erasing the
@@ -763,6 +870,11 @@ are verified by until a real key exists.
 ---
 
 ## Phase 5 — determinism, honestly
+
+### 4.8 Make the human gates negative-testable (S) — C6
+
+Export `THRESHOLDS` (`run.mts:25`, currently a non-exported local no test imports) and add a
+test that a human case at 3% room error exits 1. Pairs with 6.17.
 
 ### 5.1 SF-error cross gate (M — **not S**) — B7
 
@@ -833,7 +945,7 @@ the project's working state and the next session reads it. 6.0 first.
 | 6.3 | **Retract** round 4's "toilet correctly excluded / 249.3 SF". | comment `5095757169` | D3 |
 | 6.4 | Body: set the count to **843 at `21e57a0`** and date it ("as of `<sha>`") rather than writing 835, which would replace a stale wrong number with a fresh one. Annotate 837→835 in the round-8 review comment. Commit messages are immutable — record, don't rewrite. | body, comment | D4 |
 | 6.5 | Repoint the evidence index and slice-doc links at the branch holding rounds 7–8 evidence; fix the two malformed image links. | body, comments | D5 |
-| 6.6 | Retract/annotate: corridor 1,718 SF (never pinned; also in the evidence *filename*), 0.04→0.02 SF overlap, the vestibule "recovery" that overshoots its baseline by 30.8%, the sample-plan total, round 3's "~3–4%" (actually 4.4%, both superseded by 136.8); and `partition-bank-15in` IoU, which the round-8 review records as 0.199 while the bench and round 9 both read 0.197. | rounds 1,2,3; body; filename | D9 |
+| 6.6 | Retract/annotate — **but NOT the sample-plan total**: round 1's 1,751.9 SF is *correct*, being 4 × 437.978, the production (snapped) reading, against the un-snapped bench's 1,744.7. It is A5b visible in the project's own history since round 1 and mistaken for sloppiness ever since; cite it as corroboration rather than retracting it. Retracting a right statement is the sin rev 5 charged rev 4 with. Retract/annotate: corridor 1,718 SF (never pinned; also in the evidence *filename*), 0.04→0.02 SF overlap, the vestibule "recovery" that overshoots its baseline by 30.8%, round 3's "~3–4%" (actually 4.4%, both superseded by 136.8); and `partition-bank-15in` IoU, which the round-8 review records as 0.199 while the bench and round 9 both read 0.197. | rounds 1,2,3; body; filename | D9 |
 | 6.7 | Rename `ward-room-294sf` — measures 229.3. | corpus | D9 |
 | 6.8 | Downgrade "four independent reviewers" to what the artifacts support; note 2 of 5 repros became regression tests. | comment `5099217709` | D6, D7 |
 | 6.9 | **Mark as unrepeated one-off measurements**: "23 s → 0.39 s", "~285 ms", "37,048 of 71,819", the 75/80-seed sweep, 0.56 ft / 0.42 ft, and the design doc's uncommitted round-trip table. A perf harness is deferred. | comments, `oneclick.ts:83,85,97`, design doc | D8 |
@@ -847,6 +959,8 @@ the project's working state and the next session reads it. 6.0 first.
 | 6.17 | Correct the "Negative-tested: a deliberately mismeasured room fails the bench" claim — `benchScore.test.ts` shrinks by 2%, *under* the 2.5% gate, and no test imports `run.mts`. Pair with 4.8. | comment `5099531899` | C6 |
 | 6.18 | Correct "retires seven knobs": the seven are gone, but module-wide named constants went 42→41 and the replacements moved into unexported literals. Knob *relocation*. | comment `5098666393` | D13 |
 
+| # | Task | Finding |
+|---|---|---|
 | 6.19 | **`docs/design/IMPROVE_WITH_USE.md` — round 9's two corrections, which rev 2 dropped.** §3's storage figures are backwards: the doc says "≈ 2.3 MB base64 vs 3.8 MB decimal… **Optionally** gzip at rest… spec'd, not required" (verified at `:481-485`), while round 9 measured **3.53 MB decimal / 2.92 MB base64 / 0.48 MB gzip** — the doc's own numbers are wrong and its "optional" is the 86% win. Make gzip the recommendation. §4: annotate that a per-project pitch cap **is** a measured knob (IoU 0.197 → 0.937 in a 1.0–1.1 ft window, cliffs either side), so the never-auto-apply guard rails are load-bearing. §5: annotate the build order with round 9's. | round 9 |
 
 This file matters for the same reason the issue does: §5 is a "Recommended build order" the next
@@ -885,7 +999,7 @@ list:
 | — | The `fflate` dynamic-import build failure, seen once, unreproduced. | Unknown; may surface in CI once 0.1 lands |
 | — | Perf harness for D8's *historical* numbers (23 s → 0.39 s, ~285 ms). `bench/perf.mts` is scheduled under 1.4 for the hover path only; it does not re-measure D8's claims. | D8's figures stay unrepeatable; 6.9 marks them as such |
 | A2 / 2.1c | **2.1c's failure branch is itself a deferral** — "if none exists, say so and leave the flat deduction" means the plan's #2 priority may end up unfixed. Rev 3 stated the branch but did not list it here, which is the most consequential omission the table could have. | The two hatch known-fails keep reporting 0.95 while measuring +384% and +97% |
-| — | The raster path's **source-DPI limit** (1.1h detects and clamps, but nothing tells the user a scan is too coarse to measure at the requested precision). | Silent over-confidence on low-DPI scans |
+| — | The raster path's **source-DPI limit**. *(Rev 4 cited 1.1h as the mitigation, but 1.1h only applies if the `ws ≤ 1` clamp is lifted, which the corrected formula does not do — so the mitigation does not exist.)* Nothing tells the user a scan is too coarse to measure at the requested precision. | Silent over-confidence on low-DPI scans |
 | C6 | Run-once enforcement for sealed cases — no counter, ledger or marker. 4.3 documents it as discipline rather than building it. | The one sealed holdout gets rerun and overfit, making the accuracy number it produces worthless |
 | A2 | **The annotation-ring class ships at conf 1.00.** 2.4 exempts it because review proved no engine-internal signal exists (min-passage delta 0.00%). Correct engineering, but it is an accepted risk, not merely an exit-criterion adjustment — rev 2 booked it as the latter. | An estimator sees a verbatim-confidence trace that is 35% short. Consider recording the exemption class in `origin` even where the score cannot move |
 | — | **Four escape-hatch tasks permit the null action**: 3.4 ("fix *or* correct the comment"), 5.5 ("fix *or* retract"), 6.12 ("add the test *or state it is unguarded*"), 6.14 ("write the check *or drop it*"). | Taking the null branch each time leaves: px thresholds still mislabelled dimensionless, bit-identity still overclaimed, **the O(N²) lattice fix still unguarded** (D7: a revert passes 843/843 + bench), and the slice check still unwritten |
@@ -921,17 +1035,16 @@ measurement, and D3 shows at least one "verified visually" claim was wrong.
   land 0.11, re-measure every cross-resolution number, then decide** — and fold in 1.1e's
   measured failures (`patient-room-137` pairIoU 0.844, `patient-toilet-137a` 0.835) at the same
   time, since those are on the VA plan and will move under 0.11's re-pin.
-- **D-10 (new).** 2.4's floor: absolute threshold or relative separation? The absolute form
-  makes Phase 2 unexitable under branch (ii) (see Phase 2 exit criteria). Recommend relative.
-- **D-9 (new).** **Is vertex snapping correct?** It is what makes `enclosed-room` read exactly
-  120.000 SF — but it inflated the 19 SF annotation band by **8.5%** and moves every VA probe
-  +2.2% to +8.5%. 0.11 makes the bench agree with production; it does not establish that
-  production is right. Must be answered before 0.11's re-pin is adjudicated.
-- **D-8 (new).** 4.5's wall-line semantics for the answer key: **centreline or face?**
-  Stays in Phase 4 with task 4.5. *(Rev 4 promoted it to Phase 0 because its outset remedy
-  depended on it; that remedy is withdrawn in rev 5, so the dependency is gone. Review correctly
-  flagged that rev 4 asserted the promotion in prose while adding no Phase 0 row — the
-  contradiction is resolved by dropping the promotion, not by adding the row.)*
 - **D-7 (new).** 3.3's door-likelihood channel: `MASK_DOORLIKE_BIT` (bit 8 free), per-cluster
   circle re-fit, or an intrinsic cluster property? Recommend bit 8. **3.2 and 3.3 cannot start
   until D-5 and D-7 are answered** — marked in the tasks themselves.
+
+- **D-8 / D-9 (merged, and now task 0.12).** Wall-line semantics — centreline or face — and
+  whether vertex snapping is correct as a measurement policy. **They are one question**:
+  snapping pulls corners onto PDF path vertices, which are centrelines, so 0.11 decides the
+  semantics by acting. Promoted to Phase 0 as 0.12, blocking 0.11. *(Rev 4 promoted D-8 in prose
+  with no owning task; rev 5 demoted it on the grounds the outset withdrawal removed the
+  dependency — the dependency had moved, not vanished.)*
+- **D-10 (new).** 2.4's floor: absolute threshold or relative separation? The absolute form
+  makes Phase 2 unexitable under branch (ii) (see Phase 2 exit criteria). Recommend relative.
+
