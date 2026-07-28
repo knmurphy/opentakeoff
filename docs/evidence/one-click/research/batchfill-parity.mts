@@ -56,7 +56,7 @@ for (const cname of CASES) {
 
   // ---- (2) shipped batch path: raw floodRegion, status-gated ----
   const detected = detectRegions(mo, seeds, SENS_BALANCED);
-  console.log(`detectRegions (raw floodRegion, shipped): ${detected.length}/${seeds.length} clean regions kept`);
+  console.log(`detectRegions as of bdff920 — sealed since 71282e9: ${detected.length}/${seeds.length} clean regions kept`);
 
   // status histogram for raw vs sealed on the SAME seeds
   const hist = (rows: string[]) => {
@@ -82,7 +82,7 @@ for (const cname of CASES) {
   // recall: for each golden probe (expect=golden, not known-fail), is there a
   // detected region with IoU >= 0.5 / >= 0.9?
   const goldens = (c.probes as any[]).filter((p) => p.expect === "golden" && !p.knownFail);
-  for (const [label, regions] of [["raw(shipped)", rawRegions], ["sealed(click-path parity)", sealedRegions]] as const) {
+  for (const [label, regions] of [["raw (the pre-71282e9 batch path)", rawRegions], ["sealed (what detectRegions calls since 71282e9)", sealedRegions]] as const) {
     let hit50 = 0, hit90 = 0;
     const detail: string[] = [];
     for (const gp of goldens) {

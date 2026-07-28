@@ -62,6 +62,13 @@ export interface ShapeOrigin {
   /** one_click: the flood-fill seed, normalized to sheet dims. */
   seed_norm?: [number, number];
   hatch_filtered?: true;
+  /** Seal ladder closed a cased opening: the dilation radius used (mask px).
+   *  A boundary that is partly synthetic must say so — the canvas records the
+   *  same field (TakeoffCanvas.jsx), and a committed shape that hides it is
+   *  indistinguishable from a clean vector-bounded trace on export. */
+  gap_sealed_px?: number;
+  /** Drawn door-swing wedges annexed into the region, and how many. */
+  door_wedges?: number;
   raster_traced?: true;
   fill_sensitivity?: number;
   /** Machine's original trace, frozen on first human edit (provenance.js). */
@@ -399,6 +406,8 @@ export class Session {
         seed_norm: [x / s.widthPx, y / s.heightPx],
         reviewed: false,
         ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
+        ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+        ...(f.wedges ? { door_wedges: f.wedges } : {}),
       }).id;
     }
     return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
@@ -447,6 +456,8 @@ export class Session {
             seed_norm: [r.seed[0] / s.widthPx, r.seed[1] / s.heightPx],
             reviewed: false,
             ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+            ...(r.flood.sealedPx ? { gap_sealed_px: r.flood.sealedPx } : {}),
+            ...(r.flood.wedges ? { door_wedges: r.flood.wedges } : {}),
           }).id;
         }
         return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };

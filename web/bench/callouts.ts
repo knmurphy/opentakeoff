@@ -24,7 +24,13 @@ export interface AreaCallout { sf: number; x: number; y: number; raw: string }
  *  NOT matched: its anchor is in the schedule, not in the room, so clicking
  *  there measures nothing. Fractional areas are accepted; a bare number is
  *  not (it would swallow room tags and title-block numerals). */
-const CALLOUT_RE = /^([\d,]+(?:\.\d+)?)\s*(?:SF|S\.F\.|SQ\.?\s*FT\.?)$/i;
+const CALLOUT_RE = /^(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:SF|S\.F\.|SQ\.?\s*FT\.?)$/i;
+/** Text that looks like an area annotation but isn't matched exactly — "± 557
+ *  SF", "(557 SF)", "557 GSF", "557 SF NET". Counting these is the difference
+ *  between "this plan prints no areas" and "this plan prints areas I can't
+ *  read": the first is a fact about the drawing, the second is a fact about
+ *  this parser, and silence made them look identical. */
+const NEAR_MISS_RE = /\d[\d,. ]*\s*(?:S\.?\s?F\.?|SQ\.?\s*FT|GSF|NSF)\b/i;
 
 export function parseAreaCallouts(items: TextItem[]): AreaCallout[] {
   const out: AreaCallout[] = [];
@@ -34,6 +40,20 @@ export function parseAreaCallouts(items: TextItem[]): AreaCallout[] {
     const sf = Number(m[1].replace(/,/g, ""));
     if (!Number.isFinite(sf) || sf <= 0) continue;
     out.push({ sf, x: it.x, y: it.y, raw: it.str.trim() });
+  }
+  return out;
+}
+
+/** Text this parser declined that still looks like a printed area. Report it —
+ *  a silent miss reads as "the plan prints no areas". */
+export function nearMissCallouts(items: TextItem[]): string[] {
+  const matched = new Set(parseAreaCallouts(items).map((c) => c.raw));
+  const out: string[] = [];
+  for (const it of items) {
+    const t = (it.str || "").trim();
+    if (!t || matched.has(t) || !NEAR_MISS_RE.test(t)) continue;
+    if (CALLOUT_RE.test(t)) continue;
+    out.push(t);
   }
   return out;
 }
@@ -50,16 +70,38 @@ export function nearbyText(items: TextItem[], x: number, y: number, radius: numb
 }
 
 /** The seed grid, in FEET, swept around a callout's text anchor. The anchor is
- *  the text baseline origin, which on a stroke-text (SHX) plan lands inside
- *  the glyph linework itself — a seed there measures the inside of a digit.
- *  Sweeping and taking the modal region is what a human does implicitly by
- *  clicking in the open part of the room. */
+ *  the text baseline origin, and a seed there frequently lands in linework
+ *  rather than open floor — the box drawn around a tag, an underline, one cell
+ *  of a tile grid. Sweeping and taking the modal region is what a human does
+ *  implicitly by clicking in the open part of the room.
+ *
+ *  The span is derived from the area the callout CLAIMS, because a fixed grid
+ *  is wrong at both ends: an 8 ft grid around a 16 SF closet puts most of its
+ *  seeds in other rooms, and they then agree with each other — the harness
+ *  reported a neighbouring 86 SF room as that closet's measurement, "stable"
+ *  at 10 of 25 seeds, and it alone supplied 78% of the sheet's mean error. A
+ *  room of A square feet is at most ~sqrt(A) across if compact, so half that
+ *  is the furthest a seed can move and still be inside a convex room. */
 export const SWEEP_FT = [-4, -2, 0, 2, 4];
+export const SWEEP_MIN_FT = 0.75, SWEEP_MAX_FT = 8;
+
+export function sweepRadiusFt(printedSf?: number): number {
+  if (!printedSf || !Number.isFinite(printedSf) || printedSf <= 0) return SWEEP_MAX_FT / 2;
+  return Math.min(SWEEP_MAX_FT, Math.max(SWEEP_MIN_FT, Math.sqrt(printedSf) / 2));
+}
 
 export function sweepOffsets(pxPerFt: number, sweepFt: number[] = SWEEP_FT): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   for (const dy of sweepFt) for (const dx of sweepFt) out.push([dx * pxPerFt, dy * pxPerFt]);
   return out;
+}
+
+/** The 5×5 grid for one callout, spanning ±sweepRadiusFt of its claimed area. */
+export function sweepOffsetsFor(pxPerFt: number, printedSf?: number, steps = 5): Array<[number, number]> {
+  const r = sweepRadiusFt(printedSf);
+  const axis: number[] = [];
+  for (let i = 0; i < steps; i++) axis.push(-r + (2 * r * i) / (steps - 1));
+  return sweepOffsets(pxPerFt, axis);
 }
 
 export interface RegionGroup { sf: number; members: number }
@@ -69,10 +111,15 @@ export interface RegionGroup { sf: number; members: number }
  *  deterministic. The most-populous cluster is the modal region: the answer
  *  most seeds around this callout produce. */
 export function clusterAreas(areas: number[], tol = 0.05): RegionGroup[] {
+  // Sort first: greedy first-fit over the INPUT order is order-dependent and
+  // non-transitive — [100,104,108] gives two clusters and [104,100,108] gives
+  // one, from the same multiset, and the reported modal area moves with it.
+  // Sorted single-linkage is a function of the multiset alone.
   const groups: { rep: number; members: number[] }[] = [];
-  for (const a of areas) {
-    const g = groups.find((gp) => Math.abs(gp.rep - a) <= tol * Math.max(Math.abs(gp.rep), Math.abs(a), 1));
-    if (g) g.members.push(a); else groups.push({ rep: a, members: [a] });
+  for (const a of [...areas].sort((x, y) => x - y)) {
+    const g = groups[groups.length - 1];
+    if (g && Math.abs(g.members[g.members.length - 1] - a) <= tol * Math.max(Math.abs(a), 1)) g.members.push(a);
+    else groups.push({ rep: a, members: [a] });
   }
   return groups
     .map((g) => ({ sf: g.members.reduce((x, y) => x + y, 0) / g.members.length, members: g.members.length }))
@@ -107,13 +154,14 @@ export type MeasureFn = (x: number, y: number) => number | null;
 export function checkCallouts(
   callouts: AreaCallout[],
   measure: MeasureFn,
-  offsets: Array<[number, number]>,
+  offsets: Array<[number, number]> | ((c: AreaCallout) => Array<[number, number]>),
   context: (c: AreaCallout) => string[] = () => [],
 ): CalloutRow[] {
   return callouts.map((c) => {
+    const offs = typeof offsets === "function" ? offsets(c) : offsets;
     const areas: number[] = [];
     let refused = 0;
-    for (const [dx, dy] of offsets) {
+    for (const [dx, dy] of offs) {
       const sf = measure(c.x + dx, c.y + dy);
       if (sf == null || !(sf > 0)) { refused++; continue; }
       areas.push(sf);
@@ -126,10 +174,10 @@ export function checkCallouts(
       engine_sf: mode ? mode.sf : null,
       err: mode ? (mode.sf - c.sf) / c.sf : null,
       agreement: mode ? mode.members : 0,
-      seeds: offsets.length,
+      seeds: offs.length,
       regions: groups.length,
       refused,
-      stable: !!mode && offsets.length > 0 && mode.members / offsets.length >= MIN_AGREEMENT_FRAC,
+      stable: !!mode && offs.length > 0 && mode.members / offs.length >= MIN_AGREEMENT_FRAC,
       context: context(c),
     };
   });
@@ -142,8 +190,15 @@ export interface CalloutSummary {
   meanAbsErr: number; medianAbsErr: number; meanSignedErr: number;
   minErr: number; maxErr: number;
   uniformSign: boolean;        // every error the same direction
+  fitFactor: number;           // best-fit AREA multiplier (geometric mean of engine/printed)
+  fitSpread: number;           // sd of log(engine/printed) — scale-invariant
   verdict: string;
 }
+
+/** Rows below this and the scale question isn't answerable at all. */
+export const MIN_SCALE_ROWS = 3;
+/** log-ratio sd under which a common multiplier explains the whole set. */
+export const SCALE_LOG_SD = 0.05;
 
 /** The one inference this harness is entitled to make. A wrong sheet scale is
  *  a single multiplier on every area, so it shows up as errors that all share
@@ -157,7 +212,7 @@ export function summarize(rows: CalloutRow[]): CalloutSummary {
   if (!errs.length) {
     return {
       matched: 0, unstable, total, meanAbsErr: NaN, medianAbsErr: NaN, meanSignedErr: NaN,
-      minErr: NaN, maxErr: NaN, uniformSign: false,
+      minErr: NaN, maxErr: NaN, uniformSign: false, fitFactor: NaN, fitSpread: NaN,
       verdict: unstable
         ? "no callout produced a stable region — every sweep was seed-sensitive, which is itself the finding"
         : "no callout produced a measurable region",
@@ -169,11 +224,20 @@ export function summarize(rows: CalloutRow[]): CalloutSummary {
   const meanSignedErr = errs.reduce((a, e) => a + e, 0) / errs.length;
   const minErr = Math.min(...errs), maxErr = Math.max(...errs);
   const uniformSign = errs.every((e) => e > 0) || errs.every((e) => e < 0);
-  const spread = maxErr - minErr;
-  const verdict = uniformSign && spread <= 0.05
-    ? "errors share a sign and cluster within 5 points — consistent with a wrong sheet scale; check the scale before reading these as engine error"
-    : uniformSign
-      ? "errors share a sign but not a magnitude — a systematic boundary convention (or a systematic engine bias), not a scale error"
-      : "errors have mixed signs — NOT a scale error; each row is its own question (finish-zone vs room floor, annotation boundaries, real error)";
-  return { matched: errs.length, unstable, total, meanAbsErr, medianAbsErr, meanSignedErr, minErr, maxErr, uniformSign, verdict };
+  // A wrong sheet scale is a constant AREA multiplier c, so the right statistic
+  // is the spread of log(engine/printed), which is invariant under c. Testing
+  // the spread of RELATIVE error (the first version did) has power that decays
+  // exactly as the error grows: a 1/8"-read-as-1/4" mix-up — c = 4, the most
+  // common real one — spreads relative error by 8 points under ±1% noise and
+  // was reported as "not a scale error".
+  const logs = errs.map((e) => Math.log1p(e));
+  const logMean = logs.reduce((a, b) => a + b, 0) / logs.length;
+  const fitFactor = Math.exp(logMean);
+  const fitSpread = Math.sqrt(logs.reduce((a, b) => a + (b - logMean) ** 2, 0) / Math.max(1, logs.length - 1));
+  const verdict = errs.length < MIN_SCALE_ROWS
+    ? `only ${errs.length} stable row(s) — too few to say anything about the sheet scale; read the rows individually`
+    : fitSpread <= SCALE_LOG_SD
+      ? `every row is explained by one area multiplier of ×${fitFactor.toFixed(3)} (log-sd ${fitSpread.toFixed(3)}) — consistent with a wrong sheet scale; check the scale before reading these as engine error`
+      : `no single multiplier explains these (best fit ×${fitFactor.toFixed(3)}, log-sd ${fitSpread.toFixed(3)} — too wide) — so this is not ONE scale error; but the spread is also too wide to rule a scale error out row by row, and ${uniformSign ? "the shared sign still suggests something systematic" : "the mixed signs mean each row is its own question"}`;
+  return { matched: errs.length, unstable, total, meanAbsErr, medianAbsErr, meanSignedErr, minErr, maxErr, uniformSign, fitFactor, fitSpread, verdict };
 }

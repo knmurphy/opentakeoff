@@ -16,7 +16,8 @@ import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, door
 import { roomLabelSeeds, detectRegions } from "../src/lib/detectRooms.ts";
 import { polyIoU, ringAreaAbs } from "./score.ts";
 import type { Point } from "../src/lib/oneclick.ts";
-import { batchMetrics, batchReach, seedStability, TINY_PROPOSAL_SF, type Proposal } from "./batch.ts";
+import { batchMetrics, batchReach, batchCoverage, seedStability, TINY_PROPOSAL_SF, type Proposal } from "./batch.ts";
+import { parseAreaCallouts } from "./callouts.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -65,36 +66,52 @@ for (const file of files) {
   }
 
   const m = batchMetrics(proposals, seeds.length, pxPerFt);
-  const goldens = (c.probes as Array<{ expect: string; golden?: Point[]; knownFail?: boolean }>)
-    .filter((p) => p.expect === "golden" && !p.knownFail && p.golden)
-    .map((p) => p.golden!);
+  const goldenProbes = (c.probes as Array<{ name: string; expect: string; golden?: Point[]; knownFail?: boolean }>)
+    .filter((p) => p.expect === "golden" && !p.knownFail && p.golden);
+  const goldens = goldenProbes.map((p) => p.golden!);
+  const cov = batchCoverage(proposals, goldenProbes.map((p) => ({ name: p.name, ring: p.golden! })), pxPerFt);
   const reach = batchReach(proposals, goldens, seeds.map((s) => s.seed), (a, b) => polyIoU(a, b, 8));
+  // roomLabelSeeds tokenizes on whitespace, so "250 SF" — an AREA CALLOUT —
+  // yields the token "250" and is counted as a room tag. Separate the two, or
+  // "reach" flatters itself with seeds no room tag actually provided.
+  const calloutAt = new Set(parseAreaCallouts(items).map((c) => `${c.x},${c.y}`));
+  const tagSeeds = seeds.filter((s) => !calloutAt.has(`${s.seed[0]},${s.seed[1]}`));
+  const tagReach = batchReach(
+    proposals.filter((p) => !calloutAt.has(`${p.seed[0]},${p.seed[1]}`)),
+    goldens, tagSeeds.map((s) => s.seed), (a, b) => polyIoU(a, b, 8),
+  );
 
   console.log(`\n══ ${caseName} ══  ${items.length} text items`);
   console.log(`  seeding    ${m.labels} room-number labels → ${m.proposals} proposals (${m.refused} refused by the engine)`);
-  console.log(`  floor      Σ ${m.sumProposedSF.toFixed(0)} SF | double-counted ${m.overlapSF.toFixed(0)} SF (${(m.overlapFrac * 100).toFixed(1)}%)  [the bench gates human-measured cases at 0.5%]`);
+  console.log(`  floor      Σ ${m.sumProposedSF.toFixed(0)} SF | double-counted ${m.overlapSF.toFixed(0)} SF (${(m.overlapFrac * 100).toFixed(1)}%)  [per-cell, blind under ~4 px of shared width; the bench gates human-measured cases at 0.5%]`);
   if (m.duplicates.length) console.log(`  duplicates ${m.duplicates.length} label pair(s) proposing the same space: ${m.duplicates.slice(0, 6).map(([a, b]) => `${a}/${b}`).join(", ")}${m.duplicates.length > 6 ? " …" : ""}`);
+  if (m.nested.length) console.log(`  nested     ${m.nested.length} pair(s) one-inside-another (a closet in a suite is fine; a hole read as floor is not): ${m.nested.slice(0, 6).map(([a, b]) => `${a}/${b}`).join(", ")}${m.nested.length > 6 ? " …" : ""}`);
   console.log(`  sizes      min ${m.minSF.toFixed(0)} SF · median ${m.medianSF.toFixed(0)} SF · max ${m.maxSF.toFixed(0)} SF${m.maxSF > 10 * Math.max(m.medianSF, 1) ? "   ← an outlier this far above the median is usually paper space, not a room" : ""}`);
-  if (m.tiny.length) console.log(`  sub-${TINY_PROPOSAL_SF}-SF   ${m.tiny.length} of ${m.proposals} proposals under the fixture-sized threshold — a seed that landed INSIDE the label\u0027s own stroke-text glyphs: ${m.tiny.slice(0, 10).join(", ")}${m.tiny.length > 10 ? " …" : ""}`);
-  console.log(`  reach      ${reach.withLabel}/${reach.goldens} pinned rooms contain a label anchor — the recall ceiling for tag seeding`);
-  console.log(`  recall     ${reach.recallHalf}/${reach.goldens} pinned rooms matched at IoU ≥ 0.5 · ${reach.recallNine}/${reach.goldens} at ≥ 0.9`);
+  if (m.tiny.length) console.log(`  sub-${TINY_PROPOSAL_SF}-SF   ${m.tiny.length} of ${m.proposals} proposals under the fixture-sized threshold — a seed that landed inside the box drawn around the room tag, or in one floor-tile cell: ${m.tiny.slice(0, 10).join(", ")}${m.tiny.length > 10 ? " …" : ""}`);
+  console.log(`  reach      ${reach.withLabel}/${reach.goldens} pinned rooms contain a seed anchor — but only ${tagReach.withLabel}/${tagReach.goldens} from an actual ROOM TAG (the rest are area callouts like "250 SF", whose numeric token roomLabelSeeds keeps)`);
+  console.log(`  recall     ${reach.recallHalf}/${reach.goldens} pinned rooms matched at IoU ≥ 0.5 · ${reach.recallNine}/${reach.goldens} at ≥ 0.9 — from room tags alone: ${tagReach.recallHalf}/${tagReach.goldens} and ${tagReach.recallNine}/${tagReach.goldens}`);
+  console.log(`             (a match against an engine-pinned golden can be a self-comparison: the golden was pinned from a trace of this same engine)`);
+  console.log(`  coverage   ${cov.coveredSF.toFixed(0)}/${cov.knownSF.toFixed(0)} SF of known floor is in SOME proposal (${(cov.frac * 100).toFixed(1)}%)  [floor in no proposal is invisible to every metric above]`);
+  for (const r of cov.rows.filter((x) => x.frac < 0.9)) {
+    console.log(`               ${r.name.padEnd(24)} ${(r.frac * 100).toFixed(1)}% covered (${r.coveredSF.toFixed(0)}/${r.knownSF.toFixed(0)} SF)${r.frac < 0.05 ? "   ← proposed by NOTHING" : ""}`);
+  }
 
   let stability: ReturnType<typeof seedStability> | undefined;
   if (jitter) {
     const d = pxPerFt;                                     // one foot
     const offs: Array<[number, number]> = [[d, 0], [-d, 0], [0, d], [0, -d]];
-    const remeasure = (x: number, y: number): number | null => {
+    const remeasure = (x: number, y: number): Point[] | null => {
       const f = floodRegionSealed(mo, x, y, 0.5, radii, wedgeCap, minPass);
       if (f.status !== "ok") return null;
       const ring = traceRegion(f) as Point[] | null;
-      return ring && ring.length >= 3 ? ringAreaAbs(ring) / (pxPerFt * pxPerFt) : null;
+      return ring && ring.length >= 3 ? ring : null;
     };
-    stability = seedStability(proposals, (p) => ringAreaAbs(p.ring) / (pxPerFt * pxPerFt), remeasure, offs);
+    stability = seedStability(proposals, remeasure, offs, (a, b) => polyIoU(a, b, 8));
     const solid = stability.filter((s) => s.held === s.tried).length;
     const brittle = stability.filter((s) => s.held <= 1);
     console.log(`  stability  ${solid}/${stability.length} proposals survive a ±1 ft seed move unchanged; ${brittle.length} hold ≤1 of 4${brittle.length ? `: ${brittle.slice(0, 8).map((s) => s.label).join(", ")}` : ""}`);
   }
-  out.push({ caseName, metrics: m, reach, stability });
+  out.push({ caseName, metrics: m, reach, tagReach, coverage: cov, stability });
 }
 
 writeFileSync(join(here, "batch-results.json"), JSON.stringify({ cases: out }, null, 1));

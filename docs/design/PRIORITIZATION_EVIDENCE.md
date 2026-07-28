@@ -108,10 +108,16 @@ why it should be *measured against* the harness in A rather than in
 isolation: two independent truth sources on the same sheet is how you find
 out which one has the convention problem.
 
-## <a name="c"></a>C. Batch fill's flood is the round-4 engine, and it ships today
+## <a name="c"></a>C. Batch fill's flood was the round-4 engine, and it shipped
 
-`detectRegions` (`web/src/lib/detectRooms.ts:76-93`) calls **`floodRegion`** —
-the raw flood. The click path calls `floodRegionSealed` with
+> **Fixed in `71282e9`** (this branch). The finding and its numbers are kept as
+> written — they are why the fix exists — but the present tense below described
+> the code before that commit. `detectRegions` now derives the scale-dependent
+> parameters from `MaskObj.mppf` and calls `floodRegionSealed`, as do the MCP
+> server's `one_click` and `detect_rooms`.
+
+`detectRegions` (then at `web/src/lib/detectRooms.ts:76-93`) called
+**`floodRegion`** — the raw flood. The click path calls `floodRegionSealed` with
 `sealRadiiFor` / `doorWedgeCapPx` / `minPassRadiusFor`
 (`TakeoffCanvas.jsx`, `bench/run.mts:53`). Everything rounds 5–8 added — gap
 sealing, per-arc door wedges, the minimum-passage rule — is absent from the
@@ -147,10 +153,11 @@ rule, two rooms' labels flood the same conjoined space. **16.6% against a
 bench's own double-counted-floor gate by 33×, and the failure is invisible
 until the sealed ladder is threaded through.
 
-Not hypothetical: `mcp/src/session.ts:394-395` calls `roomLabelSeeds` +
-`detectRegions` for the MCP server's room detection. That tool measures with
-the pre-sealing engine right now, while the canvas measures with the sealed
-one. This is a live parity bug worth fixing on its own, independent of
+Not hypothetical: `mcp/src/session.ts` calls `roomLabelSeeds` +
+`detectRegions` for the MCP server's room detection, and its `one_click` ran
+the raw flood too. Those tools measured with the pre-sealing engine while the
+canvas measured with the sealed one. This was a live parity bug worth fixing on
+its own, independent of
 whether item F gets built this month.
 
 ## <a name="d"></a>D. Item F's real risk is seeding, and most of it is measurable without an answer key

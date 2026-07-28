@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
-import { parseAreaCallouts, nearbyText, sweepOffsets, checkCallouts, summarize, type TextItem, type CalloutRow } from "./callouts.ts";
+import { parseAreaCallouts, nearMissCallouts, nearbyText, sweepOffsetsFor, checkCallouts, summarize, type TextItem, type CalloutRow } from "./callouts.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const only = process.argv.slice(2).filter((a) => !a.startsWith("--"));
@@ -71,9 +71,11 @@ for (const file of files) {
   };
 
   console.log(`\n══ ${caseName} ══  ${callouts.length} area callout(s) in ${items.length} text items`);
-  if (!callouts.length) { console.log("   (this plan doesn't print its areas — nothing to cross-check)"); continue; }
+  const misses = nearMissCallouts(items);
+  if (misses.length) console.log(`   ${misses.length} near-miss(es) this parser declined: ${misses.slice(0, 6).map((m) => JSON.stringify(m)).join(", ")}${misses.length > 6 ? " …" : ""}`);
+  if (!callouts.length) { console.log("   (no area annotation this parser recognizes — see the near-misses above before concluding the plan prints no areas)"); continue; }
 
-  const rows = checkCallouts(callouts, measure, sweepOffsets(pxPerFt), (co) => nearbyText(items, co.x, co.y, 10 * pxPerFt));
+  const rows = checkCallouts(callouts, measure, (co) => sweepOffsetsFor(pxPerFt, co.sf), (co) => nearbyText(items, co.x, co.y, 10 * pxPerFt));
   for (const r of rows) {
     const err = r.err == null ? "     n/a" : `${(r.err * 100 >= 0 ? "+" : "")}${(r.err * 100).toFixed(1)}%`.padStart(8);
     const eng = r.engine_sf == null ? "  no region" : `${r.engine_sf.toFixed(0)} SF`.padStart(11);

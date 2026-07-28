@@ -29,18 +29,25 @@ const NOT_A_PDF = fileURLToPath(new URL("../package.json", import.meta.url));
 const KEY = "sample-plan.pdf";
 const UPP = 1 / 36; // 1/4" = 1'-0" at render scale 2.0
 
+// .strict() matters: the SDK publishes these shapes as JSON Schema with
+// additionalProperties:false, and a real client REJECTS a reply carrying a key
+// the schema doesn't declare (-32602). A plain z.object() strips unknown keys
+// instead of failing, so it would wave through exactly that break — it did,
+// once (round-9 review: one_click gained gap_sealed_px/door_wedges in the
+// reply without them being declared here, and the suite stayed green because
+// the only test plan never seals or wedges).
 const SCHEMAS: Record<string, z.ZodTypeAny> = {
-  load_plan: z.object(loadPlanOutput),
-  sheet_info: z.object(sheetInfoOutput),
-  set_scale: z.object(setScaleOutput),
-  one_click: z.object(oneClickOutput),
-  detect_rooms: z.object(detectRoomsOutput),
-  measure_polygon: z.object(measurePolygonOutput),
-  measure_line: z.object(measureLineOutput),
-  takeoff_summary: z.object(takeoffSummaryOutput),
-  export_takeoff: z.object(exportTakeoffOutput),
-  delete_shape: z.object(deleteShapeOutput),
-  read_sheet_text: z.object(readSheetTextOutput),
+  load_plan: z.object(loadPlanOutput).strict(),
+  sheet_info: z.object(sheetInfoOutput).strict(),
+  set_scale: z.object(setScaleOutput).strict(),
+  one_click: z.object(oneClickOutput).strict(),
+  detect_rooms: z.object(detectRoomsOutput).strict(),
+  measure_polygon: z.object(measurePolygonOutput).strict(),
+  measure_line: z.object(measureLineOutput).strict(),
+  takeoff_summary: z.object(takeoffSummaryOutput).strict(),
+  export_takeoff: z.object(exportTakeoffOutput).strict(),
+  delete_shape: z.object(deleteShapeOutput).strict(),
+  read_sheet_text: z.object(readSheetTextOutput).strict(),
 };
 
 async function pair() {
@@ -296,4 +303,40 @@ test("deduct role: committed deducts subtract in the summary and export as measu
 
   const exported = await callOk(client, "export_takeoff");
   assert.deepEqual(exported.shapes.map((s: any) => s.measure_role), ["floor_area", "deduct"]);
+});
+
+// The plan every other test uses is four clean rectangles: nothing there ever
+// seals an opening or annexes a door wedge, so no test exercised the reply
+// shape those cases produce. That blind spot shipped a schema break once
+// (round-9 review) — this drives the real client against a room that DOES
+// seal and wedge, which is the only way the strict check above can bite.
+const SEALING_PLAN = fileURLToPath(new URL("../../demo/sample-finish-plan.pdf", import.meta.url));
+const SEALING_KEY = "sample-finish-plan.pdf";
+const SEALING_UPP = 1 / 18;   // 1/8" = 1'-0" at render scale 2.0
+
+test("sealed/wedged rooms: the reply a real client validates carries the seal provenance AND stays schema-legal", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: SEALING_PLAN });
+  await callOk(client, "set_scale", { sheet: SEALING_KEY, upp: SEALING_UPP });
+
+  // patient-room-137 — the bench's pinned probe; its boundary is closed by the
+  // seal ladder and its entry wedge is annexed from a drawn door swing.
+  const r = await callOk(client, "one_click", { sheet: SEALING_KEY, x: 2592, y: 756, condition: "CPT-1" });
+  assert.ok((r.gap_sealed_px ?? 0) > 0 || (r.door_wedges ?? 0) > 0,
+    `this probe should seal or wedge — got ${JSON.stringify(r)}`);
+
+  // …and the synthetic boundary must survive onto the committed shape, or an
+  // exported takeoff can't tell a sealed trace from a clean vector-bounded one
+  const exported = await callOk(client, "export_takeoff");
+  const shp = exported.shapes.find((s: any) => s.id === r.shape_id);
+  assert.ok(shp, "the click committed a shape");
+  assert.ok((shp.origin?.gap_sealed_px ?? 0) > 0 || (shp.origin?.door_wedges ?? 0) > 0,
+    `origin must record the synthetic boundary — got ${JSON.stringify(shp.origin)}`);
+
+  // detect_rooms drops the whole batch if ANY room's reply is schema-illegal,
+  // so one sealed room among the 50-odd on this sheet is enough to catch it
+  const batch = await callOk(client, "detect_rooms", { sheet: SEALING_KEY });
+  assert.ok(batch.detected > 0, "the VA plan has room-number labels");
+  assert.ok(batch.rooms.some((x: any) => (x.gap_sealed_px ?? 0) > 0 || (x.door_wedges ?? 0) > 0),
+    "at least one batch-detected room seals or wedges on this plan");
 });
