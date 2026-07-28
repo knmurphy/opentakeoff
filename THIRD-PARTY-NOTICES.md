@@ -22,3 +22,23 @@ The optional AI sandbox (`/server`) additionally uses
 
 `pdf.js` is distributed under the Apache License 2.0; a copy of that license is
 available at <https://github.com/mozilla/pdf.js/blob/master/LICENSE>.
+
+## Bundled binary artifacts
+
+Redistributed in this repository and served from the app's own origin (not a
+CDN). Each is unmodified apart from Google Fonts' `latin` / `latin-ext`
+subsetting.
+
+| Artifact | Family | Source | License |
+|---|---|---|---|
+| `web/public/fonts/bricolage-grotesque-*.woff2` | Bricolage Grotesque | Google Fonts | SIL OFL 1.1 |
+| `web/public/fonts/inter-*.woff2` | Inter | Google Fonts | SIL OFL 1.1 |
+| `web/public/fonts/jetbrains-mono-*.woff2` | JetBrains Mono | Google Fonts | SIL OFL 1.1 |
+| `web/public/fonts/space-mono-*.woff2` | Space Mono | Google Fonts | SIL OFL 1.1 |
+| `web/public/fonts/ibm-plex-mono-*.woff2` | IBM Plex Mono | Google Fonts | SIL OFL 1.1 |
+
+The SIL Open Font License 1.1 text ships alongside them at
+[`web/public/fonts/OFL.txt`](web/public/fonts/OFL.txt) and is served with the
+app. The `@font-face` declarations that load them are generated into
+[`web/src/styles/fonts.css`](web/src/styles/fonts.css), which documents how to
+regenerate the set.

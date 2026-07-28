@@ -11,7 +11,7 @@ npm install
 npm run dev      # http://localhost:5173 — hot reload
 npm test         # node:test over the pure geometry + totals math (test/*.test.ts)
 npm run build    # → web/dist/ (static output; this is what Netlify deploys)
-npm run check    # typecheck + lint + test + build — exactly what CI runs; green here ⇒ green CI
+npm run check    # typecheck + lint + test + build (see the CI note below)
 ```
 
 ## Shipping — the required steps, every change
@@ -30,8 +30,13 @@ builds and tests every change.
 So:
 
 1. **Branch first** — never commit on `main`: `git checkout -b <topic>`.
-2. **`npm run check` before pushing** (in `web/`). It is exactly what CI runs,
-   on the same Node (`web/.nvmrc`) — green here means green CI.
+2. **`npm run check` before pushing** (in `web/`), on the same Node
+   (`web/.nvmrc`). Note it is **not identical to CI**: `check` includes `lint`
+   and CI's `web` job does not, and CI additionally runs an **`mcp` job on
+   Ubuntu *and* Windows** (typecheck/test/build/`smoke:dist`) plus a
+   **`capture` job** (`python3 capture/capture_server.py selftest`). A green
+   `check` predicts the `web` job only — if you touched `mcp/` or `capture/`,
+   run those locally too.
 3. **Open a PR** and wait for the `web` check to pass. Don't merge red or
    pending.
 4. **Squash-merge with branch delete**

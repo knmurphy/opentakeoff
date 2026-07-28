@@ -2,6 +2,14 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-28
+
+### Changed
+- **Webfonts are self-hosted; the app no longer contacts a font CDN.** `tokens.css` used to `@import` five families from `fonts.googleapis.com` on every page load — a third-party request (IP + User-Agent) before the user opens a plan, and a hard failure with no network, in an app whose pitch is that nothing leaves the browser. The same families and weights now ship as woff2 under `web/public/fonts/` (latin + latin-ext subsets, ~1.5 MB) with generated `@font-face` rules in `web/src/styles/fonts.css`, and `style-src`/`font-src` in `web/public/_headers` are back to `'self'`. Verified with a headless load of the production build: **zero off-origin requests**, all faces resolved from our own origin. All five families are SIL OFL 1.1 — the licence text ships at `web/public/fonts/OFL.txt` and the artifacts are itemised in a new *Bundled binary artifacts* section of `THIRD-PARTY-NOTICES.md`.
+
+### Fixed
+- **Two documentation claims that the code never backed.** `FEATURES.md` advertised a `?hatchqa` QA wall for the condition hatch patterns; the string appears in no commit of `web/src` in this repository's history, so the claim is struck (the 2026-07-05 entry describing it now carries a correction rather than being rewritten). And `AGENTS.md` said `npm run check` is "exactly what CI runs" — it is not: `check` runs `lint` and CI's `web` job does not, while CI additionally runs an `mcp` job on Ubuntu *and* Windows plus a `capture` selftest. A green `check` predicts the `web` job only.
+
 ## 2026-07-21
 
 ### Added
@@ -162,7 +170,7 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 - **Highlighter.** A freehand marker under Markup (`H`): press and drag to paint — real ink feel, stroke after stroke, no dialog between strokes. A style popover under the Markup menu offers five inks (yellow default), **F/M/B** tip sizes, and a **chisel or round** nib (remembered per browser). Strokes capture with distance thinning, preview imperatively (no React render per move), stick to their sheet, scale with the plan like drawn ink, and **export into the Marked Set PDF** in their own color (chisel = ribbon fill, round = round-cap stroke). Because press-drag paints, press-drag panning is unavailable while the highlighter is armed — Space/middle/right-drag still pan. The pure stroke geometry (`thinStroke`, `strokePathD`, `chiselRibbon`) lives in `web/src/lib/geometry.js` with tests.
 
 ### Changed
-- **Hatch patterns redesigned.** The 16 condition hatches retuned as a set: two stroke weights (dense/dual-family patterns draw lighter so nothing shouts), per-pattern tile sizes, even pitches, and ~8–16% ink coverage across the board — brick now staggers like running bond, plank reads as long boards, checker/dots/speckle calmed. Dark view gets brighter stroke alphas baked into the pattern. The Marked Set PDF's hatch approximations follow the new pitches. A hidden `?hatchqa` QA wall renders every pattern at three scales in two colors for future retunes.
+- **Hatch patterns redesigned.** The 16 condition hatches retuned as a set: two stroke weights (dense/dual-family patterns draw lighter so nothing shouts), per-pattern tile sizes, even pitches, and ~8–16% ink coverage across the board — brick now staggers like running bond, plank reads as long boards, checker/dots/speckle calmed. Dark view gets brighter stroke alphas baked into the pattern. The Marked Set PDF's hatch approximations follow the new pitches. A hidden `?hatchqa` QA wall renders every pattern at three scales in two colors for future retunes. *(Correction, 2026-07-28: no `?hatchqa` wall is present in this repository — the string appears in no commit of `web/src` in this history. The retuned patterns themselves did ship; only the QA wall is unaccounted for.)*
 - **Hatch picker reorganized.** A 4×4 grid of larger swatches with a caption line that names the pattern under the cursor (or the current selection) — no more squinting at a 26px tile.
 - **"Cut Out" is now "Eraser".** The toolbar menu and its tools read Erase shape / Erase rectangle (`D` / `⇧D`). Labels only — the takeoff math is unchanged, and existing deduct shapes are untouched.
 
