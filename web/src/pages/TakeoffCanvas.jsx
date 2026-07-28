@@ -3180,6 +3180,7 @@ export default function TakeoffCanvas() {
     const base = { key, running: true, total: seeds.length };
     setDetect({ ...base, done: 0, tally: null, report: null, items: [] });
     let painted = 0;   // ms of the last progress render — the file's throttle idiom, one render per ~150 ms, not one per flood
+    let tried = 0;     // seeds actually FLOODED — diverges from seeds.length the moment a pass is cancelled
     for (let i = 0; i < seeds.length; i++) {
       if (run.cancel || seq !== renderSeqRef.current) break;
       await new Promise((r) => requestAnimationFrame(r));   // yield the frame BEFORE the flood, so the first one doesn't stall the click that started it
@@ -3187,6 +3188,7 @@ export default function TakeoffCanvas() {
       // one seed at a time through the SHIPPED batch path — identical
       // arithmetic to detectRegions(mask, allSeeds), just interruptible
       const [reg] = detectRegions(mo, [seeds[i]], fillSens);
+      tried++;
       if (reg) {
         regions++;
         const ring = snapVertices(traceRegion(reg.flood), (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null), 7);
@@ -3209,7 +3211,7 @@ export default function TakeoffCanvas() {
     }
     if (run.discarded || seq !== renderSeqRef.current) return;   // the set was dropped (Esc / hydrate / sheet change) — publishing a report now would resurrect it
     const tally = {
-      textItems: items.length, patternHits, seeds: seeds.length, regions,
+      textItems: items.length, patternHits, seeds: seeds.length, tried, regions,
       proposals: found.length, tiny: found.filter((r) => r.area_sf < FIXTURE_HINT_SF).length,
       ...(run.cancel ? { cancelled: true } : {}),
     };
@@ -3218,7 +3220,10 @@ export default function TakeoffCanvas() {
     // review set stays open with its report so "nothing found here" is on
     // screen with the reason, instead of a toast that ages out in six seconds
     // and leaves an unmarked sheet looking finished.
-    setDetect({ key, running: false, done: tally.seeds, total: seeds.length, tally, report, items: found });
+    // `done` is what was TRIED, not the seed count: on a cancelled pass the two
+    // differ, and reporting the total would draw a full progress bar over a
+    // pass that stopped early (Copilot review, PR #190).
+    setDetect({ key, running: false, done: tried, total: seeds.length, tally, report, items: found });
     setCommitMsg(report.message);
   }
   // Accept = the ONLY thing that writes a takeoff. One dispatchShape `add` for

@@ -198,6 +198,11 @@ export interface DetectionTally {
   patternHits: number;
   /** seeds surviving the text filters and the drawing-extent gate */
   seeds: number;
+  /** seeds actually FLOODED. Equal to `seeds` on a completed pass; smaller on
+   *  a cancelled one. Optional so an older caller still reports coherently —
+   *  it then reads as "everything was tried", which is what a caller with no
+   *  cancellation has done. */
+  tried?: number;
   /** seeds whose flood came back clean (status "ok") */
   regions: number;
   /** regions that traced to a usable ring — the proposals actually offered */
@@ -232,22 +237,33 @@ const plural = (n: number) => (n === 1 ? "" : "s");
  *  tests pin it, and nothing here knows what a DOM is. */
 export function detectionReport(t: DetectionTally, tinySf = 4): DetectionReport {
   const n = t.proposals;
+  // Seeds actually FLOODED. On a completed pass this is every seed; on a
+  // cancelled one it is fewer, and the difference must not be laundered into
+  // "the fill failed" — a tag nobody tried and a tag that leaked are different
+  // facts, and the second is the one that makes an estimator distrust a room
+  // (Copilot review, PR #190).
+  const tried = t.tried ?? t.seeds;
   const headline =
     t.seeds === 0
       ? t.patternHits === 0
         ? "No room-number tags on this sheet — detection has nothing to seed from."
         : `No room-number tags on this sheet — all ${t.patternHits} matching numeral${plural(t.patternHits)} were rejected as something else.`
       : n === 0
-        ? `No rooms detected: ${t.seeds} room tag${plural(t.seeds)} found, none produced a usable region.`
-        : `${n} of ${t.seeds} room tag${plural(t.seeds)} produced a room.`;
+        ? `No rooms detected: ${t.seeds} room tag${plural(t.seeds)} found, ${tried === 0 ? "none was tried" : "none produced a usable region"}.`
+        : `${n} of ${tried} room tag${plural(tried)} produced a room${t.cancelled ? ` (${t.seeds} on the sheet)` : ""}.`;
   const limits: string[] = [];
-  if (t.cancelled) limits.push("Stopped early — the remaining room tags were never tried.");
+  if (t.cancelled) {
+    const untried = Math.max(0, t.seeds - tried);
+    limits.push(untried > 0
+      ? `Stopped early — ${untried} room tag${plural(untried)} ${untried === 1 ? "was" : "were"} never tried.`
+      : "Stopped early.");
+  }
   if (t.seeds > 0 && t.patternHits > t.seeds) {
     const k = t.patternHits - t.seeds;
     limits.push(`${k} other numeral${plural(k)} rejected as not a room tag (printed areas, dimensions, drawing numbers, title-block text).`);
   }
-  if (t.seeds > n) {
-    const k = t.seeds - n;
+  if (tried > n) {
+    const k = tried - n;
     limits.push(`${k} tag${plural(k)} produced nothing — the fill leaked past the room, or landed in dense linework.`);
   }
   if (t.tiny > 0) {

@@ -260,3 +260,43 @@ test("detectionReport: message is the headline plus every limit, in order", () =
   const r = detectionReport(tally({ tiny: 3 }));
   assert.equal(r.message, [r.headline, ...r.limits].join(" "));
 });
+
+// ── a cancelled pass must not launder untried tags into failures ───────────
+// (Copilot review, PR #190). "Nobody tried this tag" and "the fill leaked out
+// of this room" are different facts, and only the second is a reason to
+// distrust the engine on this sheet.
+
+const cancelTally = (over: Partial<DetectionTally> = {}): DetectionTally => ({
+  textItems: 100, patternHits: 12, seeds: 10, tried: 10, regions: 8, proposals: 8, tiny: 0, ...over,
+});
+
+test("detectionReport: a cancelled pass counts failures against what was TRIED", () => {
+  // 10 tags on the sheet, stopped after 4, of which 3 produced a room
+  const r = detectionReport(cancelTally({ tried: 4, regions: 3, proposals: 3, cancelled: true }));
+  assert.match(r.headline, /3 of 4 room tags produced a room \(10 on the sheet\)/);
+  assert.ok(r.limits.some((l) => /Stopped early — 6 room tags were never tried/.test(l)),
+    `must say what was skipped, got ${JSON.stringify(r.limits)}`);
+  assert.ok(r.limits.some((l) => /^1 tag produced nothing/.test(l)),
+    `only the ONE tried-and-failed tag is a failure, got ${JSON.stringify(r.limits)}`);
+  assert.ok(!r.limits.some((l) => /^7 tags produced nothing/.test(l)),
+    "the 6 untried tags must never be reported as fill failures");
+});
+
+test("detectionReport: cancelling before the first flood claims nothing", () => {
+  const r = detectionReport(cancelTally({ tried: 0, regions: 0, proposals: 0, cancelled: true }));
+  assert.match(r.headline, /none was tried/);
+  assert.ok(r.limits.some((l) => /never tried/.test(l)));
+  assert.ok(!r.limits.some((l) => /produced nothing/.test(l)), "nothing was tried, so nothing failed");
+  assert.equal(r.empty, true);
+});
+
+test("detectionReport: a completed pass is unchanged, and a caller with no `tried` still reads right", () => {
+  const complete = detectionReport(cancelTally({ regions: 8, proposals: 8 }));
+  assert.match(complete.headline, /8 of 10 room tags produced a room\./);
+  assert.ok(!complete.headline.includes("on the sheet"), "no cancellation aside on a full pass");
+  assert.ok(complete.limits.some((l) => /^2 tags produced nothing/.test(l)));
+
+  const legacy = detectionReport({ ...cancelTally({ proposals: 8, regions: 8 }), tried: undefined });
+  assert.deepEqual(legacy.limits, complete.limits, "absent `tried` means everything was tried");
+  assert.equal(legacy.headline, complete.headline);
+});
