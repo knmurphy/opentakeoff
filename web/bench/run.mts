@@ -58,12 +58,18 @@ function runCase(caseName: string, segs: number[], imgW: number, imgH: number, m
 
     // cross-resolution agreement — gate only where the mask is at or above the
     // engine's determinism floor (below it, half-foot topology quantizes and
-    // the engine itself says so via confidence); coarser runs stay visible
+    // the engine itself says so via confidence); coarser runs stay visible.
+    // A case with FEWER THAN TWO gated resolutions is not cross-checked at
+    // all and is reported as such — comparing a run to itself asserts
+    // nothing, and pretending otherwise inflated the gate (review round 8).
     const gatingRuns = runs.filter((_, k) => (masks[k].mppf ?? Infinity) >= DETERMINISM_MIN_MPPF);
     const subFloorRes = RES_FACTORS.filter((_, k) => (masks[k].mppf ?? Infinity) < DETERMINISM_MIN_MPPF);
-    const ca = crossAgreement(gatingRuns.length >= 2 ? gatingRuns : runs.slice(0, 1), CROSS_CELL);
+    const ungated = gatingRuns.length < 2;
+    const ca = ungated
+      ? { statuses: runs.map((r) => r.status), statusAgree: true, minPairIoU: undefined }
+      : crossAgreement(gatingRuns, CROSS_CELL);
     const iouByRes = p.expect === "golden" ? runs.map((r) => (r.ring && r.ring.length >= 3 ? polyIoU(r.ring, p.golden!, CROSS_CELL) : 0)) : undefined;
-    crossScores.push({ caseName, probeName: p.name, expect: p.expect, resolutions: RES_FACTORS, ...ca, statuses: runs.map((r) => r.status), iouByRes, subFloorRes: subFloorRes.length ? subFloorRes : undefined, knownFail: p.knownFail, tags: p.tags });
+    crossScores.push({ caseName, probeName: p.name, expect: p.expect, resolutions: RES_FACTORS, ...ca, statuses: runs.map((r) => r.status), iouByRes, subFloorRes: subFloorRes.length ? subFloorRes : undefined, ungated: ungated || undefined, knownFail: p.knownFail, tags: p.tags });
   }
 }
 
@@ -103,16 +109,17 @@ console.log(`refusal probes: ${agg.refusalProbes} | correct ${(agg.correctRefusa
 console.log(`\n── cross-resolution (ws × ${RES_FACTORS.join(" / ")}) ──`);
 for (const s of crossScores) {
   const bits = [
-    s.statusAgree ? `statuses ${s.statuses.join("/")}` : `DISAGREE ${s.statuses.join("/")}`,
+    s.ungated ? `statuses ${s.statuses.join("/")}` : (s.statusAgree ? `statuses ${s.statuses.join("/")}` : `DISAGREE ${s.statuses.join("/")}`),
     s.minPairIoU !== undefined ? `pair IoU ${s.minPairIoU.toFixed(3)}` : "",
     s.iouByRes ? `vs-golden ${s.iouByRes.map((v) => v.toFixed(3)).join("/")}` : "",
+    s.ungated ? "[NO GATED PAIR — not cross-checked]" : "",
     s.subFloorRes?.length ? `[sub-floor: ×${s.subFloorRes.join(",×")}]` : "",
     s.knownFail ? "[known-fail]" : "",
   ].filter(Boolean).join("  ");
   console.log(`${(s.caseName + " / " + s.probeName).padEnd(44)} ${bits}`);
 }
 const xagg = aggregateCross(crossScores);
-console.log(`\ncross probes: ${xagg.crossProbes} | disagreements ${xagg.disagreements} | pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} | pair-IoU mean ${xagg.crossMeanIoU.toFixed(3)}`);
+console.log(`\ncross probes: ${xagg.crossProbes} | disagreements ${xagg.disagreements} | pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} | pair-IoU mean ${xagg.crossMeanIoU.toFixed(3)}${xagg.ungated ? ` | NOT cross-checked (single gated resolution): ${xagg.ungated}` : ""}`);
 writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, crossScores, crossAggregate: xagg, resFactors: RES_FACTORS }, null, 1));
 
 const failures: string[] = [];

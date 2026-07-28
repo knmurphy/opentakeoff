@@ -82,6 +82,9 @@ export interface CrossScore {
   minPairIoU?: number;         // worst pairwise ring agreement (≥2 traced, gating res only)
   iouByRes?: number[];         // per-resolution IoU vs the golden (diagnostic, all res)
   subFloorRes?: number[];      // resolutions below the engine's determinism floor — tracked, non-gating
+  ungated?: boolean;           // FEWER THAN TWO resolutions at/above the floor: this case is
+                               // NOT cross-checked at all — the honest statement, never a
+                               // self-comparison dressed up as agreement (review round 8)
   knownFail?: boolean;
   tags?: string[];
 }
@@ -106,17 +109,19 @@ export interface CrossAggregate {
   disagreements: number;       // gating probes whose verdict flips with resolution
   crossFloorIoU: number;       // worst pairwise ring agreement among gating golden probes
   crossMeanIoU: number;
+  ungated: number;             // probes with <2 gated resolutions — NOT cross-checked
   knownFails: number;
 }
 
 export function aggregateCross(scores: CrossScore[]): CrossAggregate {
-  const gating = scores.filter((s) => !s.knownFail);
+  const gating = scores.filter((s) => !s.knownFail && !s.ungated);
   const ious = gating.filter((s) => s.minPairIoU !== undefined).map((s) => s.minPairIoU!);
   return {
     crossProbes: gating.length,
     disagreements: gating.filter((s) => !s.statusAgree).length,
     crossFloorIoU: ious.length ? Math.min(...ious) : 1,
     crossMeanIoU: ious.length ? ious.reduce((a, b) => a + b, 0) / ious.length : 1,
+    ungated: scores.filter((s) => s.ungated).length,
     knownFails: scores.filter((s) => s.knownFail).length,
   };
 }

@@ -140,6 +140,92 @@ export function syntheticCorpus(): SyntheticCase[] {
     ], meta));
   }
 
+  {
+    // TWO drawn doors on one room — the per-arc-cluster retry must include
+    // BOTH swing wedges (the all-at-once retry used to balloon, reject, and
+    // drop every wedge on multi-door rooms — adversarial review, round 8)
+    const R2 = 54;
+    const south = doorSwing();
+    const eastLeaf = [316, 154, 316 - R2, 154];
+    const eastArc: number[] = [];
+    let px = 316 - R2, py = 154;
+    for (let k = 1; k <= 8; k++) {
+      const a = (k / 8) * (Math.PI / 2);
+      const qx = 316 - R2 * Math.cos(a), qy = 154 + R2 * Math.sin(a);
+      eastArc.push(px, py, qx, qy); px = qx; py = qy;
+    }
+    const roomSegs = [
+      100, 100, 316, 100, 316, 100, 316, 154, 316, 208, 316, 280, 316, 280, 262, 280,
+      208, 280, 100, 280, 100, 280, 100, 100,
+      ...south.segs, ...eastLeaf, ...eastArc,
+    ];
+    const meta = zeroMeta([...border, ...roomSegs]);
+    const n = (border.length >> 2) + (roomSegs.length >> 2);
+    for (let k = 0; k < 8; k++) meta[n - 8 + k] = SEG_CURVE;              // east arc
+    for (let k = 0; k < 8; k++) meta[n - 8 - 1 - 8 + k] = SEG_CURVE;      // south arc (before east leaf)
+    cases.push(mk("two-door-room", roomSegs, [
+      { name: "center", seed: [200, 190], expect: "golden", golden: ROOM, tags: ["door-swing", "multi-door"] },
+    ], meta));
+  }
+
+  {
+    // Finish-tag ANNOTATION RING: solid hairline lines inset from every wall
+    // with 45° corner ties (the VA plan draws per-wall paint tags this way).
+    // The precise classifier correctly says the ring is not hatch — and then
+    // nothing lets the flood past it, so the room reads to the ring, not the
+    // wall (adversarial re-pin audit, round 8: patient-room-137 lost a
+    // perimeter band this way). KNOWN-FAIL until the engine understands
+    // annotation semantics; the golden pins the wall-to-wall intent.
+    const ring = sq(118, 118, 298, 262);
+    const ties = [118, 118, 100, 100, 298, 118, 316, 100, 298, 262, 316, 280, 118, 262, 100, 280];
+    const all = [...sq(100, 100, 316, 280), ...ring, ...ties];
+    cases.push(mk("annotation-ring-room", all, [
+      { name: "center", seed: [200, 190], expect: "golden", golden: ROOM, tags: ["annotation-ring", "known-limit"], knownFail: true },
+    ], zeroMeta([...border, ...all])));
+  }
+
+  {
+    // Partition BANK at sub-cap pitch (15" o.c. cubbies/lockers): repetitive
+    // real architecture IS a periodic same-pen lattice, so the interior
+    // partitions classify as hatch and the predominantly-soft tier annexes
+    // the bank (adversarial review, round 8). Genuine ambiguity — at this
+    // pitch the linework is indistinguishable from a tile pattern without
+    // context. KNOWN-FAIL documenting the limitation; the golden pins one
+    // bay. Shell is a heavier pen, partitions hairline (pen-width membership
+    // is what keeps the SHELL hard).
+    const bank: number[] = [];
+    const meta: number[] = [];
+    const shell = sq(100, 100, 350, 208);
+    for (let k = 0; k < 4; k++) meta.push(3 << 4);      // shell pen w=3
+    const xs: number[] = [];
+    for (let i = 0; i < 6; i++) { const x = 136 + i * 22.5; xs.push(x); bank.push(x, 100, x, 208); meta.push(0); }
+    const all = [...shell, ...bank];
+    const m = new Uint8Array((border.length >> 2) + (all.length >> 2));
+    for (let i = 0; i < meta.length; i++) m[(border.length >> 2) + i] = meta[i];
+    cases.push(mk("partition-bank-15in", all, [
+      // middle bay: between partitions 3 and 4 (x 181..203.5)
+      { name: "mid-bay", seed: [192, 154], expect: "golden", golden: rect(xs[2], 100, xs[3], 208), tags: ["partition-bank", "known-limit"], knownFail: true },
+    ], m));
+  }
+
+  {
+    // Same-pen demising wall on a SHARED tile module (flattened exports draw
+    // everything hairline; AutoCAD's global hatch origin makes adjacent
+    // same-pattern fills share the lattice). The wall sits in a perfect
+    // lattice of its own pen → soft → rooms merge. Pre-existing exposure
+    // (the old classifier's protects were width-based too); KNOWN-FAIL
+    // documenting it; the golden pins room A alone.
+    const grid: number[] = [];
+    for (let x = 100; x <= 568; x += 18) grid.push(x, 100, x, 334);
+    for (let y = 100; y <= 334; y += 18) grid.push(100, y, 568, y);
+    // demising wall at x = 334 — exactly 13 tile modules from the shared
+    // hatch origin, so it sits IN the grid's lattice
+    const all = [...sq(100, 100, 568, 334), 334, 100, 334, 334, ...grid];
+    cases.push(mk("tile-demising-same-pen", all, [
+      { name: "room-a", seed: [220, 220], expect: "golden", golden: rect(100, 100, 334, 334), tags: ["demising-wall", "known-limit"], knownFail: true },
+    ], zeroMeta([...border, ...all])));
+  }
+
   cases.push(mk("open-space", sq(100, 100, 316, 280), [
     { name: "outside-room", seed: [600, 600], expect: "refusal", tags: ["open-space"] },
   ]));

@@ -675,6 +675,24 @@ test("markPolylineArcs: a DASHED arc (gaps between dashes, dash-split chords) st
   assert.ok(curveBits >= (segs.length >> 2) - 2, "chords carry the polyarc provenance bit");
 });
 
+test("markPolylineArcs: a joined off-circle stub doesn't kill the arc — trimmed, arc marked, stub not (review round 8)", () => {
+  // a straight stub meets the arc start at a plausible signed turn; its
+  // vertex is off the circle, so an all-or-nothing fit would reject the
+  // whole window. The trim-retry must recover the arc without the stub.
+  const arc = arcChords(200, 200, 54, 0, Math.PI / 2, 10);
+  const [ax, ay] = [arc[0], arc[1]];
+  const dir = Math.atan2(arc[3] - ay, arc[2] - ax) - (30 * Math.PI) / 180;  // 30° turn into the arc
+  const stub = [ax - 10 * Math.cos(dir), ay - 10 * Math.sin(dir), ax, ay];
+  const segs = [...stub, ...arc];
+  const meta = new Uint8Array(segs.length >> 2);
+  const marked = markPolylineArcs(segs, meta);
+  assert.ok(marked >= 9, `arc chords recovered despite the stub (got ${marked})`);
+  assert.equal(meta[0] & SEG_POLYARC, 0, "the stub itself is not marked");
+  let arcMarked = 0;
+  for (let i = 1; i < meta.length; i++) if (meta[i] & SEG_POLYARC) arcMarked++;
+  assert.ok(arcMarked >= 9, `arc body carries the bit (got ${arcMarked}/10)`);
+});
+
 test("markPolylineArcs: straight dashed lines, zigzags, and ellipses are NOT arcs", () => {
   const dashedLine: number[] = [];
   for (let x = 100; x < 180; x += 8) dashedLine.push(x, 50, x + 4.5, 50);
@@ -720,6 +738,20 @@ test("periodicity: resolvably-IRREGULAR pitch is not hatch (the old ±35% band s
   }
   const soft = classifyHatchSegs(segs, new Uint8Array(segs.length >> 2), 0.5);
   for (let i = 0; i < soft.length; i++) assert.equal(soft[i], 0, `irregular row ${i} stays hard`);
+});
+
+test("periodicity: a pattern edge with a FAR same-pen stroke beyond it stays hard (clipped-guard tautology, review round 8)", () => {
+  // hatch patch rows at pitch 4 image px; one unrelated same-pen parallel
+  // stroke 4 pitches beyond the bottom edge (open space, not a bounding
+  // wall). The clipped-edge clause must test the bound on the side OPPOSITE
+  // its lattice — the edge row only softens when clipped within ONE pitch.
+  const segs: number[] = [];
+  for (const y of [100, 104, 108, 112, 116]) segs.push(200, y, 400, y);
+  segs.push(200, 84, 400, 84);                         // far stroke, 4 pitches below the y=100 edge
+  const soft = classifyHatchSegs(segs, new Uint8Array(segs.length >> 2), 0.5);
+  assert.equal(soft[0], 0, "the y=100 pattern edge stays hard (far stroke is not a clip bound)");
+  assert.equal(soft[5], 0, "the lone far stroke stays hard");
+  assert.equal(soft[2], 1, "interior rows still classify");
 });
 
 test("periodicity: door-arc chords are not a periodic family (unmarked arcs, the round-7 failure)", () => {

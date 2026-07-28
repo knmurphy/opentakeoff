@@ -39,6 +39,14 @@ const PINNED = [
       // its own one-click probe (dense hatch, failure mode #1: the click
       // lands between cross-hatch lines and must measure, not refuse).
       { name: "patient-room-137", seed: [2592, 756], expect: "golden" as const, tags: ["door-swing"] },
+      // The room has an inset finish-tag ANNOTATION RING (solid hairline
+      // offset lines, 45° corner ties) that the engine cannot yet see past —
+      // the room probe reads to the ring, and the perimeter band between
+      // ring and wall is measurable only as its own click. This probe pins
+      // the band's left strip so that floor is tracked, not lost; the
+      // synthetic annotation-ring-room known-fail pins the wall-to-wall
+      // intent. (Adversarial re-pin audit, round 8.)
+      { name: "patient-room-137-band", seed: [2550, 900], expect: "golden" as const, tags: ["annotation-band"] },
       { name: "patient-toilet-137a", seed: [2668, 1112], expect: "golden" as const, tags: ["hatch", "dense-hatch-room"] },
       { name: "elevator-e01", seed: [2538, 1566], expect: "golden" as const, tags: ["door-swing"] },
       // ward room + its vestibule are TWO probes since the min-passage rule:
