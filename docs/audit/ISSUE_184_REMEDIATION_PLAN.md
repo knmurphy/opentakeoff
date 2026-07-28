@@ -3,6 +3,13 @@
 Companion to [`ISSUE_184_AUDIT.md`](./ISSUE_184_AUDIT.md). Finding IDs (A1, B3, …) refer to
 that document.
 
+**Status: passed adversarial review at rev 7** (cycle 6, a narrow confirmation pass, verified
+the last fix and found nothing new). Blocking findings per cycle: **10 → 10 → 7 → 6 → 1 → 0**.
+Two cycles found defects in the *product* rather than in this document, and both are now audit
+findings: **A5b** (the bench scores a quantity production never returns) and the **A1
+correction** (pinning `mppf` does not fix it; `Math.round(segs·ws)` still follows render scale,
+so cap-bound sheets shift too).
+
 **Revision 7 (final).** Cycle 5 returned a single blocking item and judged Phases 0 and 1
 otherwise executable. Blocking findings per cycle ran 10 → 10 → 7 → 6 → 1, and the character
 shifted from "this claim is false" to "this task is half-specified" — the substance has
