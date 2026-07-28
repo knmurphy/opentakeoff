@@ -185,6 +185,20 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 
 ## Phase 0 — make the gates real
 
+> **✅ IMPLEMENTED** in `5e92a11` on `claude/issue-184-hatch-periodicity-fduafy`.
+> 0.1a (lint + bench in CI and in `check`), 0.2 (corpus-shape assertion — verified a
+> deleted fixture now goes red where it printed "bench passed"), 0.3 (xpass detection —
+> verified), 0.4 (known-fail block, which surfaces `open-margin`'s live `NOT REFUSED`),
+> 0.5/0.6 (leak annotated as a diagnostic, refusal denominator labelled), 0.7 (headline
+> split: synthetic n=9 mean 0.979 vs engine-pinned n=12 mean 1.000).
+>
+> **Not yet done in this phase:** 0.1b (e2e in CI — needs the Playwright devDependency and
+> a browser install step), 0.8 (ledger), 0.9 (re-pin protocol), 0.10 (callout harness),
+> 0.11/0.12 (bench↔production parity and the wall-line-semantics decision it forces).
+> **0.9 still blocks 0.11 and anything else that moves a golden.**
+
+## Phase 0 — original task list
+
 | # | Task | Finding | Size |
 |---|---|---|---|
 | 0.1a | Add `lint` and `bench` to CI. Extend `check` to `typecheck && lint && test && bench && build` and have CI call it, so the definition lives in one place. Rev 1's "prefer `npm run check`" was wrong — `check` contains neither `bench` nor `e2e`, so it would have added lint only. Also extend `lint` (`eslint src netlify/functions`) to cover `bench test e2e`. Note this is a **policy reversal**, not an oversight: `eslint.config.mjs:5` documents the `.ts` exclusion as deliberate ("tsc --noEmit already checks them strictly"). | B2 | S |
@@ -350,6 +364,22 @@ subject is a tautological gate.)*
 ---
 
 ## Phase 1 — the live product bug
+
+> **✅ A1 FIXED** in `1a02b15`. `buildMask` maps into the baseline render before choosing
+> the raster and before quantizing. Measured: `mppf` 18.000 and 882.23 SF at rs 2.000 /
+> 2.070 / 3.000 / 5.374 with **zero differing mask cells**; before the fix rs 5.374 gave
+> `mppf` 30.0 and a different area. Three regression tests, each verified to fail on revert.
+> No golden moved — at the default render `k === 1` and the result is bit-identical.
+>
+> **Plan correction:** 1.1i is **not a separate fix**. Once `ws` is baseline-derived the
+> quantization that follows `ws` is too — `Math.round(seg*ws)` and `Math.round(seg*k*wsB)`
+> agree on 400k random draws, 0 differences. Landed as one fix.
+>
+> **Still open:** 1.0 (the interim toggle mitigation is unnecessary now the real fix is in),
+> 1.1d/1.1g (the raster/scan path builds its own render and keeps the old formula, so **A1
+> is still live on scanned sheets**), 1.4 (A8 hover perf).
+
+## Phase 1 — original task list
 
 ### 1.0 Mitigate A1 today (S)
 
