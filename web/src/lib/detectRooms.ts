@@ -8,6 +8,9 @@
 //   roomLabelSeeds  positioned text items → candidate seed points
 //   detectRegions   seeds + mask → { seed, flood } for each CLEAN (ok) flood,
 //                   through the SAME sealed flood the click path uses
+//   detectionReport tally of one pass → the honest readout (see the bottom of
+//                   this file — the numbers matter less than saying what they
+//                   do NOT cover)
 //
 // The caller owns pdf.js/the DOM (extracting positioned text, building the
 // mask via oneclick.ts, tracing/committing results) — this module imports
@@ -175,4 +178,81 @@ export function detectRegions(
     out.push({ str: s.str, seed: s.seed, flood: f });
   }
   return out;
+}
+
+// ── what one detection pass actually did ───────────────────────────────────
+// A batch detector that reports only its successes lies by omission: the
+// estimator sees N outlined rooms and reads the sheet as measured. It is not.
+// Tag seeding has a hard ceiling — on the VA finish plan only 2 of the 8 known
+// rooms carry a room-number tag AT ALL (corridors, the elevator and the
+// vestibule carry none, and no seeding change reaches them), and roughly a
+// quarter of the proposals that do come back are small artifacts. So the
+// report below is built from what the pass SAW, not from what it produced,
+// and every path through it — including the perfect one — carries the ceiling.
+
+/** Counts collected while running a pass, in pipeline order. */
+export interface DetectionTally {
+  /** positioned text items scanned on the sheet */
+  textItems: number;
+  /** items carrying a numeral matching the room-number pattern (pre-filter) */
+  patternHits: number;
+  /** seeds surviving the text filters and the drawing-extent gate */
+  seeds: number;
+  /** seeds whose flood came back clean (status "ok") */
+  regions: number;
+  /** regions that traced to a usable ring — the proposals actually offered */
+  proposals: number;
+  /** proposals under the caller's fixture-sized threshold */
+  tiny: number;
+  /** the human stopped the pass before it reached the last seed */
+  cancelled?: boolean;
+}
+
+export interface DetectionReport {
+  /** one sentence: what came back, ALWAYS against what was tried */
+  headline: string;
+  /** everything the headline does not cover — never empty */
+  limits: string[];
+  /** headline + limits, for a single-line message channel */
+  message: string;
+  /** nothing to review (no proposal was produced) */
+  empty: boolean;
+}
+
+/** The limitation that holds on every sheet whatever the counts say. This is
+ *  unconditional on purpose: it is exactly when the pass looks perfect (every
+ *  tag produced a room) that the readout is most likely to be misread as
+ *  "sheet complete". */
+export const NO_TAG_CAVEAT =
+  "Only rooms carrying a room-number tag are found — corridors, elevators and vestibules usually carry none and are NOT detected. One-Click those.";
+
+const plural = (n: number) => (n === 1 ? "" : "s");
+
+/** Turn a pass's tally into the readout. Pure — the canvas renders it, the
+ *  tests pin it, and nothing here knows what a DOM is. */
+export function detectionReport(t: DetectionTally, tinySf = 4): DetectionReport {
+  const n = t.proposals;
+  const headline =
+    t.seeds === 0
+      ? t.patternHits === 0
+        ? "No room-number tags on this sheet — detection has nothing to seed from."
+        : `No room-number tags on this sheet — all ${t.patternHits} matching numeral${plural(t.patternHits)} were rejected as something else.`
+      : n === 0
+        ? `No rooms detected: ${t.seeds} room tag${plural(t.seeds)} found, none produced a usable region.`
+        : `${n} of ${t.seeds} room tag${plural(t.seeds)} produced a room.`;
+  const limits: string[] = [];
+  if (t.cancelled) limits.push("Stopped early — the remaining room tags were never tried.");
+  if (t.seeds > 0 && t.patternHits > t.seeds) {
+    const k = t.patternHits - t.seeds;
+    limits.push(`${k} other numeral${plural(k)} rejected as not a room tag (printed areas, dimensions, drawing numbers, title-block text).`);
+  }
+  if (t.seeds > n) {
+    const k = t.seeds - n;
+    limits.push(`${k} tag${plural(k)} produced nothing — the fill leaked past the room, or landed in dense linework.`);
+  }
+  if (t.tiny > 0) {
+    limits.push(`${t.tiny} proposal${plural(t.tiny)} under ${tinySf} SF — usually the box drawn around a room tag, not a room. Reject ${t.tiny === 1 ? "it" : "them"}.`);
+  }
+  limits.push(NO_TAG_CAVEAT);
+  return { headline, limits, message: [headline, ...limits].join(" "), empty: n === 0 };
 }

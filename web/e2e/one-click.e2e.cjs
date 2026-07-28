@@ -5,6 +5,12 @@
 //   3. hover the door-swing room→ preview ≈ 113 SF, NOT sealed (arc bounds it)
 //   4. hover open sheet space   → no preview at all
 //   5. Enter                    → "Created 3 takeoffs" toast
+// then the Detect-rooms review gate on the same fixture:
+//   6. Detect rooms             → 3 dashed proposals, and NOTHING committed
+//   7. the readout states the no-room-tag ceiling even at 3-of-3
+//   8. ✓ on one proposal        → exactly one new shape
+//   9. ✕ on another             → no new shape (a rejection commits nothing)
+//  10. Accept all               → the last one commits; ⌘Z undoes it
 // Screenshots + a video land in e2e/out/. Exit code 0 = all checks passed.
 //
 // Usage: node e2e/one-click.e2e.cjs   (expects the dev server on BASE_URL;
@@ -117,6 +123,88 @@ const check = (ok, what) => {
   await toast.waitFor({ timeout: 5000 }).catch(() => {});
   check(await toast.count() > 0, "Enter creates all 3 takeoffs");
   await shot("06-created");
+
+  // ── Detect rooms — the batch pass and its review gate ────────────────────
+  // The fixture's three rooms each carry a room-number tag (101/102/103), so a
+  // clean pass proposes exactly three. The point of the checks below is not
+  // the count: it is that the count is a PROPOSAL count, that the readout says
+  // what the pass cannot reach even when it reached everything it could, and
+  // that the takeoff only ever moves on an explicit accept.
+  const shapeCount = () => page.locator("[data-shape-id]").count();
+  const proposalCount = () => page.locator('[data-dt="proposal"]').count();
+  const readout = () => page.evaluate(() => {
+    const h = [...document.querySelectorAll("div")].find((d) => d.textContent.trim() === "Detect rooms" && d.style.textTransform === "uppercase");
+    return h ? h.parentElement.textContent : "";
+  });
+
+  const before = await shapeCount();
+  check(before === 3, `the 3 created takeoffs are on the sheet (got ${before})`);
+  await page.click('[data-dt="run"]');
+  await page.waitForFunction(() => !document.querySelector('[data-dt="cancel"]'), null, { timeout: 30000 });
+  await page.waitForTimeout(300);
+  const proposed = await proposalCount();
+  check(proposed === 3, `detection proposes the 3 tagged rooms (got ${proposed})`);
+  check(await shapeCount() === before, "detection commits NOTHING on its own");
+  const rd = await readout();
+  check(/3 of 3 room tags produced a room/.test(rd), `readout states what was tried, not just what came back (got "${rd.slice(0, 200)}")`);
+  check(/NOT detected/.test(rd) && /room-number tag/.test(rd),
+    "readout carries the no-room-tag ceiling even at 3 of 3 — it must never read as a finished sheet");
+  check(!/complete|finished|all rooms/i.test(rd), "readout never claims the sheet is done");
+  await shot("07-detected");
+
+  await page.locator('[data-dt="accept"]').first().click();
+  await page.waitForTimeout(300);
+  check(await shapeCount() === before + 1, `✓ commits exactly one takeoff (got ${await shapeCount()})`);
+  check(await proposalCount() === 2, `the accepted proposal leaves the review set (got ${await proposalCount()})`);
+
+  await page.locator('[data-dt="reject"]').first().click();
+  await page.waitForTimeout(300);
+  check(await shapeCount() === before + 1, "✕ commits nothing");
+  check(await proposalCount() === 1, `the rejected proposal leaves the review set too (got ${await proposalCount()})`);
+  await shot("08-reviewed");
+
+  await page.click('[data-dt="accept-all"]');
+  await page.waitForTimeout(300);
+  check(await shapeCount() === before + 2, `Accept all commits the rest (got ${await shapeCount()})`);
+  check(await proposalCount() === 0, "nothing is left to review");
+  check(/NOT detected/.test(await readout()), "the ceiling stays on screen after accepting everything");
+
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(300);
+  check(await shapeCount() === before + 1, `undo removes the accepted batch in one step (got ${await shapeCount()})`);
+  await shot("09-accepted-undone");
+
+  // The chips are click targets only under the review tools (oneclick/select/
+  // pan). Under a drawing tool a stray click on a ✓ must commit NOTHING — an
+  // accidental commit nobody notices is worse than one they have to undo,
+  // because it ends up in a bid. This is the regression that matters most.
+  await page.click('[data-dt="discard"]');
+  await page.waitForTimeout(200);
+  await page.click('[data-dt="run"]');
+  await page.waitForFunction(() => !document.querySelector('[data-dt="cancel"]'), null, { timeout: 30000 });
+  await page.waitForTimeout(300);
+  const afterRerun = await shapeCount();
+  check(await proposalCount() === 3, `a second pass re-proposes all 3 (got ${await proposalCount()})`);
+  await page.keyboard.press("a");               // Area tool — drawing, not reviewing
+  await page.waitForTimeout(250);
+  await page.locator('[data-dt="accept"]').first().click({ force: true });   // force: the chip refuses pointer events, so this lands on the canvas underneath — exactly the stray click
+  await page.waitForTimeout(400);
+  check(await shapeCount() === afterRerun, `a ✓ click under the Area tool commits nothing (got ${await shapeCount()}, expected ${afterRerun})`);
+  check(await proposalCount() === 3, `…and the proposal is still there to review (got ${await proposalCount()})`);
+  await page.keyboard.press("Backspace");       // drop the stray trace point that click placed
+  await page.keyboard.press("o");               // back to One-Click
+  await page.waitForTimeout(250);
+  await page.locator('[data-dt="accept"]').first().click();
+  await page.waitForTimeout(400);
+  check(await shapeCount() === afterRerun + 1, `…and the same chip commits once a review tool is armed (got ${await shapeCount()})`);
+  await shot("10-chip-gating");
+
+  // a whole set must be discardable without touching the takeoff
+  const beforeEsc = await shapeCount();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  check(await proposalCount() === 0, "Esc discards the whole review set");
+  check(await shapeCount() === beforeEsc, "discarding the set leaves the takeoff untouched");
 
   check(pageErrors.length === 0, `no page errors (got ${JSON.stringify(pageErrors)})`);
 

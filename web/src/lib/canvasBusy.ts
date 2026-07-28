@@ -19,6 +19,10 @@
 //     conditions it minted and orphan the proposals it's still staging)
 //   - agentProposals: dashed agent proposals await accept/reject — the agent's
 //     analog of One-Click's `proposal` review gate, deferred for the same reason
+//   - detecting/detectProposals: a Detect-rooms pass is mid-flight, or its
+//     review set awaits accept/reject. Same class as the agent pair: a
+//     re-hydrate would wipe the conditions the accept gate commits into and
+//     leave a running pass filling a set nobody can act on.
 export interface CanvasBusyState {
   poly?: unknown[];
   calib?: unknown[];
@@ -32,6 +36,8 @@ export interface CanvasBusyState {
   scanning?: boolean;
   agentRunning?: boolean;
   agentProposals?: unknown[];
+  detecting?: boolean;
+  detectProposals?: unknown[];
 }
 
 export function isCanvasBusy(s: CanvasBusyState): boolean {
@@ -47,6 +53,8 @@ export function isCanvasBusy(s: CanvasBusyState): boolean {
     !!s.editing ||
     !!s.scanning ||
     !!s.agentRunning ||
-    (s.agentProposals?.length ?? 0) > 0
+    (s.agentProposals?.length ?? 0) > 0 ||
+    !!s.detecting ||
+    (s.detectProposals?.length ?? 0) > 0
   );
 }

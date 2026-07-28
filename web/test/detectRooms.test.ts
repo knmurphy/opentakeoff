@@ -1,7 +1,8 @@
 // Detect Rooms core tests — pure, DOM-free, pdfjs-free. Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { roomLabelSeeds, detectRegions, sheetBounds, ROOM_LABEL_RE } from "../src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, sheetBounds, detectionReport, NO_TAG_CAVEAT, ROOM_LABEL_RE } from "../src/lib/detectRooms.ts";
+import type { DetectionTally } from "../src/lib/detectRooms.ts";
 import { buildMask, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
 
 // a closed square room, as flat boundary segments in image px
@@ -182,4 +183,80 @@ test("roomLabelSeeds: the drop happens after the spatial gate, not before", () =
   assert.ok(750 < bounds.y1 && 765 > bounds.y1, "the fixture straddles the edge as intended");
   assert.equal(seeds.length, 1, "gated on the label's own position");
   assert.deepEqual(seeds[0].seed, [500, 765]);
+});
+
+// ── detectionReport — the honesty core ─────────────────────────────────────
+// These pin the WORDING as behavior, because the wording is the feature: a
+// batch detector that reports only its successes tells the estimator the sheet
+// is measured when most of it isn't.
+
+const tally = (o: Partial<DetectionTally> = {}): DetectionTally => ({
+  textItems: 500, patternHits: 12, seeds: 12, regions: 9, proposals: 9, tiny: 0, ...o,
+});
+
+test("detectionReport: the headline always states the denominator", () => {
+  const r = detectionReport(tally({ proposals: 9, seeds: 12 }));
+  assert.equal(r.headline, "9 of 12 room tags produced a room.");
+  assert.equal(r.empty, false);
+});
+
+test("detectionReport: the no-tag ceiling rides EVERY report, including a perfect one", () => {
+  // the case that most invites "sheet done": every tag produced a room
+  const perfect = detectionReport(tally({ patternHits: 4, seeds: 4, regions: 4, proposals: 4 }));
+  assert.equal(perfect.headline, "4 of 4 room tags produced a room.");
+  assert.equal(perfect.limits.at(-1), NO_TAG_CAVEAT);
+  assert.match(perfect.message, /NOT detected/);
+  // and on the other extreme
+  for (const t of [tally({ seeds: 0, patternHits: 0, regions: 0, proposals: 0 }),
+                   tally({ proposals: 0, regions: 0 }),
+                   tally({ cancelled: true, proposals: 2 })]) {
+    assert.equal(detectionReport(t).limits.at(-1), NO_TAG_CAVEAT);
+  }
+});
+
+test("detectionReport: limits are never empty, and the caveat is always last", () => {
+  const r = detectionReport(tally({ patternHits: 56, seeds: 41, regions: 40, proposals: 40, tiny: 11 }));
+  assert.ok(r.limits.length >= 1);
+  assert.equal(r.limits.at(-1), NO_TAG_CAVEAT);
+  assert.match(r.limits[0], /^15 other numerals rejected as not a room tag/);
+  assert.match(r.limits[1], /^1 tag produced nothing/);
+  assert.match(r.limits[2], /^11 proposals under 4 SF/);
+});
+
+test("detectionReport: no tags at all is a stated outcome, not an empty screen", () => {
+  const none = detectionReport(tally({ patternHits: 0, seeds: 0, regions: 0, proposals: 0 }));
+  assert.equal(none.headline, "No room-number tags on this sheet — detection has nothing to seed from.");
+  assert.equal(none.empty, true);
+  // numerals present but all rejected reads differently — the reason matters
+  const filtered = detectionReport(tally({ patternHits: 7, seeds: 0, regions: 0, proposals: 0 }));
+  assert.equal(filtered.headline, "No room-number tags on this sheet — all 7 matching numerals were rejected as something else.");
+  assert.equal(filtered.empty, true);
+  // …and with zero seeds there is no "N of the seeds were junk" line to add
+  assert.equal(filtered.limits.length, 1);
+});
+
+test("detectionReport: tags found but nothing floodable says both halves", () => {
+  const r = detectionReport(tally({ patternHits: 12, seeds: 12, regions: 0, proposals: 0 }));
+  assert.equal(r.headline, "No rooms detected: 12 room tags found, none produced a usable region.");
+  assert.equal(r.empty, true);
+  assert.match(r.message, /12 tags produced nothing/);
+});
+
+test("detectionReport: a cancelled pass says the rest were never tried", () => {
+  const r = detectionReport(tally({ cancelled: true, seeds: 41, regions: 6, proposals: 6 }));
+  assert.match(r.limits[0], /Stopped early/);
+  assert.equal(r.empty, false);
+});
+
+test("detectionReport: singular/plural, and the tiny threshold is the caller's", () => {
+  const one = detectionReport(tally({ patternHits: 2, seeds: 1, regions: 1, proposals: 0, tiny: 0 }));
+  assert.match(one.headline, /1 room tag found/);
+  assert.match(one.message, /1 tag produced nothing/);
+  const t = detectionReport(tally({ proposals: 9, tiny: 1 }), 6);
+  assert.match(t.message, /1 proposal under 6 SF .* Reject it\./);
+});
+
+test("detectionReport: message is the headline plus every limit, in order", () => {
+  const r = detectionReport(tally({ tiny: 3 }));
+  assert.equal(r.message, [r.headline, ...r.limits].join(" "));
 });
