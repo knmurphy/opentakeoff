@@ -24,7 +24,7 @@ import {
   traceRegion, ringArea, MASK_MAX_DIM, SENS_BALANCED, SEAL_RADII,
   type MaskObj, type FloodResult, type Point,
 } from "../src/lib/oneclick.ts";
-import { traceConfidence } from "../src/lib/confidence.ts";
+import { traceConfidence, floodSignals } from "../src/lib/confidence.ts";
 
 // ── the fixture ────────────────────────────────────────────────────────────
 // 1000 × 1000 image px at 36 px/ft — 1/4" = 1'-0" at the canvas's RENDER_SCALE
@@ -107,12 +107,18 @@ test("A6: detectRegions and the canvas produce the SAME ring for the same seed a
     { count: a.count, sealedPx: a.sealedPx, virtualFrac: a.virtualFrac, wedges: a.wedges, hatchFiltered: a.hatchFiltered, mppf: a.mppf },
     { count: b.count, sealedPx: b.sealedPx, virtualFrac: b.virtualFrac, wedges: b.wedges, hatchFiltered: b.hatchFiltered, mppf: b.mppf },
   );
+  // through floodSignals on BOTH sides, so the receipt covers every signal the
+  // engine emits — not a hand-listed subset. Audit A2: hand-listing is how
+  // `wedgeGrowth` came to be declared and supplied by nobody. (NOTE: a FIFTH
+  // call site, mcp/src/session.ts:298, still hand-lists its fields and so
+  // under-reports the signals added by A2/A3; it is outside this change's
+  // edit scope and is reported as a follow-up.)
   assert.deepEqual(
-    traceConfidence({ hatchFiltered: a.hatchFiltered, sealedPx: a.sealedPx, virtualFrac: a.virtualFrac, wedges: a.wedges, mppf: a.mppf }),
-    traceConfidence({ hatchFiltered: b.hatchFiltered, sealedPx: b.sealedPx, virtualFrac: b.virtualFrac, wedges: b.wedges, mppf: b.mppf }),
+    traceConfidence(floodSignals(a)),
+    traceConfidence(floodSignals(b)),
     "the confidence receipt is the same on both surfaces",
   );
-  assert.ok(traceConfidence({ sealedPx: a.sealedPx, virtualFrac: a.virtualFrac, mppf: a.mppf }).score < 1,
+  assert.ok(traceConfidence(floodSignals(a)).score < 1,
     "a sealed doorway costs confidence — the score is not a rubber stamp",
   );
 });

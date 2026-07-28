@@ -39,7 +39,7 @@ export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; hatchTier?: HatchTier; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number; curveFrac?: number; minPassPx?: number; minPassDelta?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -163,6 +163,10 @@ export const CLUSTER_FIT_TOL_PX = 1.5;
 export const HATCH_ANGLE_TOL = 2;      // deg — CAD hatch angle jitter is ≪ 1°
 export const HATCH_MAX_PITCH = 24;     // mask px — scale-unknown fallback for the pitch cap
 export const HATCH_MAX_PITCH_FT = HATCH_MAX_PITCH / 18;  // = 4/3 ft at the 18 px/ft calibration — keeps room-scale rhythm (demising walls) hard, at every resolution
+/** Which verification regime accepted a hatch escalation — see floodRegion. */
+export type HatchTier = "bounded" | "trapped" | "override";
+/** Ordering for combining tiers across a room's retries: worst wins. */
+export const HATCH_TIER_RISK: Record<HatchTier, number> = { bounded: 0, trapped: 1, override: 2 };
 export const HATCH_BOUND_FRAC = 0.7;   // ≥ this soft-bounded fraction ⇒ PREDOMINANTLY hatch (tile-grid cell): escalate unbounded
 export const HATCH_ESCALATE_FRAC = 0.02; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation. Was 0.35 when hatch classification was a loose rhythm heuristic and a high bar kept its false positives from escalating everything; with per-stroke periodicity evidence (item C), ANY real hatch run on the boundary is worth testing — a hatched alcove of a room is often < 35% of its boundary — and grow-but-verify remains the gate. The floor only skips re-floods over boundary specks. Balanced-preset value; see escalationParams.
 export const HATCH_GROWTH_MAX = 2.5;     // grow-but-verify cap: reject a walls-only escalation that balloons past this × the strict area (a misclassified wall would leak or overgrow). Balanced-preset value.
@@ -895,6 +899,23 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
   const r2 = floodPass(maskObj, ix, iy, 1);
   if (r2.status === "ok" && (r1.status !== "ok" || (r2.count > r1.count && r2.count <= r1.count * growthCap))) {
     r2.hatchFiltered = true;
+    // AUDIT A2. WHICH REGIME accepted this escalation, not how far it reached.
+    // Escalation GROWTH is useless as a magnitude here and worse than useless
+    // as a threshold (corpus: tile-grid-room grows 451.8× and is right, IoU
+    // 0.992; partition-bank-15in grows 5.09× and is wrong, IoU 0.197). What
+    // does carry information is how much the engine PROMISED before accepting:
+    //   bounded  — the moderate band: the re-flood had to grow AND stay inside
+    //              growthMax, so a misclassified wall leaks or balloons and is
+    //              thrown away. Grow-but-verify.
+    //   trapped  — the strict pass found no room at all (tiny/boundary). The
+    //              escalation is unbounded, but there was no measurement to
+    //              lose: any clean re-flood beats nothing.
+    //   override — predominantly soft (≥ HATCH_BOUND_FRAC): the strict pass
+    //              DID return a bounded region and the escalation DISCARDS it,
+    //              unbounded, on the hatch classifier's word alone. Strictly
+    //              the most exposed of the three, and the only tier both known
+    //              hatch failures sit in.
+    r2.hatchTier = growthCap !== Infinity ? "bounded" : r1.status === "ok" ? "override" : "trapped";
     return r2;
   }
   return r1;
@@ -929,6 +950,7 @@ export const SEAL_RADII = [1, 2, 4];    // fallback — seals gaps up to 2/4/8 p
 export const DOOR_SEAL_MAX_FT = 5;      // widest opening sealing will bridge (3'-0" doors + margin)
 export const SEAL_R_MAX = 128;          // absolute radius cap (cost + the Uint8 distance transform)
 export const SEAL_VIRTUAL_MAX = 0.25;   // a sealed region's boundary must be ≥75% real linework
+export const SEAL_MAX_SHEET_FRAC = 0.30; // ...and must still satisfy the room-size cap (= LEAK_FRACTION)
 
 /** The escalation ladder for a sheet where one foot spans `maskPxPerFt` mask px:
  *  1, 2, 4, … doubling up to the radius that bridges a DOOR_SEAL_MAX_FT opening
@@ -1321,12 +1343,33 @@ function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: numb
 // the dilated flood fails (open space still leaks; the dilation ate a
 // sliver-sized region), everything falls back exactly to the old behavior:
 // raw flood first, then the seal ladder — sealing still only ever improves.
+//
+// AUDIT A3. The min-passage path is a DILATION path — the same machinery the
+// seal ladder runs, at a smaller radius — and for a year it took neither of
+// the ladder's two sanity gates and reported no provenance at all. Because
+// minPassPx > 0 on every scaled sheet, that made the ladder's advertised
+// "room-size cap + ≥75%-real-boundary" guarantee vacuous on the PRIMARY path:
+// a region the ladder would have refused was returned unguarded, with
+// sealedPx/virtualFrac unset, so the readout said nothing and traceConfidence
+// scored it a verbatim 1.00. Both gates now apply here (a rejected min-pass
+// region falls through to the raw flood and the ladder, exactly as a rejected
+// ladder rung does), and the path reports itself:
+//   • minPassPx    — the radius that ran, whenever the rule changed the answer
+//   • minPassDelta — the fraction of the VERBATIM flood's region the rule
+//                    removed: 1 − minPass.count / rawFlood.count, and 1 when
+//                    the verbatim flood produced no bounded region at all
+//                    (the rule is then the only reason there is a measurement).
+// Both are only set when minPassDelta > 0. The rule runs on essentially every
+// scaled click and usually changes nothing; provenance for "a rule ran and did
+// not matter" is noise, and a confidence deduction for it would be a lie.
 function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], minPassPx = 0): FloodResult {
   const scratch = (): SealScratch => {
     let s = sealCache.get(mo.mask);
     if (!s) { s = { dt: hardDT(mo.mask, mo.mw, mo.mh), byR: new Map() }; sealCache.set(mo.mask, s); }
     return s;
   };
+  let raw: FloodResult | null = null;
+  const rawFlood = (): FloodResult => (raw ??= floodRegion(mo, ix, iy, sensitivity));
   if (minPassPx > 0) {
     const s = scratch();
     let dm = s.byR.get(minPassPx);
@@ -1335,10 +1378,27 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     const f = floodRegion(dm, ax, ay, sensitivity);
     if (f.status === "ok") {
       growRegionBack(f, mo, minPassPx, f.hatchFiltered ? 1 : 3, s.dt);
-      return f;
+      // the ladder's own two gates, on the ladder's own terms (see below)
+      const vf = f.count > f.mw * f.mh * SEAL_MAX_SHEET_FRAC ? 1 : virtualBoundaryFrac(f, s.dt);
+      if (vf <= SEAL_VIRTUAL_MAX) {
+        const r0 = rawFlood();
+        const d = +(r0.status === "ok" && r0.count > 0 ? 1 - f.count / r0.count : 1).toFixed(4);
+        if (d > 0) {
+          f.minPassPx = minPassPx;
+          f.minPassDelta = d;
+          // d === 1: the verbatim linework bounds NOTHING here — the dilation
+          // is not trimming a hairline connection, it is BRIDGING an opening,
+          // which is the seal ladder's job under another name. Report it as
+          // one (the readout and gap_sealed_px provenance follow), with the
+          // ladder's own virtual-boundary fraction. min_pass_px rides beside
+          // it to say which radius did it and why.
+          if (d === 1) { f.sealedPx = minPassPx; f.virtualFrac = +vf.toFixed(3); }
+        }
+        return f;
+      }
     }
   }
-  const base = floodRegion(mo, ix, iy, sensitivity);
+  const base = rawFlood();
   if (base.status === "ok") return base;
   const sc = scratch();
   for (const r of radii) {
@@ -1357,7 +1417,7 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     //   • the seal must be LOCAL — most of the region's boundary must hug real
     //     linework (dt ≤ 3), with only door-width virtual runs. A starved blob
     //     ends at descent watersheds in open space and fails this immediately.
-    if (f.count > f.mw * f.mh * 0.30) continue;
+    if (f.count > f.mw * f.mh * SEAL_MAX_SHEET_FRAC) continue;
     const vf = virtualBoundaryFrac(f, sc.dt);
     if (vf > SEAL_VIRTUAL_MAX) continue;
     f.sealedPx = r;
@@ -1373,6 +1433,15 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
  *  re-measuring to the wall opening; a retry is kept only when its growth
  *  stays inside the arc's own bounding-box allowance. Accepted wedges union. */
 export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII, wedgeCapPx = 0, minPassPx = 0): FloodResult {
+  const out = floodRegionSealedInner(mo, ix, iy, sensitivity, radii, wedgeCapPx, minPassPx);
+  if (out.status === "ok") {
+    const cf = curveBoundaryFrac(out, mo);
+    if (cf > 0) out.curveFrac = +cf.toFixed(3);
+  }
+  return out;
+}
+
+function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], wedgeCapPx: number, minPassPx: number): FloodResult {
   const r1 = sealAttempt(mo, ix, iy, sensitivity, radii, minPassPx);
   if (!wedgeCapPx || r1.status !== "ok") return r1;
   const clusters = boundaryCurveClusters(mo, r1.region);
@@ -1386,7 +1455,9 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   let count = r1.count;
   let wedges = 0;
   let hatchFiltered = !!r1.hatchFiltered;
+  let hatchTier = r1.hatchTier;
   let sealedPx = r1.sealedPx, virtualFrac = r1.virtualFrac;
+  let minPassPxOut = r1.minPassPx, minPassDelta = r1.minPassDelta;
   // Judge every cluster as GEOMETRY first (re-fitted circle: radius, sweep,
   // chord-frame extent), then spend the finite wedge budget on the most
   // door-like ones. Ranking, not scanline order: a room ringed with curved
@@ -1423,14 +1494,18 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
     for (let i = 0; i < region.length; i++) if (r2.region[i] && !region[i]) { region[i] = 1; count++; }
     wedges++;
     if (r2.hatchFiltered) hatchFiltered = true;
+    if (r2.hatchTier && HATCH_TIER_RISK[r2.hatchTier] > (hatchTier ? HATCH_TIER_RISK[hatchTier] : -1)) hatchTier = r2.hatchTier;
     if (r2.sealedPx && (!sealedPx || r2.sealedPx > sealedPx)) sealedPx = r2.sealedPx;
     if (r2.virtualFrac != null && (virtualFrac == null || r2.virtualFrac > virtualFrac)) virtualFrac = r2.virtualFrac;
+    if (r2.minPassPx && (!minPassPxOut || r2.minPassPx > minPassPxOut)) minPassPxOut = r2.minPassPx;
+    if (r2.minPassDelta != null && (minPassDelta == null || r2.minPassDelta > minPassDelta)) minPassDelta = r2.minPassDelta;
   }
   if (!wedges || !region) return r1;
   const out: FloodResult & { status: "ok" } = {
     status: "ok", region, count, mw, mh, ws: r1.ws, mppf: r1.mppf,
     hardHits: r1.hardHits, softHits: r1.softHits,
-    hatchFiltered: hatchFiltered || undefined, sealedPx, virtualFrac,
+    hatchFiltered: hatchFiltered || undefined, hatchTier, sealedPx, virtualFrac,
+    minPassPx: minPassPxOut, minPassDelta,
   };
   // Absorb the door LEAF: the straight leaf line stays a barrier through the
   // retry, leaving a 1–2 px slit between the room and the annexed wedge. The
@@ -1475,6 +1550,36 @@ function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, 
     }
   }
   return boundary ? virtual / boundary : 1;
+}
+
+// Fraction of a region's boundary cells that abut CURVE linework (bit 4) —
+// an arc the door-wedge retry never opened (a curved wall, a revision cloud,
+// a door whose cluster was refused). AUDIT A2: this is the one place a trace
+// can be less than verbatim without any inference having run. buildMask
+// tessellates every bezier into CURVE_STEPS chords and traceRegion returns an
+// RDP-simplified staircase through them, so the reported area of a
+// curve-bounded space is a polygonal approximation of geometry the drawing
+// states exactly — and it measurably costs accuracy (corpus: curved-partition
+// 3.2% SF error against 2.0% for the same-scale straight-walled rooms). An
+// arc ABSORBED as a door swing is not counted: those cells stop being
+// boundary, which is the honest reading — the wedge deduction already covers
+// them.
+function curveBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, mo: MaskObj): number {
+  const { region, mw, mh } = f;
+  const mask = mo.mask;
+  let boundary = 0, curved = 0;
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!region[i]) continue;
+      const w = x > 0 ? i - 1 : -1, e = x < mw - 1 ? i + 1 : -1, n = y > 0 ? i - mw : -1, s = y < mh - 1 ? i + mw : -1;
+      if (!((w >= 0 && !region[w]) || (e >= 0 && !region[e]) || (n >= 0 && !region[n]) || (s >= 0 && !region[s]))) continue;
+      boundary++;
+      for (const j of [w, e, n, s]) if (j >= 0 && !region[j] && (mask[j] & MASK_CURVE_BIT)) { curved++; break; }
+    }
+  }
+  return boundary ? curved / boundary : 0;
 }
 
 // ── 5. contour trace + simplify ────────────────────────────────────────────

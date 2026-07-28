@@ -1,7 +1,7 @@
 // Benchmark scorer — the IoU/aggregate math the corpus gate stands on.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { polyIoU, scoreGolden, aggregate, crossAgreement, aggregateCross, polyOverlapPx2, caseCoverage, type ProbeScore, type CrossScore } from "../bench/score.ts";
+import { polyIoU, scoreGolden, aggregate, crossAgreement, aggregateCross, polyOverlapPx2, caseCoverage, confidenceGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore } from "../bench/score.ts";
 import type { Point } from "../src/lib/oneclick.ts";
 
 const sq = (x0: number, y0: number, x1: number, y1: number): Point[] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
@@ -123,4 +123,104 @@ test("caseCoverage: totals, ratio, overlap, refused-room penalty, deducts", () =
   // deducts reduce the golden total (human deducted a column; engine floods around it)
   const ded = caseCoverage("t3", [{ golden: sq(0, 0, 100), ring: sq(0, 0, 100) }], 10, true, 2);
   assert.equal(ded.sumGoldenSF, 98);
+});
+
+// ── audit A2: the anti-correlation gate ─────────────────────────────────────
+// RFC item D shipped a confidence score anti-correlated with error. These pin
+// the gate that keeps it fixed. Note every fixture below carries knownFail on
+// the badly-calibrated probes ON PURPOSE: three of the four real offenders are
+// flagged that way in the corpus, and `aggregate`/`aggregateCross` both open
+// with `filter(s => !s.knownFail)`. A gate routed through either could not fire.
+
+const gp = (probe: string, sfErr: number, confidence: number, knownFail = false): ProbeScore => {
+  const [caseName, probeName] = probe.split("/");
+  return { caseName, probeName, expect: "golden", status: "ok", iou: 0.9, sfErr, leak: false, refused: false, confidence, knownFail };
+};
+
+test("A2 gate: an inaccurate probe may not report high confidence — known-fail included", () => {
+  const bad = confidenceGate([gp("acc/a", 0.000, 1.00), gp("acc/b", 0.001, 0.95), gp("wrong/x", 3.842, 0.95, true)]);
+  assert.equal(bad.inaccurate.length, 1, "the known-fail probe is IN the population, not filtered out");
+  assert.ok(bad.failures.some((f) => /wrong\/x/.test(f) && /anti-correlated/.test(f)), bad.failures.join("; "));
+  const good = confidenceGate([gp("acc/a", 0.000, 1.00), gp("acc/b", 0.001, 0.95), gp("wrong/x", 3.842, 0.85, true)]);
+  assert.deepEqual(good.failures, []);
+});
+
+test("A2 gate: it keys on SF ERROR, not IoU — the 4.3%-at-1.00 probe is caught", () => {
+  // two-doorways/center: IoU 0.957 (invisible to any IoU threshold) but 4.33%
+  // SF off — the number a bid is actually written from.
+  const s = [gp("acc/a", 0.000, 1.00), gp("acc/b", 0.002, 0.95), gp("two-doorways/center", 0.0433, 1.00)];
+  s[2].iou = 0.957;
+  assert.ok(confidenceGate(s).failures.some((f) => /two-doorways/.test(f)));
+});
+
+test("A2 gate: a refusal probe that TRACES fails the ceiling whatever its confidence", () => {
+  const refusalTraced = (conf?: number): ProbeScore =>
+    ({ caseName: "va-finish-plan", probeName: "open-margin", expect: "refusal", status: "ok", correctRefusal: false, confidence: conf, knownFail: true });
+  const base = [gp("acc/a", 0.000, 1.00), gp("acc/b", 0.001, 0.95)];
+  assert.ok(confidenceGate([...base, refusalTraced(0.97)]).failures.some((f) => /open-margin/.test(f) && /refuse/.test(f)));
+  // ...and reporting NO confidence is itself a failure: that is precisely how
+  // open-margin sat outside the gate before A2.
+  assert.ok(confidenceGate([...base, refusalTraced(undefined)]).failures.some((f) => /open-margin/.test(f) && /NO confidence/.test(f)));
+  assert.deepEqual(confidenceGate([...base, refusalTraced(0.65)]).failures, []);
+  // a refusal probe that correctly refuses is not in any population
+  assert.deepEqual(confidenceGate([...base, { caseName: "c", probeName: "r", expect: "refusal", status: "leak", correctRefusal: true }]).failures, []);
+});
+
+test("A2 gate: the floor is RELATIVE with a margin — a constant-score stub cannot pass it", () => {
+  // "replacing traceConfidence with () => ({score: 0.5, factors: []})" — the
+  // stated anti-gaming case. It satisfies every ceiling and any non-strict
+  // floor; the margin is what refuses it.
+  const stub = [gp("acc/a", 0.000, 0.5), gp("acc/b", 0.001, 0.5), gp("wrong/x", 3.842, 0.5, true), gp("wrong/y", 0.974, 0.5, true)];
+  const r = confidenceGate(stub);
+  assert.deepEqual(r.inaccurate.map((p) => p.confidence), [0.5, 0.5]);
+  assert.ok(r.failures.length >= 2, `a constant score must FAIL the floor: ${JSON.stringify(r.failures)}`);
+  assert.ok(r.failures.every((f) => /median-of-inaccurate|absolute floor/.test(f)));
+});
+
+test("A2 gate: an accurate probe below the inaccurate median + margin fails", () => {
+  const s = [gp("acc/low", 0.000, 0.86), gp("acc/hi", 0.001, 0.99), gp("wrong/x", 3.842, 0.85, true)];
+  assert.ok(confidenceGate(s).failures.some((f) => /acc\/low/.test(f) && /median-of-inaccurate/.test(f)));
+  const ok = [gp("acc/low", 0.000, 0.89), gp("acc/hi", 0.001, 0.99), gp("wrong/x", 3.842, 0.85, true)];
+  assert.deepEqual(confidenceGate(ok).failures, []);
+});
+
+test("A2 gate: empty populations do something, not nothing", () => {
+  // no accurate probe at all ⇒ the gate is NOT satisfied. Otherwise deleting
+  // the accurate probes would silently disable the floor.
+  const noAcc = confidenceGate([gp("wrong/x", 3.842, 0.85, true)]);
+  assert.ok(noAcc.failures.some((f) => /the floor cannot be evaluated/.test(f)), noAcc.failures.join("; "));
+  // no inaccurate probe ⇒ no median to compare to, so the CALIBRATED ABSOLUTE
+  // floor applies instead — the check is not skipped.
+  assert.deepEqual(confidenceGate([gp("acc/a", 0.000, 0.99)]).failures, []);
+  const low = confidenceGate([gp("acc/a", 0.000, CONF_GATE.floorAbs - 0.01)]);
+  assert.ok(low.failures.some((f) => /ABSOLUTE floor/.test(f)), low.failures.join("; "));
+  // probes in the dead zone between the two thresholds join neither population
+  const dead = confidenceGate([gp("acc/a", 0.000, 0.99), gp("mid/m", 0.02, 0.10)]);
+  assert.deepEqual(dead.inaccurate, []);
+  assert.equal(dead.accurate.length, 1);
+});
+
+test("A2 gate: the exemption list is BOUNDED, reasoned, and xfailed WITH A DIRECTION", () => {
+  // (b) the bound — an exemption list that can grow is `knownFail` again
+  assert.equal(Object.keys(CONF_GATE_EXEMPT).length, 1,
+    "exactly one probe is exempt; adding another needs its own argument, not a bigger list");
+  assert.ok("annotation-ring-room/center" in CONF_GATE_EXEMPT);
+  // (c) the reason is recorded in code, and names the signal set it was
+  // evaluated against — not just "known limit"
+  const { reason, xfailAbove } = CONF_GATE_EXEMPT["annotation-ring-room/center"];
+  for (const signal of ["raster", "hatchFiltered", "sealedPx", "virtualFrac", "wedges", "wedgeGrowth", "curveFrac", "minPassDelta", "areaSF", "mppf"])
+    assert.match(reason, new RegExp(signal), `the exemption must name ${signal} among the signals it was evaluated against`);
+  // (a) the xfail has a DIRECTION: it asserts the probe still scores ABOVE
+  // 0.90, so a future signal that DOES fire here breaks the gate instead of
+  // being quietly absorbed.
+  assert.equal(xfailAbove, 0.90);
+  const exempt = (conf?: number): ProbeScore =>
+    ({ caseName: "annotation-ring-room", probeName: "center", expect: "golden", status: "ok", iou: 0.65, sfErr: 0.35, leak: false, refused: false, confidence: conf, knownFail: true });
+  const base = [gp("acc/a", 0.000, 1.00), gp("acc/b", 0.001, 0.95), gp("wrong/x", 3.842, 0.85, true)];
+  assert.deepEqual(confidenceGate([...base, exempt(1.00)]).failures, [], "today it scores 1.00 and is exempt");
+  const flipped = confidenceGate([...base, exempt(0.88)]);
+  assert.ok(flipped.failures.some((f) => /XFAIL FLIPPED/.test(f)), flipped.failures.join("; "));
+  assert.ok(confidenceGate([...base, exempt(undefined)]).failures.some((f) => /no confidence at all/.test(f)));
+  // exempt probes are in neither gating population
+  assert.equal(confidenceGate([...base, exempt(1.00)]).inaccurate.length, 1);
 });

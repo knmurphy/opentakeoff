@@ -5,11 +5,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildMask, floodRegion, floodRegionSealed, sealRadiiFor, doorWedgeCapPx,
+  buildMask, floodRegion, floodRegionSealed, dilateHardMask, sealRadiiFor, doorWedgeCapPx,
   minPassRadiusFor, MIN_PASS_FT, DETERMINISM_MIN_MPPF, MASK_MAX_DIM,
-  traceRegion, ringArea,
+  traceRegion, ringArea, type FloodResult,
 } from "../src/lib/oneclick.ts";
-import { traceConfidence, CONF_COARSE } from "../src/lib/confidence.ts";
+import { traceConfidence, floodSignals, CONF_COARSE } from "../src/lib/confidence.ts";
 
 const sq = (x0: number, y0: number, x1: number, y1: number): number[] => [
   x0, y0, x1, y0, x1, y0, x1, y1, x1, y1, x0, y1, x0, y1, x0, y0,
@@ -181,4 +181,112 @@ test("A1: omitting basePxPerFt keeps the old behaviour exactly (no-op for existi
   assert.equal(without.ws, withBase.ws);
   assert.equal(without.mppf, withBase.mppf);
   assert.deepEqual(Array.from(without.mask), Array.from(withBase.mask));
+});
+
+// ── audit A3: the minimum-passage path is a DILATION path, and it must take
+// the seal ladder's own two gates and report its own provenance. ────────────
+// Before this, `minPassPx > 0` — true on every scaled sheet — returned from
+// sealAttempt BEFORE the room-size cap and BEFORE the ≥75%-real-boundary rule,
+// and without setting any provenance at all. So the project's advertised
+// "guarded by a room-size cap and a >=75%-real-boundary rule" was vacuous on
+// the PRIMARY path, and traceConfidence scored the result a verbatim 1.00.
+
+test("A3: the min-passage rule reports how much of the verbatim flood it removed", () => {
+  const { segs, seedA } = slitScene(0.3 * PXFT);
+  for (const maxDim of [800, 400]) {
+    const mo = buildMask(segs, 800, 500, maxDim, null, PXFT);
+    const mppf = mo.mppf ?? 0;
+    const f = floodRegionSealed(mo, seedA[0], seedA[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf)) as Extract<FloodResult, { status: "ok" }>;
+    assert.equal(f.status, "ok");
+    assert.equal(f.minPassPx, minPassRadiusFor(mppf), "the radius that ran is on the record");
+    // chamber B is 36% of room A's area, so the rule removes ~26% of the
+    // verbatim flood's region — the same 35.8% change of the MEASUREMENT the
+    // audit reported, expressed against the flood it replaced
+    assert.ok(Math.abs((f.minPassDelta ?? 0) - 0.263) < 0.01, `expected ~26.3% removed, got ${f.minPassDelta}`);
+    const c = traceConfidence(floodSignals(f, { areaSF: f.count / (mppf * mppf) }));
+    assert.ok(c.score < 1, `a measurement the rule moved by a third cannot score 1.00 (got ${c.score})`);
+    assert.match(c.factors.join(" "), /min-passage-rule/);
+  }
+});
+
+test("A3: a rule that changed nothing costs nothing and says nothing", () => {
+  const segs = [...sq(100, 100, 340, 340)];
+  const mo = buildMask(segs, 800, 500, 800, null, PXFT);
+  const mppf = mo.mppf ?? 0;
+  const f = floodRegionSealed(mo, 220, 220, 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf)) as Extract<FloodResult, { status: "ok" }>;
+  assert.equal(f.status, "ok");
+  assert.ok(minPassRadiusFor(mppf) > 0, "the rule really is on for this sheet");
+  assert.equal(f.minPassPx, undefined, "provenance for 'a rule ran and did not matter' is noise");
+  assert.equal(f.minPassDelta, undefined);
+  assert.equal(traceConfidence(floodSignals(f)).score, 1);
+});
+
+// Room A's ONLY opening is a sub-½ft slot: the verbatim linework does not
+// enclose it at all, so the dilation is not trimming a connection — it is
+// BRIDGING an opening, which is the seal ladder's job under another name.
+function slottedRoom(slotPx: number) {
+  const segs = [
+    100, 100, 340, 100, 100, 340, 340, 340, 100, 100, 100, 340,
+    340, 100, 340, 200, 340, 200 + slotPx, 340, 340,
+  ];
+  return { segs, seed: [220, 220] as [number, number] };
+}
+
+test("A3: a room bounded only by the min-passage rule reports itself as SEALED, not as verbatim", () => {
+  const { segs, seed } = slottedRoom(0.4 * PXFT);
+  const mo = buildMask(segs, 800, 500, 800, null, PXFT);
+  const mppf = mo.mppf ?? 0;
+  assert.equal(floodRegion(mo, seed[0], seed[1], 0.5).status, "leak", "without the rule this space is not enclosed");
+  const f = floodRegionSealed(mo, seed[0], seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf)) as Extract<FloodResult, { status: "ok" }>;
+  assert.equal(f.status, "ok");
+  assert.equal(f.minPassDelta, 1, "the verbatim flood bounded nothing — the rule is the whole measurement");
+  assert.equal(f.sealedPx, minPassRadiusFor(mppf), "so it reports a seal, and the readout says 'sealed'");
+  assert.equal(typeof f.virtualFrac, "number", "with the ladder's own virtual-boundary fraction");
+  const c = traceConfidence(floodSignals(f, { areaSF: f.count / (mppf * mppf) }));
+  assert.ok(c.score <= 0.90, `an unenclosed space must not come back confidently bounded (got ${c.score})`);
+  assert.match(c.factors.join(" "), /undecidable-passage/);
+});
+
+// D-1: the room-size cap and the ≥75%-real-boundary rule now apply to the
+// min-passage path too. This scene is where that BITES: a rectangle drawn as a
+// picket line of 4-px dashes 18 px apart. The min-passage dilation closes every
+// gap, so the primary flood comes back a clean "ok" — and the region it returns
+// has most of its boundary sitting in open space, which is exactly what the
+// ≥75% rule exists to refuse. Before A3 this returned that region, unguarded,
+// with no provenance, at confidence 1.00.
+function picketRoom(gapPx: number, dashPx: number) {
+  const segs: number[] = [];
+  const dashes = (x0: number, y0: number, x1: number, y1: number) => {
+    const L = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.round(L / (dashPx + gapPx)));
+    for (let k = 0; k < n; k++) {
+      const t0 = (k * (dashPx + gapPx)) / L, t1 = Math.min(1, (k * (dashPx + gapPx) + dashPx) / L);
+      segs.push(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0, x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
+    }
+  };
+  dashes(200, 200, 800, 200); dashes(800, 200, 800, 700); dashes(800, 700, 200, 700); dashes(200, 700, 200, 200);
+  return segs;
+}
+
+test("A3/D-1: the min-passage path takes the ladder's ≥75%-real-boundary rule — a region it refuses is refused", () => {
+  const PICKET_PXFT = 72;                       // ⇒ minPassRadiusFor = 18 px
+  const segs = picketRoom(18, 4);
+  const mo = buildMask(segs, 1400, 1000, 1400, null, PICKET_PXFT);
+  const mppf = mo.mppf ?? 0;
+  const r = minPassRadiusFor(mppf);
+  assert.ok(r > 0);
+  // the dilated flood itself succeeds — so it is the GUARD, not the flood,
+  // that must refuse here. Without the guard this returns "ok".
+  const dilated = floodRegion(dilateHardMask(mo, r), 500, 450, 0.5);
+  assert.equal(dilated.status, "ok", "the min-passage flood is clean; only the guard stands between it and a bogus room");
+  const f = floodRegionSealed(mo, 500, 450, 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), r);
+  assert.notEqual(f.status, "ok", `a region >25% synthetic boundary must be refused, not measured (got ${f.status})`);
+});
+
+test("A3/D-1: the guard does not fire on ordinary rooms — the corpus refusal rate stays 0", () => {
+  // the same construction with a SOLID boundary: the guard must be silent.
+  const segs = picketRoom(0, 600);
+  const mo = buildMask(segs, 1400, 1000, 1400, null, 72);
+  const mppf = mo.mppf ?? 0;
+  const f = floodRegionSealed(mo, 500, 450, 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+  assert.equal(f.status, "ok");
 });

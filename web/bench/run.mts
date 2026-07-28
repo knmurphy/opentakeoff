@@ -19,8 +19,8 @@ import { fileURLToPath } from "url";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM, DETERMINISM_MIN_MPPF } from "../src/lib/oneclick.ts";
 import type { FloodResult, Point } from "../src/lib/oneclick.ts";
 import { syntheticCorpus } from "./corpus.ts";
-import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, caseCoverage, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage } from "./score.ts";
-import { traceConfidence } from "../src/lib/confidence.ts";
+import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, ringAreaAbs, caseCoverage, confidenceGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage } from "./score.ts";
+import { traceConfidence, floodSignals } from "../src/lib/confidence.ts";
 
 const THRESHOLDS = {
   floorIoU: 0.90, meanIoU: 0.95, maxRefusalRate: 0, maxLeakRate: 0, minCorrectRefusal: 1,
@@ -63,13 +63,21 @@ function runCase(caseName: string, segs: number[], imgW: number, imgH: number, m
 
     // baseline (production resolution) — the headline metrics
     const base = runs[0];
+    // A2: confidence for EVERY probe that traced, refusal probes included.
+    // It used to be computed only in the golden branch, so the four refusal
+    // probes reported none — which put va-finish-plan/open-margin (a real-plan
+    // probe that traces 23,831 SF of sheet margin instead of refusing) outside
+    // any confidence gate at all. The signal set is the WHOLE FloodResult; a
+    // caller that drops a field silently disables that deduction.
+    const conf = (f: FloodResult, ring: Point[] | null) => (f.status !== "ok" ? undefined : traceConfidence(floodSignals(f, {
+      areaSF: ring && ring.length >= 3 ? ringAreaAbs(ring) / (ptPerFt * ptPerFt) : undefined,
+    })).score);
     if (p.expect === "refusal") {
-      scores.push({ caseName, probeName: p.name, expect: "refusal", status: base.status, correctRefusal: base.status !== "ok", knownFail: p.knownFail, tags: p.tags });
+      scores.push({ caseName, probeName: p.name, expect: "refusal", status: base.status, correctRefusal: base.status !== "ok", confidence: conf(base.flood, base.ring), knownFail: p.knownFail, tags: p.tags });
     } else {
       const f = base.flood;
       const s = scoreGolden(f.status, base.ring, p.golden!);
-      const conf = f.status === "ok" ? traceConfidence({ hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf }).score : undefined;
-      scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf, knownFail: p.knownFail, tags: p.tags } as ProbeScore);
+      scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf(f, base.ring), knownFail: p.knownFail, tags: p.tags } as ProbeScore);
       if (!p.knownFail) coverRows.push({ golden: p.golden!, ring: base.ring });
     }
 
@@ -142,7 +150,7 @@ for (const s of scores) {
   const bits = [
     s.expect === "golden"
       ? (s.refused ? "REFUSED" : `IoU ${(s.iou ?? 0).toFixed(3)}${s.sfErr != null ? `  SF±${(s.sfErr * 100).toFixed(1)}%` : ""}${s.leak ? " LEAK" : ""}${(s as { confidence?: number }).confidence != null ? `  conf ${(s as { confidence?: number }).confidence!.toFixed(2)}` : ""}`)
-      : (s.correctRefusal ? "refused ✓" : `NOT refused (${s.status})`),
+      : (s.correctRefusal ? "refused ✓" : `NOT refused (${s.status})${s.confidence != null ? `  conf ${s.confidence.toFixed(2)}` : ""}`),
     s.knownFail ? "[known-fail]" : "",
     s.tags?.length ? `(${s.tags.join(",")})` : "",
   ].filter(Boolean).join("  ");
@@ -210,7 +218,20 @@ for (const s of crossScores) {
 }
 const xagg = aggregateCross(crossScores);
 console.log(`\ncross probes: ${xagg.crossProbes} | disagreements ${xagg.disagreements} | pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} | pair-IoU mean ${xagg.crossMeanIoU.toFixed(3)}${xagg.ungated ? ` | NOT cross-checked (single gated resolution): ${xagg.ungated}` : ""}`);
-writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, resFactors: RES_FACTORS }, null, 1));
+// ── confidence vs error (audit A2's anti-correlation gate) ──────────────────
+// Evaluated over EVERY probe, known-fails included — see confidenceGate.
+const cgate = confidenceGate(scores);
+console.log(`\n── confidence vs SF error (gate: >${CONF_GATE.ceilSfErr * 100}% SF ⇒ conf ≤ ${CONF_GATE.ceilConf}; ≤${CONF_GATE.floorSfErr * 100}% SF ⇒ conf ≥ median-of-inaccurate + ${CONF_GATE.floorMargin}, and ≥ ${CONF_GATE.floorAbs}) ──`);
+console.log(`  INACCURATE (n=${cgate.inaccurate.length}, median conf ${cgate.medianInaccurate?.toFixed(2) ?? "n/a"}):`);
+for (const p of cgate.inaccurate) console.log(`    ${p.probe.padEnd(40)} conf ${p.confidence.toFixed(2)}   ${p.why}`);
+console.log(`  ACCURATE   (n=${cgate.accurate.length}, worst conf ${cgate.minAccurate?.toFixed(2) ?? "n/a"}):`);
+for (const p of [...cgate.accurate].sort((a, b) => a.confidence - b.confidence)) console.log(`    ${p.probe.padEnd(40)} conf ${p.confidence.toFixed(2)}`);
+for (const p of cgate.exempt) {
+  console.log(`  EXEMPT     ${p.probe.padEnd(40)} conf ${p.confidence?.toFixed(2) ?? "n/a"}  (xfail: must stay > ${CONF_GATE_EXEMPT[p.probe].xfailAbove})`);
+  console.log(`      ↳ ${CONF_GATE_EXEMPT[p.probe].reason}`);
+}
+
+writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS }, null, 1));
 
 const failures: string[] = [];
 for (const cv of coverages) {
@@ -243,5 +264,6 @@ if (agg.leakRate > THRESHOLDS.maxLeakRate) failures.push(`leak rate ${(agg.leakR
 if (agg.correctRefusalRate < THRESHOLDS.minCorrectRefusal) failures.push(`correct-refusal ${(agg.correctRefusalRate * 100).toFixed(1)}%`);
 if (xagg.disagreements > THRESHOLDS.maxCrossDisagreements) failures.push(`${xagg.disagreements} cross-resolution verdict flip(s)`);
 if (xagg.crossFloorIoU < THRESHOLDS.crossFloorIoU) failures.push(`cross-resolution pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} < ${THRESHOLDS.crossFloorIoU}`);
+failures.push(...cgate.failures);
 if (failures.length) { console.error(`\nBENCH FAILED: ${failures.join("; ")}`); process.exit(1); }
 console.log("\nbench passed");
