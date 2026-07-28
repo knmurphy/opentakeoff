@@ -12,7 +12,7 @@ import {
   extractVectorGeometry, buildMask, traceRegion, snapVertices, ringArea,
   MASK_MAX_DIM, SENS_BALANCED, type MaskObj, type VectorGeometry, type Point, type FloodResult,
 } from "../../web/src/lib/oneclick.ts";
-import { traceConfidence } from "../../web/src/lib/confidence.ts";
+import { traceConfidence, floodSignals } from "../../web/src/lib/confidence.ts";
 import { roomLabelSeeds, detectRegions, floodAtSeed, oneClickArgs } from "../../web/src/lib/detectRooms.ts";
 import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
@@ -294,11 +294,13 @@ export class Session {
 
   /** The confidence + engine receipts shared by one_click and detect_rooms —
    *  the same fields the canvas puts on a proposal's origin. */
-  private receipts(f: Extract<FloodResult, { status: "ok" }>, scaleBlind: boolean) {
-    const conf = traceConfidence({
-      hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac,
-      wedges: f.wedges, mppf: f.mppf,
-    });
+  private receipts(f: Extract<FloodResult, { status: "ok" }>, scaleBlind: boolean, areaSF?: number) {
+    // Route through the shared adapter, not a hand-listed field set. This site
+    // was the fifth such list and silently went stale the moment hatchTier,
+    // wedgeGrowth, curveFrac, min-passage and areaSF landed — MCP would have
+    // reported HIGHER confidence than the canvas for the same click, which is
+    // A6 (engine parity) reopening through the confidence surface.
+    const conf = traceConfidence(floodSignals(f, { mppf: f.mppf, areaSF }));
     return {
       confidence: conf.score,
       ...(conf.factors.length ? { confidence_factors: conf.factors } : {}),
@@ -413,7 +415,7 @@ export class Session {
     if (ring.length < 3) throw new UserError("Couldn't trace that space into a polygon.");
     const areaPx2 = ringArea(ring);
     const perimPx = closedMetrics(ring).perim;
-    const rec = this.receipts(f, eng.scaleBlind);
+    const rec = this.receipts(f, eng.scaleBlind, s.upp ? areaPx2 * s.upp * s.upp : undefined);
     const common = {
       status: "ok" as const,
       nverts: ring.length,
@@ -474,7 +476,7 @@ export class Session {
         if (ring.length < 3) return null; // couldn't trace into a polygon — drop, don't sink the batch
         const areaPx2 = ringArea(ring);
         const perimPx = closedMetrics(ring).perim;
-        const rec = this.receipts(r.flood, eng.scaleBlind);
+        const rec = this.receipts(r.flood, eng.scaleBlind, s.upp ? areaPx2 * s.upp * s.upp : undefined);
         const common = {
           label: r.str,
           nverts: ring.length,
