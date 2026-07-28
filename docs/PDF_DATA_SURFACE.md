@@ -1,13 +1,10 @@
 # PDF Data Surface — what we can read deterministically, and how to surface it
 
-> **Status: RESEARCH, nothing built. Reviewed and corrected.** This is an
-> inventory and a set of ranked proposals, not a commitment. It has been
-> through five adversarial reviews (accuracy against the code, feasibility,
-> constraint compliance, external technical claims, product value); §§1–3 are
-> the original research with factual corrections applied, §4 records which of
-> its conclusions were overturned, and
-> [`PDF_DATA_PLAN.md`](PDF_DATA_PLAN.md) — not §4 — is the authoritative
-> ordering. It exists so a feature can be picked off this
+> **Status: RESEARCH, nothing built.** An inventory and a set of proposals, not
+> a commitment. §§1–2 are the inventory and are the load-bearing part. §3's
+> proposals and §4's ranking were **partly overturned** in review and carry
+> inline markers where they were; **[`PDF_DATA_PLAN.md`](PDF_DATA_PLAN.md) is
+> the authoritative ordering**, not §4. It exists so a feature can be picked off this
 > list with the seams already named. Companion to
 > [`FEATURES.md`](../FEATURES.md) (what exists) and
 > [`docs/ESTIMATING_ROADMAP.md`](ESTIMATING_ROADMAP.md) (the pricing arc).
@@ -46,12 +43,13 @@ scheduled.
 ## 1. The finding, in one paragraph
 
 OpenTakeoff already parses a lot of a plan set deterministically — and then
-**throws almost all of it away**. The page text layer is read at six call
-sites and cached at none of them — up to three fire automatically per sheet
-(the thumbnail pump, itself guarded on missing metadata; the panel render; the
-per-file label scan), each keeping only the sheet number and the scale note,
-while the other two are user-triggered region reads. Nothing is indexed and
-nothing is reused. The vector op-list walk composes the full CTM and visits
+**throws almost all of it away**. The page text layer is read at six call sites
+and cached at none of them: **four** fire automatically — the gallery thumbnail
+pump (guarded on missing metadata), the panel render, the lead-page label read,
+and the per-file label scan — and between them keep only the sheet number and
+the scale note; the remaining **two** are user-triggered region reads. Any one
+sheet sees up to three of the automatic four. Nothing is indexed and nothing is
+reused. The vector op-list walk composes the full CTM and visits
 every path, but keeps only endpoints, segments, one width byte, and a total
 image area — discarding color, dash, and layer membership, which are the three
 things CAD uses to say what a line *means*. And an entire tier of the format
@@ -76,7 +74,7 @@ marked-content begin/end items, which is how text gets attributed to a layer
 
 | Field | Used today | Where |
 |---|---|---|
-| `str` + `transform` | ✅ but transiently | `extractSheetNumber`, `detectScale` (`lib/sheets.ts`), `extractRegionText` → `parseSchedule`, `roomLabelSeeds` (`lib/detectRooms.ts`) |
+| `str` + `transform` | ✅ but transiently | `extractSheetNumber`, `detectScale` (`lib/sheets.ts`), `extractRegionText` → `parseSchedule`, `roomLabelSeeds` (`lib/detectRooms.ts` — **MCP only**; see §4) |
 | `height` / cap height | ✅ | `Token.h` for row clustering in `scheduleParse.ts` |
 | `width` | ❌ | glyph-run width — would give real text bounding boxes for hit-testing and highlight rects |
 | `fontName` / `styles` | ❌ | font identity separates title-block text from drawing annotation from dimension strings, deterministically |
@@ -90,7 +88,7 @@ available cheaply — which is why none of them exist.
 
 ### 2.2 Vector op list (`page.getOperatorList()`)
 
-`extractVectorGeometry` (`lib/oneclick.ts:107`) walks the stream with correct
+`extractVectorGeometry` (`lib/oneclick.ts:105`) walks the stream with correct
 save/restore/transform/form-XObject matrix composition and emits
 `{ points, segs, meta, imageArea }`. It consumes `save`, `restore`,
 `transform`, `setLineWidth`, `setGState` (`LW` only), the form-XObject pair,
@@ -126,7 +124,7 @@ hold (`docFor` in `TakeoffCanvas.jsx`, passed to the gallery as `getDoc`, `openP
 | `getPermissions()` | usage flags | Warn once, up front, on a restricted set rather than failing oddly later. |
 | `getOptionalContentConfig()` | OCG id → `{ name, intent }` + the default on/off config | §2.4. |
 | `getFieldObjects()` / `getJSActions()` | AcroForm fields | RFI/transmittal forms shipped as PDFs. Ties into `lib/rfi.js`. |
-| `page.getStructTree()` | tagged-PDF structure | Almost never present on CAD output. Low priority, note it and move on. |
+| `page.getStructTree()` (page-level, not document) | tagged-PDF structure | Almost never present on CAD output. Low priority, note it and move on. |
 
 ### 2.4 Optional content groups — the layers
 
@@ -142,8 +140,9 @@ that we currently use neither of:
    more involved than it looks** (verified against 4.10.38): gate on
    `args[0] === "OC"`, because the same op carries `[tagName, MCID]` for
    ordinary tags. `args[1]` is then `{type: "OCG", id}` **or**
-   `{type: "OCMD", ids, policy, expression}` — several groups at once, or a
-   `/VE` boolean visibility expression — **or** `null`. Tracking a stack of
+   `{type: "OCMD", ids, policy}` for several groups at once, **or**
+   `{type: "OCMD", expression}` for a `/VE` boolean visibility expression (that
+   branch carries no `ids` and no `policy`), **or** `null`. Tracking a stack of
    these does attribute segments to layers, but it is not a
    one-byte-per-segment addition, and a naive string compare on `args[1]`
    silently attributes nothing. `getGroups()` also returns **`null`**, not
@@ -153,12 +152,13 @@ that we currently use neither of:
 
 Why this matters more than anything else on the list: One-Click's whole
 difficulty is deciding which linework is a boundary. The hatch classifier
-(`classifyHatchSegs`, ~80 lines of calibrated heuristics with a
+(`classifyHatchSegs`, ~100 lines of calibrated heuristics with a
 three-tier escalation and a sensitivity knob) exists to *infer* something the
 PDF often states outright — this path is on layer `A-FLOR-PATT`. When OCGs are
 present, "exclude these layers from the mask" is a deterministic, explainable
-replacement for a heuristic that AGENTS.md admits is calibrated on one sheet
-and one CAD style. The heuristic stays as the fallback for sheets with no OCGs
+replacement for a heuristic whose own source admits its "constants
+above are calibrated on one sheet/one CAD style; other plans hatch differently"
+(`oneclick.ts:74`). The heuristic stays as the fallback for sheets with no OCGs
 (scans, flattened exports, some plotters).
 
 **Caveat to test before building:** many bid sets are flattened on the way out
@@ -213,10 +213,13 @@ true` skips decryption rather than performing it, so numbers survive while
 parse of the file** on top of pdf.js, not the free read that "already a
 dependency" suggests. When present, `/Measure` beats `detectScale`'s note-matching outright
 — and it's per-viewport, so a sheet with a plan at 1/8" and a detail at 1/2"
-resolves *both*. The ambiguity is not what the first draft described, though:
+resolves *both*. Two things to get right about the existing behaviour:
 `detectScale` sets `multi: true` only on the branch that **succeeds** (a
-title-block hit); the give-up branch returns `null` and carries no flag. And
-`multi` is written but never read anywhere in the app (`sheets.ts:153-155`).
+title-block hit) — the give-up branch returns `null` and carries no flag at all
+— and `multi` **is** consumed: it drives a `±` badge and a "this sheet shows
+several scales … confirm against a known dimension" tooltip on the adopt-scale
+affordance (`TakeoffCanvas.jsx:4682-4683`). So the multi-scale case is already
+surfaced, if thinly. `/Measure` would *resolve* it rather than warn about it.
 
 **Probe before building.** Verify emission rates across a real corpus; if it's
 rare, it's a cheap opportunistic upgrade, not a feature.
@@ -224,16 +227,17 @@ rare, it's a cheap opportunistic upgrade, not a feature.
 ### 2.7 Sheet-level facts we can already derive but don't expose
 
 - **Vector vs. scan.** `sheetStatsRef` already holds `{ segCount, imageFrac }`
-  per sheet (`TakeoffCanvas.jsx:1194`) — used only to route One-Click. Show it:
+  per sheet (`TakeoffCanvas.jsx:1192`) — used only to route One-Click. Show it:
   "12 of 84 sheets are scans" is a bid-planning fact.
 - **Page geometry.** `page.view`, `.rotate`, `.userUnit` → real sheet size
   (ARCH D, ANSI E, 30×42) and rotation. Sheet size is a sanity check on scale:
   a 1/8" plan on a half-size print is the classic 2× error the Check-a-dimension
   feature (`K`) exists to catch.
-- **Scale disagreement.** `detectScale` already computes `multi` (several
-  distinct scale notes on one page) and discards the detail. Surfacing *which*
-  scales were found and where turns a silent "suggest nothing" into an
-  actionable list.
+- **Scale disagreement.** `detectScale` computes `multi` and already warns with
+  it (§2.6), but discards *which* scales it saw and where. The warning says
+  "several scales here"; it can't say "1/8\" in the title block, 1/2\" under the
+  detail — which is the plan view?" Keeping the list is the upgrade, not the
+  warning itself.
 
 ---
 
@@ -272,14 +276,21 @@ do, so it is node-testable and the MCP server can reuse it verbatim. The
 pdf.js-touching half stays in `sheets.ts` / `TakeoffCanvas.jsx` /
 `mcp/src/pdf.ts`.
 
-**Cache seam.** In-memory ref keyed by sheet key for the session; persisted
-under its own key in the keyPath-less `META_STORE` in `lib/store.js` — **no DB
-version bump**, the stamp-library precedent (see `ESTIMATING_ROADMAP.md` §3b).
-Key on file name + size so a reissued sheet invalidates.
+**Cache seam.** In-memory ref keyed by sheet key for the session.
+*Superseded on persistence* — see `PDF_DATA_PLAN.md` T10: the stamp-library key
+this originally cited is **browser-global by design**, which is wrong for a
+per-project index keyed on filenames that collide across projects, and the
+existing `metaGet`/`metaPut` (`store.js:348-358`) are what a persisted version
+should use. Persistence is deferred until the in-memory build is measured.
 
-**Build trigger.** Piggyback the thumbnail pump in `PlanNavigator.jsx:203-233`,
-which already walks every sheet lazily behind an `IntersectionObserver` and
-already calls `getTextContent()`. Zero new passes for the common case.
+**Build trigger.** ⚠️ **Superseded — this does not work.** The original idea was
+to piggyback the gallery thumbnail pump, which already walks sheets lazily and
+already calls `getTextContent()`. It cannot build a whole-set index: the pump
+`continue`s past any key already in `thumbCacheRef` (canvas-owned and
+"survives gallery close", so a second open indexes nothing), gates the text read
+on `!labels[key] || !detectedScales[key]`, and only enqueues keys without
+thumbnails. See `PDF_DATA_PLAN.md` T6, which replaces it with a standalone
+indexing job carrying a completeness state.
 
 Unlocks, immediately:
 
@@ -287,17 +298,22 @@ Unlocks, immediately:
   sheet, click to open and zoom-to-hit with a highlight rect. This is the
   single most-missed feature in any plan viewer and we already have the data.
 - **A real drawing list** — the gallery shows `A-101 · FIRST FLOOR PLAN`
-  instead of a file stem (`labelOf` in `PlanNavigator.jsx:253`), sorted by
+  instead of a file stem (`labelOf` in `PlanNavigator.jsx:254`), sorted by
   sheet number, filterable by discipline.
 - **Auto-levels** — `sheet_levels` is set today by a `window.prompt`
-  (`PlanNavigator.jsx:266`). Propose levels from the title text and let the
+  (`PlanNavigator.jsx:267`). Propose levels from the title text and let the
   user confirm; feeds `groupSheetsByLevel` (`lib/sheetLevels.js`) unchanged.
 - **Room list per sheet** — `roomLabelSeeds` already finds the numbers; pair
   each with the nearest larger text run to get `104 · CORRIDOR`. Filterable,
   and every row is a one-click seed for the existing flood
   (`detectRegions`) — "detect all corridors" becomes a real gesture.
 
-### P2 · A "Plan Data" panel — the one place all of this is filterable
+### P2 · A "Plan Data" panel — ⚠️ **REJECTED, do not build**
+
+> Kept for the reasoning about *what data wants surfacing*; the packaging is
+> wrong. The app already has six rail buttons and nine surfaces, and every tab
+> below has an existing owner — see `PDF_DATA_PLAN.md` "Not doing". Where P3,
+> P4 and P6 say "a tab in P2", read "the surface named in the plan".
 
 A docked panel mirroring `TakeoffsPanel.jsx` / `ReportPanel.jsx`, with tabs:
 **Sheets · Text · Rooms · Layers · Annotations · Schedules · Document**.
@@ -316,7 +332,8 @@ the negative space called out. *"9 sheets have no detected scale. 12 are scans.
 
 ### P3 · Layer awareness (OCG) — the biggest engine unlock
 
-1. Track `beginMarkedContentProps("OC", id)` / `endMarkedContent` in
+1. Track the marked-content brackets — **not** the `("OC", id)` shape written
+   here originally; see §2.4 for the real arg shapes — in
    `extractVectorGeometry`, emitting a parallel `layerIds` array alongside the
    existing `meta`. Same walk, same transforms, one more stack.
 2. Read `pdf.getOptionalContentConfig().getGroups()` for names.
@@ -414,7 +431,7 @@ None of this is finished until it leaves the app the way everything else does:
 | 6 | **P5** color/dash | Same file as P3. |
 | 7 | **P7** exports + MCP | Continuous. |
 
-**What review changed.** Four corrections, in descending importance:
+**What review changed:**
 
 1. **Ship what already exists first.** `lib/detectRooms.ts` is a complete,
    tested batch room detector whose only importers are `mcp/src/session.ts` and
@@ -443,9 +460,10 @@ compare "won't show you which wall moved."
 
 ## 5. Risks and constraints
 
-- **Perf on big sets.** A 200-sheet text layer is not free. Build lazily behind
-  the existing `IntersectionObserver` pump, never eagerly on load, and keep the
-  per-sheet record bounded (cap `text` tokens, drop the raw array from the
+- **Perf on big sets.** A 200-sheet text layer is not free. Build lazily and never
+  eagerly on load — though **not** off the gallery's `IntersectionObserver`
+  pump, which cannot cover a whole set (§3/P1, `PDF_DATA_PLAN.md` T6) — and keep
+  the per-sheet record bounded (cap `text` tokens, drop the raw array from the
   persisted copy if it gets heavy — the search index can be a token/position
   digest rather than the full item list).
 - **Memory.** Sheet records live alongside masks and snap grids, which are
@@ -464,7 +482,8 @@ compare "won't show you which wall moved."
 - **Corpus first, heuristics second.** OCGs and `/Measure` viewports are worth
   a lot when present and worth nothing when absent, and this repo has exactly
   one bundled sample plan (`web/public/demo/`). Probe a real spread of sets
-  before either P3 or the `/VP` work gets scheduled.
+  before either is scheduled — that probe is `PDF_DATA_PLAN.md` T1, and its
+  verdict is what gates them.
 - **The privacy posture doesn't move.** Every item above is client-side pdf.js
   or pdf-lib. Nothing here needs the AI seam, the login gate, or the network —
   which is precisely why it should be built before more of the app leans on
@@ -511,11 +530,12 @@ What the category returns:
 | **Citable artifacts** — sheet renders, region crops, markdown, so an agent can cite exact sources | partly, via MCP | **Yes** — rendering crops is what `rasterizeRegion` already does |
 | **Semantic search over the set** — plain-language query, ranked hits with snippets and URIs, then fetch the exact evidence behind a hit | no equivalent | **Now yes** — see §8.6 |
 
-Two framing ideas are worth adopting regardless of who sells them: extracted
-text carries a **semantic type** (leader, note, dimension, title-block), and
-the sheet set is treated as an **addressable index** — "detail 3 on M002" is a
-resolvable address, not a search query. Both are cheap to design in and
-awkward to retrofit.
+Two framing ideas looked worth adopting: extracted text carrying a **semantic
+type** (leader, note, dimension, title-block), and the sheet set treated as an
+**addressable index** — "detail 3 on M002" as a resolvable address rather than a
+search query. ⚠️ **Both were subsequently cut.** "Cheap to design in and awkward
+to retrofit" is the signature of speculative generality, and nothing in the plan
+consumes either. Build them when something needs them.
 
 **What this validates.** The category's own framing of the problem — teams
 writing brittle OCR scripts, hand-cropping regions, and babysitting edge cases
@@ -561,7 +581,7 @@ arrive over the wire:
 
 | Thing | Rough size | Licence |
 |---|---|---|
-| tesseract.js — SIMD core + English traineddata | **~5 MB** (`_fast` traineddata 1.89 MB) to **~14 MB** (standard 10.4 MB), plus a 3.3 MB core. *The first draft's "~60 MB" was unsourced and wrong by 5–10× — that figure only appears if you count the whole unpacked npm core package, which ships four wasm variants.* | Apache-2.0 |
+| tesseract.js — SIMD core + English traineddata | **~5 MB** (`_fast` traineddata 1.89 MB) to **~14 MB** (standard 10.4 MB), plus a 3.3 MB core. *An earlier "~60 MB" here was unsourced and 4–12× too high — that figure only appears if you count the whole unpacked npm core package, which ships four wasm variants.* | Apache-2.0 |
 | PaddleOCR det + rec | `en_PP-OCRv5_mobile_rec` **7.5 MB**, `PP-OCRv5_mobile_det` **4.7 MB** — but `PP-OCRv5_server_det` is **84 MB** in the *official* list. The hazard isn't flaky third-party repos: det and rec each ship **mobile and server** variants and the family name doesn't say which. Multilingual rec is 16 MB. These are Paddle inference-model sizes, not ONNX-export sizes. | Apache-2.0 (code) — **verify each ONNX re-export separately; several hub exports declare no licence at all, which disqualifies them** |
 | Sentence-embedding model, quantized | ~20–100 MB | varies — check the model card |
 | Small VLMs (256M–500M, quantized) | hundreds of MB | varies |
@@ -650,12 +670,18 @@ bespoke 504 cold-start retry logic — all so a *scanned* schedule can be read.
 But `parseSchedule` is already pure, already pdfjs-free, and already takes
 `Token[] = {str, x, y, h}` **precisely so that either path can feed it** — the
 module's own header says so. A local OCR that emits positioned tokens plugs
-into that existing contract with **zero parser changes and zero new
-abstraction**. The architecture anticipated this; the runtime just arrived.
+into that existing contract with **no new abstraction**.
+
+One caveat, since this section originally overstated it: it is not *zero* work.
+`parseSchedule` clusters rows on `max(t.h * 0.6, 4)` where `h` is pdf.js **cap
+height**, while OCR engines report bounding-box height including descenders — so
+that constant needs a fixture pass against real scanned schedules. And
+`scheduleParse.ts`'s own header anticipates "a **server** OCR/VLM adapter," not
+a local engine. The seam is right; the calibration is real work.
 
 That would give the scan path a free, offline, no-login default tier, with the
 server reader demoted to the escalation for genuinely hard sheets. It also
-removes the awkward failure mode documented at `TakeoffCanvas.jsx:3990` where
+removes the awkward failure mode documented at `TakeoffCanvas.jsx:3983-3984` where
 the only advice for an unreachable reader is "re-drag your box."
 
 ### 8.3 Small vision-language models in-browser — **deferred**
@@ -734,11 +760,9 @@ sessions — a natural extension of the zip-ingest path and its guardrails in
 
 ---
 
-## 9. What this changes about §4
+## 9. What §§7–8 change about the ordering
 
-See §4's superseded note — review reordered the work, and
-[`PDF_DATA_PLAN.md`](PDF_DATA_PLAN.md) is authoritative. Two points from §7–§8
-survive the reordering:
+Two points survive the reordering (§4):
 
 - **Local OCR is worth doing, but not for the reason first given.** It is not a
   scan-reading feature — One-Click already handles scanned *plans* via

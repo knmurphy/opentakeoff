@@ -4,15 +4,6 @@ The scheduled work derived from [`PDF_DATA_SURFACE.md`](PDF_DATA_SURFACE.md).
 That document is the research and the *why*; this one is the ordered backlog
 and the *what*, sized so each task is a single reviewable PR.
 
-> **Revision note.** This plan was rewritten after five adversarial reviews
-> (accuracy, feasibility, constraints, external claims, product). The first
-> draft was wrong in ways worth recording so they aren't re-proposed: it built
-> a sheet index before shipping the batch room detector that already exists; it
-> hung the index build off the gallery thumbnail pump, which structurally
-> cannot index a whole set; it treated a text cache as a free refactor when it
-> is the load-bearing coordinate-space decision; and it proposed a seventh
-> docked panel for data that belongs in surfaces the app already has.
-
 ## Ground rules (from `PDF_DATA_SURFACE.md` §0)
 
 1. **No paid dependency, and no gate, in the default path.** No subscription,
@@ -147,14 +138,15 @@ label."
 
 ### T6 · Set-indexing job · M
 **Goal.** Index a whole set, and know when it is complete.
-**Why this is its own task.** The first draft hung this off the gallery
-thumbnail pump. It cannot work: the pump `continue`s past any key already in
+**Why this is its own task.** The obvious move — hanging it off the gallery
+thumbnail pump — cannot work: the pump `continue`s past any key already in
 `thumbCacheRef` — which is canvas-owned and survives gallery close, so a second
 open indexes **nothing** — it gates the text read on `!labels[key] ||
 !detectedScales[key]`, and the observer only enqueues keys without thumbnails.
 On a 200-sheet set that indexes the cards in the viewport. It also shares its
-cancellation token with the enumerate effect, so adding a PDF aborts the pump
-and nothing re-invokes it.
+cancellation token with the enumerate effect, so adding a PDF aborts the
+in-flight pump mid-queue (it does get re-invoked when new cards intersect, so
+this is a stall and a reordering rather than a permanent stop).
 **Do.** A standalone job with its own queue, progress, cancellation, and a
 per-file `indexed: complete | partial | none` state. **Must survive the
 navigator unmounting.** In-memory only — no IndexedDB (see T10).
@@ -192,13 +184,14 @@ criterion satisfiable by searching only the active sheet tests nothing.
 ### T9 · Auto-level proposals · S
 Replace the `window.prompt` with proposed levels the user confirms;
 `groupSheetsByLevel` unchanged downstream.
-**Decide explicitly:** `sheet_levels` is hydrated, the index is not — so a
-snapshot Load or revision Restore reverts levels while the index still claims
-them. Pick a behavior; don't leave it silent.
+**Decided:** `sheet_levels` is hydrated, the index is not — so a snapshot Load
+or revision Restore reverts levels while the index still claims them. The
+payload wins: on hydrate, drop the index's inferred levels and re-propose. A
+user's saved assignment always outranks an inference.
 **Depends on.** T6.
 
 ### T10 · Index persistence · M · **deferred until T6 measures**
-The first draft resolved the research doc's own open question ("measure before
+This originally resolved the research doc's open question ("measure before
 choosing") to *persist*, without the measurement. Deferred on purpose.
 When scheduled: **use the existing `metaGet`/`metaPut`/`metaDelete`
 (`store.js:348-358`)** rather than hand-rolling. Note the stamp-library
@@ -277,31 +270,38 @@ plugin, not with Print/Plot.
 Merged; a read-only tab of things you cannot act on is a dead end.
 **Do.** Read into the index; import `FreeText`/`Text`/`Ink`/`Square` — but
 **into their own hideable layer with its own provenance, not the user's markup
-layer.** That layer feeds the RFI register (`lib/rfi.js` seeds subjects from
-markup text), so merging 200 architect sticky notes would flood the estimator's
-RFI candidate list with things they didn't write.
+layer.** Merging 200 architect sticky notes into the user's own ink would bury
+what they wrote and inflate every markup count. (This originally claimed it would also flood
+an "RFI candidate list" — it wouldn't: `raiseRfi` is a
+per-markup button that seeds a subject from that one markup's text, and nothing
+enumerates markups as candidates.)
 **Shape note.** `data.vertices` is a flat `Float32Array` and `data.inkLists` is
 an array of `Float32Array`s — not arrays of point objects.
 **Shape import** (`Polygon`/`PolyLine`/`Square` → `verts_norm`) is opt-in,
 behind the propose → review → Create gate, stamped `origin.method =
 "pdf_annotation"`. Justify it as **migration** — inheriting an existing
 third-party takeoff so an estimator can switch tools — not as interop.
-**Reconcile** with the two existing answers to "what changed" (`revisions.js`
-quantity deltas, `revisionClouds.js` drawn clouds) or say which one wins.
+**Reconcile** with the two existing answers to "what changed": `revisions.js`
+quantity deltas are the estimator's own record and stay authoritative for
+*quantities*; `revisionClouds.js` marks what the estimator changed; imported
+clouds are the architect's claim about the *drawing* and are advisory — they
+annotate, they never drive a quantity.
 **Depends on.** T6.
 
 ### T17 · Layer attribution · XL · gated on T1
-**The mechanism is more complex than the first draft claimed.** In pdf.js
+**The mechanism is more complex than it looks.** In pdf.js
 4.10.38, `beginMarkedContentProps` `args[1]` is **not** an id string — it is
 `{type:"OCG", id}` **or** `{type:"OCMD", ids, policy, expression}` (multiple
 groups, or a `/VE` boolean expression) **or** `null`. Consumers must gate on
 `args[0] === "OC"` because the same op carries `[tagName, MCID]` for non-OC
 tags. `getGroups()` returns **`null`**, not `{}`, when there are no OCGs.
 It is not one byte per segment.
-**Scope is five render sites**, not one: panel render, detail view,
-`ensureRasterMask`, `agentViewRegion`, `rasterizeRegion` — and toggling
-visibility re-runs the render effect, which nukes masks, snap grids, and any
-live proposal. "Remember per project" is a new `buildPayload` field and a new
+**Scope is seven render sites**, not one: panel render, detail view,
+`ensureRasterMask`, `agentViewRegion`, `rasterizeRegion`, the gallery
+thumbnails (`PlanNavigator.jsx:221`) and the Marked Set PDF export
+(`markedset.js:391`) — miss the last two and hidden layers reappear in
+thumbnails and in the deliverable. Toggling visibility also re-runs the render
+effect, which nukes masks, snap grids, and any live proposal. "Remember per project" is a new `buildPayload` field and a new
 `hydrate` else-clear branch.
 **If T1 finds OCGs on most real sheets, break this up before starting. If not,
 drop it** — the estimator's actual want is one sentence ("keep furniture and
@@ -349,8 +349,9 @@ the mock agent path; nobody should buy credits to close a size-S ticket.
 Move `buildRasterMask`'s threshold and closing passes off the main thread.
 It already hurts: this runs on the scanned-plan path, which is exactly where
 One-Click is slowest — a felt freeze during the app's headline gesture.
-**Trigger.** Name the number (mask-build ms on a scanned sheet) or it never
-gets scheduled. **Note** `busyRef` is load-bearing — `PlanNavigator.jsx:209`
+**Trigger.** Schedule it when mask build on a scanned sheet exceeds ~150 ms on
+the reference machine, or when a One-Click on a scan visibly stutters — measure
+before and after in the PR. **Note** `busyRef` is load-bearing — `PlanNavigator.jsx:209`
 yields the thumbnail pump on `busyRef.current === "rendering"`, so moving mask
 work changes when that flag is set.
 
@@ -371,13 +372,13 @@ sets no COOP/COEP, so no `SharedArrayBuffer`; and it can't simply be added —
 clearance per the DoD, including the character dictionary the recogniser needs.
 A `prebuild` script that copies wasm from `node_modules` and fetches models by
 pinned URL + recorded SHA-256 into `web/public/models/<engine>@<version>/` —
-**weights are never committed to git** (`.git` is 9.8 MB today; 15–60 MB would
+**weights are never committed to git** (`.git` is ~11 MB; 15–60 MB would
 multiply it permanently and is paid on every CI checkout across a 2-OS matrix).
 A `_headers` rule for `/models/*` with `immutable`. A CI guard that the
 initial-load JS graph does not grow. Ships nothing user-visible.
-*Correction carried forward:* tesseract's real cost is **~5 MB (`_fast`
-traineddata + SIMD core) to ~14 MB (standard)**, not the ~60 MB the first draft
-claimed — an unsourced number. This makes D1 cheaper than it looked.
+*Cost, corrected:* tesseract's real cost is **~5 MB (`_fast`
+traineddata + SIMD core) to ~14 MB (standard)**, not the ~60 MB first claimed here — an
+unsourced number. This makes D1 cheaper than it looked.
 *Also state plainly:* self-hosting does not remove the meter, it **moves it** to
 the deployer's bandwidth bill. `README.md:220` says "No paid dependencies" and
 that must stay true for a fork.
@@ -388,8 +389,7 @@ at `TakeoffCanvas.jsx:3983`; the sign-in/domain checks guard only the escalation
 branch. New raster path yielding `ImageData`, bypassing `SCAN_MAX_DIM` (a
 server-only cap). Calibrate `parseSchedule`'s row clustering: `h` is pdf.js
 **cap height**, OCR gives bounding-box height including descenders, so
-`max(t.h*0.6, 4)` needs a fixture pass — this is not the drop-in the first draft
-described.
+`max(t.h*0.6, 4)` needs a fixture pass — this is not a drop-in.
 **Acceptance, all of it:** on a build with `VITE_GOOGLE_CLIENT_ID` unset, no
 sign-in, DevTools offline — a scanned schedule parses to rows; **zero non-self
 network requests during OCR**; unchanged initial-load bundle; a stated accuracy
@@ -411,7 +411,7 @@ the `opfs-sahpool` VFS, which does not.
 ### D3 · Auto-find the schedule table on a sheet
 The research doc identifies the real upgrade to a shipped feature — the parser
 is "gated behind a manual marquee instead of run over the whole sheet" — and
-the first draft never scheduled it. Deterministic table-bounds detection on a
+nothing here scheduled it until now. Deterministic table-bounds detection on a
 vector sheet, no model. Worth an S–M when M2 lands.
 
 ---
@@ -422,7 +422,7 @@ vector sheet, no model. Worth an S–M when M2 lands.
   Also: **MuPDF/mupdf.js is AGPL-3.0-or-commercial** and cannot be linked into
   an Apache-2.0 distribution.
 - **A "Plan Data" panel.** The app already has six rail buttons and nine
-  surfaces. Every tab the first draft proposed has an existing owner: Sheets →
+  surfaces. Every tab proposed in the research doc has an existing owner: Sheets →
   the gallery, Text → Find, Rooms → the canvas overlay, Layers → the
   render-and-fill settings menu, Annotations → their own imported layer,
   Schedules → `ImportSchedulePanel`, Document → hover text.
