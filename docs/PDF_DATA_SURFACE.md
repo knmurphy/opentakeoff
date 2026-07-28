@@ -13,6 +13,23 @@ login-gate, cost, and non-repeatability that the AI paths (`lib/ai.js`,
 `/ai/parse-schedule`) carry. Where a proposal genuinely needs a model, it says
 so.
 
+## 0. Ground rules
+
+Two constraints govern every proposal below. They are not preferences.
+
+1. **No paid dependency, and no gate, in the default path.** A capability may
+   not require a subscription, a metered API, a sign-in, an allow-listed email
+   domain, or a key the user has to obtain. Anything that does is an *optional
+   escalation* the app works without — and that a fork can delete without
+   losing a feature.
+2. **Nothing leaves the browser.** Plan bytes are never uploaded, and the app
+   must work with the network off. This is the existing posture (`AGENTS.md`:
+   "No backend, no database, no auth"), stated here because §8 introduces the
+   one thing that can quietly violate it — see §8.0.
+
+Where a proposal falls outside these rules it is marked **deferred**, not
+scheduled.
+
 ---
 
 ## 1. The finding, in one paragraph
@@ -454,6 +471,44 @@ runs the same models with a silent WebGPU→WASM fallback. That moves several
 things this repo currently routes to a network endpoint into "runs on the
 estimator's laptop, free, offline."
 
+Read this section against §0. "Free" here means free of licence fees and of
+per-use billing — every engine named is Apache-2.0 or MIT, compatible with this
+repo. It does **not** automatically mean free of a network call, which is the
+subject of §8.0.
+
+### 8.0 The cost that is not money — weights, and where they come from
+
+Model-backed capabilities cost **megabytes**, not dollars, and the megabytes
+arrive over the wire:
+
+| Thing | Rough size | Licence |
+|---|---|---|
+| tesseract.js — WASM core + English traineddata | tens of MB (~60 MB reported combined; `_fast` traineddata is much smaller) | Apache-2.0 |
+| PaddleOCR mobile det + rec, ONNX | single-digit MB per model (English recognition ~7.5 MB) — **but published exports vary enormously by variant** (one repo lists a detection model at 84 MB), so pin the exact mobile export, never the family name | Apache-2.0 |
+| Sentence-embedding model, quantized | ~20–100 MB | varies — check the model card |
+| Small VLMs (256M–500M, quantized) | hundreds of MB | varies |
+
+**The trap:** by default these libraries fetch weights *and* their `.wasm`
+binaries from a third-party CDN on first use. No plan data goes anywhere — the
+transfer is weights coming down, never sheet bytes going up — but it is still a
+third-party request from an app whose whole claim is that nothing leaves the
+browser, and it breaks on a jobsite with no signal.
+
+**So it is a hard requirement, not a follow-up:** weights and wasm ship as
+static assets served from the app's own origin. Transformers.js exposes
+`env.localModelPath`, `env.allowRemoteModels = false`, and
+`env.backends.onnx.wasm.wasmPaths` for exactly this. Self-hosted, versioned
+with the app, offline, no third party.
+
+**And they load lazily.** `lib/ingest.js` already sets the precedent verbatim —
+fflate and pdf-lib load "only when a user actually drops a zip or image — so
+they never weigh down the initial page load." Same rule: OCR weights load the
+first time someone marquees a scanned schedule, never before. An estimator who
+only ever opens vector plans downloads nothing.
+
+Verify the licence on the *weights* separately from the licence on the *code*;
+they are frequently different.
+
 ### 8.1 Other PDF engines — noted, not recommended
 
 PDFium compiled to WASM (`@embedpdf/pdfium`, `pdfium.js`) and MuPDF WASM
@@ -492,22 +547,22 @@ server reader demoted to the escalation for genuinely hard sheets. It also
 removes the awkward failure mode documented at `TakeoffCanvas.jsx:3990` where
 the only advice for an unreachable reader is "re-drag your box."
 
-### 8.3 Small vision-language models in-browser
+### 8.3 Small vision-language models in-browser — **deferred**
 
-SmolVLM (256M / 500M / 2B, Apache-2.0, explicit transformers.js + WebGPU
-support), Moondream 3, Florence-2. The existing BYO-AI seam (`lib/ai.js`,
-`visionQuery`, first consumer *read scale with AI*) is already shaped as
-"configure an endpoint" — a local WebGPU model is just another provider behind
-the same interface, with no key and no network.
+SmolVLM (256M/500M/2B, Apache-2.0, explicit transformers.js + WebGPU support),
+Moondream 3, and Florence-2 all run in a browser, and the BYO-AI seam
+(`lib/ai.js`, `visionQuery`) is already shaped to take another provider.
 
-**Scope this narrowly.** Small VLMs are unreliable at reading precise small
-text off a dense E-size sheet — which is exactly what a scale note or a
-schedule cell is. Use them for **classification-shaped** questions where a
-wrong answer is cheap and checkable: is this sheet a scan or vector? which
-discipline? does this region look like a schedule? Leave *reading* to OCR
-(§8.2) and to the deterministic text layer.
+**Not scheduled, for two reasons.** Hundreds of megabytes of weights is a poor
+trade against §8.0 for what it buys; and small VLMs are unreliable at reading
+precise small text off a dense E-size sheet, which is exactly what a scale note
+or a schedule cell is. If they are ever revisited it should be for
+**classification-shaped** questions where a wrong answer is cheap and checkable
+(scan or vector? which discipline? does this region look like a schedule?),
+never for reading. Reading belongs to OCR (§8.2) and to the deterministic text
+layer.
 
-### 8.4 Document layout detection — the "regions" capability
+### 8.4 Document layout detection — the "regions" capability — **deferred**
 
 DocLayout-YOLO (YOLOv10-based, ONNX exports published, deliberately
 lightweight) is the open counterpart to the typed drawing regions of §7, and
@@ -539,7 +594,7 @@ chosen as a memory ceiling. Two separable upgrades:
 
 Do the worker move first; it is most of the win for a fraction of the risk.
 
-### 8.6 Local semantic search — the client-side answer to `source-search`
+### 8.6 Local semantic search — the client-side answer to §7's hosted search
 
 `sqlite-wasm` + `sqlite-vec` (~1.5 MB WASM) persisted on **OPFS** in a Web
 Worker, with embeddings generated locally by transformers.js. That is
