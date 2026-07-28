@@ -2813,7 +2813,13 @@ export default function TakeoffCanvas() {
       // cap and the flood's size guards are feet-true — resolution-independent.
       // rescaleSheet evicts this cache entry when the calibration changes.
       const upp = uppFor(key);
-      mo = buildMask(segs, dims.w, dims.h, MASK_MAX_DIM, segMetaRef.current.get(key), upp ? 1 / upp : 0);
+      // A1: pass the BASELINE px/ft too, so the working raster is pinned to the
+      // sheet rather than to whatever scale this sheet happens to be rendered at.
+      // Without it the Hi-Res toggle changed measured SF on the same click.
+      const rsNow = renderScalesRef.current.get(key) || RENDER_SCALE;
+      const pxPerFt = upp ? 1 / upp : 0;
+      mo = buildMask(segs, dims.w, dims.h, MASK_MAX_DIM, segMetaRef.current.get(key), pxPerFt,
+                     pxPerFt ? pxPerFt * RENDER_SCALE / rsNow : 0);
       maskCacheRef.current.set(key, mo);
     }
     return mo;

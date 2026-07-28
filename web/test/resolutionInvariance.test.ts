@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   buildMask, floodRegion, floodRegionSealed, sealRadiiFor, doorWedgeCapPx,
   minPassRadiusFor, MIN_PASS_FT, DETERMINISM_MIN_MPPF, MASK_MAX_DIM,
+  traceRegion, ringArea,
 } from "../src/lib/oneclick.ts";
 import { traceConfidence, CONF_COARSE } from "../src/lib/confidence.ts";
 
@@ -124,4 +125,60 @@ test("MASK_MAX_DIM export still caps ws at 1", () => {
   const mo = buildMask(sq(2, 2, 98, 98), 100, 100, MASK_MAX_DIM, null, 12);
   assert.equal(mo.ws, 1);
   assert.equal(mo.mppf, 12);
+});
+
+// ── A1: the working raster is a property of the SHEET, not of the render ─────
+// Audit finding A1: MASK_MAX_DIM is a CAP, not a pin. Below it the mask followed
+// the render scale, so the per-sheet "Hi-Res render" toggle changed measured
+// square footage on the same click (11×17 at 1/8": 97.8 SF vs 134.0 SF, +37%).
+// Above the cap the resolution was pinned but Math.round(seg*ws) still quantized
+// in RENDER px, so cap-bound sheets shifted too. buildMask now takes the baseline
+// px/ft and maps into the baseline render before choosing the raster and before
+// quantizing. Reverting either half fails these.
+const A1_PT_PER_FT = 9, A1_BASE_RS = 2;              // 11×17 at 1/8" = 1'-0"
+function a1Scene(rs: number) {
+  const k = rs / A1_BASE_RS, segs: number[] = [];
+  const L = (a: number, b: number, c: number, d: number) => segs.push(a * k * 2, b * k * 2, c * k * 2, d * k * 2);
+  L(100, 100, 400, 100); L(400, 100, 400, 180); L(400, 196, 400, 340);   // right wall with a slit
+  L(400, 340, 100, 340); L(100, 340, 100, 100);
+  L(150, 150, 380, 150); L(150, 200, 380, 200);                          // interior linework
+  return { segs, w: 900 * k * 2, h: 700 * k * 2, pxPerFt: A1_PT_PER_FT * rs, base: A1_PT_PER_FT * A1_BASE_RS };
+}
+
+test("A1: mask is bit-identical across render scales (Hi-Res cannot change a measurement)", () => {
+  const base = a1Scene(A1_BASE_RS);
+  const mb = buildMask(base.segs, base.w, base.h, MASK_MAX_DIM, null, base.pxPerFt, base.base);
+  // 2.07 is the VA sheet's autoRenderScale; 5.374 is the audit's worked Hi-Res example.
+  for (const rs of [2.07, 3, 5.374]) {
+    const s = a1Scene(rs);
+    const m = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base);
+    assert.equal(m.mppf, mb.mppf, `mppf drifted at rs ${rs}: ${m.mppf} vs ${mb.mppf}`);
+    assert.equal(m.mw, mb.mw, `mask width drifted at rs ${rs}`);
+    assert.equal(m.mh, mb.mh, `mask height drifted at rs ${rs}`);
+    let diff = 0;
+    for (let i = 0; i < mb.mask.length; i++) if (mb.mask[i] !== m.mask[i]) diff++;
+    assert.equal(diff, 0, `${diff} mask cells differ at rs ${rs} — the raster still follows the render scale`);
+  }
+});
+
+test("A1: measured area is identical across render scales", () => {
+  const areas = [A1_BASE_RS, 2.07, 5.374].map((rs) => {
+    const s = a1Scene(rs);
+    const mo = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base);
+    const mppf = mo.mppf ?? 0;
+    const f = floodRegionSealed(mo, 250 * (rs / A1_BASE_RS) * 2, 220 * (rs / A1_BASE_RS) * 2, 0.5,
+      sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+    assert.equal(f.status, "ok");
+    return ringArea(traceRegion(f)) / (s.pxPerFt * s.pxPerFt);
+  });
+  for (const a of areas) assert.ok(Math.abs(a - areas[0]) < 0.01, `SF drifted across render scales: ${areas.map((x) => x.toFixed(2)).join(" / ")}`);
+});
+
+test("A1: omitting basePxPerFt keeps the old behaviour exactly (no-op for existing callers)", () => {
+  const s = a1Scene(A1_BASE_RS);
+  const withBase = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base);
+  const without = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt);
+  assert.equal(without.ws, withBase.ws);
+  assert.equal(without.mppf, withBase.mppf);
+  assert.deepEqual(Array.from(without.mask), Array.from(withBase.mask));
 });

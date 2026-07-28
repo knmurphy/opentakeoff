@@ -616,13 +616,31 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
 // swings, curved walls) additionally carry bit 4: still hard, but identifiable
 // so annexDoorWedges can recognize a swing arc on a region's boundary.
 export const MASK_CURVE_BIT = 4;
-export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0): MaskObj {
-  const ws = Math.min(1, maxDim / Math.max(imgW, imgH, 1));
-  const mw = Math.max(2, Math.ceil(imgW * ws)), mh = Math.max(2, Math.ceil(imgH * ws));
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0, basePxPerFt = 0): MaskObj {
+  // A1 (audit): the working raster must be a property of the SHEET, not of the
+  // render scale. It used to be `ws = min(1, maxDim/imgmax)` — a CAP, not a pin —
+  // so on any sheet rendering under the cap the mask resolution just followed the
+  // render, and the per-sheet "Hi-Res render" toggle silently changed measured
+  // square footage (11×17 at 1/8": 97.8 SF vs 134.0 SF, +37%). Above the cap the
+  // resolution was pinned but `Math.round(seg*ws)` still quantized in RENDER px,
+  // so cap-bound sheets shifted too (VA plan: −3.96% on one probe at identical mppf).
+  //
+  // Fix: map into the BASELINE render (RENDER_SCALE) before choosing the raster and
+  // before quantizing. k is this render's ratio to baseline; basePxPerFt is px/ft at
+  // baseline, which is render-independent by construction. At the default render
+  // k === 1 exactly and every number below is bit-identical to the old behaviour,
+  // so this is a no-op for every existing caller that doesn't pass basePxPerFt.
+  const k = (Number.isFinite(basePxPerFt) && basePxPerFt > 0 && Number.isFinite(pxPerFt) && pxPerFt > 0)
+    ? basePxPerFt / pxPerFt : 1;
+  const bW = imgW * k, bH = imgH * k;                       // image dims at baseline
+  const wsB = Math.min(1, maxDim / Math.max(bW, bH, 1));    // baseline raster scale
+  const mw = Math.max(2, Math.ceil(bW * wsB)), mh = Math.max(2, Math.ceil(bH * wsB));
+  const ws = k * wsB;                                       // image px → mask px at THIS render
   const mask = new Uint8Array(mw * mh);
   // pxPerFt = IMAGE px per foot (the sheet scale at this render). When known,
   // the hatch pitch cap converts to mask px through it, so whether a rhythm
   // reads as hatch or as walls is a property of the DRAWING, not of ws.
+  // mppf = pxPerFt*k*wsB = basePxPerFt*wsB — the render scale cancels exactly.
   const mppf = Number.isFinite(pxPerFt) && pxPerFt > 0 ? pxPerFt * ws : 0;
   const soft = meta ? classifyHatchSegs(segs, meta, ws, mppf > 0 ? HATCH_MAX_PITCH_FT * mppf : HATCH_MAX_PITCH) : null;
   let softCount = 0;
@@ -630,6 +648,11 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
     let v = soft && soft[si] ? 2 : 1;
     if (v === 1 && meta && (meta[si] & SEG_CURVE)) v = 1 | MASK_CURVE_BIT;
     if (v === 2) softCount++;
+    // Quantization needs no separate baseline step: ws is now baseline-derived
+    // (ws = k·wsB) and mw/mh come from the baseline dims, so seg*ws already lands
+    // on the baseline grid. Measured: Math.round(seg*ws) and Math.round(seg*k*wsB)
+    // agree on 400k random (rs, wsB, seg) draws — 0 differences. The audit plan
+    // listed this as a separate fix (1.1i); it is subsumed by pinning ws.
     let x0 = Math.round(segs[i] * ws), y0 = Math.round(segs[i + 1] * ws);
     const x1 = Math.round(segs[i + 2] * ws), y1 = Math.round(segs[i + 3] * ws);
     const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
