@@ -30,7 +30,11 @@ const THRESHOLDS = {
   // when the answer key is independent):
   humanMaxSfErr: 0.025,        // any single room > 2.5% SF off fails
   humanCoverageBand: 0.02,     // Σ engine vs Σ golden within ±2% (missed/phantom floor)
-  humanOverlapFrac: 0.005,     // double-counted floor ≤ 0.5% of the engine total
+  // 0.9's adjacency-tiling invariant. Unlike the two above this one is NOT
+  // engine-self-referential: two probes' regions claiming the same floor is
+  // double-counted SF whoever authored the answer key, so it gates every
+  // whole-plan case, engine-pinned included.
+  pairwiseOverlapFrac: 0.005,  // double-counted floor ≤ 0.5% of the engine total
 };
 // 0.2 (audit B4): the corpus is discovered by directory listing, so a deleted
 // or unreadable fixture used to shrink the run silently and still exit 0 —
@@ -111,6 +115,13 @@ if (process.env.BENCH_SEALED) {
   } catch { /* no sealed dir yet */ }
 }
 const realCaseNames: string[] = [];   // 0.7: which cases are engine-pinned
+// 0.9: every golden that ever moved more than ±2.5% carries the reason it was
+// allowed to, written into the corpus JSON by bench/pin-goldens.mts. Reprint it
+// on every run — an adjudication filed once and never seen again is a note, not
+// a record, and the −33% re-pin (bug #17) was invisible precisely because the
+// justification lived in a commit body nobody re-read.
+interface CorpusAdjudication { at?: string; scope?: string; from_sf?: number; to_sf?: number; delta_pct?: number; iou_old_new?: number; overlap_sf?: number; frac_pct?: number; reason: string }
+const adjudications: Array<{ caseName: string; subject: string; a: CorpusAdjudication }> = [];
 for (const file of caseFiles) {
   const c = JSON.parse(readFileSync(file, "utf8"));
   const doc = await pdfjs.getDocument({ url: join(dirname(file), c.pdf), useSystemFonts: true }).promise;
@@ -120,6 +131,9 @@ for (const file of caseFiles) {
   const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
   const name = file.replace(/^.*[\\/]/, "").replace(".json", "");
   if (!c.humanMeasured) realCaseNames.push(name);   // human-measured cases ARE independent truth
+  for (const a of (c.adjudications ?? []) as CorpusAdjudication[]) adjudications.push({ caseName: name, subject: a.scope ?? "case", a });
+  for (const p of c.probes as Array<{ name: string; adjudications?: CorpusAdjudication[] }>)
+    for (const a of p.adjudications ?? []) adjudications.push({ caseName: name, subject: p.name, a });
   runCase(name, g.segs, vp.width, vp.height, g.meta, c.ptPerFt, c.probes, !!c.humanMeasured, c.deducts_sf || 0, true);   // ptPerFt is image px/ft at the pinned scale
 }
 
@@ -137,7 +151,20 @@ for (const s of scores) {
 if (coverages.length) {
   console.log("\n── case coverage (Σ engine vs Σ golden, double-counted floor) ──");
   for (const cv of coverages) {
-    console.log(`${cv.caseName.padEnd(28)} ${String(cv.probes).padStart(2)} probes | golden ${cv.sumGoldenSF.toFixed(1)} SF | engine ${cv.sumEngineSF.toFixed(1)} SF (×${cv.ratio.toFixed(3)}) | overlap ${cv.overlapSF.toFixed(2)} SF | worst room SF±${(cv.maxSfErr * 100).toFixed(1)}%${cv.humanMeasured ? "  [HUMAN-MEASURED — gated]" : ""}`);
+    const ov = cv.sumEngineSF > 0 ? (cv.overlapSF / cv.sumEngineSF) * 100 : 0;
+    console.log(`${cv.caseName.padEnd(28)} ${String(cv.probes).padStart(2)} probes | golden ${cv.sumGoldenSF.toFixed(1)} SF | engine ${cv.sumEngineSF.toFixed(1)} SF (×${cv.ratio.toFixed(3)}) | overlap ${cv.overlapSF.toFixed(2)} SF (${ov.toFixed(3)}%, gate ${THRESHOLDS.pairwiseOverlapFrac * 100}%) | worst room SF±${(cv.maxSfErr * 100).toFixed(1)}%${cv.humanMeasured ? "  [HUMAN-MEASURED — gated]" : ""}`);
+  }
+  // 0.9: these are whole-CASE figures. They catch floor no probe covers and
+  // floor counted twice — they do NOT catch a single room losing a third of
+  // its area, because 2730050 → 92c1242 did exactly that while this line would
+  // have read +0.5%. The per-probe rule in bench/pin-goldens.mts is that guard.
+  console.log("  (whole-case figures — a per-ROOM regression can hide inside them; see bench/pin-goldens.mts)");
+}
+if (adjudications.length) {
+  console.log("\n── re-pin adjudications on record (bench/pin-goldens.mts, task 0.9) ──");
+  for (const { caseName, subject, a } of adjudications) {
+    const move = a.from_sf != null ? `${a.from_sf.toFixed(2)} → ${a.to_sf!.toFixed(2)} SF (${a.delta_pct}%${a.iou_old_new != null ? `, IoU ${a.iou_old_new.toFixed(3)}` : ""})` : a.overlap_sf != null ? `${a.overlap_sf} SF overlap (${a.frac_pct}%)` : "";
+    console.log(`  ${(caseName + " / " + subject).padEnd(42)} ${a.at ?? ""} ${move}\n      ↳ ${a.reason}`);
   }
 }
 const agg = aggregate(scores);
@@ -187,10 +214,11 @@ writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: ag
 
 const failures: string[] = [];
 for (const cv of coverages) {
-  if (!cv.humanMeasured) continue;                     // engine-pinned cases only report
+  // 0.9: adjacency tiling gates every whole-plan case (see THRESHOLDS above).
+  if (cv.sumEngineSF > 0 && cv.overlapSF > cv.sumEngineSF * THRESHOLDS.pairwiseOverlapFrac) failures.push(`${cv.caseName}: ${cv.overlapSF.toFixed(1)} SF double-counted (> ${THRESHOLDS.pairwiseOverlapFrac * 100}% of total)`);
+  if (!cv.humanMeasured) continue;                     // the rest gate human-measured cases only
   if (cv.maxSfErr > THRESHOLDS.humanMaxSfErr) failures.push(`${cv.caseName}: worst room SF error ${(cv.maxSfErr * 100).toFixed(1)}% > ${THRESHOLDS.humanMaxSfErr * 100}%`);
   if (Math.abs(cv.ratio - 1) > THRESHOLDS.humanCoverageBand) failures.push(`${cv.caseName}: engine total ×${cv.ratio.toFixed(3)} of the human total (band ±${THRESHOLDS.humanCoverageBand * 100}%)`);
-  if (cv.sumEngineSF > 0 && cv.overlapSF > cv.sumEngineSF * THRESHOLDS.humanOverlapFrac) failures.push(`${cv.caseName}: ${cv.overlapSF.toFixed(1)} SF double-counted (> ${THRESHOLDS.humanOverlapFrac * 100}% of total)`);
 }
 // 0.2: a shrinking corpus must be loud, not green.
 if (caseFiles.length !== EXPECT.cases && !process.env.BENCH_SEALED) failures.push(`expected ${EXPECT.cases} corpus case files, found ${caseFiles.length}`);
