@@ -26,6 +26,10 @@
 // primary result stands — a misclassified wall can never make the tool worse
 // than the strict mask.
 
+// The snap spatial hash (dependency-free, no DOM) — imported so `oneClickRing`
+// below can be THE one composition of trace-then-snap. See section 6b.
+import { buildSnapGrid, nearestSnap } from "./geometry.js";
+
 export type Point = [number, number];
 export interface OpList { fnArray: number[]; argsArray: any[]; }  // per-op args array, or null for arg-less ops
 /** pdf.js's OPS code table (op name → numeric code); passed in so this module never imports pdfjs. */
@@ -1659,6 +1663,56 @@ export function snapVertices(poly: Point[], nearest: NearestFn, tolPx = 6, minGa
   }
   while (out.length > 1 && Math.hypot(out[0][0] - out[out.length - 1][0], out[0][1] - out[out.length - 1][1]) <= minGapPx) out.pop();
   return out.length >= 3 ? out : poly;
+}
+
+// ── 6b. THE PRODUCTION RING ────────────────────────────────────────────────
+// `traceRegion` is NOT what the product returns. Every vector One-Click ring in
+// the product is trace-THEN-SNAP, and `area_sf` is computed from the SNAPPED
+// ring: TakeoffCanvas.jsx (propose / live-preview / agent tool) and
+// mcp/src/session.ts (one_click / detect_rooms) all compose the same two calls
+// with the same tolerance, by hand, five times over.
+//
+// Audit A5b measured the cost of that: `bench/run.mts` and
+// `bench/pin-goldens.mts` called bare `traceRegion` and never imported
+// `snapVertices` at all, so EVERY engine-pinned golden pinned a number the
+// product never displays — the bench read 117.568 SF on a room the product
+// (and e2e/one-click.e2e.cjs, through real Chromium) measures at exactly
+// 120.000. The long-standing "1,751.9 vs 1,744.7" sample-plan discrepancy was
+// this, not sloppiness: 1,751.9 is the snapped production reading.
+//
+// So the composition lives HERE, once, and every surface that wants "the ring
+// the product returns" calls this. Same reasoning as confidence.ts's
+// `floodSignals`: a hand-listed call site is a call site that goes stale.
+/** Snap-grid bucket size, image px. Mirrors canvasConstants.SNAP_CELL. */
+export const SNAP_CELL_PX = 24;
+/** Vertex-snap tolerance, image px — how far a traced corner may be pulled onto
+ *  a true PDF vertex. Mirrors the canvas's literal 7 and mcp's SNAP_TOL. */
+export const SNAP_TOL_PX = 7;
+
+/** Build the production snap lookup from `extractVectorGeometry(...).points`.
+ *  Callers that already hold a grid (the canvas caches one per sheet) can keep
+ *  passing their own `NearestFn` instead. */
+export function snapNearest(points: Point[], cell = SNAP_CELL_PX): NearestFn {
+  const grid = buildSnapGrid(points, cell);
+  return (x, y, d) => nearestSnap(grid, x, y, d);
+}
+
+/** Options for `oneClickRing`. The raster branch is a DIFFERENT measurement —
+ *  a looser RDP eps and NO snapping, because a scan has no true endpoints and
+ *  pulling room corners onto the title block's vector corners would corrupt
+ *  the ring — so the type makes it impossible to ask for a raster ring without
+ *  supplying the raster eps, or to hand a snap grid to the raster path. */
+export type OneClickRingOpts =
+  | { raster?: false; nearest?: NearestFn | null }
+  | { raster: true; rasterEps: number };
+
+/** THE ring the product returns for a completed flood. Vector path: trace, then
+ *  snap corners onto true PDF vertices at SNAP_TOL_PX. Raster path: trace at the
+ *  scan eps, unsnapped. */
+export function oneClickRing(f: Extract<FloodResult, { status: "ok" }>, opts: OneClickRingOpts = {}): Point[] {
+  if (opts.raster) return traceRegion(f, opts.rasterEps);
+  const nearest = opts.nearest;
+  return snapVertices(traceRegion(f), (x, y, d) => (nearest ? nearest(x, y, d) : null), SNAP_TOL_PX);
 }
 
 // Shoelace in whatever px the ring is in (caller multiplies by upp²).

@@ -2,6 +2,7 @@
  "pdf": "../../../demo/sample-plan.pdf",
  "scale": 2,
  "ptPerFt": 36,
+ "wallSemantics": "centerline",
  "note": "4 identical quadrant rooms; traces reviewed as exact rectangles (issue #184 round 3)",
  "pinnedAt": "reviewed traces, issue #184",
  "probes": [
@@ -14,20 +15,20 @@
    "expect": "golden",
    "golden": [
     [
-     241,
-     205
+     240,
+     204
     ],
     [
-     1219,
-     205
+     1220,
+     204
     ],
     [
      1219,
      783
     ],
     [
-     241,
-     783
+     240,
+     784
     ]
    ]
   },
@@ -40,16 +41,16 @@
    "expect": "golden",
    "golden": [
     [
-     1221,
-     205
+     1220,
+     204
     ],
     [
-     2199,
-     205
+     2200,
+     204
     ],
     [
-     2199,
-     783
+     2200,
+     784
     ],
     [
      1221,
@@ -66,20 +67,20 @@
    "expect": "golden",
    "golden": [
     [
-     241,
-     785
+     240,
+     784
     ],
     [
      1219,
      785
     ],
     [
-     1219,
-     1363
+     1220,
+     1364
     ],
     [
-     241,
-     1363
+     240,
+     1364
     ]
    ]
   },
@@ -96,16 +97,16 @@
      785
     ],
     [
-     2199,
-     785
+     2200,
+     784
     ],
     [
-     2199,
-     1363
+     2200,
+     1364
     ],
     [
-     1221,
-     1363
+     1220,
+     1364
     ]
    ]
   }

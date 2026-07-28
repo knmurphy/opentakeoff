@@ -19,6 +19,7 @@ import { createRequire } from "module";
 import { readFileSync, writeFileSync } from "fs";
 import { resolve, relative, dirname } from "path";
 import { fileURLToPath } from "url";
+import { WALL_SEMANTICS } from "./corpus.ts";
 
 export type Pt = [number, number];
 interface ShapeIn {
@@ -38,6 +39,11 @@ interface PayloadIn {
 export interface ExportProbe { name: string; seed: Pt; expect: "golden"; golden: Pt[]; tags: string[] }
 export interface ExportCase {
   pdf: string; page: number; scale: number; ptPerFt: number;
+  /** A5b: which line a golden traces to. Human polygons drawn with the canvas's
+   *  snap-to-vector on land on PDF path vertices — wall CENTRELINES — which is
+   *  the same line the engine's snapped ring lands on, so the two are directly
+   *  comparable under the 2.5% gate. Declared, never assumed. */
+  wallSemantics: string;
   humanMeasured: true; note: string; pinnedAt: string;
   deducts_sf?: number;
   probes: ExportProbe[];
@@ -180,6 +186,7 @@ if (isMain) {
     page,
     scale: SCALE,
     ptPerFt: 1 / upp,
+    wallSemantics: WALL_SEMANTICS,
     humanMeasured: true,
     note: `${caseName ?? args[2]}: human-measured takeoff exported as answer key (${res.probes.length} probes${res.skippedMachine ? `; ${res.skippedMachine} machine-origin shapes excluded` : ""})`,
     pinnedAt: "human-measured takeoff (from-takeoff.mts)",

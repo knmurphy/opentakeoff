@@ -38,13 +38,22 @@
 // entry alongside the numbers it excuses, so it survives every later re-pin and
 // `npm run bench` prints it back on every run. Nothing is written to disk
 // unless every case passes: a failed re-pin leaves the goldens untouched.
+//
+// WHAT GETS PINNED (audit A5b). The golden is THE PRODUCTION RING — traced and
+// then vertex-SNAPPED, via `oneClickRing`, exactly as TakeoffCanvas.jsx and
+// mcp/src/session.ts compute the `area_sf` a user reads. Until A5b this file
+// called bare `traceRegion`, so every golden on disk pinned a number the
+// product never returns; the whole-corpus re-pin that fixed it went through
+// this protocol, one adjudicated reason per moved probe, and those reasons are
+// in the corpus JSON. Goldens also declare `wallSemantics` — see bench/corpus.ts.
 import { createRequire } from "module";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, oneClickRing, snapNearest, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
 import type { Point } from "../src/lib/oneclick.ts";
 import { polyIoU, polyOverlapPx2, ringAreaAbs } from "./score.ts";
+import { WALL_SEMANTICS } from "./corpus.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -363,12 +372,15 @@ async function main() {
     const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
     const mo = buildMask(g.segs, vp.width, vp.height, MASK_MAX_DIM, g.meta, c.ptPerFt);
     const mppf = mo.ws * c.ptPerFt;
+    // A5b: pin THE PRODUCTION RING. This used to be a bare `traceRegion`, so
+    // every golden on disk pinned a quantity the product never returns.
+    const nearest = snapNearest(g.points);
     const probes: PinnedProbeOut[] = [];
     for (const p of c.probes) {
       if (p.expect === "refusal") { probes.push({ ...p } as PinnedProbeOut); continue; }
       const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
       if (f.status !== "ok") { console.error(`  ${c.file} ${p.name}: engine refused (${f.status}) — cannot pin`); continue; }
-      const ring: Point[] = traceRegion(f).map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
+      const ring: Point[] = oneClickRing(f, { nearest }).map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
       probes.push({ ...p, golden: ring } as PinnedProbeOut);
       console.log(`  ${c.file} ${p.name}: traced ${ring.length} verts${f.wedges ? " (+swing)" : ""}${f.sealedPx ? ` (sealed@${f.sealedPx})` : ""}`);
     }
@@ -399,7 +411,7 @@ async function main() {
     if (diff.caseTotal.adjudication) caseAdj.push({ at, scope: "case-total", from_sf: +diff.caseTotal.oldSF.toFixed(2), to_sf: +diff.caseTotal.newSF.toFixed(2), delta_pct: +((diff.caseTotal.deltaPct ?? 0) * 100).toFixed(2), reason: diff.caseTotal.adjudication });
     if (diff.overlap.adjudication) caseAdj.push({ at, scope: "pairwise-overlap", overlap_sf: +diff.overlap.sf.toFixed(2), frac_pct: +(diff.overlap.frac * 100).toFixed(3), reason: diff.overlap.adjudication });
 
-    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
+    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: WALL_SEMANTICS, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
     pending.push({ path, json: JSON.stringify(out, null, 1), diff });
   }
 

@@ -10,6 +10,23 @@
 import { SEG_CURVE } from "../src/lib/oneclick";
 import type { Point } from "../src/lib/oneclick";
 
+// ── WALL-LINE SEMANTICS (audit A5b) ─────────────────────────────────────────
+// Every golden here is CENTRELINE: a room measures wall-centre to wall-centre,
+// not interior-clear face to face. That is not a new decision, it is this
+// repo's existing one, made explicit:
+//   • e2e/one-click.e2e.cjs asserts 120 SF for OFFICE 101, which
+//     e2e/make-fixture.cjs draws as a 216×180 pt rectangle at 1.6 pt stroke.
+//     216/18 × 180/18 = 120.00 exactly; interior-clear would be
+//     (216−1.6)/18 × (180−1.6)/18 = 118.05.
+//   • demo/make_sample_plan.py draws `3 w` / `120 110 980 580 re` with
+//     partitions at x=610 and y=400 — centreline quadrants are 490×290 pt =
+//     438.58 SF each; interior-clear would be 487×287 pt = 431.39 SF.
+// Snapping traced corners onto PDF path vertices lands them on those
+// centrelines, so the snapped ring IS the centreline ring. Recorded here and in
+// each corpus JSON's `wallSemantics` so the next reader does not have to
+// re-derive it from two fixture generators.
+export const WALL_SEMANTICS = "centerline";
+
 export interface Probe {
   name: string;
   seed: Point;                       // image px
@@ -23,8 +40,63 @@ export interface SyntheticCase {
   imgW: number; imgH: number;
   ptPerFt: number;                   // image px per foot (for radii/wedge caps)
   segs: number[];
+  /** Snap targets — what `extractVectorGeometry(...).points` would hold for the
+   *  op list that draws `segs`. See `snapPointsFor`. */
+  points: Point[];
   meta?: Uint8Array;
   probes: Probe[];
+  /** see WALL_SEMANTICS */
+  wallSemantics: string;
+}
+
+// ── snap targets for a synthetic case (audit A5b) ───────────────────────────
+// Production snaps traced corners onto `extractVectorGeometry(...).points`, and
+// a SyntheticCase had no such field — it carries only `segs`. Rather than
+// hand-listing a point set per case (thirteen chances to be quietly wrong), the
+// point set is DERIVED from `segs` under one stated rule, because `segs` is
+// already authored as an op-list mirror: consecutive entries that share an
+// endpoint are one moveTo/lineTo chain, and disjoint entries are separate ones.
+//
+// THE RULE — exactly what `extractVectorGeometry`'s `visit()` records:
+//   • moveTo (a chain's first vertex)            → recorded
+//   • lineTo (every straight segment's end)      → recorded
+//   • a cubic bezier                             → its ENDPOINT ONLY; the
+//     CURVE_STEPS−1 interior chord vertices are never recorded, so a run of
+//     SEG_CURVE chords contributes one point, at the run's end
+//   • closePath                                  → records nothing (the start
+//     vertex was already recorded by its moveTo)
+//   • `re` (rectangle) → its four corners, which is what an `sq(...)` run of
+//     four joined straight segments derives to anyway
+//
+// The one judgement call is reading SEG_CURVE as BEZIER provenance. It is the
+// right one for this corpus: SEG_CURVE without SEG_POLYARC is precisely the bit
+// `extractVectorGeometry` sets while tessellating a `curveTo`, and no synthetic
+// case sets SEG_POLYARC. It is also the conservative reading — a polyline arc
+// (drawn lineTo-by-lineTo) would hand the snapper a target on every chord and
+// make curved boundaries snap MORE accurately, so deriving them as beziers
+// gives curved probes the harder, not the easier, corpus.
+export function snapPointsFor(segs: number[], meta?: Uint8Array | null): Point[] {
+  const n = segs.length >> 2;
+  const isCurve = (i: number) => !!meta && !!(meta[i] & SEG_CURVE);
+  const out: Point[] = [];
+  let start: Point | null = null;
+  const same = (p: Point | null, q: Point) => !!p && p[0] === q[0] && p[1] === q[1];
+  // A segment back onto the chain's own first vertex is the `closePath` case,
+  // which records nothing — so the point set never carries a duplicate of the
+  // chain start (duplicates would only burn slots in buildSnapGrid's 40-per-
+  // bucket cap and can never add a snap target).
+  const push = (p: Point) => { if (!same(out[out.length - 1] ?? null, p) && !same(start, p)) out.push(p); };
+  for (let i = 0; i < n; i++) {
+    const k = i << 2;
+    const a: Point = [segs[k], segs[k + 1]], b: Point = [segs[k + 2], segs[k + 3]];
+    const prevEnd: Point | null = i > 0 ? [segs[k - 2], segs[k - 1]] : null;
+    if (!same(prevEnd, a)) { start = null; push(a); start = a; }   // moveTo
+    // interior chord of a bezier run ⇒ not a recorded vertex
+    const nextContinuesCurve = i + 1 < n && isCurve(i + 1)
+      && segs[k + 4] === b[0] && segs[k + 5] === b[1];
+    if (!(isCurve(i) && nextContinuesCurve)) push(b);
+  }
+  return out;
 }
 
 const PXFT = 18;
@@ -36,7 +108,8 @@ const rect = (x0: number, y0: number, x1: number, y1: number): Point[] => [[x0, 
 const zeroMeta = (segs: number[]) => new Uint8Array(segs.length >> 2);
 
 function mk(name: string, segs: number[], probes: Probe[], meta?: Uint8Array): SyntheticCase {
-  return { name, imgW: 1000, imgH: 800, ptPerFt: PXFT, segs: [...border, ...segs], meta, probes };
+  const all = [...border, ...segs];
+  return { name, imgW: 1000, imgH: 800, ptPerFt: PXFT, segs: all, points: snapPointsFor(all, meta), meta, probes, wallSemantics: WALL_SEMANTICS };
 }
 
 // door-swing linework shared by two cases: 54 px (3 ft) south opening at

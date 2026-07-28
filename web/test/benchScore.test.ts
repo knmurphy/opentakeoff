@@ -201,19 +201,33 @@ test("A2 gate: empty populations do something, not nothing", () => {
 });
 
 test("A2 gate: the exemption list is BOUNDED, reasoned, and xfailed WITH A DIRECTION", () => {
-  // (b) the bound — an exemption list that can grow is `knownFail` again
-  assert.equal(Object.keys(CONF_GATE_EXEMPT).length, 1,
-    "exactly one probe is exempt; adding another needs its own argument, not a bigger list");
-  assert.ok("annotation-ring-room/center" in CONF_GATE_EXEMPT);
-  // (c) the reason is recorded in code, and names the signal set it was
-  // evaluated against — not just "known limit"
+  // (b) the bound — an exemption list that can grow is `knownFail` again.
+  // A5b took it from 1 to 3: measuring the product's SNAPPED ring moved the
+  // nine synthetic probes out of the gate's dead zone and into the accurate
+  // population for the first time, where two of them fail the floor for
+  // reasons that are findings, not miscalibrations. See CONF_GATE_EXEMPT.
+  assert.deepEqual(Object.keys(CONF_GATE_EXEMPT).sort(),
+    ["annotation-ring-room/center", "tile-grid-room/in-cell", "two-doorways/center"],
+    "adding another needs its own argument, not a bigger list");
+  // (c) EVERY entry records the signal set it was evaluated against — not just
+  // "known limit" — and (a) EVERY entry carries at least one xfail DIRECTION,
+  // so the day the situation improves the gate fails instead of absorbing it.
+  for (const [probe, e] of Object.entries(CONF_GATE_EXEMPT)) {
+    for (const signal of ["raster", "hatchFiltered", "wedges", "wedgeGrowth", "curveFrac", "minPassDelta", "areaSF", "mppf"])
+      assert.match(e.reason, new RegExp(signal), `${probe}: the exemption must name ${signal} among the signals it was evaluated against`);
+    assert.match(e.reason, /XFAIL DIRECTION/, `${probe}: the reason must state its xfail direction in prose too`);
+    assert.ok(e.xfailAbove != null || e.xfailAtMost != null || e.xfailEquals != null,
+      `${probe}: an exemption with no direction is \`knownFail\` under a new name`);
+  }
   const { reason, xfailAbove } = CONF_GATE_EXEMPT["annotation-ring-room/center"];
-  for (const signal of ["raster", "hatchFiltered", "sealedPx", "virtualFrac", "wedges", "wedgeGrowth", "curveFrac", "minPassDelta", "areaSF", "mppf"])
-    assert.match(reason, new RegExp(signal), `the exemption must name ${signal} among the signals it was evaluated against`);
-  // (a) the xfail has a DIRECTION: it asserts the probe still scores ABOVE
-  // 0.90, so a future signal that DOES fire here breaks the gate instead of
-  // being quietly absorbed.
+  for (const signal of ["sealedPx", "virtualFrac"]) assert.match(reason, new RegExp(signal));
   assert.equal(xfailAbove, 0.90);
+  // the two A5b entries assert in the OTHER direction: they say a deduction
+  // that cannot yet discriminate still cannot.
+  assert.equal(CONF_GATE_EXEMPT["two-doorways/center"].xfailAtMost, 0.87);
+  assert.ok(CONF_GATE_EXEMPT["two-doorways/center"].xfailAtMost! < CONF_GATE.floorAbs,
+    "the ceiling it is held under must sit BELOW the floor it is excused from, or the exemption excuses nothing");
+  assert.equal(CONF_GATE_EXEMPT["tile-grid-room/in-cell"].xfailEquals, "partition-bank-15in/mid-bay");
   const exempt = (conf?: number): ProbeScore =>
     ({ caseName: "annotation-ring-room", probeName: "center", expect: "golden", status: "ok", iou: 0.65, sfErr: 0.35, leak: false, refused: false, confidence: conf, knownFail: true });
   const base = [gp("acc/a", 0.000, 1.00), gp("acc/b", 0.001, 0.95), gp("wrong/x", 3.842, 0.85, true)];
@@ -223,4 +237,29 @@ test("A2 gate: the exemption list is BOUNDED, reasoned, and xfailed WITH A DIREC
   assert.ok(confidenceGate([...base, exempt(undefined)]).failures.some((f) => /no confidence at all/.test(f)));
   // exempt probes are in neither gating population
   assert.equal(confidenceGate([...base, exempt(1.00)]).inaccurate.length, 1);
+});
+
+test("A2/A5b gate: the xfailAtMost and xfailEquals directions flip the same way round", () => {
+  const base = [gp("acc/a", 0.000, 1.00), gp("acc/b", 0.001, 0.95), gp("wrong/x", 3.842, 0.85, true)];
+  // xfailAtMost — two-doorways/center. Today 0.85 ≤ 0.87 and it is excused;
+  // the day the engine can justify withholding the deduction it rises and this
+  // fires instead of quietly absorbing the improvement.
+  const twoDoor = (conf: number): ProbeScore =>
+    ({ caseName: "two-doorways", probeName: "center", expect: "golden", status: "ok", iou: 1, sfErr: 0, leak: false, refused: false, confidence: conf });
+  assert.deepEqual(confidenceGate([...base, twoDoor(0.85)]).failures, []);
+  assert.ok(confidenceGate([...base, twoDoor(0.92)]).failures.some((f) => /two-doorways/.test(f) && /XFAIL FLIPPED/.test(f)));
+
+  // xfailEquals — tile-grid-room/in-cell is excused only for as long as its
+  // score is IDENTICAL to partition-bank-15in/mid-bay's, which is the finding.
+  const tile = (conf: number): ProbeScore =>
+    ({ caseName: "tile-grid-room", probeName: "in-cell", expect: "golden", status: "ok", iou: 1, sfErr: 0, leak: false, refused: false, confidence: conf });
+  const bank = (conf: number): ProbeScore =>
+    ({ caseName: "partition-bank-15in", probeName: "mid-bay", expect: "golden", status: "ok", iou: 0.2, sfErr: 4.0, leak: true, refused: false, confidence: conf, knownFail: true });
+  assert.deepEqual(confidenceGate([...base, tile(0.85), bank(0.85)]).failures, []);
+  const split = confidenceGate([...base, tile(0.95), bank(0.85)]);
+  assert.ok(split.failures.some((f) => /tile-grid-room/.test(f) && /no longer equals/.test(f)), split.failures.join("; "));
+  // …and if the probe it is compared against leaves the corpus, the assertion
+  // is UNCHECKABLE, which is a failure rather than a silent pass
+  const orphan = confidenceGate([...base, tile(0.85)]);
+  assert.ok(orphan.failures.some((f) => /XFAIL UNCHECKABLE/.test(f)), orphan.failures.join("; "));
 });

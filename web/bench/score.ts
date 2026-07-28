@@ -234,13 +234,40 @@ export const CONF_GATE = {
   floorAbs: 0.88,
 };
 
+/** An exemption's XFAIL DIRECTION — the assertion that makes the exemption
+ *  self-destruct the day the situation it documents improves. At least one
+ *  direction is required (bounded by test/benchScore.test.ts). */
+export interface ConfGateExemption {
+  /** the probe still scores ABOVE this — "no signal fires here, and none has". */
+  xfailAbove?: number;
+  /** the probe still scores AT OR BELOW this — "a deduction fires here that
+   *  the engine cannot yet justify withholding, and it still can't". */
+  xfailAtMost?: number;
+  /** the probe still scores EXACTLY what the named other probe scores. The
+   *  sharpest direction available when the finding IS the identity: one signal
+   *  producing one number on a probe that is exactly right and on a probe that
+   *  is wildly wrong is a demonstration that the signal does not discriminate. */
+  xfailEquals?: string;
+  reason: string;
+}
+
 /** Probes exempt from the gate, each with the SIGNAL SET it was evaluated
  *  against — an exemption without one is just `knownFail` under a new name.
  *  This list is BOUNDED by a test (see test/benchScore.test.ts) and each entry
- *  carries an XFAIL WITH A DIRECTION: `xfailAbove` asserts the probe still
- *  scores above that value, so the day a signal DOES fire here the gate fails
- *  loudly instead of quietly absorbing the improvement. */
-export const CONF_GATE_EXEMPT: Record<string, { xfailAbove: number; reason: string }> = {
+ *  carries an XFAIL WITH A DIRECTION, so the day the situation improves the
+ *  gate fails loudly instead of quietly absorbing it.
+ *
+ *  A5b GREW THIS LIST FROM ONE TO THREE, and that needs stating plainly. The
+ *  two additions are not new defects — they are defects the gate could not see
+ *  while the bench measured the wrong quantity. Before A5b the bench scored
+ *  `traceRegion` instead of the product's snapped ring, which parked every
+ *  synthetic probe at a systematic ~0.8–4.3% SF error: squarely inside this
+ *  gate's DEAD ZONE (above floorSfErr 0.5%, and mostly below ceilSfErr 2.5%),
+ *  so not one of the nine entered either population. Measuring what the product
+ *  returns moved them all to ~0.00% and put them in the accurate population for
+ *  the first time — where two of them fail the floor. The gate was passing
+ *  because the bench was wrong. */
+export const CONF_GATE_EXEMPT: Record<string, ConfGateExemption> = {
   "annotation-ring-room/center": {
     xfailAbove: 0.90,
     reason:
@@ -253,6 +280,38 @@ export const CONF_GATE_EXEMPT: Record<string, { xfailAbove: number; reason: stri
       "for a confidence deduction to key on; separating an annotation ring from a wall needs vector-native " +
       "topology (RFC item A), not tuning. XFAIL DIRECTION: asserted to stay ABOVE 0.90 — if a future signal " +
       "fires here the assertion breaks and the exemption must be re-argued or dropped.",
+  },
+  "tile-grid-room/in-cell": {
+    xfailEquals: "partition-bank-15in/mid-bay",
+    reason:
+      "Added by audit A5b, and the exemption IS the finding. Signal set as measured: raster false, " +
+      "sealedPx undefined, virtualFrac undefined, wedges undefined, wedgeGrowth undefined, curveFrac " +
+      "undefined, minPassDelta undefined, mppf 18, areaSF 1029 — and hatchFiltered true with hatchTier " +
+      "\"override\", which is the ONLY factor, giving score 0.850 exactly. partition-bank-15in/mid-bay " +
+      "carries the identical single factor at the identical 0.850 while measuring 400.0% wrong, and " +
+      "tile-demising-same-pen/room-a likewise at 100.0% wrong. So `hatch-filtered(override)` is the sole " +
+      "deduction on the corpus's most accurate escalated trace AND on its two worst: it reports the " +
+      "REGIME the escalation was accepted under, which is equally true of all three, and says nothing " +
+      "about whether the result is plausible. Separating them needs a signal keyed on the escalated " +
+      "region's own geometry, which is a change to src/lib/confidence.ts and outside A5b's scope. " +
+      "XFAIL DIRECTION: asserted to stay EXACTLY EQUAL to partition-bank-15in/mid-bay's score. The day " +
+      "any signal tells the two apart this breaks, and the exemption must be dropped — not widened.",
+  },
+  "two-doorways/center": {
+    xfailAtMost: 0.87,
+    reason:
+      "Added by audit A5b. Signal set as measured: raster false, hatchFiltered false (hatchTier absent), " +
+      "wedges undefined, wedgeGrowth undefined, curveFrac undefined, mppf 18, areaSF 19.8, sealedPx set " +
+      "with virtualFrac 0.00, and minPassDelta ≥ 1 — the sole-minimum-passage deduction, whose own " +
+      "factor string is \"the drawn linework does not enclose this space\". Score 0.850. That statement " +
+      "is TRUE: the fixture is a room with two undrawn cased openings, and every square foot of its " +
+      "boundary across those openings is synthetic. The probe measures 0.00% off only because the " +
+      "golden is authored under the same convention the engine guessed (a cased opening is bridged) — " +
+      "the engine had no evidence for that and correctly declined to claim any. So this is a case where " +
+      "the gate's floor premise (accurate ⇒ confident) does not hold, rather than a miscalibration to " +
+      "tune away. XFAIL DIRECTION: asserted to stay AT OR BELOW 0.87, i.e. below CONF_GATE.floorAbs. If " +
+      "the engine ever learns to distinguish a bridged drawn opening from an invented wall it will " +
+      "score at or above the floor, this breaks, and the exemption must be dropped.",
   },
 };
 
@@ -279,14 +338,23 @@ export function confidenceGate(scores: ProbeScore[]): ConfGateResult {
   const inaccurate: ConfGateResult["inaccurate"] = [];
   const exempt: ConfGateResult["exempt"] = [];
 
+  const confByProbe = new Map(scores.map((s) => [key(s), s.confidence]));
   for (const s of scores) {
     const k = key(s);
     if (k in CONF_GATE_EXEMPT) {
       exempt.push({ probe: k, confidence: s.confidence });
-      const { xfailAbove, reason } = CONF_GATE_EXEMPT[k];
+      const { xfailAbove, xfailAtMost, xfailEquals, reason } = CONF_GATE_EXEMPT[k];
       // xfail WITH A DIRECTION — see CONF_GATE_EXEMPT
       if (s.confidence == null) failures.push(`exempt ${k}: reports no confidence at all — the exemption asserts a value it can no longer check (${reason.slice(0, 60)}…)`);
-      else if (s.confidence <= xfailAbove) failures.push(`exempt ${k}: XFAIL FLIPPED — confidence ${s.confidence.toFixed(2)} ≤ ${xfailAbove}. A signal now fires on the probe the exemption says has none. Re-argue the exemption or delete it; do not widen the list.`);
+      else {
+        if (xfailAbove != null && s.confidence <= xfailAbove) failures.push(`exempt ${k}: XFAIL FLIPPED — confidence ${s.confidence.toFixed(2)} ≤ ${xfailAbove}. A signal now fires on the probe the exemption says has none. Re-argue the exemption or delete it; do not widen the list.`);
+        if (xfailAtMost != null && s.confidence > xfailAtMost) failures.push(`exempt ${k}: XFAIL FLIPPED — confidence ${s.confidence.toFixed(2)} > ${xfailAtMost}. The deduction the exemption says the engine cannot yet withhold is no longer binding here. Drop the exemption; do not widen the list.`);
+        if (xfailEquals != null) {
+          const other = confByProbe.get(xfailEquals);
+          if (other == null) failures.push(`exempt ${k}: XFAIL UNCHECKABLE — it asserts equality with ${xfailEquals}, which reports no confidence (or is not in the corpus).`);
+          else if (Math.abs(other - s.confidence) > 1e-9) failures.push(`exempt ${k}: XFAIL FLIPPED — confidence ${s.confidence.toFixed(3)} no longer equals ${xfailEquals}'s ${other.toFixed(3)}. Some signal now tells them apart, which is what the exemption was waiting for. Drop the exemption; do not widen the list.`);
+        }
+      }
       continue;
     }
     // a refusal probe that TRACED is as wrong as a measurement can be — no SF

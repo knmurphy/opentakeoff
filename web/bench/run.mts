@@ -12,13 +12,32 @@
 // fails: a measurement that changes with raster resolution is not a
 // measurement. Baseline metrics are always scored at factor 1 so the headline
 // numbers stay comparable across runs.
+//
+// AUDIT A5b — WHAT THIS BENCH MEASURES. Production does not return
+// `traceRegion(f)`. Every vector One-Click ring in the product is trace-THEN-
+// SNAP (corners pulled onto true PDF vertices) and `area_sf` comes off the
+// SNAPPED ring. This file used to call bare `traceRegion` and never imported
+// `snapVertices` at all, so every number it printed — and every engine-pinned
+// golden it graded against — was a quantity the product never returns
+// (enclosed-room: bench 117.568 SF, product 120.000, which
+// e2e/one-click.e2e.cjs independently confirms through real Chromium). Both the
+// bench and bench/pin-goldens.mts now go through `oneClickRing`, the single
+// shared composition in src/lib/oneclick.ts.
+//
+// The snap costs the corpus something, so it is bought back explicitly: pulling
+// corners onto exact vertices makes the synthetic probes' rings identical
+// across mask resolutions, which would have turned the 9 truth-by-construction
+// probes into ~1.000-by-construction and voided the cross-resolution signal on
+// them. So every probe is ALSO traced un-snapped, and that reading is reported
+// as MASK FIDELITY (ungated) beside the production one — rasterisation error
+// stays visible, it just stops being mistaken for the product's accuracy.
 import { createRequire } from "module";
 import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, MASK_MAX_DIM, DETERMINISM_MIN_MPPF } from "../src/lib/oneclick.ts";
-import type { FloodResult, Point } from "../src/lib/oneclick.ts";
-import { syntheticCorpus } from "./corpus.ts";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, oneClickRing, snapNearest, MASK_MAX_DIM, DETERMINISM_MIN_MPPF } from "../src/lib/oneclick.ts";
+import type { FloodResult, Point, NearestFn } from "../src/lib/oneclick.ts";
+import { syntheticCorpus, WALL_SEMANTICS } from "./corpus.ts";
 import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, ringAreaAbs, caseCoverage, confidenceGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage } from "./score.ts";
 import { traceConfidence, floodSignals } from "../src/lib/confidence.ts";
 
@@ -49,16 +68,31 @@ const coverages: CaseCoverage[] = [];
 
 interface CaseProbe { name: string; seed: Point; expect: "golden" | "refusal"; golden?: Point[]; tags?: string[]; knownFail?: boolean }
 
-function runCase(caseName: string, segs: number[], imgW: number, imgH: number, meta: Uint8Array | null, ptPerFt: number, probes: CaseProbe[], humanMeasured = false, deductsSF = 0, wholePlan = false) {
+/** Un-snapped reading of a probe, kept beside the production one. */
+interface MaskFidelity { caseName: string; probeName: string; iou: number; sfErr: number; prodIou: number; prodSfErr: number; minPairIoU?: number; knownFail?: boolean }
+const fidelity: MaskFidelity[] = [];
+
+function runCase(caseName: string, segs: number[], points: Point[], imgW: number, imgH: number, meta: Uint8Array | null, ptPerFt: number, probes: CaseProbe[], humanMeasured = false, deductsSF = 0, wholePlan = false) {
   // factor 1 reproduces the production mask exactly: min(cap, image dim)
   const baseDim = Math.min(MASK_MAX_DIM, Math.max(imgW, imgH, 2));
   const masks = RES_FACTORS.map((f) => buildMask(segs, imgW, imgH, Math.max(2, Math.round(baseDim * f)), meta, ptPerFt));
+  // A5b: the snap grid is built from op-list vertices in IMAGE px, so it is the
+  // same object at every mask resolution — exactly as in production, where the
+  // canvas caches one grid per sheet independent of the working raster.
+  const nearest: NearestFn = snapNearest(points);
   const coverRows: Array<{ golden: Point[]; ring: Point[] | null }> = [];
   for (const p of probes) {
-    const runs: Array<CrossRun & { flood: FloodResult }> = masks.map((mo, k) => {
+    const runs: Array<CrossRun & { flood: FloodResult; rawRing: Point[] | null }> = masks.map((mo, k) => {
       const mppf = mo.ws * ptPerFt;
       const f = floodRegionSealed(mo, p.seed[0], p.seed[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
-      return { res: RES_FACTORS[k], status: f.status, ring: f.status === "ok" ? traceRegion(f) : null, flood: f };
+      return {
+        res: RES_FACTORS[k], status: f.status, flood: f,
+        // `ring` is THE PRODUCTION RING — traced and snapped, the thing the
+        // product puts on screen and in area_sf. Everything gating reads it.
+        ring: f.status === "ok" ? oneClickRing(f, { nearest }) : null,
+        // ...and the un-snapped trace, for the mask-fidelity report only.
+        rawRing: f.status === "ok" ? traceRegion(f) : null,
+      };
     });
 
     // baseline (production resolution) — the headline metrics
@@ -95,6 +129,36 @@ function runCase(caseName: string, segs: number[], imgW: number, imgH: number, m
       : crossAgreement(gatingRuns, CROSS_CELL);
     const iouByRes = p.expect === "golden" ? runs.map((r) => (r.ring && r.ring.length >= 3 ? polyIoU(r.ring, p.golden!, CROSS_CELL) : 0)) : undefined;
     crossScores.push({ caseName, probeName: p.name, expect: p.expect, resolutions: RES_FACTORS, ...ca, statuses: runs.map((r) => r.status), iouByRes, subFloorRes: subFloorRes.length ? subFloorRes : undefined, ungated: ungated || undefined, knownFail: p.knownFail, tags: p.tags });
+
+    // ── MASK FIDELITY (A5b) — the same probe read UN-SNAPPED ─────────────────
+    // Reported, never gated. Snapping pulls corners onto exact PDF vertices, so
+    // a snapped ring can be byte-identical across resolutions while the
+    // underlying raster contour is not — which is precisely how a corpus loses
+    // its rasterisation signal without anyone noticing. This row is what keeps
+    // that error on screen: the un-snapped IoU/SF error vs the same golden, and
+    // the un-snapped cross-resolution pair-IoU beside the snapped one.
+    if (p.expect === "golden" && base.rawRing && base.rawRing.length >= 3) {
+      const ag = ringAreaAbs(p.golden!);
+      const rawRuns = runs.filter((r) => r.rawRing && r.rawRing.length >= 3);
+      let rawPair: number | undefined;
+      if (!ungated) {
+        const gatedRaw = rawRuns.filter((r) => (masks[RES_FACTORS.indexOf(r.res)].mppf ?? Infinity) >= DETERMINISM_MIN_MPPF);
+        for (let i = 0; i < gatedRaw.length; i++)
+          for (let j = i + 1; j < gatedRaw.length; j++) {
+            const v = polyIoU(gatedRaw[i].rawRing!, gatedRaw[j].rawRing!, CROSS_CELL);
+            if (rawPair === undefined || v < rawPair) rawPair = v;
+          }
+      }
+      fidelity.push({
+        caseName, probeName: p.name,
+        iou: polyIoU(base.rawRing, p.golden!),
+        sfErr: ag > 0 ? Math.abs(ringAreaAbs(base.rawRing) - ag) / ag : 0,
+        prodIou: base.ring && base.ring.length >= 3 ? polyIoU(base.ring, p.golden!) : 0,
+        prodSfErr: ag > 0 && base.ring && base.ring.length >= 3 ? Math.abs(ringAreaAbs(base.ring) - ag) / ag : 1,
+        minPairIoU: rawPair,
+        knownFail: p.knownFail,
+      });
+    }
   }
   // whole-case accounting: per-room SF error can't see floor NO probe covers
   // or floor counted twice — the case totals and pairwise overlaps can.
@@ -108,7 +172,7 @@ function runCase(caseName: string, segs: number[], imgW: number, imgH: number, m
 
 // synthetic cases — goldens by construction
 for (const c of syntheticCorpus()) {
-  runCase(c.name, c.segs, c.imgW, c.imgH, c.meta ?? null, c.ptPerFt, c.probes);
+  runCase(c.name, c.segs, c.points, c.imgW, c.imgH, c.meta ?? null, c.ptPerFt, c.probes);
 }
 
 // pinned real-PDF cases. corpus/sealed/ holds the run-once protocol cases
@@ -130,6 +194,7 @@ const realCaseNames: string[] = [];   // 0.7: which cases are engine-pinned
 // justification lived in a commit body nobody re-read.
 interface CorpusAdjudication { at?: string; scope?: string; from_sf?: number; to_sf?: number; delta_pct?: number; iou_old_new?: number; overlap_sf?: number; frac_pct?: number; reason: string }
 const adjudications: Array<{ caseName: string; subject: string; a: CorpusAdjudication }> = [];
+const caseSemanticsFailures: string[] = [];
 for (const file of caseFiles) {
   const c = JSON.parse(readFileSync(file, "utf8"));
   const doc = await pdfjs.getDocument({ url: join(dirname(file), c.pdf), useSystemFonts: true }).promise;
@@ -142,7 +207,11 @@ for (const file of caseFiles) {
   for (const a of (c.adjudications ?? []) as CorpusAdjudication[]) adjudications.push({ caseName: name, subject: a.scope ?? "case", a });
   for (const p of c.probes as Array<{ name: string; adjudications?: CorpusAdjudication[] }>)
     for (const a of p.adjudications ?? []) adjudications.push({ caseName: name, subject: p.name, a });
-  runCase(name, g.segs, vp.width, vp.height, g.meta, c.ptPerFt, c.probes, !!c.humanMeasured, c.deducts_sf || 0, true);   // ptPerFt is image px/ft at the pinned scale
+  // A5b: a corpus case that does not declare its wall-line semantics cannot be
+  // read (centreline vs interior-clear is a ~1.6% difference on the sample plan
+  // and 8.5% on a narrow band). Loud, not assumed.
+  if (c.wallSemantics !== WALL_SEMANTICS) caseSemanticsFailures.push(`${name}: wallSemantics is ${JSON.stringify(c.wallSemantics ?? null)} — the corpus is pinned "${WALL_SEMANTICS}" (see bench/corpus.ts)`);
+  runCase(name, g.segs, g.points, vp.width, vp.height, g.meta, c.ptPerFt, c.probes, !!c.humanMeasured, c.deducts_sf || 0, true);   // ptPerFt is image px/ft at the pinned scale
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
@@ -184,8 +253,35 @@ const agg = aggregate(scores);
 const PINNED_CASES = new Set(realCaseNames);
 const synth = aggregate(scores.filter((s) => !PINNED_CASES.has(s.caseName)));
 const pinned = aggregate(scores.filter((s) => PINNED_CASES.has(s.caseName)));
-console.log(`\nsynthetic (truth by construction — the only independent signal):`);
-console.log(`  n=${synth.goldenProbes} | mean IoU ${synth.meanIoU.toFixed(3)} | floor IoU ${synth.floorIoU.toFixed(3)}`);
+
+// ── MASK FIDELITY (A5b) — printed BEFORE the headline, on purpose ───────────
+// The synthetic goldens are still independent of the engine (linework and
+// golden come from the same authored numbers), but since A5b the engine's ring
+// is SNAPPED onto those very numbers, so a synthetic probe scores ~1.000
+// whenever its golden corners are drawn vertices — by construction OF THE SNAP,
+// not by the raster getting them right. That is what the product returns and it
+// is the right thing to gate; it is NOT a measurement of how well the flood
+// approximates the room. This block is the measurement that still is.
+const fidGate = fidelity.filter((f) => !f.knownFail);
+const fidMeanIoU = fidGate.length ? fidGate.reduce((a, f) => a + f.iou, 0) / fidGate.length : 1;
+const fidFloorIoU = fidGate.length ? Math.min(...fidGate.map((f) => f.iou)) : 1;
+const fidWorstSf = fidGate.length ? Math.max(...fidGate.map((f) => f.sfErr)) : 0;
+const fidPairs = fidGate.map((f) => f.minPairIoU).filter((v): v is number => v !== undefined);
+console.log(`\n── mask fidelity: the SAME probes traced UN-SNAPPED (REPORTED, NOT GATED) ──`);
+console.log(`   ${"probe".padEnd(42)} ${"raw IoU".padStart(8)} ${"raw SF±".padStart(9)}   ${"prod IoU".padStart(8)} ${"prod SF±".padStart(9)}   raw x-res pair IoU`);
+for (const f of fidelity) {
+  console.log(`   ${(f.caseName + " / " + f.probeName).padEnd(42)} ${f.iou.toFixed(3).padStart(8)} ${(`${(f.sfErr * 100).toFixed(2)}%`).padStart(9)}   ${f.prodIou.toFixed(3).padStart(8)} ${(`${(f.prodSfErr * 100).toFixed(2)}%`).padStart(9)}   ${f.minPairIoU !== undefined ? f.minPairIoU.toFixed(3) : "—"}${f.knownFail ? "  [known-fail]" : ""}`);
+}
+console.log(`   raw (rasterisation only, known-fails excluded): n=${fidGate.length} | mean IoU ${fidMeanIoU.toFixed(3)} | floor IoU ${fidFloorIoU.toFixed(3)} | worst SF ${(fidWorstSf * 100).toFixed(2)}%`);
+console.log(`   raw cross-resolution pair-IoU floor: ${fidPairs.length ? Math.min(...fidPairs).toFixed(3) : "n/a"} (${fidPairs.length} probe(s) with ≥2 gated resolutions)`);
+console.log(`   ↑ this is the rasterisation error the snap hides. It is deliberately UNGATED: the`);
+console.log(`     product ships the snapped ring, so gating the raw one would gate a quantity nobody buys.`);
+
+console.log(`\nsynthetic — PRODUCTION RINGS (trace+snap) vs goldens authored from the same numbers.`);
+console.log(`  Independent of the engine's own past output, but NOT a raw accuracy figure: the snap`);
+console.log(`  lands corners on the authored vertices, so this says "the flood found the right drawn`);
+console.log(`  boundary", not "the raster is this good" — for that, read mask fidelity above.`);
+console.log(`  n=${synth.goldenProbes} | mean IoU ${synth.meanIoU.toFixed(3)} | floor IoU ${synth.floorIoU.toFixed(3)}  [wall semantics: ${WALL_SEMANTICS}]`);
 console.log(`engine-pinned (REGRESSION SAFETY ONLY — not accuracy; these are the engine's own past output):`);
 console.log(`  n=${pinned.goldenProbes} | mean IoU ${pinned.meanIoU.toFixed(3)} | floor IoU ${pinned.floorIoU.toFixed(3)}`);
 console.log(`\ngolden probes: ${agg.goldenProbes} | mean IoU ${agg.meanIoU.toFixed(3)} | floor IoU ${agg.floorIoU.toFixed(3)} | refusal ${(agg.refusalRate * 100).toFixed(1)}% | leak ${(agg.leakRate * 100).toFixed(1)}% (gating aggregate — see the split above before quoting the mean)`);
@@ -227,13 +323,19 @@ for (const p of cgate.inaccurate) console.log(`    ${p.probe.padEnd(40)} conf ${
 console.log(`  ACCURATE   (n=${cgate.accurate.length}, worst conf ${cgate.minAccurate?.toFixed(2) ?? "n/a"}):`);
 for (const p of [...cgate.accurate].sort((a, b) => a.confidence - b.confidence)) console.log(`    ${p.probe.padEnd(40)} conf ${p.confidence.toFixed(2)}`);
 for (const p of cgate.exempt) {
-  console.log(`  EXEMPT     ${p.probe.padEnd(40)} conf ${p.confidence?.toFixed(2) ?? "n/a"}  (xfail: must stay > ${CONF_GATE_EXEMPT[p.probe].xfailAbove})`);
-  console.log(`      ↳ ${CONF_GATE_EXEMPT[p.probe].reason}`);
+  const x = CONF_GATE_EXEMPT[p.probe];
+  const dir = [
+    x.xfailAbove != null ? `must stay > ${x.xfailAbove}` : "",
+    x.xfailAtMost != null ? `must stay ≤ ${x.xfailAtMost}` : "",
+    x.xfailEquals != null ? `must stay EQUAL to ${x.xfailEquals}` : "",
+  ].filter(Boolean).join("; ");
+  console.log(`  EXEMPT     ${p.probe.padEnd(40)} conf ${p.confidence?.toFixed(2) ?? "n/a"}  (xfail: ${dir})`);
+  console.log(`      ↳ ${x.reason}`);
 }
 
-writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS }, null, 1));
+writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, wallSemantics: WALL_SEMANTICS, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? Math.min(...fidPairs) : null, gated: false } }, null, 1));
 
-const failures: string[] = [];
+const failures: string[] = [...caseSemanticsFailures];
 for (const cv of coverages) {
   // 0.9: adjacency tiling gates every whole-plan case (see THRESHOLDS above).
   if (cv.sumEngineSF > 0 && cv.overlapSF > cv.sumEngineSF * THRESHOLDS.pairwiseOverlapFrac) failures.push(`${cv.caseName}: ${cv.overlapSF.toFixed(1)} SF double-counted (> ${THRESHOLDS.pairwiseOverlapFrac * 100}% of total)`);
