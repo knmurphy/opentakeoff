@@ -963,6 +963,25 @@ the entanglement audit.)*
 
 ## Phase 6 — the working record
 
+> **✅ APPLIED 2026-07-28.** The issue-record items landed: the body was rewritten with
+> inline `[corrected]` annotations (6.0, 6.1, 6.2, 6.4, 6.5, 6.11, 6.16, 6.18, plus the
+> engine-pinned caveat and the A1/A5b defects), and a consolidated corrections comment
+> ([`5102667000`](https://github.com/knmurphy/opentakeoff/issues/184#issuecomment-5102667000))
+> records the retractions belonging to specific earlier comments (6.3, 6.6, 6.8, 6.9, 6.10,
+> 6.15, 6.17). **The historical comments were deliberately left unedited** — the original
+> claims should stay visible next to their retractions.
+>
+> **Not applied, and why:** 6.14 (slice doc) and 6.19 (`IMPROVE_WITH_USE.md`) target files that
+> exist only on the feature branches, not on the audit branch, and pushing there is outside
+> this branch's authorisation. 6.7 (rename `ward-room-294sf`), 6.12 (the missing O(N²)
+> regression test) and 6.13 (e2e header comments) are code/corpus changes that belong with the
+> engineering phases — 6.7 in particular moves a corpus key and must go through 0.9.
+>
+> One self-inflicted note: the first two body writes reproduced the exact malformed-link defect
+> 6.5 exists to fix (GitHub mangled `[`code`](url)` constructs into double-backticked text).
+> Caught by re-reading the stored body via the API rather than trusting the write. Verified
+> clean on the third write — `body.count("](``") == 0`.
+
 **Moved earlier in priority than rev 1 had it** — not for disclosure, but because the issue is
 the project's working state and the next session reads it. 6.0 first.
 
