@@ -101,7 +101,7 @@ interface SheetState {
   detected: DetectedScale | null;
   /** real feet per image px at RENDER_SCALE; null until set_scale */
   upp: number | null;
-  text: { str: string; x: number; y: number }[];
+  text: { str: string; x: number; y: number; h: number }[];
   page: PageHandle;
   // lazy per-sheet caches (built once, reused by identity)
   geo?: VectorGeometry;
@@ -534,9 +534,13 @@ export class Session {
 
   readSheetText(name: string, region?: { x0: number; y0: number; x1: number; y1: number }) {
     const s = this.sheet(name);
-    const items = region
+    const hit = region
       ? s.text.filter((t) => t.x >= region.x0 && t.x <= region.x1 && t.y >= region.y0 && t.y <= region.y1)
       : s.text;
+    // {str,x,y} is this tool's published shape. positionedText also carries a
+    // glyph height for room detection; it is projected out here rather than
+    // widening the contract, and the strict conformance check enforces that.
+    const items = hit.map(({ str, x, y }) => ({ str, x, y }));
     return { sheet: s.key, items, text: items.map((t) => t.str).join(" ") };
   }
 }

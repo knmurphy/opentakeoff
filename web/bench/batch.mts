@@ -42,12 +42,14 @@ for (const file of files) {
   const ops = await page.getOperatorList();
   const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
   const tc = await page.getTextContent();
-  const items: { str: string; x: number; y: number }[] = [];
+  const items: { str: string; x: number; y: number; h: number }[] = [];
   for (const it of tc.items as Array<{ str?: string; transform: number[] }>) {
     const str = it.str || "";
     if (!str.trim()) continue;
     const t = pdfjs.Util.transform(vp.transform, it.transform);
-    items.push({ str, x: +t[4].toFixed(1), y: +t[5].toFixed(1) });
+    // h = device-space glyph height; detectRooms uses it to drop the seed clear
+    // of a tag box drawn around the label (mcp/src/pdf.ts does the same)
+    items.push({ str, x: +t[4].toFixed(1), y: +t[5].toFixed(1), h: +Math.hypot(t[2], t[3]).toFixed(1) });
   }
 
   const pxPerFt = c.ptPerFt;

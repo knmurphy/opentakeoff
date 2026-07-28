@@ -30,6 +30,10 @@ export interface PositionedTextItem {
   str: string;
   x: number;
   y: number;
+  /** Text height in the same px, when the caller can supply it (device-space
+   *  glyph height — `hypot(t[2], t[3])` of the viewport-composed text matrix).
+   *  Without it the seed stays on the anchor; see `placement` below. */
+  h?: number;
 }
 
 /** A room-number label found in the text layer, with its seed point. */
@@ -61,7 +65,30 @@ export interface RoomLabelOptions {
    *  margin, revision cloud legend — is not a room tag. Supply the sheet
    *  dimensions and an inset, or omit to skip the spatial gate entirely. */
   bounds?: { x0: number; y0: number; x1: number; y1: number };
+  /** Where the seed goes relative to the label.
+   *
+   *  "anchor" is the text baseline origin — the original behavior, and what a
+   *  caller with no glyph metrics gets. It fails on a very common drafting
+   *  convention: a rectangle drawn AROUND the room tag. The seed then floods
+   *  the inside of that box, ~3.5 SF, not the room. On the VA finish plan that
+   *  was 37 of 41 proposals (issue #184 round 9).
+   *
+   *  "below-box" (the default when the item carries `h`) drops the seed clear
+   *  of the tag. Below, not beside: the box hugs the text horizontally — it is
+   *  ~2.6x the width of the run, so a width-based offset stays inside it — but
+   *  extends only a few px under the baseline. Measured against the same 41
+   *  seeds: median proposal 3 SF → 52 SF, sub-4-SF 37 → 11, and the rooms the
+   *  sheet's tags can reach go from 0 of 2 to 2 of 2. */
+  placement?: "anchor" | "below-box";
+  /** Multiples of the text height to drop by, for "below-box". */
+  gap?: number;
 }
+
+/** Default drop for "below-box", in multiples of the label's text height.
+ *  Enough to clear the tag box's bottom edge, short enough to stay inside a
+ *  small room: at a 1/8" sheet a room-tag run is ~0.6 ft tall, so this is
+ *  ~0.9 ft below the baseline. */
+export const LABEL_GAP = 1.5;
 
 /** Scan positioned text items for room-number labels, returning each as a
  *  seed point. An item's string may be JUST the number ("134") or a
@@ -89,7 +116,10 @@ export function roomLabelSeeds(items: PositionedTextItem[], opts: RoomLabelOptio
     if (toks.some((t) => t !== num && OTHER_NUMBER_RE.test(t))) continue;   // "08 - 6231"
     if (toks.some((t) => NON_ROOM_WORDS.has(t.replace(/[^A-Z]/gi, "").toUpperCase()))) continue;
     if (b && (it.x < b.x0 || it.x > b.x1 || it.y < b.y0 || it.y > b.y1)) continue;
-    out.push({ str: num, seed: [it.x, it.y] });
+    // y grows downward in seed space (image px, origin top-left)
+    const place = opts.placement ?? (it.h && it.h > 0 ? "below-box" : "anchor");
+    const dy = place === "below-box" && it.h && it.h > 0 ? (opts.gap ?? LABEL_GAP) * it.h : 0;
+    out.push({ str: num, seed: [it.x, it.y + dy] });
   }
   return out;
 }

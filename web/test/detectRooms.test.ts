@@ -150,3 +150,36 @@ test("roomLabelSeeds: the spatial gate drops sheet-margin numerals, and is opt-i
 test("sheetBounds: a symmetric inset of the sheet", () => {
   assert.deepEqual(sheetBounds(1000, 800, 0.1), { x0: 100, y0: 80, x1: 900, y1: 720 });
 });
+
+test("roomLabelSeeds: the seed drops clear of a tag box when the caller supplies glyph height", () => {
+  // a rectangle drawn AROUND the room number is a common convention; the
+  // anchor sits inside it, so the flood measures the box (~3.5 SF), not the
+  // room. The box hugs the text horizontally but ends just under the baseline.
+  const items = [{ str: "137", x: 100, y: 200, h: 10 }];
+  assert.deepEqual(roomLabelSeeds(items), [{ str: "137", seed: [100, 215] }], "1.5 text heights below");
+  assert.deepEqual(roomLabelSeeds(items, { gap: 3 }), [{ str: "137", seed: [100, 230] }]);
+  assert.deepEqual(roomLabelSeeds(items, { placement: "anchor" }), [{ str: "137", seed: [100, 200] }]);
+});
+
+test("roomLabelSeeds: no glyph height ⇒ the anchor, unchanged", () => {
+  // a caller that can't supply metrics keeps the original behavior rather than
+  // guessing an offset in the wrong units
+  assert.deepEqual(roomLabelSeeds([{ str: "137", x: 100, y: 200 }]), [{ str: "137", seed: [100, 200] }]);
+  assert.deepEqual(roomLabelSeeds([{ str: "137", x: 100, y: 200, h: 0 }]), [{ str: "137", seed: [100, 200] }]);
+  assert.deepEqual(
+    roomLabelSeeds([{ str: "137", x: 100, y: 200 }], { placement: "below-box" }),
+    [{ str: "137", seed: [100, 200] }],
+    "asking for below-box without metrics cannot fabricate one",
+  );
+});
+
+test("roomLabelSeeds: the drop happens after the spatial gate, not before", () => {
+  // a tag just inside the bottom of the drawing extent: its dropped seed lands
+  // outside. Gating on the moved seed would discard a legitimate room tag.
+  const bounds = sheetBounds(1000, 800);                        // y1 = 752
+  const items = [{ str: "134", x: 500, y: 750, h: 10 }];        // anchor inside, seed at 765
+  const seeds = roomLabelSeeds(items, { bounds });
+  assert.ok(750 < bounds.y1 && 765 > bounds.y1, "the fixture straddles the edge as intended");
+  assert.equal(seeds.length, 1, "gated on the label's own position");
+  assert.deepEqual(seeds[0].seed, [500, 765]);
+});
