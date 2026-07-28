@@ -86,7 +86,7 @@ const detectedRoom = z.object({
   gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
   door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
   scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
-});
+}).strict();  // published schema is additionalProperties:false; strict makes runtime + conformance match it (per-room entries carry the receipts spread, so undeclared keys would land HERE first)
 
 /** detect_rooms: one flood per room-number label found on the sheet's text
  * layer, kept only when it traces cleanly (a leak/tiny/boundary flood is

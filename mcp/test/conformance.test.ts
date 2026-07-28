@@ -29,18 +29,25 @@ const NOT_A_PDF = fileURLToPath(new URL("../package.json", import.meta.url));
 const KEY = "sample-plan.pdf";
 const UPP = 1 / 36; // 1/4" = 1'-0" at render scale 2.0
 
+// .strict() everywhere: the published outputSchema is additionalProperties:false,
+// but zod's default parse runs in STRIP mode and silently drops unknown keys —
+// so an undeclared reply key passed this suite while a conforming client would
+// reject it. That exact gap shipped once (b2c1ba7 declared five keys the replies
+// already carried; reverting it left this suite green). Strict mode makes the
+// check as strict as the schema it certifies. Verified: an undeclared key on
+// the one_click reply now fails this suite.
 const SCHEMAS: Record<string, z.ZodTypeAny> = {
-  load_plan: z.object(loadPlanOutput),
-  sheet_info: z.object(sheetInfoOutput),
-  set_scale: z.object(setScaleOutput),
-  one_click: z.object(oneClickOutput),
-  detect_rooms: z.object(detectRoomsOutput),
-  measure_polygon: z.object(measurePolygonOutput),
-  measure_line: z.object(measureLineOutput),
-  takeoff_summary: z.object(takeoffSummaryOutput),
-  export_takeoff: z.object(exportTakeoffOutput),
-  delete_shape: z.object(deleteShapeOutput),
-  read_sheet_text: z.object(readSheetTextOutput),
+  load_plan: z.object(loadPlanOutput).strict(),
+  sheet_info: z.object(sheetInfoOutput).strict(),
+  set_scale: z.object(setScaleOutput).strict(),
+  one_click: z.object(oneClickOutput).strict(),
+  detect_rooms: z.object(detectRoomsOutput).strict(),
+  measure_polygon: z.object(measurePolygonOutput).strict(),
+  measure_line: z.object(measureLineOutput).strict(),
+  takeoff_summary: z.object(takeoffSummaryOutput).strict(),
+  export_takeoff: z.object(exportTakeoffOutput).strict(),
+  delete_shape: z.object(deleteShapeOutput).strict(),
+  read_sheet_text: z.object(readSheetTextOutput).strict(),
 };
 
 async function pair() {
