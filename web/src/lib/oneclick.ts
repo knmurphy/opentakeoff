@@ -114,13 +114,45 @@ export const SEG_FILLONLY = 4;      // filled-not-stroked path (solid poché out
 export const SEG_POLYARC = 8;       // provenance: SEG_CURVE came from markPolylineArcs, not a bezier op
 // meta high nibble = device line width, ceil'd and capped at 15 (0 = hairline)
 
-// polyline arc detection (markPolylineArcs) — all thresholds are DIMENSIONLESS
-// geometry (turn angles, ratios), so detection is resolution- and scale-free
+// polyline arc detection (markPolylineArcs) — the SHAPE thresholds are
+// dimensionless geometry (turn angles, ratios), but detection as a whole is
+// NOT scale-free: two of these are absolute image px (the sliver floor at
+// markPolylineArcs' length test and circleFitOk's absolute residual slack),
+// so a drawing rendered small enough eventually stops resolving its own arcs.
+// They are raster-honesty floors, not physical thresholds — which is exactly
+// why nothing PHYSICAL (a door leaf's length) may be tested here: this runs
+// inside extractVectorGeometry at render time, with no sheet scale. Feet-true
+// arc tests live at cluster time instead (see arcClusterFit / DOOR_R_*_FT).
 export const ARC_MIN_CHORDS = 4;       // fewer chords is a corner chamfer, not an arc
 export const ARC_MIN_TOTAL_TURN = 30;  // deg — shallower chains are gentle wall sweeps; door swings are ~90°
 export const ARC_CHORD_TURN_MIN = 2;   // deg — near-collinear chains are straight runs with drafting jitter
 export const ARC_CHORD_TURN_MAX = 45;  // deg — sharper turns are zigzags/symbols, not tessellation
 export const ARC_FIT_TOL_FRAC = 0.03;  // circle-fit residual cap as a fraction of the radius (ellipse fixtures fail this)
+
+// ── non-door curve discrimination (issue: clouds/columns read as door arcs) ──
+// SEG_CURVE answers "is this curved linework?" — true of a column, a revision
+// cloud and a door swing alike, and it must stay true of all three (it is what
+// exempts them from hatch classification). "Is this a DOOR swing?" is a
+// separate question, answered here and carried in its own mask bit, so that
+// refusing a cloud can never make its chords hatch-eligible.
+// Both of these are dimensionless, so they can run at render time:
+export const ARC_CLOSED_TURN = 300;    // deg — a chain that sweeps this far closes on itself: a round column, a callout bubble, a north-arrow ring. A door leaf never passes 180°.
+export const ARC_CUSP_MIN = 3;         // consecutive cusp reversals that make a chain a revision cloud. A mirrored DOUBLE DOOR is two arcs with ONE reversal, so it must stay under this — the naive "any cusp" form deletes double doors.
+export const ARC_CUSP_R_RATIO = 1.5;   // ...and a cloud's scallops all share one radius
+export const ARC_CUSP_SPAN_MULT = 8;   // ...which is small next to the chain's own run length (a double door's radius is ~1/3 of its run)
+/** mask bit: this curve cell is NOT door-swing linework (closed circle / cloud
+ *  scallop). A cell crossed by both a door-like and a non-door-like chord ends
+ *  up flagged — deliberately conservative; clusters are judged on the FRACTION
+ *  of their cells flagged, so a few shared cells can't flip a real door. */
+export const MASK_NODOOR_BIT = 8;
+// Feet-true door-leaf band, applied per CLUSTER (where MaskObj.mppf exists).
+// NOT 2–6 ft: 1'-6" closet leaves are real, and at 1/16" = 1'-0" a ¼" paper
+// scallop is 4 ft model — it would sneak in under a 6 ft cap, so the cap sits
+// below it and the cusp rule catches the rest.
+export const DOOR_R_MIN_FT = 1.5;
+export const DOOR_R_MAX_FT = 4.5;
+export const CLUSTER_FIT_TOL_FRAC = 0.05;  // per-cluster circle-fit RMS cap (fraction of the fitted radius) — cells are integer-quantized and the arc rasters 1–2 px thick, so the absolute floor below matters more
+export const CLUSTER_FIT_TOL_PX = 1.5;
 
 // hatch classification — a hatch/poché member is a stroke INSIDE a periodic
 // parallel family: same-pen neighbors at ±pitch on both sides (and the lattice
@@ -335,6 +367,24 @@ export function markPolylineArcs(segs: number[], meta: Uint8Array): number {
 // circle before marking. The fit is the arbiter — turn statistics alone
 // would admit near-circular polylines that aren't arcs.
 function scanChainForArcs(segs: number[], meta: Uint8Array, chain: number[]): number {
+  let marked = 0;
+  for (const w of scanChainWindows(segs, chain)) {
+    // mark the seg-index RANGE so bridged slivers ride along — but only segs
+    // sharing the chain's meta (a foreign path's sliver interleaved in the
+    // stream must not be stamped)
+    const cm = meta[chain[w.c0]];
+    for (let j = chain[w.c0]; j <= chain[w.c1]; j++) if (meta[j] === cm) meta[j] |= SEG_CURVE | SEG_POLYARC;
+    marked += w.c1 - w.c0 + 1;
+  }
+  return marked;
+}
+
+/** One confirmed arc inside a chain: chord range (chain indices), the signed
+ *  total turn across it (deg), and the circle it fits. */
+interface ArcWindow { c0: number; c1: number; turn: number; r: number; }
+
+// The window scanner both marking and non-door discrimination run on.
+function scanChainWindows(segs: number[], chain: number[]): ArcWindow[] {
   const m = chain.length;
   const dirs: number[] = [], lens: number[] = [];
   for (const i of chain) {
@@ -358,7 +408,7 @@ function scanChainForArcs(segs: number[], meta: Uint8Array, chain: number[]): nu
   // pieces, so an ISOLATED sub-threshold turn continues a window; two in a
   // row is a straight run and breaks it
   const neutral = (k: number) => Math.abs(turn[k]) < ARC_CHORD_TURN_MIN && ratioOk(k);
-  let marked = 0;
+  const out: ArcWindow[] = [];
   let s = 1;
   while (s < m) {
     if (!signedTurn(s)) { s++; continue; }
@@ -380,28 +430,96 @@ function scanChainForArcs(segs: number[], meta: Uint8Array, chain: number[]): nu
       if (total >= ARC_MIN_TOTAL_TURN) {
         for (const [c0, c1] of [[s - 1, e], [s, e], [s - 1, e - 1], [s, e - 1]] as const) {
           if (c1 - c0 + 1 < ARC_MIN_CHORDS) continue;
-          let t = 0; for (let j = c0 + 1; j <= c1; j++) t += Math.abs(turn[j]);
-          if (t < ARC_MIN_TOTAL_TURN || !circleFitOk(segs, chain, c0, c1)) continue;
-          // mark the seg-index RANGE so bridged slivers ride along — but
-          // only segs sharing the chain's meta (a foreign path's sliver
-          // interleaved in the stream must not be stamped)
-          const cm = meta[chain[c0]];
-          for (let j = chain[c0]; j <= chain[c1]; j++) if (meta[j] === cm) meta[j] |= SEG_CURVE | SEG_POLYARC;
-          marked += c1 - c0 + 1;
+          let t = 0, signed = 0;
+          for (let j = c0 + 1; j <= c1; j++) { t += Math.abs(turn[j]); signed += turn[j]; }
+          const fit = t < ARC_MIN_TOTAL_TURN ? null : circleFitOk(segs, chain, c0, c1);
+          if (!fit) continue;
+          out.push({ c0, c1, turn: signed, r: fit.r });
           break;
         }
       }
     }
     s = e + 1;
   }
-  return marked;
+  return out;
+}
+
+/** Per-chord verdict: this curve chord is NOT door-swing linework. Runs over
+ *  every SEG_CURVE chord — bezier tessellation included, since CAD emits
+ *  circles as beziers and extractVectorGeometry stamps SEG_CURVE on those
+ *  unconditionally, so a discriminator scoped to the polyline path would never
+ *  see a bezier-drawn column.
+ *
+ *  Two dimensionless refusals (the feet-true radius band is a CLUSTER-time
+ *  test — there is no sheet scale here):
+ *    1. a chain sweeping ≥ ARC_CLOSED_TURN closes on itself — column, callout
+ *       bubble, north arrow. Nothing that closes is a door leaf.
+ *    2. a CUSP CHAIN — four or more equal-radius arcs meeting at reversals —
+ *       is a revision cloud. The naive "consecutive arcs with opposite turn
+ *       sign" form also describes a mirrored DOUBLE DOOR, so all three of
+ *       similar radius, SMALL radius (relative to the chain's own run) and
+ *       ≥ ARC_CUSP_MIN reversals are required; a double door has one. */
+export function flagNonDoorArcs(segs: number[], meta: Uint8Array): Uint8Array {
+  const n = segs.length >> 2;
+  const veto = new Uint8Array(n);
+  if (!meta || n < ARC_MIN_CHORDS) return veto;
+  const len = (i: number) => Math.hypot(segs[i * 4 + 2] - segs[i * 4], segs[i * 4 + 3] - segs[i * 4 + 1]);
+  let chain: number[] = [];
+  const flush = () => {
+    if (chain.length >= ARC_MIN_CHORDS) judgeChain(segs, chain, veto);
+    chain = [];
+  };
+  for (let i = 0; i < n; i++) {
+    // Slivers are bridged BEFORE the membership test, unlike markPolylineArcs:
+    // pdf.js emits a ZERO-LENGTH lineTo between the two half-circle beziers of
+    // a CAD circle, and letting that break the chain split every bezier circle
+    // into two 180° halves — neither of which closes (measured on the corpus's
+    // real plan; the column read as two door-sized arcs).
+    if (len(i) < 0.5) continue;
+    if (!(meta[i] & SEG_CURVE) || (meta[i] & SEG_CLIP)) { flush(); continue; }
+    if (chain.length) {
+      const p = chain[chain.length - 1];
+      const gap = Math.hypot(segs[i * 4] - segs[p * 4 + 2], segs[i * 4 + 1] - segs[p * 4 + 3]);
+      if (meta[i] !== meta[p] || gap > Math.max(len(i), len(p))) flush();
+    }
+    chain.push(i);
+  }
+  flush();
+  return veto;
+}
+
+function judgeChain(segs: number[], chain: number[], veto: Uint8Array): void {
+  const wins = scanChainWindows(segs, chain);
+  if (!wins.length) return;
+  const stamp = (w: ArcWindow) => { for (let j = chain[w.c0]; j <= chain[w.c1]; j++) veto[j] = 1; };
+  // 1. closed circles
+  let closed = false;
+  for (const w of wins) if (Math.abs(w.turn) >= ARC_CLOSED_TURN) { stamp(w); closed = true; }
+  if (closed) return;
+  // 3. cusp chains (revision clouds). Windows separated by at most one chord
+  // are joined at a cusp — the sharp reversal that broke the turn window.
+  if (wins.length <= ARC_CUSP_MIN) return;
+  let run = 1, best = 1;
+  for (let k = 1; k < wins.length; k++) {
+    if (wins[k].c0 - wins[k - 1].c1 <= 2 && Math.sign(wins[k].turn) === Math.sign(wins[k - 1].turn)) run++;
+    else run = 1;
+    if (run > best) best = run;
+  }
+  if (best <= ARC_CUSP_MIN) return;                    // ≤ 3 arcs in a row ⇒ ≤ 2 reversals
+  let rmin = Infinity, rmax = 0, span = 0;
+  for (const w of wins) { if (w.r < rmin) rmin = w.r; if (w.r > rmax) rmax = w.r; }
+  for (const i of chain) span += Math.hypot(segs[i * 4 + 2] - segs[i * 4], segs[i * 4 + 3] - segs[i * 4 + 1]);
+  if (!(rmin > 0) || rmax > rmin * ARC_CUSP_R_RATIO) return;       // radii must match
+  if (rmax * ARC_CUSP_SPAN_MULT > span) return;                    // ...and be small next to the run
+  for (const w of wins) stamp(w);
 }
 
 // Kasa least-squares circle through the chords' vertices, centroid-centered
 // for conditioning; accept when every vertex sits on the circle to within
 // ARC_FIT_TOL_FRAC of the radius (a hair of absolute slack for PDF coordinate
 // rounding). Tessellation vertices of a true arc lie exactly on it.
-function circleFitOk(segs: number[], chain: number[], c0: number, c1: number): boolean {
+// Returns the fitted circle (the RADIUS is what the cloud test needs), or null.
+function circleFitOk(segs: number[], chain: number[], c0: number, c1: number): { cx: number; cy: number; r: number } | null {
   const xs: number[] = [], ys: number[] = [];
   xs.push(segs[chain[c0] * 4]); ys.push(segs[chain[c0] * 4 + 1]);
   for (let k = c0; k <= c1; k++) { const i = chain[k]; xs.push(segs[i * 4 + 2]); ys.push(segs[i * 4 + 3]); }
@@ -415,18 +533,18 @@ function circleFitOk(segs: number[], chain: number[], c0: number, c1: number): b
     sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z;
   }
   const det = sxx * syy - sxy * sxy;
-  if (Math.abs(det) < 1e-9) return false;              // collinear — no circle
+  if (Math.abs(det) < 1e-9) return null;               // collinear — no circle
   const cx = (sxz * syy - syz * sxy) / (2 * det);
   const cy = (syz * sxx - sxz * sxy) / (2 * det);
   let r = 0;
   for (let i = 0; i < m; i++) r += Math.hypot(xs[i] - mx - cx, ys[i] - my - cy);
   r /= m;
-  if (!(r > 0)) return false;
+  if (!(r > 0)) return null;
   const tol = Math.max(0.75, r * ARC_FIT_TOL_FRAC);
   for (let i = 0; i < m; i++) {
-    if (Math.abs(Math.hypot(xs[i] - mx - cx, ys[i] - my - cy) - r) > tol) return false;
+    if (Math.abs(Math.hypot(xs[i] - mx - cx, ys[i] - my - cy) - r) > tol) return null;
   }
-  return true;
+  return { cx: cx + mx, cy: cy + my, r };
 }
 
 // ── 2. hatch classification ────────────────────────────────────────────────
@@ -643,10 +761,15 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
   // mppf = pxPerFt*k*wsB = basePxPerFt*wsB — the render scale cancels exactly.
   const mppf = Number.isFinite(pxPerFt) && pxPerFt > 0 ? pxPerFt * ws : 0;
   const soft = meta ? classifyHatchSegs(segs, meta, ws, mppf > 0 ? HATCH_MAX_PITCH_FT * mppf : HATCH_MAX_PITCH) : null;
+  // curve chords that are demonstrably not door swings (closed circles, cloud
+  // scallops) — a SEPARATE plane from SEG_CURVE, so refusing them never makes
+  // them hatch-eligible (classifyHatchSegs still skips every SEG_CURVE chord)
+  const noDoor = meta ? flagNonDoorArcs(segs, meta) : null;
   let softCount = 0;
   for (let i = 0, si = 0; i + 3 < segs.length; i += 4, si++) {
     let v = soft && soft[si] ? 2 : 1;
     if (v === 1 && meta && (meta[si] & SEG_CURVE)) v = 1 | MASK_CURVE_BIT;
+    if ((v & MASK_CURVE_BIT) && noDoor && noDoor[si]) v |= MASK_NODOOR_BIT;
     if (v === 2) softCount++;
     // Quantization needs no separate baseline step: ws is now baseline-derived
     // (ws = k·wsB) and mw/mh come from the baseline dims, so seg*ws already lands
@@ -939,12 +1062,19 @@ function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: 
 // multi-door room lost every wedge (~a quarter-circle of real floor per
 // door). Now each arc CLUSTER (connected curve cells; dash gaps bridge)
 // retries independently and its acceptance is bounded by the arc's OWN
-// extent: a wedge fits inside its arc's bounding box, so the allowance is
-// that box's area (with slack), capped at two 5-ft doors' worth. That same
-// bound is what keeps curved WALLS honest — a long shallow wall arc has a
-// thin bounding box (chord × sagitta), far smaller than the neighbor space
-// behind it, so opening it can never annex a closet-sized room; ambiguity
-// still degrades to the arc-bounded measurement, never a wrong annex.
+// GEOMETRY, re-fitted from the cluster's cells (arcClusterFit →
+// wedgeAllowance): the sector the leaf sweeps about the fitted hinge, boxed in
+// the arc's CHORD FRAME, capped at two 5-ft doors' worth.
+//
+// The claim that used to stand here — that a curved wall's thin box could
+// never admit the closet behind it — was FALSE, and this is the correction.
+// The box was AXIS-ALIGNED, so a diagonal shallow arc got a near-square one;
+// the ceiling was a constant ≈51 SF at every scale that ignored the arc's own
+// radius; and the rim was denominated in mask px. A 30 ft wall with a 2.5 ft
+// bulge annexed the whole ~50 SF behind it, at 0.97 confidence, labelled
+// "incl. door swing", with no door anywhere in the scene. What actually keeps
+// a curved wall honest is its RADIUS: 46 ft is not a door leaf, and a cluster
+// that fits one clean circle of non-leaf radius gets no allowance at all.
 export const WEDGE_SLACK = 1.3;        // growth head-room over the ideal quarter-circle
 export const WEDGE_GROWTH_FRAC = 0.30; // or this fraction of the region — corridors touch many doors
 export const WEDGE_MAX_DOORS = 12;     // absolute ceiling on the fractional allowance — 30% of a
@@ -1017,6 +1147,146 @@ function boundaryCurveClusters(mo: MaskObj, region: Uint8Array): number[][] {
     clusters.push(cl);
   }
   return clusters;
+}
+
+/** A boundary curve cluster, re-fitted as geometry.
+ *  A cluster is a bag of mask CELLS — it carries no radius, and a per-SEGMENT
+ *  bit can't supply one (buildMask ORs bits per crossing segment, so a cell
+ *  touched by two different arcs carries both). Re-fitting the circle from the
+ *  cells themselves is what actually works, and it is the only place the
+ *  sheet scale (MaskObj.mppf) is available, so the feet-true door-leaf test
+ *  lives here rather than in render-time arc detection. */
+export interface ArcClusterFit {
+  cx: number; cy: number;      // fitted centre, mask px (the HINGE of a door arc)
+  r: number;                   // fitted radius, mask px
+  rms: number;                 // fit residual, mask px
+  good: boolean;               // one circle explains the cluster (a double door's two arcs do not)
+  sweep: number;               // angular extent about the centre, radians
+  noDoorFrac: number;          // fraction of cells flagged MASK_NODOOR_BIT
+  bu: number; bn: number;      // CHORD-FRAME extents (along / across the arc's own chord), mask px
+  buH: number; bnH: number;    // ...the same box widened to reach the hinge (only meaningful when `good`)
+}
+
+/** Least-squares circle through a cluster's cells + its chord-frame extent.
+ *  The chord frame is the whole point of the extent: an axis-aligned box gives
+ *  a DIAGONAL shallow arc a near-square box (a 30 ft chord at 45° boxes
+ *  21 ft × 21 ft instead of 30 ft × its 2.5 ft sagitta), which is how a curved
+ *  wall used to buy itself a door's worth of allowance. */
+export function arcClusterFit(cl: number[], mw: number, mask: Uint8Array): ArcClusterFit {
+  const m = cl.length;
+  const X = (i: number) => i % mw, Y = (i: number) => (i / mw) | 0;
+  let mx = 0, my = 0, noDoor = 0;
+  for (const i of cl) { mx += X(i); my += Y(i); if (mask[i] & MASK_NODOOR_BIT) noDoor++; }
+  mx /= m; my /= m;
+  let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+  for (const i of cl) {
+    const x = X(i) - mx, y = Y(i) - my, z = x * x + y * y;
+    sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z;
+  }
+  // principal axis of the cells = the arc's own chord direction (a shallow arc
+  // is dominated by its chord); the covariance is already accumulated above
+  const tr = sxx + syy, dsc = Math.sqrt(Math.max(0, ((sxx - syy) / 2) ** 2 + sxy * sxy));
+  const l1 = tr / 2 + dsc;
+  let ux = sxy, uy = l1 - sxx;
+  if (Math.hypot(ux, uy) < 1e-9) { ux = 1; uy = 0; } else { const L = Math.hypot(ux, uy); ux /= L; uy /= L; }
+  let u0 = Infinity, u1 = -Infinity, n0 = Infinity, n1 = -Infinity;
+  for (const i of cl) {
+    const x = X(i) - mx, y = Y(i) - my;
+    const a = x * ux + y * uy, b = -x * uy + y * ux;
+    if (a < u0) u0 = a; if (a > u1) u1 = a; if (b < n0) n0 = b; if (b > n1) n1 = b;
+  }
+  const bu = u1 - u0 + 1, bn = n1 - n0 + 1;
+  const base = { cx: mx, cy: my, r: 0, rms: Infinity, good: false, sweep: 0, noDoorFrac: noDoor / m, bu, bn, buH: bu, bnH: bn };
+  const det = sxx * syy - sxy * sxy;
+  if (m < ARC_MIN_CHORDS || Math.abs(det) < 1e-9) return base;
+  const cx = (sxz * syy - syz * sxy) / (2 * det), cy = (syz * sxx - sxz * sxy) / (2 * det);
+  let r = 0;
+  for (const i of cl) r += Math.hypot(X(i) - mx - cx, Y(i) - my - cy);
+  r /= m;
+  if (!(r > 0)) return base;
+  let s2 = 0;
+  const angs: number[] = [];
+  for (const i of cl) {
+    const dx = X(i) - mx - cx, dy = Y(i) - my - cy;
+    const d = Math.hypot(dx, dy) - r;
+    s2 += d * d;
+    angs.push(Math.atan2(dy, dx));
+  }
+  const rms = Math.sqrt(s2 / m);
+  angs.sort((a, b) => a - b);
+  let gap = angs[0] + 2 * Math.PI - angs[angs.length - 1];
+  for (let k = 1; k < angs.length; k++) if (angs[k] - angs[k - 1] > gap) gap = angs[k] - angs[k - 1];
+  // the hinge (fitted centre) in the SAME chord frame, so the wedge's box can
+  // reach it — a quarter arc's own box is smaller than the wedge it bounds
+  const hu = cx * ux + cy * uy, hn = -cx * uy + cy * ux;
+  return {
+    ...base,
+    cx: cx + mx, cy: cy + my, r, rms,
+    good: rms <= Math.max(CLUSTER_FIT_TOL_PX, CLUSTER_FIT_TOL_FRAC * r),
+    sweep: Math.max(0, 2 * Math.PI - gap),
+    buH: Math.max(u1, hu) - Math.min(u0, hu) + 1,
+    bnH: Math.max(n1, hn) - Math.min(n0, hn) + 1,
+  };
+}
+
+/** The growback rim, in FEET. The retry's boundary may sit up to the seal
+ *  growback margin (dt ≤ 3 cells at the 18 px/ft calibration — 2 inches)
+ *  outside the arc's own extent, so the allowance carries a rim of that
+ *  width. Written as 3 CELLS it was not feet-true: the rim's AREA is
+ *  width × perimeter, and with the perimeter growing as mppf the rim shrank
+ *  as 1/mppf in SF — the same drawing got a different allowance at a
+ *  different raster. Denominated in feet it is resolution-free, with the
+ *  3-cell raster-honesty floor kept below the calibration point. */
+export const WEDGE_RIM_FT = 3 / CAL_MPPF;              // = 2 inches
+export function wedgeRimPx(maskPxPerFt: number): number {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return 3;
+  return Math.max(3, Math.round(WEDGE_RIM_FT * maskPxPerFt));
+}
+
+/** Growth (mask cells) a cluster's curve-transparent retry may add, and
+ *  whether the cluster looks like a door swing at all.
+ *
+ *  A door retry annexes the SECTOR between the arc and its hinge — and the
+ *  hinge is the fitted circle's CENTRE, so the sector is 0.5·θ·r², bounded
+ *  independently by the cluster's chord-frame box (which must include that
+ *  centre, or a quarter-arc's box would be smaller than its own wedge).
+ *  Two refusals, and the line between them is whether the cluster's OWN
+ *  geometry already bounds the growth:
+ *    • flagged non-door (closed circle / cloud scallop) AND no clean circle
+ *      fit — a cloud explains nothing about how far a hole in it can reach, so
+ *      only the refusal stands between it and 51 SF of the next room. A
+ *      flagged cluster that DOES fit one circle needs no refusal: the sector
+ *      bound below is its own interior, and the corpus's real plan counts the
+ *      floor inside a drawn ring as floor.
+ *    • one clean circle whose radius is not a door leaf — what a curved wall
+ *      always is. Here geometry does NOT help: a 46 ft radius sweeps a 700 SF
+ *      sector, so the old constant ceiling (2 × a 5 ft door's wedge ≈ 51 SF at
+ *      every scale) let a 30 ft × 2.5 ft wall annex the ~50 SF behind it. Only
+ *      the upper edge of the band refuses — an arc SHORTER than a closet leaf
+ *      is bounded by its own tiny sector, so DOOR_R_MIN_FT governs ranking. */
+export function wedgeAllowance(fit: ArcClusterFit, mppf: number, wedgeCapPx: number): number {
+  if (fit.noDoorFrac > 0.5 && !fit.good) return 0;
+  if (fit.good && mppf > 0 && fit.r / mppf > DOOR_R_MAX_FT) return 0;
+  const rim = wedgeRimPx(mppf);
+  const bu = fit.good ? fit.buH : fit.bu, bn = fit.good ? fit.bnH : fit.bn;
+  let area = bu * bn;
+  if (fit.good) area = Math.min(area, 0.5 * fit.sweep * fit.r * fit.r);
+  area += 2 * rim * (bu + bn) + 4 * rim * rim;
+  return Math.min(2 * wedgeCapPx, Math.round(area * WEDGE_SLACK));
+}
+
+/** How door-like a cluster is, for RANKING (the wedge budget is finite, and
+ *  taking clusters in scanline order let a row of curved fixtures spend it
+ *  before the room's real doors were ever reached). Higher is more door-like. */
+function doorLikeness(fit: ArcClusterFit, mppf: number): number {
+  let s = 1 - fit.noDoorFrac;
+  const swDeg = (fit.sweep * 180) / Math.PI;
+  if (fit.good) {
+    s += 1;
+    if (mppf > 0 && fit.r / mppf >= DOOR_R_MIN_FT && fit.r / mppf <= DOOR_R_MAX_FT) s += 4;
+    if (swDeg >= 45 && swDeg <= 190) s += 2;
+  }
+  return s;
 }
 
 // Walk the seed up the distance field until it clears the dilation radius —
@@ -1117,22 +1387,19 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   let wedges = 0;
   let hatchFiltered = !!r1.hatchFiltered;
   let sealedPx = r1.sealedPx, virtualFrac = r1.virtualFrac;
-  for (const cl of clusters.slice(0, WEDGE_MAX_DOORS)) {
-    // per-cluster allowance from the ARC'S OWN extent: a swing wedge fits
-    // inside its arc's bounding box plus the seal's growback margin (the
-    // boundary of a sealed result hugs true linework to within 3 cells —
-    // the same dt ≤ 3 band virtualBoundaryFrac counts as real), so box
-    // area + a 3-cell rim (with slack) bounds a door retry — while a long
-    // shallow curved-wall arc gets only its thin chord × sagitta box, so a
-    // closet behind it can never ride in
-    let x0 = mw, x1 = 0, y0 = mh, y1 = 0;
-    for (const i of cl) {
-      const x = i % mw, y = (i / mw) | 0;
-      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
-    }
-    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
-    const clusterAllowance = Math.min(2 * wedgeCapPx, Math.round((bw * bh + 3 * 2 * (bw + bh)) * WEDGE_SLACK));
-    if (clusterAllowance < 1) continue;
+  // Judge every cluster as GEOMETRY first (re-fitted circle: radius, sweep,
+  // chord-frame extent), then spend the finite wedge budget on the most
+  // door-like ones. Ranking, not scanline order: a room ringed with curved
+  // millwork used to exhaust the budget before its real doors were reached.
+  // Ties break on first-cell index, so the order stays deterministic.
+  const ranked = clusters
+    .map((cl) => {
+      const fit = arcClusterFit(cl, mw, mo.mask);
+      return { cl, fit, allow: wedgeAllowance(fit, mo.mppf || 0, wedgeCapPx), rank: doorLikeness(fit, mo.mppf || 0), at: cl[0] };
+    })
+    .filter((c) => c.allow >= 1)
+    .sort((a, b) => (b.rank - a.rank) || (a.at - b.at));
+  for (const { cl, allow: clusterAllowance } of ranked.slice(0, WEDGE_MAX_DOORS)) {
     // open ONLY this cluster's cells
     const m2mask = mo.mask.slice();
     for (const i of cl) m2mask[i] = m2mask[i] & ~1;
