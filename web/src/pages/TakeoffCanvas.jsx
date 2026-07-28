@@ -37,7 +37,7 @@ import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } 
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
-import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
+import { buildRasterMask, rasterMaskScale, scanNativeScale, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { roomNameFromTokens } from "../lib/roomName";
 import { traceConfidence } from "../lib/confidence";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
@@ -491,9 +491,10 @@ export default function TakeoffCanvas() {
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
   const segMetaRef = useRef(new Map());    // sheetKey → per-segment meta bytes (hatch classification input)
   const maskCacheRef = useRef(new Map());  // sheetKey → built boundary mask (lazy, dropped on re-render)
-  const sheetStatsRef = useRef(new Map()); // sheetKey → {segCount, imageFrac} — raster-fallback trigger signals
+  const sheetStatsRef = useRef(new Map()); // sheetKey → {segCount, imageFrac, scanPxPerPt} — raster-fallback trigger signals + the scan's own resolution (mask DPI ceiling)
   const rasterMaskCacheRef = useRef(new Map()); // sheetKey → Promise<MaskObj|null> — scan-pixel mask (lazy, shared across clicks)
   const rasterMaskReadyRef = useRef(new Map()); // sheetKey → resolved MaskObj — sync view of the cache for the hover preview
+  const dpiNoticedRef = useRef(new Set());      // sheetKeys already told "this is a NNN DPI scan" (say it once, not per click)
   const textContentCacheRef = useRef(new Map());// sheetKey → Promise<TextContent> — pdf.js text layer (auto-naming)
   const ocLiveRef = useRef(null);               // hover-preview state: pending cursor + last computed ring / failed seed
   const ocLivePolyRef = useRef(null);           // hover-preview DOM (imperative per-move, like rubberRef)
@@ -1200,7 +1201,18 @@ export default function TakeoffCanvas() {
           segMetaRef.current.set(m.key, meta);
           // raster-fallback trigger signals: how much of the sheet is placed
           // image, and whether the vector linework is dense enough to bound rooms
-          sheetStatsRef.current.set(m.key, { segCount: segs.length >> 2, imageFrac: Math.min(1, imageArea / (m.w * m.h)) });
+          const frac = Math.min(1, imageArea / (m.w * m.h));
+          // …and the scan's OWN resolution, measured off the same op list in PDF
+          // points so it is render-independent. Only a plan-sized image gets a
+          // vote: a logo measured as "the scan" would clamp the mask to the
+          // logo's DPI. 0 ⇒ unknown ⇒ rasterMaskScale does not clamp.
+          let scanPxPerPt = 0;
+          try {
+            const base1 = m.pageObj.getViewport({ scale: 1 });
+            const nat = scanNativeScale(ol, base1.transform, pdfjsLib.OPS, base1.width, base1.height);
+            if (nat.areaFrac >= RASTER_MIN_IMG_FRAC) scanPxPerPt = nat.pxPerPt;
+          } catch { /* unmeasurable — stays 0, no clamp */ }
+          sheetStatsRef.current.set(m.key, { segCount: segs.length >> 2, imageFrac: frac, scanPxPerPt });
         }).catch(() => {
           if (stale()) return;
           // A rejected op-list (corrupt embedded JBIG2/CCITT — exactly the class of
@@ -1210,7 +1222,7 @@ export default function TakeoffCanvas() {
           // "try again in a second" for the sheet's whole lifetime. A sentinel that
           // reads as image-dominant/segment-empty lets the raster fallback engage
           // instead (rasterEligible true, vectorViable false).
-          sheetStatsRef.current.set(m.key, { segCount: 0, imageFrac: 1 });
+          sheetStatsRef.current.set(m.key, { segCount: 0, imageFrac: 1, scanPxPerPt: 0 });
         });
         // read the drawn scale note off this panel's page text (best-effort)
         m.pageObj.getTextContent().then((tc) => {
@@ -2658,9 +2670,21 @@ export default function TakeoffCanvas() {
       setPrevScale({ key, upp: prior, source: scaleSources[key] || "standard" });
     }
     setScales((s) => ({ ...s, [key]: upp }));
-    // the boundary mask bakes the scale in (feet-true hatch pitch cap + flood
-    // guards) — a recalibrated sheet needs its mask rebuilt on next use
+    // Every per-sheet mask cache bakes the scale in one way or another — the
+    // vector mask's hatch-pitch cap is feet-true (mppf), and a mask carries the
+    // `ws` that converts its cells back to image px, which is what prices a
+    // trace. A recalibrated sheet must rebuild ALL of them on next use.
+    //
+    // A1 (audit 1.1g): the raster caches used to be dropped ONLY by the render
+    // effect (sheet-group / Hi-Res change), never here. That was survivable
+    // while the raster mask's scale was render-derived; the moment A1's fix made
+    // the mask a function of the sheet, a recalibrate could leave a mask built
+    // against the old calibration — a NEW instance of A1's own failure class,
+    // introduced by A1's fix. The invariant to hold is simply: whatever the
+    // render effect clears per sheet, this deletes per sheet.
     maskCacheRef.current.delete(key);
+    rasterMaskCacheRef.current.delete(key);
+    rasterMaskReadyRef.current.delete(key);
     // STRICT panel lookup — the panelByKey wrapper falls back to panels[0], so
     // it can't detect an off-canvas sheet: a future off-canvas caller would
     // silently re-price that sheet's shapes against the wrong panel's bitmap
@@ -2833,9 +2857,24 @@ export default function TakeoffCanvas() {
     if (!pr) {
       const pageObj = pageObjsRef.current.get(key), dims = panelImgs[key];
       if (!pageObj || !dims?.w) return Promise.resolve(null);
-      const rs = renderScalesRef.current.get(key) || RENDER_SCALE;
-      const ws = Math.min(1, MASK_MAX_DIM / Math.max(dims.w, dims.h, 1));
-      const mw = Math.max(2, Math.ceil(dims.w * ws)), mh = Math.max(2, Math.ceil(dims.h * ws));
+      // A1 (raster half): the mask render is pinned to the BASELINE render, not
+      // to this sheet's render scale — the same pin the vector path got in
+      // ensureMask, chosen by the one shared helper so the two masks cannot land
+      // on different grids. This used to be `ws = min(1, MASK_MAX_DIM/max(dims))`
+      // against THIS render's bitmap, rendered at `rs * ws`, which on any sheet
+      // under the cap is just a render at `rs` — the Hi-Res toggle moved the
+      // measured SF. It is also clamped at the scan's own resolution (see
+      // rasterMaskScale): the raster mask reads a bitmap, and rendering a 150 DPI
+      // scan at 300 DPI invents no edges. rescaleSheet + the render effect evict
+      // the cache; nothing here may outlive a recalibration.
+      const pg = pageObj.getViewport({ scale: 1 });   // page size in points — the render-free input
+      const plan = rasterMaskScale({
+        pageW: pg.width, pageH: pg.height,
+        renderScale: renderScalesRef.current.get(key) || RENDER_SCALE,
+        baseScale: RENDER_SCALE, maxDim: MASK_MAX_DIM,
+        scanPxPerPt: sheetStatsRef.current.get(key)?.scanPxPerPt || 0,
+      });
+      const { mw, mh } = plan;
       // distinct namespace from the panel's own renderTasksRef entry (keyed by
       // `key` alone) so registering this task can't clobber — or get clobbered
       // by — the panel's primary render; group-switch cleanup cancels both.
@@ -2845,7 +2884,7 @@ export default function TakeoffCanvas() {
         cv.width = mw; cv.height = mh;
         const ctx = cv.getContext("2d", { willReadFrequently: true });
         if (!ctx) throw new Error("2d canvas context unavailable"); // caught below like any other render failure — clear message over a cryptic null-deref
-        const rt = pageObj.render({ canvasContext: ctx, viewport: pageObj.getViewport({ scale: rs * ws }), background: "#ffffff" });
+        const rt = pageObj.render({ canvasContext: ctx, viewport: pageObj.getViewport({ scale: plan.vs }), background: "#ffffff" });
         renderTasksRef.current.set(taskKey, rt);
         try {
           await rt.promise;
@@ -2854,7 +2893,7 @@ export default function TakeoffCanvas() {
         }
         const px = ctx.getImageData(0, 0, mw, mh);
         cv.width = cv.height = 0;   // drop the backing store
-        const built = buildRasterMask(px.data, mw, mh, ws);
+        const built = buildRasterMask(px.data, mw, mh, plan.ws, { dpiLimited: plan.dpiLimited, scanDpi: plan.scanDpi });
         rasterMaskReadyRef.current.set(key, built);   // sync view for the hover preview
         return built;
       })().catch(() => {
@@ -2878,7 +2917,7 @@ export default function TakeoffCanvas() {
   // vector corners would corrupt the ring. Duplicate/carve checks run inside a
   // FUNCTIONAL setProposal so a click racing the first raster render can't
   // clobber state.
-  function proposeRegion(f, tp, local, negative, raster) {
+  function proposeRegion(f, tp, local, negative, raster, mo) {
     const upp = uppFor(tp.key);
     if (!upp) return;
     let ring;
@@ -2891,6 +2930,15 @@ export default function TakeoffCanvas() {
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
     const conf = traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf });
+    // A1/DPI ceiling: when the working raster was capped by the SCAN's own
+    // resolution rather than by MASK_MAX_DIM, that is a property of the source
+    // document the estimator can't discover any other way — so it rides into
+    // provenance by name (no extra score deduction: the clamp doesn't make this
+    // trace worse, it names the ceiling; where the ceiling actually bites,
+    // traceConfidence's coarse-mask factor already deducts for it).
+    const cff = mo?.dpiLimited
+      ? [...conf.factors, `scan-resolution(~${Math.round(mo.scanDpi || 0)} DPI)`]
+      : conf.factors;
     // Decide accept/dup/carve-reject INSIDE the functional updater, against
     // its own authoritative `prev` — not proposalRef, which only catches up
     // on the next render's passive-effect flush (a macrotask). proposeRegion
@@ -2941,7 +2989,7 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster, cf: conf.score, cff: conf.factors }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster, cf: conf.score, cff }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
@@ -2949,6 +2997,13 @@ export default function TakeoffCanvas() {
     else if (f.wedges) setCommitMsg("Measured through the drawn door to the wall opening — the swing area is included. ⏎ creates.");
     else if (f.sealedPx) setCommitMsg("That space wasn't fully enclosed — a small opening (a doorway or line gap) was sealed to bound it. Review the edge, then ⏎ creates.");
     else if (!negative && area_sf < FIXTURE_HINT_SF) setCommitMsg(`Fixture-sized (${fa(area_sf)}) — likely casework, not a room. ⌫ removes it; ⏎ creates anyway.`);
+    // said ONCE per sheet per session: the scan's resolution, not the app's
+    // setting, is what bounds this sheet's detail. Silent would be the wrong
+    // call — the estimator would read a soft edge as a tool defect.
+    else if (mo?.dpiLimited && !dpiNoticedRef.current.has(tp.key)) {
+      dpiNoticedRef.current.add(tp.key);
+      setCommitMsg(`This sheet is a ~${Math.round(mo.scanDpi || 0)} DPI scan — One-Click reads it at the scan's own resolution, so the edge is only as sharp as the scan. Review it, then ⏎ creates.`);
+    }
     else setCommitMsg("");
     if (outcome === "added" && !negative) {
       roomNameAt(tp.key, ring).then((n) => {   // attach the drawing's own room tag to THIS region (seed identity)
@@ -3018,7 +3073,7 @@ export default function TakeoffCanvas() {
         : "Landed on dense scan ink (text or hatching). Zoom in and click an open spot, or trace it with Area (A).");
       return;
     }
-    proposeRegion(f, tp, local, negative, true);
+    proposeRegion(f, tp, local, negative, true, rmo);
   }
   function createProposal() {
     if (!proposal || !proposal.regions.length) return;
