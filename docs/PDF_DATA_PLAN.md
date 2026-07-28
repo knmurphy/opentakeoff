@@ -4,24 +4,38 @@ The scheduled work derived from [`PDF_DATA_SURFACE.md`](PDF_DATA_SURFACE.md).
 That document is the research and the *why*; this one is the ordered backlog
 and the *what*, sized so each task is a single reviewable PR.
 
+> **Revision note.** This plan was rewritten after five adversarial reviews
+> (accuracy, feasibility, constraints, external claims, product). The first
+> draft was wrong in ways worth recording so they aren't re-proposed: it built
+> a sheet index before shipping the batch room detector that already exists; it
+> hung the index build off the gallery thumbnail pump, which structurally
+> cannot index a whole set; it treated a text cache as a free refactor when it
+> is the load-bearing coordinate-space decision; and it proposed a seventh
+> docked panel for data that belongs in surfaces the app already has.
+
 ## Ground rules (from `PDF_DATA_SURFACE.md` §0)
 
 1. **No paid dependency, and no gate, in the default path.** No subscription,
    no metered API, no sign-in, no allow-listed domain, no user-supplied key.
-   Anything that needs one is an optional escalation the app works without.
-2. **Nothing leaves the browser.** Plan bytes are never uploaded and the app
-   works with the network off. Any model weights ship as static assets from the
-   app's own origin (§8.0), never from a third-party CDN at runtime, and load
-   lazily on first use — the `lib/ingest.js` precedent.
-
-Work that cannot meet both is listed under [Not doing](#not-doing) rather than
-scheduled.
+   Anything that needs one is an optional escalation the app works without —
+   and that a fork can delete without losing a feature.
+2. **No plan bytes leave the browser, and no runtime dependency on a
+   third-party origin.** Note this is an *aspiration with a known live
+   violation*: `web/src/styles/tokens.css:3` `@import`s five webfont families
+   from Google on every page load. Until that is fixed (see
+   [Repo drift](#repo-drift--separate-prs)) the app does not clear its own bar,
+   and no task here may cite the rule as though it already holds.
 
 ## Definition of done — every task
 
 - Branch first, never commit on `main` (`AGENTS.md`).
-- `cd web && npm run check` green — typecheck, lint, test, build, on the Node
-  pinned by `web/.nvmrc`. This is exactly what CI runs.
+- `cd web && npm run check` green — typecheck, **lint**, test, build.
+  **This is not identical to CI.** `.github/workflows/ci.yml` runs typecheck,
+  test and build (no lint) for `web`, *plus* an `mcp` job on Ubuntu **and**
+  Windows (typecheck/test/build/`smoke:dist`) and a `capture` job
+  (`python3 capture/capture_server.py selftest`). Touching `mcp/` or
+  `capture/` means running those locally too — a green `npm run check` does
+  not predict them.
 - New pure logic has `node:test` coverage in `web/test/`, following the
   `geometry.test.ts` / `totals.test.ts` / `scheduleParse.test.ts` precedent.
 - Exercised by hand against the bundled sample plan (`web/public/demo/`) —
@@ -29,275 +43,433 @@ scheduled.
   calling it done.
 - Docs synced where behavior changed: `README.md`, `docs/USER_GUIDE.md`,
   `CHANGELOG.md`, and the capability row in `FEATURES.md`.
-- No new dependency without a note on why an existing one won't do. `pdfjs-dist`,
-  `pdf-lib`, and `fflate` are already present and cover most of this plan.
+- **Any bundled third-party binary** (weights, wasm, tokenizers, character
+  dictionaries) is recorded in `THIRD-PARTY-NOTICES.md` under a *Bundled binary
+  artifacts* section with filename, upstream URL, exact version/commit,
+  SHA-256, licence, and where the licence text lives in `dist/`. Upstream
+  NOTICE content is appended to `NOTICE`. Re-exported or quantised artifacts
+  are marked as modified. **An artifact with no declared licence is
+  disqualified** — not a judgement call.
+- No new dependency without a note on why an existing one won't do.
+  `pdfjs-dist@4.10.38`, `pdf-lib@1.17.1` and `fflate` are already present and
+  cover most of this plan.
 
-Sizes: **S** ≈ a sitting · **M** ≈ a day · **L** ≈ multi-day.
+Sizes: **S** ≈ a sitting · **M** ≈ a day · **L** ≈ multi-day · **XL** ≈ break it up.
 
 ---
 
 ## M0 — Probe first
 
-Two later tasks are worth nothing if the data isn't in real plan sets. Find out
-before building either.
-
 ### T1 · Corpus probe · S
-**Goal.** Know what real bid sets actually contain.
-**Do.** A dev-only route (`?probe`) or a throwaway script that reports, per
-file and per page: optional-content groups and their names; annotation
-subtypes with counts; presence of an outline, page labels, and permissions;
-`Producer`/`Creator` from metadata; presence of `/VP` `/Measure` viewports;
-text-item count; `segCount` and `imageFrac`. Emit CSV.
-**Run against.** The bundled sample plus as many real sets as can be gathered —
-ideally spanning architect-published, GC-platform-republished, and scanned.
-**Acceptance.** A table of results committed to the PR description, and a
-one-line verdict on T15 and T16: schedule, defer, or drop.
-**Ships?** No. Probe only; nothing user-visible.
+**Goal.** Know what real bid sets contain before scheduling work that assumes it.
+**Do.** A **throwaway script** (not an app route — `web/src/main.jsx` has two
+routes and adding a dev-only third needs a build-time gate that isn't worth it).
+Report per file and page: optional-content groups and names; annotation
+subtypes with counts; presence of outline, page labels, permissions;
+`Producer`/`Creator`; presence of `/VP` `/Measure`; text-item count; `segCount`
+and `imageFrac`.
+**Privacy.** The committed CSV carries **counts and enum values only** — no
+`Title`, no outline text, no file paths, `Producer`/`Creator` normalised to the
+product family. Real bid sets carry client names and architect file paths in
+exactly these fields.
+**Acceptance.** Results table in the PR description, and a one-line verdict on
+T15 and T17: schedule, defer, or drop.
+**Ships?** No.
 
 ---
 
-## M1 — The sheet index
+## M1 — Ship the engine that already exists
 
-Everything downstream reads this. Nothing else in the plan starts first.
+The highest-value work in this plan needs no new extraction at all.
 
-### T2 · `lib/sheetIndex.ts` — the pure core · M
-**Goal.** Turn positioned text into the per-sheet facts everything else needs.
-**Scope.** Sheet title (largest text run adjacent to the sheet number);
-discipline class from the number's leading letters; level inference
-("LEVEL 2", "SECOND FLOOR"); room number ↔ room name pairing built on the
-existing `ROOM_LABEL_RE` in `detectRooms.ts`.
-**Out of scope.** Any pdf.js import, any DOM, any caching, any UI.
-**Pattern.** Pure and pdfjs-free like `scheduleParse.ts` and `detectRooms.ts` —
-takes tokens already resolved to image px, so `mcp/src/pdf.ts` reuses it
-unchanged.
-**Tests.** `web/test/sheetIndex.test.ts` — title picked over adjacent noise;
-discipline classes incl. two- and three-letter prefixes (`FP`, `AV`); level
-phrasings; room pairing when the number and name are one run vs. two; nothing
-found returns empty, never throws.
-**Acceptance.** Zero pdfjs/DOM imports. Runs under `node --test`.
+### T2 · Wire Detect Rooms into the canvas · S
+**Goal.** Give the human the batch room detection the MCP server already has.
+**The finding.** `web/src/lib/detectRooms.ts` is complete and tested.
+Its only importers are `mcp/src/session.ts:15` and its own test — **nothing in
+`web/src` calls it.** The app can batch-trace a finish plan for an agent and
+not for the estimator.
+**Do.** A toolbar action on the active sheet: `roomLabelSeeds` over the page
+text → `detectRegions` against the existing mask → `traceRegion` → the existing
+**propose → review → Create** gate. No new engine, no new math.
+**Acceptance.** On the sample plan, one action proposes multiple rooms; accept
+and reject individually; quantities match a manual One-Click of the same room.
 **Depends on.** Nothing.
 
-### T3 · Index build + cache · M
-**Goal.** Build the record once per sheet, reuse it everywhere.
-**Do.** Wire T2 to pdf.js at the call site; hold in an in-memory ref keyed by
-sheet key; persist under a new key in the keyPath-less `META_STORE`
-(`lib/store.js`) — **no `DB_VERSION` bump**, the stamp-library precedent.
-Sanitize on load like `sanitizeSheetLevels` / `sanitizeMaterialLibrary`:
-a stale or corrupt index degrades to "not indexed yet," never to a crash.
-Invalidate on file name + size so a reissued sheet re-indexes.
-**Build trigger.** The gallery's existing lazy thumbnail pump
-(`PlanNavigator.jsx`), which already walks every sheet behind an
-`IntersectionObserver` and already calls `getTextContent()`. No new passes.
-**Tests.** `web/test/sheetIndex-store.test.ts` — round-trip, sanitizer gate on
-malformed payloads, invalidation on size change.
-**Acceptance.** Opening the gallery on the sample plan populates the index;
-reload reuses it without re-parsing.
-**Depends on.** T2.
-
-### T4 · Retire the redundant text reads · S
-**Goal.** Stop fetching the same text layer six times.
-**Do.** Route the existing `getTextContent()` call sites through the cache:
-`PlanNavigator.jsx:225`, `TakeoffCanvas.jsx:1205`, `:1216`, `:1232`, `:3714`,
-`:3965`.
-**Acceptance.** No behavior change; measurably fewer parses on a multi-sheet
-open. Pure win — worth landing before any new surface.
-**Depends on.** T3.
-
----
-
-## M2 — Surface it and filter it
-
-### T5 · Cross-sheet Find · M
-**Goal.** `⌘F` / `/` searches every sheet's text; results grouped by sheet;
-click opens the sheet, zooms to the hit, highlights it.
-**Notes.** Needs per-hit rects — use the text item's `width` and cap height,
-which we currently discard. Respect `menuDepthRef` so the shortcut doesn't
-fight the single-letter tool keys (`docs/USER_GUIDE.md` §15).
-**Acceptance.** Search the sample plan for a room name; land on it.
-**Depends on.** T3.
-
-### T6 · Gallery shows real sheet identity · S
-**Goal.** `A-101 · FIRST FLOOR PLAN` instead of a file stem.
-**Do.** Extend `labelOf` in `PlanNavigator.jsx`; sort by sheet number; filter by
-discipline. Keep `sortGalleryGroups`' per-group ordering rule intact — it fixed
-a real churn bug, don't regress it.
-**Depends on.** T3.
-
-### T7 · Auto-level proposals · S
-**Goal.** Replace the `window.prompt` level assignment with proposed levels the
-user confirms.
-**Do.** Feed T2's inferred level into a confirm step; `groupSheetsByLevel`
-(`lib/sheetLevels.js`) is unchanged downstream. Manual assignment stays.
-**Depends on.** T2.
-
-### T8 · Plan Data panel + Sheets tab · L
-**Goal.** One place where extracted data is filterable.
-**Do.** A docked panel mirroring `TakeoffsPanel.jsx` / `ReportPanel.jsx`, built
-on the column-profile pattern in `lib/reportColumns.js` (`GETTERS` +
-`*_PROFILE`, `defaultVisible`, opt-ins appended, never reordered). Sheets tab
-facets on discipline, level, detected scale, vector-vs-scan, has-takeoff, plus
-the coverage readout: *"9 sheets have no detected scale. 12 are scans. 31
-A-sheets have no takeoff."*
-**Tests.** Column getters and profile in `web/test/planDataColumns.test.ts`,
-the `reportColumns.test.ts` precedent.
-**Depends on.** T3.
-
-### T9 · Rooms tab · M
-**Goal.** A filterable room list per sheet; each row seeds the existing
-One-Click flood.
-**Do.** Rows from T2; the action path is `detectRegions` + `traceRegion`, which
-already exist. Results land in the existing **propose → review → Create** gate —
-this is not a bulk commit.
-**Depends on.** T2, T8.
-
-### T10 · Addressable refs + semantic text typing · M
-**Goal.** Two framings that are cheap now and awkward to retrofit.
-**Do.** (a) Make a sheet reference resolvable — `M002` addresses a sheet,
-and the index carries enough to resolve a region reference later. (b) Type each
-extracted text run in the index: `title_block`, `note`, `dimension`, `leader`,
-`room_label`, `schedule_cell`, `unknown`.
-**Tests.** Typing classifier in `web/test/sheetIndex.test.ts` — deterministic
-rules only, no model.
+### T3 · Room label ↔ finish-schedule join · L
+**Goal.** One-Click a room and land on the correct condition automatically.
+**Why.** The app parses finish schedules into typed rows and (after T2) reads
+room labels off the plan. Nothing connects them — and that cross-reference is
+the estimator's afternoon.
+**Note.** The room finish schedule (ROOM NO | NAME | FLOOR | BASE | WALL) is a
+**different table** from the material legend `scheduleParse.ts` handles today
+(which keys on FLOORING/BASE/WALLS section headers). This is a second parser,
+not a tweak.
+**Unlocks.** Auto-assigned conditions; a real coverage answer ("the schedule
+lists 84 rooms with a floor finish, you have shapes over 71"); and a finish code
+with zero rooms on the plan as a flagged discrepancy — an RFI found before bid
+day.
+**Tests.** `web/test/roomSchedule.test.ts` — parser and join, both pure.
 **Depends on.** T2.
 
 ---
 
-## M3 — Ungate the scan path
+## M2 — The index
 
-### T11 · Local OCR behind the existing token contract · M
-**Goal.** Read a scanned schedule with no sign-in, no key, no network.
-**Why it's cheap.** `scheduleParse.ts` is already pure, already pdfjs-free, and
-already takes `Token[] = {str,x,y,h}` *specifically so either path can feed it* —
-the module header says so. A local OCR emitting positioned tokens plugs into
-the existing contract with **no parser changes**.
-**Do.** Pick the smallest engine that clears the bar on real scanned schedules
-(evaluate tesseract.js vs. a pinned PaddleOCR mobile ONNX export — see §8.0 for
-why the exact export matters). Self-host weights and wasm from the app's own
-origin. Lazy-load on first use only.
-**Routing.** Local OCR becomes the default tier for a token-less region. The
-existing `/ai/parse-schedule` endpoint demotes to an optional escalation —
-still there, no longer the gate, deletable without losing a feature.
-**Tests.** `web/test/localOcr.test.ts` over the pure adapter (raw engine output
-→ `Token[]`), engine mocked. The engine itself is not unit-tested here.
-**Acceptance.** A scanned schedule parses to rows with the network off and
-nobody signed in. Accuracy is *not* claimed to match the hosted reader —
-the existing approve-rows dialog is the correction pass.
-**Depends on.** Nothing. Can run parallel to M1.
-**Risk.** Bundle discipline. If weights ever load on initial page load, the
-task has failed regardless of accuracy.
+### T4 · `textFor(key)` — one cache, one declared coordinate space · M
+**Goal.** Fetch each page's text once, in a space every consumer agrees on.
+**This is the load-bearing decision, which is why it is first.** The six
+existing call sites do **not** share a space. Four
+(`PlanNavigator.jsx:225`, `TakeoffCanvas.jsx:1205`, `:1216`, `:1232`) use
+`RENDER_SCALE` or a panel viewport and compare against page fractions, so they
+are scale-insensitive. Two (`:3714` `agentTextTokens`, `:3965`
+`importScheduleFromRect`) use per-sheet `renderScalesRef` and pass **absolute-px
+rects**. `autoRenderScale` caps below `RENDER_SCALE` for oversized pages — which
+an ingested image always is — and `hiResKeys` changes it mid-session.
+It is not only x/y: `parseSchedule` clusters rows on `max(t.h * 0.6, 4)`
+(`scheduleParse.ts:65`), and that absolute 4px floor means the same schedule
+parses differently at `rs=1.0` and `rs=2.0`.
+**Do.** A promise cache keyed on **`(sheetKey, renderScale)`**, returning tokens
+in a documented space. Route all six sites through it.
+**Acceptance.** A counter asserted in test shows one parse per `(key, rs)`;
+schedule import produces byte-identical rows before and after on a fixture.
+("Measurably fewer parses" is not a criterion — add the counter or drop the
+claim.)
+**Depends on.** Nothing. **Do not start T5 until this lands.**
+
+### T5 · `lib/sheetIndex.ts` — the pure core · M
+**Scope.** Sheet title; discipline class from the number prefix; level
+inference; room number ↔ name pairing — **reusing `ROOM_LABEL_RE` and
+`roomLabelSeeds` from `detectRooms.ts`**, never a second definition of "room
+label."
+**Out of scope.** pdf.js, DOM, caching, UI.
+**Tests.** `web/test/sheetIndex.test.ts`.
+**Depends on.** T4 (for the coordinate contract).
+
+### T6 · Set-indexing job · M
+**Goal.** Index a whole set, and know when it is complete.
+**Why this is its own task.** The first draft hung this off the gallery
+thumbnail pump. It cannot work: the pump `continue`s past any key already in
+`thumbCacheRef` — which is canvas-owned and survives gallery close, so a second
+open indexes **nothing** — it gates the text read on `!labels[key] ||
+!detectedScales[key]`, and the observer only enqueues keys without thumbnails.
+On a 200-sheet set that indexes the cards in the viewport. It also shares its
+cancellation token with the enumerate effect, so adding a PDF aborts the pump
+and nothing re-invokes it.
+**Do.** A standalone job with its own queue, progress, cancellation, and a
+per-file `indexed: complete | partial | none` state. **Must survive the
+navigator unmounting.** In-memory only — no IndexedDB (see T10).
+**Memory.** This would be the first long-lived unbounded per-sheet structure in
+the app; existing caches (`maskCacheRef`, `snapGridsRef`, `vectorSegsRef`) are
+cleared wholesale on group change and bounded to ≤4 sheets. Cap tokens or store
+a digest, and **instrument it** — the acceptance criterion is a measured
+200-sheet heap and wall-clock number in the PR.
+**Acceptance.** Completeness state is correct after: first open, second open,
+adding a file mid-index, and closing the gallery mid-index.
+**Depends on.** T4, T5.
+
+### T7 · Gallery shows real sheet identity · S
+`A-101 · FIRST FLOOR PLAN`, sheet-number sort, discipline filter. Extends
+`labelOf` (`PlanNavigator.jsx:254`); keep `sortGalleryGroups`' per-group
+ordering rule intact — it fixed a real churn bug.
+**Ship this immediately after T6** — it is the smallest thing that makes the
+index visible to a user, it is used every time a sheet is opened, and it is a
+better smoke test for "is the index complete?" than Find is.
+**Depends on.** T6.
+
+### T8 · Cross-sheet Find · M
+`⌘F` / `/` over indexed text, results grouped by sheet, click to open + zoom +
+highlight.
+**Reuse, don't reinvent:** the deep-jump machinery at `TakeoffCanvas.jsx:1373`
+(`wantSheetRef`) and the phase-2 `pendingFlyRef` at `:1384` already do
+open-then-fly, and the render effect resets `poly`/`proposal`/`zone` and the
+transform on arrival. Respect `menuDepthRef`.
+**Honesty requirement.** Must show T6's completeness state — a partial index
+returning "no matches" is a silent lie, which is worse than no feature.
+**Acceptance.** A **multi-file** fixture, not the single-file sample: a
+criterion satisfiable by searching only the active sheet tests nothing.
+**Depends on.** T6.
+
+### T9 · Auto-level proposals · S
+Replace the `window.prompt` with proposed levels the user confirms;
+`groupSheetsByLevel` unchanged downstream.
+**Decide explicitly:** `sheet_levels` is hydrated, the index is not — so a
+snapshot Load or revision Restore reverts levels while the index still claims
+them. Pick a behavior; don't leave it silent.
+**Depends on.** T6.
+
+### T10 · Index persistence · M · **deferred until T6 measures**
+The first draft resolved the research doc's own open question ("measure before
+choosing") to *persist*, without the measurement. Deferred on purpose.
+When scheduled: **use the existing `metaGet`/`metaPut`/`metaDelete`
+(`store.js:348-358`)** rather than hand-rolling. Note the stamp-library
+precedent is the **wrong** one — those keys are browser-global by design, and a
+sheet index is per-project and keyed on filenames that collide across projects.
+`cloudStore` does not re-export the meta primitives, and the cloud manifest
+holds `{id, name}` with no size, so name+size invalidation is not computable
+without downloading the PDF. Scope per project, through the store seam, with
+the cloud path decided rather than assumed.
 
 ---
 
-## M4 — Deeper reads
+## M3 — Coverage where the estimator is looking
 
-### T12 · Document facts · S
-`getMetadata`, `getOutline`, `getPageLabels`, `getPermissions` — one call each,
-into the index and a Document tab. Use `Producer`/`Creator` to pre-route
-One-Click to the raster path for scanner-produced files instead of discovering
-it from `imageFrac` after the fact. Use `getOutline` as the drawing index when
-present; it beats every heuristic in T2. **Depends on.** T3, T8.
+### T11 · Room coverage overlay · M
+**Goal.** Missing scope, visible on the drawing.
+**Do.** Ghost every room label the index found on the active sheet: a dot per
+room, green where a shape covers it, amber where none does. Click an amber dot
+to trace it. Together with T2 that is a complete workflow — detect all, glance
+for amber, click the stragglers.
+**Not a table.** Sheet-level coverage is too coarse; the unit an estimator
+misses is a room. Estimators already work this way — colouring rooms as they go
+is why the highlighter exists.
+**Overlap.** Extend the zone check rather than competing with it — it is
+already the good answer for "what have I got in this area."
+**Depends on.** T6 (or T2 for single-sheet).
 
-### T13 · Annotations, read-only · M
-`page.getAnnotations()` per sheet into the index; Annotations tab filtering by
-subtype, author, date; row → zoom to. Read-only — nothing is imported yet.
-**Depends on.** T3, T8.
+---
 
-### T14 · Annotation import · M
-Markups first (`FreeText`/`Text`/`Ink`/`Square` → the existing markup layer,
-which never touches quantities). Shapes second and opt-in
-(`Polygon`/`PolyLine`/`Square` → `verts_norm`), behind the same **propose →
-review → Create** gate One-Click uses, stamped `origin.method =
-"pdf_annotation"` so `lib/provenance.js` tracks every correction. Someone
-else's measurement is a proposal until the estimator accepts it.
+## M4 — The addendum
+
+### T12 · Sheet-to-sheet drawing diff · L
+**Goal.** "Which sheets changed in Addendum 3, and where on them?"
+**Why it's here.** `lib/snapshotDiff.js` says outright its diff is
+"QUANTITY-LEVEL, deliberately NOT geometric," and the user guide admits the
+compare "won't show you which wall moved." Today the answer is print both and
+eyeball. Bidding a superseded sheet, or missing added scope, is how a flooring
+sub loses money.
+**Do.** Pair old-to-new by sheet number (the index's real killer application),
+render both, pixel-diff, emit a per-sheet change score plus highlighted change
+regions. `rastermask.ts` and `invertCanvasPixels` already have the machinery.
+**Depends on.** T6.
+
+---
+
+## M5 — Deeper reads
+
+### T13 · Document facts · S
+`getMetadata`, `getOutline`, `getPageLabels`, `getPermissions` into the index.
+Use `getOutline` as the drawing index when present — it beats every heuristic in
+T5. **No Document tab**; page labels and permissions are hover-text at most.
+**Depends on.** T6.
+
+### T14 · Producer-based One-Click pre-routing · M
+Its own task, not a metadata footnote. Routing a scanner-produced file straight
+to the raster path changes the One-Click trigger policy, which reads
+`sheetStatsRef` — cleared on every group change — so a persistent
+Producer-derived signal changes which branch runs *before stats arrive*, i.e. it
+changes the "still reading this sheet's linework" race. Needs
+`geometry.test.ts`-adjacent coverage.
 **Depends on.** T13.
 
-### T15 · Measurement viewports · S
-Read `/VP` → `/Measure` from the page dictionary via **pdf-lib** (already a
-dependency; pdf.js has no public API for it). When present, authoritative over
-the text-note scale, and per-viewport — which resolves the multi-scale
-ambiguity `detectScale` currently gives up on. Degrade silently when absent.
-**Depends on.** T1's verdict.
+### T15 · Measurement viewports · S · gated on T1
+Read `/VP` → `/Measure` via **pdf-lib**: `page.node.lookup(PDFName.of('VP'),
+PDFArray)` → `.lookup(i, PDFDict)` → `.lookup(PDFName.of('Measure'), PDFDict)`.
+**Read `/R` (the scale-ratio string, the entry we most want) and `/Y`**, not
+just `/X`, `/D`, `/A`.
+**Two caveats:** pdf-lib 1.17.1 cannot decrypt — permission-encrypted PDFs are
+common off GC platforms, and `ignoreEncryption: true` *skips* decryption, so
+`/R` and the unit labels come back as ciphertext while the numbers survive. And
+this is a **full second parse of the file** on top of pdf.js, not a free read.
+**Expect narrow emission** — it correlates with plotting through a CAD-vendor
+plugin, not with Print/Plot.
 
-### T16 · Layer attribution + Layers tab · L
-Track `beginMarkedContentProps("OC", id)` / `endMarkedContent` in
-`extractVectorGeometry`, emitting a per-segment layer id alongside the existing
-`meta`; read names from `getOptionalContentConfig().getGroups()`. Layers tab
-gets two independent toggles per layer: **visible** (drives the raster via
-`page.render({ optionalContentConfigPromise })`) and **exclude from One-Click**
-(drives `buildMask`). Remember exclusions per project.
-The hatch classifier stays as the path for OCG-less sheets — this does not
-replace it, and `?hatchqa` is the ready-made place to compare the two.
-**Tests.** Extend `web/test/geometry.test.ts` for layer emission; mask
-exclusion on a synthetic op list.
-**Depends on.** T1's verdict.
+### T16 · Annotations — read and import · M
+Merged; a read-only tab of things you cannot act on is a dead end.
+**Do.** Read into the index; import `FreeText`/`Text`/`Ink`/`Square` — but
+**into their own hideable layer with its own provenance, not the user's markup
+layer.** That layer feeds the RFI register (`lib/rfi.js` seeds subjects from
+markup text), so merging 200 architect sticky notes would flood the estimator's
+RFI candidate list with things they didn't write.
+**Shape note.** `data.vertices` is a flat `Float32Array` and `data.inkLists` is
+an array of `Float32Array`s — not arrays of point objects.
+**Shape import** (`Polygon`/`PolyLine`/`Square` → `verts_norm`) is opt-in,
+behind the propose → review → Create gate, stamped `origin.method =
+"pdf_annotation"`. Justify it as **migration** — inheriting an existing
+third-party takeoff so an estimator can switch tools — not as interop.
+**Reconcile** with the two existing answers to "what changed" (`revisions.js`
+quantity deltas, `revisionClouds.js` drawn clouds) or say which one wins.
+**Depends on.** T6.
 
-### T17 · Colour + dash in the op-list walk · M
-Same walk and same graphics-state tracking that already handles line width.
-Emits a per-segment colour index and a dashed bit. Unlocks: filter linework by
-colour (the fallback layer panel for flattened sheets, which is most of them),
-dashed-line exclusion from the mask, and direct polygon recovery from closed
-`SEG_FILLONLY` paths with no flood at all.
-**Depends on.** T16 (same file — land them together, or T17 alone if T1 kills
-T16).
+### T17 · Layer attribution · XL · gated on T1
+**The mechanism is more complex than the first draft claimed.** In pdf.js
+4.10.38, `beginMarkedContentProps` `args[1]` is **not** an id string — it is
+`{type:"OCG", id}` **or** `{type:"OCMD", ids, policy, expression}` (multiple
+groups, or a `/VE` boolean expression) **or** `null`. Consumers must gate on
+`args[0] === "OC"` because the same op carries `[tagName, MCID]` for non-OC
+tags. `getGroups()` returns **`null`**, not `{}`, when there are no OCGs.
+It is not one byte per segment.
+**Scope is five render sites**, not one: panel render, detail view,
+`ensureRasterMask`, `agentViewRegion`, `rasterizeRegion` — and toggling
+visibility re-runs the render effect, which nukes masks, snap grids, and any
+live proposal. "Remember per project" is a new `buildPayload` field and a new
+`hydrate` else-clear branch.
+**If T1 finds OCGs on most real sheets, break this up before starting. If not,
+drop it** — the estimator's actual want is one sentence ("keep furniture and
+dimensions out of my flood fill"), which belongs as a checklist in the existing
+render-and-fill settings menu, never as a Layers tab.
+**Note.** There is no `?hatchqa` QA wall to compare against — it is documented
+in `FEATURES.md` and `CHANGELOG.md` but was never shipped here. Building a
+comparison venue is a task, not a given.
+
+### T18 · Colour + dash in the op-list walk · M
+Same walk and graphics-state tracking that already handles line width.
+Dashed-line exclusion from the mask is a real leak class and is the part worth
+doing on its own. Colour filtering is the fallback for flattened sheets.
+**Depends on.** T17 if both, otherwise standalone.
 
 ---
 
-## M5 — Get it out of the app
+## M6 — Get it out of the app
 
-### T18 · Exports · S
-A *Sheet Index* tab in `lib/xlsx.js` — the writer already does Summary /
-By-sheet / Materials / Shapes-audit, this is a fifth in the same shape. Room
-list and Find-results CSV via `lib/csv.js`. **Depends on.** T3.
+### T19 · Exports · S
+A *Sheet Index* tab in `lib/xlsx.js`, alongside the existing
+**`Conditions` / `By sheet` / `Materials` / `Shapes`** tabs. Room list and
+Find-results CSV via `lib/csv.js`. **Depends on.** T6.
 
-### T19 · MCP tools · S
-`sheet_index`, `find_text`, `list_layers`, `list_annotations` in
-`mcp/src/tools.ts`. Nearly free because T2 is pure — the `detect_rooms`
-precedent. **Depends on.** T2 (+ T13/T16 for the latter two).
+### T20 · MCP tools · S
+`sheet_index`, `find_text`, `list_annotations` in `mcp/src/tools.ts`.
+`mcp/src/pdf.ts` has its own read path, so this needs its **own build loop** —
+not just plumbing. Remember the mcp CI job runs on Ubuntu *and* Windows.
+**Depends on.** T5 (+ T16).
 
-### T20 · Agent registry · S
-Give the in-canvas agent the structured index instead of raw text capped at
-`AGENT_TEXT_MAX_ITEMS = 600`. Strictly better context for strictly fewer
-tokens. **Depends on.** T3.
+### T21 · Agent registry · S
+Structured index instead of raw text capped at `AGENT_TEXT_MAX_ITEMS = 600`
+(which lives in `TakeoffCanvas.jsx:3700`, not `agentTools.js`).
+**Scope note.** This improves an **optional-escalation surface only** — the
+in-canvas agent is hard-gated on BYO-AI config (`TakeoffCanvas.jsx:3923`), i.e.
+a user-supplied key. No default-path capability changes. Exercise it against
+the mock agent path; nobody should buy credits to close a size-S ticket.
+**Depends on.** T6.
 
 ---
 
-## M6 — Performance, when it bites
+## M7 — Performance
 
-### T21 · Raster mask build → worker + OffscreenCanvas · M
+### T22 · Raster mask build → worker + OffscreenCanvas · M
 Move `buildRasterMask`'s threshold and closing passes off the main thread.
-Most of the win without WebGPU, and it addresses the class of problem
-`AGENTS.md` already documents (pdf.js schedules on `requestAnimationFrame` and
-pauses when the window is hidden). Flood fill itself is sequential — leave it.
-**Depends on.** Nothing. Schedule when it hurts, not before.
+It already hurts: this runs on the scanned-plan path, which is exactly where
+One-Click is slowest — a felt freeze during the app's headline gesture.
+**Trigger.** Name the number (mask-build ms on a scanned sheet) or it never
+gets scheduled. **Note** `busyRef` is load-bearing — `PlanNavigator.jsx:209`
+yields the thumbnail pump on `busyRef.current === "rendering"`, so moving mask
+work changes when that flag is set.
+
+---
+
+## Deferred
+
+### D1 · Local OCR — the gate deletion · L · split
+**Re-justified.** Not "read scans" — One-Click already handles scanned *plans*
+via `rastermask.ts`, and scanned *schedules* specifically are a minority of a
+minority. The honest win is **deleting a sign-in gate, an org-domain
+restriction, a Netlify function, and bespoke 504 retry logic**, which is a
+ground-rules and repo-health win, not minutes saved per bid. Say that plainly.
+
+**D1a — clearance and vendoring.** Engine bake-off *single-threaded* (`_headers`
+sets no COOP/COEP, so no `SharedArrayBuffer`; and it can't simply be added —
+`require-corp` breaks the Google sign-in iframe and the webfonts). Licence
+clearance per the DoD, including the character dictionary the recogniser needs.
+A `prebuild` script that copies wasm from `node_modules` and fetches models by
+pinned URL + recorded SHA-256 into `web/public/models/<engine>@<version>/` —
+**weights are never committed to git** (`.git` is 9.8 MB today; 15–60 MB would
+multiply it permanently and is paid on every CI checkout across a 2-OS matrix).
+A `_headers` rule for `/models/*` with `immutable`. A CI guard that the
+initial-load JS graph does not grow. Ships nothing user-visible.
+*Correction carried forward:* tesseract's real cost is **~5 MB (`_fast`
+traineddata + SIMD core) to ~14 MB (standard)**, not the ~60 MB the first draft
+claimed — an unsourced number. This makes D1 cheaper than it looked.
+*Also state plainly:* self-hosting does not remove the meter, it **moves it** to
+the deployer's bandwidth bill. `README.md:220` says "No paid dependencies" and
+that must stay true for a fork.
+
+**D1b — routing and gate removal.** Local OCR runs for **any** region the vector
+parser produced no rows from — token-less *and* token-bearing. Delete the gate
+at `TakeoffCanvas.jsx:3983`; the sign-in/domain checks guard only the escalation
+branch. New raster path yielding `ImageData`, bypassing `SCAN_MAX_DIM` (a
+server-only cap). Calibrate `parseSchedule`'s row clustering: `h` is pdf.js
+**cap height**, OCR gives bounding-box height including descenders, so
+`max(t.h*0.6, 4)` needs a fixture pass — this is not the drop-in the first draft
+described.
+**Acceptance, all of it:** on a build with `VITE_GOOGLE_CLIENT_ID` unset, no
+sign-in, DevTools offline — a scanned schedule parses to rows; **zero non-self
+network requests during OCR**; unchanged initial-load bundle; a stated accuracy
+bar ("≥X% of CODE-column cells parse correctly over N real scanned schedules")
+so the task can be declared failed; and deleting the Netlify function, the
+`/ai/parse-schedule` redirect and `importScheduleFromScan` leaves `npm run
+check` green.
+**Also update, or the app still says you need to sign in:**
+`docs/USER_GUIDE.md:192`, `netlify.toml:1-4` and `:15-19`,
+`TakeoffCanvas.jsx:3944-3951` and `:4006`, `scheduleScan.ts:1-9`, and the
+`FEATURES.md` row — plus a new `FEATURES.md` row for local OCR distinct from
+"Optional AI backend."
+
+### D2 · Local semantic search
+Free and possible, but T8's keyword Find must ship and prove insufficient
+first. If scheduled: SQLite's default `opfs` VFS **requires** COOP/COEP — use
+the `opfs-sahpool` VFS, which does not.
+
+### D3 · Auto-find the schedule table on a sheet
+The research doc identifies the real upgrade to a shipped feature — the parser
+is "gated behind a manual marquee instead of run over the whole sheet" — and
+the first draft never scheduled it. Deterministic table-bounds detection on a
+vector sheet, no model. Worth an S–M when M2 lands.
 
 ---
 
 ## Not doing
 
-Listed so the decision is on the record and doesn't get re-litigated.
-
-- **Swapping the PDF renderer** (PDFium-WASM, MuPDF-WASM). pdf.js is
-  load-bearing across four modules and every scheduled task is reachable
-  through it. The one gap — `/VP` `/Measure` — is covered by pdf-lib in T15.
-- **Small vision-language models** (§8.3). Hundreds of MB of weights against
-  §0's second rule, for a capability that is unreliable at exactly the small
-  dense text we care about.
-- **Drawing-region typing / layout detection** (§8.4). The open models are
-  trained on documents, not construction drawings; detail bubbles, match lines,
-  and keynote legends are out of distribution. Revisit only if `capture/` ever
-  accumulates a plan-sheet training set.
-- **Local semantic search** (§8.6). Genuinely free and genuinely possible —
-  but T5's keyword Find is what estimators reach for ten times a day, and it
-  must ship and prove insufficient first. Deferred, not rejected.
+- **Swapping the PDF renderer.** pdf.js is load-bearing across four modules.
+  Also: **MuPDF/mupdf.js is AGPL-3.0-or-commercial** and cannot be linked into
+  an Apache-2.0 distribution.
+- **A "Plan Data" panel.** The app already has six rail buttons and nine
+  surfaces. Every tab the first draft proposed has an existing owner: Sheets →
+  the gallery, Text → Find, Rooms → the canvas overlay, Layers → the
+  render-and-fill settings menu, Annotations → their own imported layer,
+  Schedules → `ImportSchedulePanel`, Document → hover text.
+- **Addressable refs + semantic text typing.** Speculative generality — its own
+  first-draft justification was "cheap now and awkward to retrofit," and
+  nothing in the plan consumes either. Build when something needs it.
+- **Small vision-language models.** Hundreds of MB against rule 2, for a
+  capability unreliable at exactly the small dense text we care about. Also
+  **Moondream 3 is BSL 1.1**, not Apache/MIT.
+- **Document layout detection for drawing regions.** Trained on documents, not
+  construction drawings — **and DocLayout-YOLO's YOLOv10/Ultralytics lineage is
+  AGPL-3.0, incompatible with Apache-2.0 redistribution.** That is a licence
+  bar, not just a fit bar, and it does not go away if `capture/` ever
+  accumulates a training set.
 - **Anything requiring a paid API in the default path.** Per §0.
 
 ---
 
-## Suggested first slice
+## Repo drift — separate PRs
 
-**T1 → T2 → T3 → T4 → T5.**
+Found during review; independent of this plan and not blocked by it.
 
-The probe that decides two later tasks, the foundation everything reads, the
-free performance win on the way through, and the one feature that justifies the
-foundation on its own. T11 can run in parallel — it depends on nothing in M1
-and it is the task that removes a sign-in gate.
+1. **`?hatchqa` doesn't exist.** Advertised in `FEATURES.md:15` and
+   `CHANGELOG.md:165`; zero code hits, never in a commit here. Either build it
+   or strike the claim.
+2. **`AGENTS.md` says `npm run check` is "exactly what CI runs."** It isn't —
+   see the DoD above. The claim invites shipping a green local check against a
+   red CI.
+3. **Self-host the webfonts.** `tokens.css:3` `@import`s five families from
+   Google on every page load: an IP+UA leak before the user opens a plan, a hard
+   failure offline, and the reason ground rule 2 does not currently hold. A few
+   hundred KB under `web/public/fonts/` with `font-display: swap`, then drop
+   `fonts.googleapis.com`/`fonts.gstatic.com` from the CSP. Also a prerequisite
+   for COOP/COEP if threading is ever wanted (D1a, D2).
+
+---
+
+## First slice
+
+**T1 → T2 → T4 → T5 → T6 → T7**
+
+T1 is cheap and gates T15/T17. **T2 ships real estimator value on day one with
+no new extraction** — it is the plan's best ratio by a wide margin, and it
+depends on nothing. T4 is the coordinate decision that everything downstream
+inherits; getting it wrong after T6 means rewriting T6. T5/T6 build the index
+with a real completeness signal. T7 makes it visible and is the honest smoke
+test.
+
+T3 (the schedule join) is the biggest single win in the plan and should start
+as soon as T2 proves the room-label path.

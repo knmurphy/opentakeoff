@@ -1,7 +1,13 @@
 # PDF Data Surface — what we can read deterministically, and how to surface it
 
-> **Status: RESEARCH, nothing built.** This is an inventory and a set of ranked
-> proposals, not a commitment. It exists so a feature can be picked off this
+> **Status: RESEARCH, nothing built. Reviewed and corrected.** This is an
+> inventory and a set of ranked proposals, not a commitment. It has been
+> through five adversarial reviews (accuracy against the code, feasibility,
+> constraint compliance, external technical claims, product value); §§1–3 are
+> the original research with factual corrections applied, §4 records which of
+> its conclusions were overturned, and
+> [`PDF_DATA_PLAN.md`](PDF_DATA_PLAN.md) — not §4 — is the authoritative
+> ordering. It exists so a feature can be picked off this
 > list with the seams already named. Companion to
 > [`FEATURES.md`](../FEATURES.md) (what exists) and
 > [`docs/ESTIMATING_ROADMAP.md`](ESTIMATING_ROADMAP.md) (the pricing arc).
@@ -22,10 +28,15 @@ Two constraints govern every proposal below. They are not preferences.
    domain, or a key the user has to obtain. Anything that does is an *optional
    escalation* the app works without — and that a fork can delete without
    losing a feature.
-2. **Nothing leaves the browser.** Plan bytes are never uploaded, and the app
-   must work with the network off. This is the existing posture (`AGENTS.md`:
-   "No backend, no database, no auth"), stated here because §8 introduces the
-   one thing that can quietly violate it — see §8.0.
+2. **No plan bytes leave the browser, and no runtime dependency on a
+   third-party origin.** `AGENTS.md` establishes "no backend, no database, no
+   auth" — but that is not the same as offline, and this rule does **not**
+   currently hold: `web/src/styles/tokens.css:3` `@import`s five webfont
+   families from Google on every page load, so the app makes a third-party
+   request before a plan is opened and fails with the network off. There is no
+   service worker. Rule 2 is therefore an *aspiration with a known live
+   violation*, and no proposal below may cite it as though it were already
+   true.
 
 Where a proposal falls outside these rules it is marked **deferred**, not
 scheduled.
@@ -35,10 +46,12 @@ scheduled.
 ## 1. The finding, in one paragraph
 
 OpenTakeoff already parses a lot of a plan set deterministically — and then
-**throws almost all of it away**. The page text layer is fetched at least four
-times per sheet (thumbnail pump, panel render, label scan, marquee import),
-used for exactly two facts each time (sheet number, scale note), and never
-cached or indexed. The vector op-list walk composes the full CTM and visits
+**throws almost all of it away**. The page text layer is read at six call
+sites and cached at none of them — up to three fire automatically per sheet
+(the thumbnail pump, itself guarded on missing metadata; the panel render; the
+per-file label scan), each keeping only the sheet number and the scale note,
+while the other two are user-triggered region reads. Nothing is indexed and
+nothing is reused. The vector op-list walk composes the full CTM and visits
 every path, but keeps only endpoints, segments, one width byte, and a total
 image area — discarding color, dash, and layer membership, which are the three
 things CAD uses to say what a line *means*. And an entire tier of the format
@@ -68,7 +81,7 @@ marked-content begin/end items, which is how text gets attributed to a layer
 | `width` | ❌ | glyph-run width — would give real text bounding boxes for hit-testing and highlight rects |
 | `fontName` / `styles` | ❌ | font identity separates title-block text from drawing annotation from dimension strings, deterministically |
 | `dir`, `hasEOL` | ❌ | RTL and line-break hints |
-| marked content | ❌ | text ↔ layer attribution |
+| marked content | ❌ | section boundaries only — **not** layer identity: on the text path pdf.js resolves `id` from `/MCID` alone and reports `tag: "OC"` with no group, so layer-attributed *text* is reachable only through the op list (§2.2) |
 
 **Not cached anywhere.** `PlanNavigator.jsx:225`, `TakeoffCanvas.jsx:1205`,
 `:1216`, `:1232`, `:3714`, `:3965` each re-fetch. On a 200-sheet bid set that
@@ -81,7 +94,7 @@ available cheaply — which is why none of them exist.
 save/restore/transform/form-XObject matrix composition and emits
 `{ points, segs, meta, imageArea }`. It consumes `save`, `restore`,
 `transform`, `setLineWidth`, `setGState` (`LW` only), the form-XObject pair,
-all six image-paint ops, and `constructPath`. Per segment it keeps 3 flag bits
+all seven image-paint ops, and `constructPath`. Per segment it keeps 3 flag bits
 (`SEG_CURVE`, `SEG_CLIP`, `SEG_FILLONLY`) and a 4-bit device line width.
 
 What the same walk is standing on but ignores:
@@ -90,9 +103,9 @@ What the same walk is standing on but ignores:
 |---|---|---|
 | `setStrokeRGBColor` / `setFillRGBColor` (+ `setGState`) | per-path RGB | On plotted sheets, **color is the encoding**: red = demo, gray/screened = existing-to-remain, black = new work. Filtering linework by color is a first-class estimator gesture, and a color-aware mask stops One-Click from being bounded by furniture or dimension lines. |
 | `setDash` | dash array | Dashed = hidden / above-ceiling / below-slab. A mask that ignores dashed paths removes a known class of false walls; a "dashed only" view is how you find soffits. |
-| `beginMarkedContentProps` (`"OC"`, ocgId) / `endMarkedContent` | optional-content (layer) membership | See §2.4 — the single biggest unlock. |
+| `beginMarkedContentProps` / `endMarkedContent` | optional-content (layer) membership | See §2.4 — the biggest unlock, and trickier than it looks. |
 | `showText` positions | glyph runs in the op stream | Text already can't block a fill (it's `showText`, not `constructPath`), but knowing *where* text sits lets the raster mask (`lib/rastermask.ts`) exclude it too, which is exactly where the scan path leaks today. |
-| `constructPath` fill winding | `fill` vs `eoFill` | Already distinguished for `SEG_FILLONLY`, but discarded — solid poché regions could be recovered as polygons directly, no flood needed. |
+| `constructPath` fill winding | `fill` vs `eoFill` | Both collapse into the single `SEG_FILLONLY` bit, so the winding rule is discarded before it reaches `meta` — solid poché regions could be recovered as polygons directly, no flood needed. |
 
 All of these are additive to a walk that already exists and already gets the
 transforms right. This is the cheapest engine work on the list per unit of
@@ -101,7 +114,7 @@ capability.
 ### 2.3 Document-level APIs we never call
 
 Every one of these is a single `await` on the `PDFDocumentProxy` we already
-hold (`getDoc` / `docFor` in `TakeoffCanvas.jsx`, `openPdf` in `mcp/src/pdf.ts`):
+hold (`docFor` in `TakeoffCanvas.jsx`, passed to the gallery as `getDoc`, `openPdf` in `mcp/src/pdf.ts`):
 
 | API | Returns | Value here |
 |---|---|---|
@@ -125,10 +138,16 @@ that we currently use neither of:
 1. `pdf.getOptionalContentConfig()` → `.getGroups()` gives id → `{ name, intent }`,
    and the config object carries the document's default visibility.
 2. In the op list, content is bracketed by
-   `OPS.beginMarkedContentProps` with args `["OC", <ocgId>]` … `OPS.endMarkedContent`.
-   Tracking a small stack of those in the existing walk attributes **every
-   segment to a named layer** — a one-byte-per-segment addition alongside the
-   `meta` array that's already there.
+   `OPS.beginMarkedContentProps` … `OPS.endMarkedContent`. **The arg shape is
+   more involved than it looks** (verified against 4.10.38): gate on
+   `args[0] === "OC"`, because the same op carries `[tagName, MCID]` for
+   ordinary tags. `args[1]` is then `{type: "OCG", id}` **or**
+   `{type: "OCMD", ids, policy, expression}` — several groups at once, or a
+   `/VE` boolean visibility expression — **or** `null`. Tracking a stack of
+   these does attribute segments to layers, but it is not a
+   one-byte-per-segment addition, and a naive string compare on `args[1]`
+   silently attributes nothing. `getGroups()` also returns **`null`**, not
+   `{}`, on a document with no OCGs.
 3. `page.render({ optionalContentConfigPromise })` makes the *raster* honor a
    modified config, so show/hide is free on the render side too.
 
@@ -179,12 +198,25 @@ number-format arrays) that state the drawing's real-world scale **as data**,
 not as a text note we regex out of the title block. Some CAD publishers emit
 it; Bluebeam reads and writes it for calibrated sets.
 
-pdf.js has no public API for `/VP`, but **pdf-lib is already a dependency**
-(`lib/ingest.js`, `lib/markedset.js`) and can walk the page dictionary
-directly. When present, `/Measure` beats `detectScale`'s note-matching outright
+pdf.js has no public API for `/VP` (confirmed: no `/Measure` handling anywhere
+in the 4.10.38 worker, and it never exposes the raw page dictionary).
+**pdf-lib is already a dependency** (`lib/ingest.js`, `lib/markedset.js`) and
+can walk the page dictionary directly: `page.node.lookup(PDFName.of('VP'),
+PDFArray)` → `.lookup(i, PDFDict)` → `.lookup(PDFName.of('Measure'), PDFDict)`.
+Read **`/R`** — the human-readable scale-ratio string, the entry a takeoff tool
+most wants — and **`/Y`** for non-uniform axes, not just `/X`, `/D`, `/A`.
+
+Two costs the API shape hides: pdf-lib 1.17.1 **cannot decrypt**, and
+permission-encrypted PDFs are common off GC platforms — `ignoreEncryption:
+true` skips decryption rather than performing it, so numbers survive while
+`/R` and the unit labels come back as ciphertext. And this is a **full second
+parse of the file** on top of pdf.js, not the free read that "already a
+dependency" suggests. When present, `/Measure` beats `detectScale`'s note-matching outright
 — and it's per-viewport, so a sheet with a plan at 1/8" and a detail at 1/2"
-resolves *both*, which is exactly the `multi: true` ambiguity `detectScale`
-currently gives up on (`sheets.ts:141-156`).
+resolves *both*. The ambiguity is not what the first draft described, though:
+`detectScale` sets `multi: true` only on the branch that **succeeds** (a
+title-block hit); the give-up branch returns `null` and carries no flag. And
+`multi` is written but never read anywhere in the app (`sheets.ts:153-155`).
 
 **Probe before building.** Verify emission rates across a real corpus; if it's
 rare, it's a cheap opportunistic upgrade, not a feature.
@@ -206,6 +238,11 @@ rare, it's a cheap opportunistic upgrade, not a feature.
 ---
 
 ## 3. Proposals — surfacing and filtering, ranked
+
+> **Partly superseded** — see §4. In particular **P2's docked panel was
+> rejected outright** (every tab has an existing owner) and **P1 was displaced
+> from first place** by work that needs no new extraction. The *inventory* each
+> proposal rests on is still sound; the packaging and the ordering are not.
 
 Each is scoped to be independently shippable, additive, and consistent with
 the repo's existing patterns.
@@ -292,8 +329,9 @@ the negative space called out. *"9 sheets have no detected scale. 12 are scans.
 
 The hatch classifier stays as-is and remains the path for OCG-less sheets.
 Where layers exist, this is deterministic and explainable where the classifier
-is calibrated and opaque — and `?hatchqa` (the existing QA wall) gives a
-ready-made place to compare the two on real sheets.
+is calibrated and opaque. Note there is **no** `?hatchqa` QA wall to compare
+them on — it is described in `FEATURES.md` and `CHANGELOG.md` but was never
+shipped here, so building a comparison venue is itself a task.
 
 ### P4 · Annotations layer — read, filter, import
 
@@ -345,7 +383,7 @@ plumbing is already generalized.
 None of this is finished until it leaves the app the way everything else does:
 
 - **xlsx** — a *Sheet Index* tab in `lib/xlsx.js` (the writer already does
-  Summary / By-sheet / Materials / Shapes-audit; this is a fifth in the same
+  `Conditions` / `By sheet` / `Materials` / `Shapes`; this is a fifth in the same
   shape).
 - **CSV** — room list and text-search results, via `lib/csv.js`.
 - **MCP** — the server already exposes `read_sheet_text` and `detect_rooms`.
@@ -361,15 +399,47 @@ None of this is finished until it leaves the app the way everything else does:
 
 ## 4. Suggested sequence
 
+> **Superseded.** The ordering below was the research draft's, and adversarial
+> review overturned it. The scheduled ordering now lives in
+> [`PDF_DATA_PLAN.md`](PDF_DATA_PLAN.md); this table is kept only to record
+> what changed and why.
+
 | # | Work | Why here |
 |---|---|---|
-| 1 | **P1** sheet index + cache | Everything else reads it. Pays for itself by removing 4 redundant text fetches per sheet. |
-| 2 | **P2** Plan Data panel, Sheets + Text + Rooms tabs | Turns P1 into visible value: cross-sheet Find and the bid-QA readout. |
-| 3 | **P6** document facts | One call each, no new UI beyond a tab that already exists after P2. |
-| 4 | **P4** annotations | Self-contained, no engine risk; markup import first, shape import behind the review gate. |
+| 1 | **P1** sheet index + cache | Everything else reads it. |
+| 2 | **P2** Plan Data panel, Sheets + Text + Rooms tabs | Turns P1 into visible value. |
+| 3 | **P6** document facts | One call each. |
+| 4 | **P4** annotations | Self-contained, no engine risk. |
 | 5 | **P3** OCG layers | Engine change. Needs the corpus probe first. |
-| 6 | **P5** color/dash | Same file as P3; do them together if P3's probe comes back thin. |
-| 7 | **P7** exports + MCP | Continuous — add each surface as its source lands. |
+| 6 | **P5** color/dash | Same file as P3. |
+| 7 | **P7** exports + MCP | Continuous. |
+
+**What review changed.** Four corrections, in descending importance:
+
+1. **Ship what already exists first.** `lib/detectRooms.ts` is a complete,
+   tested batch room detector whose only importers are `mcp/src/session.ts` and
+   its own test — **nothing in `web/src` calls it**. The app batch-traces a
+   finish plan for an agent and not for the estimator. Wiring it to a toolbar
+   button beats every proposal in §3 on value per hour of work, and it needs no
+   new extraction at all.
+2. **The join is the product.** Room labels (§3, P1) and finish schedules
+   (`parseSchedule`, shipped) are both text on a vector sheet, and nothing
+   connects them. That join auto-assigns conditions and turns coverage from a
+   sheet count into a room list. It was absent from the research entirely.
+3. **P2's panel is the wrong shape.** The app already has six rail buttons and
+   nine surfaces; every tab proposed has an existing owner. Coverage in
+   particular belongs as an on-canvas overlay, not a table — the unit an
+   estimator misses is a room, not a sheet.
+4. **The cache is a coordinate-space decision, not a refactor.** Of the six
+   text call sites, two use per-sheet render scales and pass absolute-px rects,
+   and `parseSchedule`'s row clustering has an absolute 4px floor — so a cache
+   keyed on sheet alone is silently wrong for exactly the consumers that
+   matter. It has to be settled *before* the index is written, not after.
+
+Also unproposed and larger than anything in §3: a **sheet-to-sheet drawing diff
+for addenda**. `lib/snapshotDiff.js` states outright that its diff is
+"QUANTITY-LEVEL, deliberately NOT geometric," and the user guide concedes the
+compare "won't show you which wall moved."
 
 ## 5. Risks and constraints
 
@@ -466,15 +536,23 @@ now partly reachable client-side too (§8).
 
 The relevant change since this app's AI seam was designed around a *server*:
 in-browser inference stopped being a demo. Transformers.js v3 shipped WebGPU
-(reported up to ~100× over WASM), v4 cut bundle size ~53%; ONNX Runtime Web
-runs the same models with a silent WebGPU→WASM fallback. That moves several
+support and v4 trimmed bundles; ONNX Runtime Web runs the same models with a
+silent WebGPU→WASM fallback. **Treat the headline numbers as marketing, not
+planning inputs:** the "up to 100× faster than WASM" bullet ships with no
+hardware, model, task, or methodology, and the "53% smaller" figure applies
+specifically to the `transformers.web.js` default export — averaged across all
+builds the reduction was ~10%. That moves several
 things this repo currently routes to a network endpoint into "runs on the
 estimator's laptop, free, offline."
 
-Read this section against §0. "Free" here means free of licence fees and of
-per-use billing — every engine named is Apache-2.0 or MIT, compatible with this
-repo. It does **not** automatically mean free of a network call, which is the
-subject of §8.0.
+Read this section against §0. "Free" here means free of per-use billing. It
+does **not** mean free of a network call (§8.0), and it emphatically does
+**not** mean the licences are compatible: **MuPDF/mupdf.js is
+AGPL-3.0-or-commercial** (§8.1), **DocLayout-YOLO inherits AGPL-3.0** from the
+YOLOv10/Ultralytics lineage (§8.4), and **Moondream 3 is BSL 1.1** (§8.3) —
+none redistributable under this repo's Apache-2.0. Licences vary per engine
+*and* per weight file and are not asserted here: each is verified where it is
+scheduled, and recorded in `THIRD-PARTY-NOTICES.md`.
 
 ### 8.0 The cost that is not money — weights, and where they come from
 
@@ -483,8 +561,8 @@ arrive over the wire:
 
 | Thing | Rough size | Licence |
 |---|---|---|
-| tesseract.js — WASM core + English traineddata | tens of MB (~60 MB reported combined; `_fast` traineddata is much smaller) | Apache-2.0 |
-| PaddleOCR mobile det + rec, ONNX | single-digit MB per model (English recognition ~7.5 MB) — **but published exports vary enormously by variant** (one repo lists a detection model at 84 MB), so pin the exact mobile export, never the family name | Apache-2.0 |
+| tesseract.js — SIMD core + English traineddata | **~5 MB** (`_fast` traineddata 1.89 MB) to **~14 MB** (standard 10.4 MB), plus a 3.3 MB core. *The first draft's "~60 MB" was unsourced and wrong by 5–10× — that figure only appears if you count the whole unpacked npm core package, which ships four wasm variants.* | Apache-2.0 |
+| PaddleOCR det + rec | `en_PP-OCRv5_mobile_rec` **7.5 MB**, `PP-OCRv5_mobile_det` **4.7 MB** — but `PP-OCRv5_server_det` is **84 MB** in the *official* list. The hazard isn't flaky third-party repos: det and rec each ship **mobile and server** variants and the family name doesn't say which. Multilingual rec is 16 MB. These are Paddle inference-model sizes, not ONNX-export sizes. | Apache-2.0 (code) — **verify each ONNX re-export separately; several hub exports declare no licence at all, which disqualifies them** |
 | Sentence-embedding model, quantized | ~20–100 MB | varies — check the model card |
 | Small VLMs (256M–500M, quantized) | hundreds of MB | varies |
 
@@ -495,10 +573,40 @@ third-party request from an app whose whole claim is that nothing leaves the
 browser, and it breaks on a jobsite with no signal.
 
 **So it is a hard requirement, not a follow-up:** weights and wasm ship as
-static assets served from the app's own origin. Transformers.js exposes
-`env.localModelPath`, `env.allowRemoteModels = false`, and
-`env.backends.onnx.wasm.wasmPaths` for exactly this. Self-hosted, versioned
-with the app, offline, no third party.
+static assets from the app's own origin.
+
+But "self-host the weights" is **not** an offline guarantee by itself — weights
+are one item on a list of six, and the knobs differ per engine:
+
+- *transformers.js / ORT:* `env.localModelPath`, `env.allowRemoteModels = false`,
+  **and `env.allowLocalModels = true`** — which defaults to **`false` in
+  browsers**, so setting only the first two yields a client that can load
+  nothing. `env.backends.onnx.wasm.wasmPaths` takes an object `{mjs, wasm}` in
+  v4, not a bare string prefix. ORT ships several wasm variants (simd /
+  threaded / jsep) and selects at runtime, so vendor every one it may reach —
+  plus the HF directory layout (`config.json`, `tokenizer.json`,
+  `tokenizer_config.json`, `special_tokens_map.json`,
+  `preprocessor_config.json`) and the `dtype`-suffixed `.onnx` filenames.
+- *tesseract.js:* has **none** of those settings. Its surface is `workerPath`
+  (it fetches `worker.min.js` from a CDN and runs it as a blob worker),
+  `corePath` (several wasm variants chosen at runtime by SIMD/threads
+  capability), and `langPath` + `gzip` (traineddata defaults to a third-party
+  host). Three separate origins' worth of fetches.
+- *PaddleOCR:* the recogniser is useless without its **character dictionary**,
+  a separate file with its own provenance.
+
+The only testable form of the requirement: *with the network offline after
+first load and a filter for any origin other than `self`, running the feature
+produces zero non-self requests.*
+
+**Threading is off the table.** `web/public/_headers` sets no COOP/COEP, so
+`SharedArrayBuffer` is unavailable and every engine runs single-threaded — and
+the headers can't simply be added, because `require-corp` breaks the Google
+sign-in iframe and the cross-origin webfonts. Benchmark accordingly.
+
+And be honest about the meter: self-hosting doesn't remove it, it **moves it**
+from the user's key to the deployer's bandwidth bill. `README.md` promises "No
+paid dependencies," and that has to stay true for a fork.
 
 **And they load lazily.** `lib/ingest.js` already sets the precedent verbatim —
 fflate and pdf-lib load "only when a user actually drops a zip or image — so
@@ -521,7 +629,7 @@ reason to reach for a WASM engine is a specific thing pdf.js won't expose —
 `/VP` `/Measure` viewports (§2.6) being the candidate, and pdf-lib already
 covers that more cheaply.
 
-### 8.2 On-device OCR — the highest-leverage finding
+### 8.2 On-device OCR — real, cheaper than first claimed, and deferred
 
 Current in-browser options: **tesseract.js / tesseract-wasm** (lightest, strong
 on clean multilingual documents, weak on distortion and handwriting);
@@ -532,7 +640,10 @@ hundreds of MB, single-line, reserve for handwriting). The consensus practice
 is to start with the lightest engine that clears the accuracy bar and escalate
 only on hard input.
 
-**Why this matters here more than anywhere else on the list:** the schedule
+**Why it matters, restated after review.** Not because reading scanned
+schedules is a common need — it isn't; One-Click already handles scanned
+*plans*, and scanned *schedules* are a minority of a minority. It matters
+because the schedule
 scan path (`lib/scheduleScan.ts` → `/ai/parse-schedule`) is login-gated,
 Google-configured, org-domain-restricted, network-dependent, and carries
 bespoke 504 cold-start retry logic — all so a *scanned* schedule can be read.
@@ -564,10 +675,12 @@ layer.
 
 ### 8.4 Document layout detection — the "regions" capability — **deferred**
 
-DocLayout-YOLO (YOLOv10-based, ONNX exports published, deliberately
-lightweight) is the open counterpart to the typed drawing regions of §7, and
-is small enough to run under ONNX Runtime Web. **Caveat that decides it:** it
-is trained on *documents* — text blocks, tables, headings, figures — not on
+DocLayout-YOLO (YOLOv10-based; note the official repo ships only PyTorch
+weights — ONNX exists solely as third-party re-exports) is the open counterpart to the typed drawing regions of §7, and
+is small enough to run under ONNX Runtime Web. **Two caveats, either of which decides it.**
+Its YOLOv10/Ultralytics lineage is **AGPL-3.0**, incompatible with Apache-2.0
+redistribution — a licence bar, not a fit bar, and one no amount of fine-tuning
+clears. And it is trained on *documents* — text blocks, tables, headings, figures — not on
 construction drawings, so detail bubbles, match lines, keynote legends, and
 north arrows are out of distribution. Useful as-is for finding schedule tables
 on a sheet (which would let "Import from schedule" stop requiring a manual
@@ -596,8 +709,10 @@ Do the worker move first; it is most of the win for a fraction of the risk.
 
 ### 8.6 Local semantic search — the client-side answer to §7's hosted search
 
-`sqlite-wasm` + `sqlite-vec` (~1.5 MB WASM) persisted on **OPFS** in a Web
-Worker, with embeddings generated locally by transformers.js. That is
+`sqlite-wasm` + `sqlite-vec` (measured 1.48 MB WASM for the combined
+statically-linked build) persisted on **OPFS** in a Web Worker — via the
+**`opfs-sahpool` VFS**, because SQLite's default `opfs` VFS requires the
+cross-origin isolation this deployment cannot set, with embeddings generated locally by transformers.js. That is
 the hosted semantic search of §7 — ranked hits, snippets, jump-to-source —
 with no upload, no per-sheet fee, and no vendor.
 
@@ -621,16 +736,21 @@ sessions — a natural extension of the zip-ingest path and its guardrails in
 
 ## 9. What this changes about §4
 
-Nothing about the ordering — P1 is still first, and §7 makes the case louder:
-there is a paid market for P1's output. Two additions:
+See §4's superseded note — review reordered the work, and
+[`PDF_DATA_PLAN.md`](PDF_DATA_PLAN.md) is authoritative. Two points from §7–§8
+survive the reordering:
 
-- **After P1, the local-OCR swap (§8.2) jumps the queue** ahead of the heavier
-  engine work. It is small, it uses a contract that already exists for this
-  exact purpose, and it turns the app's most gated feature into an ungated one.
-- **Adopt §7's two framing ideas in P1/P2 from the start**: semantic
-  typing of extracted text, and treating the sheet set as an addressable index
-  (`M002/detail-3`) rather than a search target. Both are free if designed in
-  and awkward to retrofit.
+- **Local OCR is worth doing, but not for the reason first given.** It is not a
+  scan-reading feature — One-Click already handles scanned *plans* via
+  `rastermask.ts`, and scanned *schedules* specifically are a minority of a
+  minority. Its real value is deleting a sign-in gate, an org-domain
+  restriction, a serverless function and its retry logic — a §0 and
+  repo-health win, not minutes saved per bid. It is deferred behind the room
+  work and split in two, and its cost is *lower* than §8.0 first claimed.
+- **§7's framing ideas did not survive.** Semantic text typing and an
+  addressable sheet index were proposed as "cheap now, awkward to retrofit" —
+  which is the signature of speculative generality. Nothing in the plan
+  consumes either. Build them when something needs them.
 
 Sources for §8: [Transformers.js WebGPU](https://huggingface.co/docs/transformers.js/en/guides/webgpu) ·
 [on-device OCR comparison](https://lofttools.com/blog/on-device-ocr-reviewed/) ·
