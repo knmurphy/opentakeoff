@@ -24,7 +24,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
+      # the corpus gate the RFC calls for. It existed since 46ad9d0 but nothing
+      # ran it, so "bench gate green" was a manual claim (audit B2).
+      - run: npm run bench
       - run: npm run build
 
   mcp:

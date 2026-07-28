@@ -32,6 +32,10 @@ const THRESHOLDS = {
   humanCoverageBand: 0.02,     // Σ engine vs Σ golden within ±2% (missed/phantom floor)
   humanOverlapFrac: 0.005,     // double-counted floor ≤ 0.5% of the engine total
 };
+// 0.2 (audit B4): the corpus is discovered by directory listing, so a deleted
+// or unreadable fixture used to shrink the run silently and still exit 0 —
+// 21 probes became 13 with "bench passed". Pin the expected shape.
+const EXPECT = { goldenProbes: 21, refusalProbes: 3, knownFails: 4, cases: 2 };
 const RES_FACTORS = [1, 0.75, 0.5];  // ws multipliers; [0] must stay 1 (production baseline)
 const CROSS_CELL = 2;                // image-px sampling cell for cross-scale IoU (4× faster, ±~0.005)
 const here = dirname(fileURLToPath(import.meta.url));
@@ -106,6 +110,7 @@ if (process.env.BENCH_SEALED) {
     for (const f of readdirSync(join(here, "corpus", "sealed")).filter((f) => f.endsWith(".json"))) caseFiles.push(join(here, "corpus", "sealed", f));
   } catch { /* no sealed dir yet */ }
 }
+const realCaseNames: string[] = [];   // 0.7: which cases are engine-pinned
 for (const file of caseFiles) {
   const c = JSON.parse(readFileSync(file, "utf8"));
   const doc = await pdfjs.getDocument({ url: join(dirname(file), c.pdf), useSystemFonts: true }).promise;
@@ -114,6 +119,7 @@ for (const file of caseFiles) {
   const ops = await page.getOperatorList();
   const g = extractVectorGeometry(ops, vp.transform, pdfjs.OPS);
   const name = file.replace(/^.*[\\/]/, "").replace(".json", "");
+  if (!c.humanMeasured) realCaseNames.push(name);   // human-measured cases ARE independent truth
   runCase(name, g.segs, vp.width, vp.height, g.meta, c.ptPerFt, c.probes, !!c.humanMeasured, c.deducts_sf || 0, true);   // ptPerFt is image px/ft at the pinned scale
 }
 
@@ -135,8 +141,33 @@ if (coverages.length) {
   }
 }
 const agg = aggregate(scores);
-console.log(`\ngolden probes: ${agg.goldenProbes} | mean IoU ${agg.meanIoU.toFixed(3)} | floor IoU ${agg.floorIoU.toFixed(3)} | refusal ${(agg.refusalRate * 100).toFixed(1)}% | leak ${(agg.leakRate * 100).toFixed(1)}%`);
-console.log(`refusal probes: ${agg.refusalProbes} | correct ${(agg.correctRefusalRate * 100).toFixed(1)}% | known-fail tracked: ${agg.knownFails}`);
+
+// 0.7 (audit B1): NEVER print a blended accuracy figure again. 12 of the 21
+// gating goldens are the engine graded against its own frozen output and score
+// ~1.000 by construction; the 9 synthetic probes carry truth independent of the
+// engine. A single mean over both buckets reads as accuracy and is not.
+const PINNED_CASES = new Set(realCaseNames);
+const synth = aggregate(scores.filter((s) => !PINNED_CASES.has(s.caseName)));
+const pinned = aggregate(scores.filter((s) => PINNED_CASES.has(s.caseName)));
+console.log(`\nsynthetic (truth by construction — the only independent signal):`);
+console.log(`  n=${synth.goldenProbes} | mean IoU ${synth.meanIoU.toFixed(3)} | floor IoU ${synth.floorIoU.toFixed(3)}`);
+console.log(`engine-pinned (REGRESSION SAFETY ONLY — not accuracy; these are the engine's own past output):`);
+console.log(`  n=${pinned.goldenProbes} | mean IoU ${pinned.meanIoU.toFixed(3)} | floor IoU ${pinned.floorIoU.toFixed(3)}`);
+console.log(`\ngolden probes: ${agg.goldenProbes} | mean IoU ${agg.meanIoU.toFixed(3)} | floor IoU ${agg.floorIoU.toFixed(3)} | refusal ${(agg.refusalRate * 100).toFixed(1)}% | leak ${(agg.leakRate * 100).toFixed(1)}% (gating aggregate — see the split above before quoting the mean)`);
+console.log(`refusal probes: ${agg.refusalProbes} (all synthetic) | correct ${agg.refusalProbes ? (agg.correctRefusalRate * 100).toFixed(1) + "%" : "n/a"} | known-fail tracked: ${agg.knownFails}`);
+
+// 0.4 (audit B3): known-fails are excluded from every aggregate, so a probe that
+// is actively failing right now is invisible in the summary. Print them.
+const kf = scores.filter((s) => s.knownFail);
+if (kf.length) {
+  console.log(`\n── known-fails (EXCLUDED from every metric above) ──`);
+  for (const s of kf) {
+    const verdict = s.expect === "refusal"
+      ? (s.refused ? "correctly refuses" : "*** NOT REFUSED — actively failing ***")
+      : `IoU ${s.iou.toFixed(3)} SF±${(s.sfErr * 100).toFixed(1)}%${s.leak ? " LEAK" : ""}`;
+    console.log(`  ${(s.caseName + " / " + s.probeName).padEnd(42)} ${verdict}`);
+  }
+}
 
 console.log(`\n── cross-resolution (ws × ${RES_FACTORS.join(" / ")}) ──`);
 for (const s of crossScores) {
@@ -161,10 +192,26 @@ for (const cv of coverages) {
   if (Math.abs(cv.ratio - 1) > THRESHOLDS.humanCoverageBand) failures.push(`${cv.caseName}: engine total ×${cv.ratio.toFixed(3)} of the human total (band ±${THRESHOLDS.humanCoverageBand * 100}%)`);
   if (cv.sumEngineSF > 0 && cv.overlapSF > cv.sumEngineSF * THRESHOLDS.humanOverlapFrac) failures.push(`${cv.caseName}: ${cv.overlapSF.toFixed(1)} SF double-counted (> ${THRESHOLDS.humanOverlapFrac * 100}% of total)`);
 }
+// 0.2: a shrinking corpus must be loud, not green.
+if (caseFiles.length !== EXPECT.cases && !process.env.BENCH_SEALED) failures.push(`expected ${EXPECT.cases} corpus case files, found ${caseFiles.length}`);
+if (agg.goldenProbes !== EXPECT.goldenProbes) failures.push(`expected ${EXPECT.goldenProbes} golden probes, found ${agg.goldenProbes} — a fixture was added or lost`);
+if (agg.refusalProbes !== EXPECT.refusalProbes) failures.push(`expected ${EXPECT.refusalProbes} refusal probes, found ${agg.refusalProbes}`);
+if (agg.knownFails !== EXPECT.knownFails) failures.push(`expected ${EXPECT.knownFails} known-fails, found ${agg.knownFails} — re-pin EXPECT deliberately`);
+// 0.3 (audit B3): nothing checked that a known-fail still fails, so a fixed
+// limitation could silently re-break, and any regression could be neutralised
+// with one knownFail:true. A known-fail that passes is a result, not a pass.
+for (const s of scores) {
+  if (!s.knownFail) continue;
+  if (s.expect === "refusal" && s.refused) failures.push(`known-fail ${s.caseName}/${s.probeName} now REFUSES correctly — re-pin it or drop the flag`);
+  if (s.expect === "golden" && s.iou >= THRESHOLDS.floorIoU && !s.leak) failures.push(`known-fail ${s.caseName}/${s.probeName} now passes (IoU ${s.iou.toFixed(3)}) — re-pin it or drop the flag`);
+}
 if (agg.floorIoU < THRESHOLDS.floorIoU) failures.push(`floor IoU ${agg.floorIoU.toFixed(3)} < ${THRESHOLDS.floorIoU}`);
 if (agg.meanIoU < THRESHOLDS.meanIoU) failures.push(`mean IoU ${agg.meanIoU.toFixed(3)} < ${THRESHOLDS.meanIoU}`);
 if (agg.refusalRate > THRESHOLDS.maxRefusalRate) failures.push(`refusal rate ${(agg.refusalRate * 100).toFixed(1)}%`);
-if (agg.leakRate > THRESHOLDS.maxLeakRate) failures.push(`leak rate ${(agg.leakRate * 100).toFixed(1)}%`);
+// 0.5 (audit B5): maxLeakRate can never be the binding gate — leak is defined as
+// IoU < 0.5 AND area > 1.5×, and any IoU < 0.5 already fails floorIoU 0.90. It is
+// kept as a diagnostic, not reported as independent evidence.
+if (agg.leakRate > THRESHOLDS.maxLeakRate) failures.push(`leak rate ${(agg.leakRate * 100).toFixed(1)}% (diagnostic — floorIoU should already have fired)`);
 if (agg.correctRefusalRate < THRESHOLDS.minCorrectRefusal) failures.push(`correct-refusal ${(agg.correctRefusalRate * 100).toFixed(1)}%`);
 if (xagg.disagreements > THRESHOLDS.maxCrossDisagreements) failures.push(`${xagg.disagreements} cross-resolution verdict flip(s)`);
 if (xagg.crossFloorIoU < THRESHOLDS.crossFloorIoU) failures.push(`cross-resolution pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} < ${THRESHOLDS.crossFloorIoU}`);
