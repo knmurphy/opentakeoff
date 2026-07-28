@@ -48,6 +48,46 @@ Sizes: **S** ≈ a sitting · **M** ≈ a day · **L** ≈ multi-day · **XL** �
 
 ---
 
+## Status — reconciled against `main` and open work, 2026-07-28
+
+This plan was written before PR #187 and #188 merged and without reading the
+open issue set. Both changed it. Read this before picking anything up.
+
+**Shipped since, so no longer scheduled here:**
+
+| Was | Now |
+|---|---|
+| **T8** cross-sheet Find | **Built** — `web/src/lib/planIndex.ts` (#187): inverted index over the set, hits intersected with the live plan set, relevance ordering, jump-to-match via `normalizedAnchor`, source-tagged `text`/`ocr`. Wired in `PlanNavigator.jsx` + `TakeoffCanvas.jsx`. |
+| **T10** index persistence | **Mostly built** — `serializePlanIndex` / `sanitizePlanIndex` / `dropFileFromIndex` + `PLAN_INDEX_SCHEMA`, banked through the META store. The measurement this plan wanted first was simply done. |
+| **T6** set-indexing job | **Partly built** — `ensureIndexed` is a standalone pass with its own staleness guard, batched progress, and an `unindexed` counter. |
+| Ground rule 2's font violation | **Fixed** — #188. |
+
+**Also shipped and absent from this plan:** the finish-tag / `sheetCodes`
+vocabulary browser. It should be folded into T5's scope rather than reinvented.
+
+**The correction that matters most — T2 is not the safe S it was ranked as.**
+See T2. Wiring the canvas to `detectRegions` against `main` today would ship a
+feature measured at **1/8 recall**.
+
+**Two structural questions this plan does not answer, and should:**
+
+1. **There is no accuracy gate.** T2, T3, T11 and T12 all stack quantities on
+   the flood engine, and `npm run check` carries no accuracy regression at all.
+   Issues #171–#175 propose one (`polyscore.ts`, a corpus + replay harness, a CI
+   gate); #184's branch already has `npm run bench` with 21 golden probes and
+   cross-resolution gating. **Pick one before T2 lands** — do not add
+   quantity-producing features to an ungated engine.
+2. **Six tasks here add surface to `TakeoffCanvas.jsx`** (T2, T7, T9, T11, T14,
+   T17) — the 6,000-line file the plugin seam (#166–#170, #177–#179) exists to
+   stop growing. That is a collision, not a coincidence, and it needs an
+   explicit decision rather than silence.
+
+**Issue cross-reference:** T2 ↔ #184 item F, #185 · T3 ↔ #186 · T5 ↔ #184
+auto-naming · T17/T18 ↔ #184 annotation semantics · T21 ↔ #170 · T22 ↔ #184
+scan handling · accuracy gate ↔ #171–#175.
+
+---
+
 ## M0 — Probe first
 
 ### T1 · Corpus probe · S
@@ -72,18 +112,34 @@ T15 and T17: schedule, defer, or drop.
 
 The highest-value work in this plan needs no new extraction at all.
 
-### T2 · Wire Detect Rooms into the canvas · S
+### T2 · Wire Detect Rooms into the canvas · ~~S~~ → **blocked on a seeding fix**
 **Goal.** Give the human the batch room detection the MCP server already has.
 **The finding.** `web/src/lib/detectRooms.ts` is complete and tested.
 Its only importers are `mcp/src/session.ts:15` and its own test — **nothing in
 `web/src` calls it.** The app can batch-trace a finish plan for an agent and
 not for the estimator.
-**Do.** A toolbar action on the active sheet: `roomLabelSeeds` over the page
-text → `detectRegions` against the existing mask → `traceRegion` → the existing
-**propose → review → Create** gate. No new engine, no new math.
-**Acceptance.** On the sample plan, one action proposes multiple rooms; accept
-and reject individually; quantities match a manual One-Click of the same room.
-**Depends on.** Nothing.
+**⚠️ "No new engine, no new math" was wrong.** #184 measured the batch fill on a
+real VA sheet: 56 labels → 52 proposals, **median proposal 4 SF**, 39 of 52
+under the fixture-sized threshold, **reach 3/8, recall 1/8**. Root cause is
+seeding, not the flood: the seed is the text item's baseline *origin*, and on a
+stroke-text (SHX) plan the room tag's own glyphs are linework — so the seed
+lands inside a digit and measures the inside of a numeral. Two candidate fixes
+are on the table (offset by the text item's bounding box; sweep-and-take).
+Separately, `main`'s `detectRegions` runs the raw `floodRegion` with no gap
+sealing, no door wedges and no minimum-passage rule (#184 bug 18, fixed
+branch-only): against `main` that is mean IoU 0.817 vs 0.999 and 16.6%
+double-counted floor.
+
+**Do.** Land the seeding fix and the sealed-flood parity **first** — both exist
+on #184's branch / #190. Then the toolbar action: `roomLabelSeeds` → the *fixed*
+`detectRegions` → `traceRegion` → the existing **propose → review → Create**
+gate.
+**Acceptance.** Recall and median proposal size measured on a real sheet, not
+just "proposes multiple rooms" — the original criterion would have passed at
+1/8 recall.
+**Depends on.** #184 item F (seeding) and bug 18 (sealed-flood parity), both
+carried by **PR #190**, which already wires `detectRegions` into
+`TakeoffCanvas.jsx`. If #190 merges, most of T2 arrives with it.
 
 ### T3 · Room label ↔ finish-schedule join · L
 **Goal.** One-Click a room and land on the correct condition automatically.
@@ -98,6 +154,9 @@ not a tweak.
 lists 84 rooms with a floor finish, you have shapes over 71"); and a finish code
 with zero rooms on the plan as a flagged discrepancy — an RFI found before bid
 day.
+**The payoff is #186 (flooring assemblies).** Assemblies consume exactly what
+this join produces — an auto-assigned condition per room — so T3 is the
+precondition for that issue, and the two should be sequenced together.
 **Tests.** `web/test/roomSchedule.test.ts` — parser and join, both pure.
 **Depends on.** T2.
 
@@ -107,8 +166,10 @@ day.
 
 ### T4 · `textFor(key)` — one cache, one declared coordinate space · M
 **Goal.** Fetch each page's text once, in a space every consumer agrees on.
-**This is the load-bearing decision, which is why it is first.** The six
-existing call sites do **not** share a space. Four
+**This is the load-bearing decision, which is why it is first.** Note the count
+has since grown to **seven** — #187's search added another uncached
+`getTextContent()` read — so this is more necessary than when it was written,
+not less. The call sites do **not** share a space. Four
 (`PlanNavigator.jsx:225`, `TakeoffCanvas.jsx:1205`, `:1216`, `:1232`) use
 `RENDER_SCALE` or a panel viewport and compare against page fractions, so they
 are scale-insensitive. Two (`:3714` `agentTextTokens`, `:3965`
@@ -131,12 +192,22 @@ claim.)
 inference; room number ↔ name pairing — **reusing `ROOM_LABEL_RE` and
 `roomLabelSeeds` from `detectRooms.ts`**, never a second definition of "room
 label."
+**Reuse, don't rebuild.** #184's branch already has `web/src/lib/roomName.ts`
+(name+number pairing with keynote/finish-tag rejection) — that is this task's
+room-pairing half, built and reviewed. And `planIndex.ts`'s `sheetCodes` /
+`TAG_RE` / `ROOM_RE` vocabulary is on `main` already. What is genuinely missing
+is **sheet title, discipline class, and level** — none of which exist anywhere.
 **Out of scope.** pdf.js, DOM, caching, UI.
 **Tests.** `web/test/sheetIndex.test.ts`.
 **Depends on.** T4 (for the coordinate contract).
 
-### T6 · Set-indexing job · M
+### T6 · Set-indexing job · ~~M~~ → **S, mostly built**
 **Goal.** Index a whole set, and know when it is complete.
+**Already done by #187's `ensureIndexed`:** a standalone pass (not hung off the
+thumbnail pump), its own staleness guard, batched progress, and an `unindexed`
+counter — which is the honesty signal this task existed to provide.
+**What remains:** cancellation, a per-file `complete | partial | none` state,
+and surviving navigator unmount.
 **Why this is its own task.** The obvious move — hanging it off the gallery
 thumbnail pump — cannot work: the pump `continue`s past any key already in
 `thumbCacheRef` — which is canvas-owned and survives gallery close, so a second
@@ -167,7 +238,7 @@ index visible to a user, it is used every time a sheet is opened, and it is a
 better smoke test for "is the index complete?" than Find is.
 **Depends on.** T6.
 
-### T8 · Cross-sheet Find · M
+### ~~T8 · Cross-sheet Find~~ · **SHIPPED in #187** — `planIndex.ts` + `PlanNavigator` wiring. Retained below only as the record of what was asked for.
 `⌘F` / `/` over indexed text, results grouped by sheet, click to open + zoom +
 highlight.
 **Reuse, don't reinvent:** the deep-jump machinery at `TakeoffCanvas.jsx:1373`
@@ -189,7 +260,7 @@ payload wins: on hydrate, drop the index's inferred levels and re-propose. A
 user's saved assignment always outranks an inference.
 **Depends on.** T6.
 
-### T10 · Index persistence · M · **deferred until T6 measures**
+### ~~T10 · Index persistence~~ · **MOSTLY SHIPPED in #187** — `serializePlanIndex` / `sanitizePlanIndex` / `dropFileFromIndex`, banked via the META store. The note below on the wrong precedent still stands for anything that extends it.
 This originally resolved the research doc's open question ("measure before
 choosing") to *persist*, without the measurement. Deferred on purpose.
 When scheduled: **use the existing `metaGet`/`metaPut`/`metaDelete`
@@ -334,6 +405,9 @@ not just plumbing. Remember the mcp CI job runs on Ubuntu *and* Windows.
 ### T21 · Agent registry · S
 Structured index instead of raw text capped at `AGENT_TEXT_MAX_ITEMS = 600`
 (which lives in `TakeoffCanvas.jsx:3700`, not `agentTools.js`).
+**Overlaps #170**, which refactors `executeAgentTool`'s `switch` to a handler
+map — same dispatch surface. Sequence them or do them together; #170 is the
+smaller and is independently actionable.
 **Scope note.** This improves an **optional-escalation surface only** — the
 in-canvas agent is hard-gated on BYO-AI config (`TakeoffCanvas.jsx:3923`), i.e.
 a user-supplied key. No default-path capability changes. Exercise it against
@@ -459,16 +533,22 @@ Found during review; independent of this plan and not blocked by it.
 
 ---
 
-## First slice
+## First slice — revised
 
-**T1 → T2 → T4 → T5 → T6 → T7**
+**T4 → T5 → T7**, with the accuracy-gate decision running alongside.
 
-T1 is cheap and gates T15/T17. **T2 ships real estimator value on day one with
-no new extraction** — it is the plan's best ratio by a wide margin, and it
-depends on nothing. T4 is the coordinate decision that everything downstream
-inherits; getting it wrong after T6 means rewriting T6. T5/T6 build the index
-with a real completeness signal. T7 makes it visible and is the honest smoke
-test.
+T1 stays worth doing (cheap, gates T15/T17). **T2 is no longer the opener** —
+it is blocked on #184's seeding fix and sealed-flood parity, both carried by
+PR #190; if that merges, most of T2 arrives with it and this plan should
+re-check rather than rebuild. **T8 is done**, so it can no longer be the payoff
+that justifies the index.
 
-T3 (the schedule join) is the biggest single win in the plan and should start
-as soon as T2 proves the room-label path.
+What justifies the index now is T7 — the gallery still falls back to filenames
+and still has no sheet-number sort or discipline filter, and it is the smallest
+visible thing the index buys. T4 comes first regardless: seven uncached
+`getTextContent()` sites across three coordinate spaces is the decision
+everything downstream inherits.
+
+**Before any of T2, T3, T11 or T12:** settle the accuracy gate (see Status).
+Adding quantity-producing features to an engine with no accuracy regression is
+how a 1/8-recall feature ships looking green.
