@@ -800,6 +800,45 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
   return { mask, mw, mh, ws, softCount, mppf };
 }
 
+// ── A8: the raster book-keeping the interactive path lives or dies on ───────
+// Three shared devices, none of which change a single measured cell:
+//
+//  1. DilatedMask — a dilated mask that is never MATERIALIZED. dilateHardMask's
+//     output is exactly `(dt[i] <= r) | (mask[i] & 2)`, and its only consumer
+//     is floodPass, which reads a few thousand cells of it. Building all
+//     mw·mh of them (a 9 MB write per rung, five rungs per arc cluster) to
+//     read a fraction was the single largest allocator on the hover path.
+//  2. regionBox — floodPass already knows the box it filled; every later
+//     full-raster scan only ever looks at region cells, so the box is all the
+//     raster any of them needs. A missing entry means "scan everything",
+//     which is what they all did before.
+//  3. scratch buffers — hardDT and the per-cluster mask copy write into
+//     caller-owned arrays, so a six-door room allocates one of each instead
+//     of six.
+interface DilatedMask extends MaskObj { dilDT?: Uint8Array; dilR?: number }
+interface RegionBox { x0: number; y0: number; x1: number; y1: number }
+const regionBox = new WeakMap<Uint8Array, RegionBox>();
+function boxOf(region: Uint8Array, mw: number, mh: number): RegionBox {
+  return regionBox.get(region) || { x0: 0, y0: 0, x1: mw - 1, y1: mh - 1 };
+}
+
+// A hovered room runs ~30 fills and keeps ONE of their region bitmaps — every
+// leak, every too-thin probe, every rejected ladder rung throws its raster
+// away. Those buffers come back here instead of to the collector; only a fill
+// that returns "ok" hands its region to the caller and leaves the pool.
+const REGION_POOL_MAX = 2;
+const regionPool: Uint8Array[] = [];   // two is the observed steady state — a fill takes one and the next leak gives it back
+function takeRegion(n: number): Uint8Array {
+  for (let k = regionPool.length - 1; k >= 0; k--) {
+    if (regionPool[k].length === n) { const b = regionPool.splice(k, 1)[0]; b.fill(0); return b; }
+  }
+  return new Uint8Array(n);
+}
+function dropRegion(b: Uint8Array): void {
+  if (regionPool.length < REGION_POOL_MAX) regionPool.push(b);
+}
+
+
 // ── 4. flood fill ──────────────────────────────────────────────────────────
 // Scanline fill from an image-px seed. `barrier` picks which mask bits block:
 // 3 = walls + hatch (the strict original behavior), 1 = walls only. hardHits/
@@ -807,6 +846,10 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
 // region from a hatch-bounded one.
 function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): FloodResult {
   const { mask, mw, mh, ws } = maskObj;
+  // virtual dilation (see DilatedMask): identical bits, no 9 MB buffer
+  const dilDT = (maskObj as DilatedMask).dilDT;
+  const dilR = dilDT ? (maskObj as DilatedMask).dilR as number : -1;
+  const bits = (i: number): number => (dilDT === undefined ? mask[i] : (dilDT[i] <= dilR ? 1 : 0) | (mask[i] & 2));
   // feet-true guards when the scale is known (identical to the px values at
   // the 18 px/ft calibration), px fallbacks + floors otherwise — see the
   // resolution-independence block up top
@@ -816,55 +859,92 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
   const nudge = mppf > 0 ? Math.max(NUDGE_PX, Math.round(NUDGE_FT * mppf)) : NUDGE_PX;
   let sx = Math.round(ix * ws), sy = Math.round(iy * ws);
   if (sx < 0 || sy < 0 || sx >= mw || sy >= mh) return { status: "boundary" };
-  if (mask[sy * mw + sx] & barrier) {
+  if (bits(sy * mw + sx) & barrier) {
     // nudge: nearest open cell (clicks often land on hatch lines)
     let found: Point | null = null;
     for (let r = 1; r <= nudge && !found; r++) {
       for (let dy = -r; dy <= r && !found; dy++) for (let dx = -r; dx <= r; dx++) {
         const nx = sx + dx, ny = sy + dy;
-        if (nx >= 0 && ny >= 0 && nx < mw && ny < mh && !(mask[ny * mw + nx] & barrier)) { found = [nx, ny]; break; }
+        if (nx >= 0 && ny >= 0 && nx < mw && ny < mh && !(bits(ny * mw + nx) & barrier)) { found = [nx, ny]; break; }
       }
     }
     if (!found) return { status: "boundary" };
     sx = found[0]; sy = found[1];
   }
-  const region = new Uint8Array(mw * mh);
+  const region = takeRegion(mw * mh);
   const cap = Math.floor(mw * mh * LEAK_FRACTION);
-  let count = 0, leaked = false, hardHits = 0, softHits = 0;
+  let count = 0, hardHits = 0, softHits = 0;
   let bx0 = sx, bx1 = sx, by0 = sy, by1 = sy;
-  const stack: number[][] = [[sx, sy]];
-  while (stack.length) {
-    const popped = stack.pop() as number[];
-    const px = popped[0], py = popped[1];
+  // Span stack: packed cell indices in a flat Int32Array. The [x, y] pair per
+  // pushed span allocated one two-element array per span — with tens of
+  // thousands of spans per fill and thirty fills per hovered room it made the
+  // fill GC-bound rather than raster-bound (A8). Same LIFO order, same pushes.
+  let stack = new Int32Array(1024);
+  let sp = 0;
+  const push = (x: number, y: number) => {
+    if (sp === stack.length) { const g = new Int32Array(sp * 2); g.set(stack); stack = g; }
+    stack[sp++] = y * mw + x;
+  };
+  // The dilated-mask read, INLINE. `bits` above is the same expression, but as
+  // a closure it sits on the single hottest path in the engine (a leaking fill
+  // touches the leak cap — 30% of the raster — and a six-door room runs thirty
+  // fills); `dil` is loop-invariant, so the branch predicts perfectly and the
+  // two loads stay in registers.
+  const dil = dilDT !== undefined;
+  const dtA = dilDT as Uint8Array;
+  push(sx, sy);
+  while (sp > 0) {
+    const cell = stack[--sp];
+    const py = (cell / mw) | 0, px = cell - py * mw;
+    const row = py * mw;
     let x0 = px;
-    while (x0 > 0 && !(mask[py * mw + x0 - 1] & barrier) && !region[py * mw + x0 - 1]) x0--;
-    if (x0 > 0 && (mask[py * mw + x0 - 1] & barrier)) { if (mask[py * mw + x0 - 1] & 1) hardHits++; else softHits++; }
+    for (;;) {
+      if (x0 === 0) break;
+      const j = row + x0 - 1;
+      if ((dil ? (dtA[j] <= dilR ? 1 : 0) | (mask[j] & 2) : mask[j]) & barrier) break;
+      if (region[j]) break;
+      x0--;
+    }
+    if (x0 > 0) { const j = row + x0 - 1, b = dil ? (dtA[j] <= dilR ? 1 : 0) | (mask[j] & 2) : mask[j]; if (b & barrier) { if (b & 1) hardHits++; else softHits++; } }
     let x1 = px;
-    while (x1 < mw - 1 && !(mask[py * mw + x1 + 1] & barrier) && !region[py * mw + x1 + 1]) x1++;
-    if (x1 < mw - 1 && (mask[py * mw + x1 + 1] & barrier)) { if (mask[py * mw + x1 + 1] & 1) hardHits++; else softHits++; }
-    if (x0 === 0 || x1 === mw - 1 || py === 0 || py === mh - 1) leaked = true;
+    for (;;) {
+      if (x1 >= mw - 1) break;
+      const j = row + x1 + 1;
+      if ((dil ? (dtA[j] <= dilR ? 1 : 0) | (mask[j] & 2) : mask[j]) & barrier) break;
+      if (region[j]) break;
+      x1++;
+    }
+    if (x1 < mw - 1) { const j = row + x1 + 1, b = dil ? (dtA[j] <= dilR ? 1 : 0) | (mask[j] & 2) : mask[j]; if (b & barrier) { if (b & 1) hardHits++; else softHits++; } }
+    // A fill that reaches the raster edge is a leak, and it used to note that
+    // and keep filling — to the leak cap, 30% of the sheet — before the tail
+    // of the function returned "leak" anyway. Nothing between here and there
+    // can change that verdict or is read after it, so returning now is the
+    // same value for up to a third of a raster less work (A8).
+    if (x0 === 0 || x1 === mw - 1 || py === 0 || py === mh - 1) { dropRegion(region); return { status: "leak" }; }
     if (x0 < bx0) bx0 = x0; if (x1 > bx1) bx1 = x1; if (py < by0) by0 = py; if (py > by1) by1 = py;
     let upOpen = false, downOpen = false;
     for (let x = x0; x <= x1; x++) {
-      const idx = py * mw + x;
+      const idx = row + x;
       if (region[idx]) { upOpen = downOpen = false; continue; }
       region[idx] = 1; count++;
       if (py > 0) {
         const u = idx - mw;
-        if (!(mask[u] & barrier) && !region[u]) { if (!upOpen) { stack.push([x, py - 1]); upOpen = true; } }
-        else { if (mask[u] & barrier) { if (mask[u] & 1) hardHits++; else softHits++; } upOpen = false; }
+        const ub = dil ? (dtA[u] <= dilR ? 1 : 0) | (mask[u] & 2) : mask[u];
+        if (!(ub & barrier) && !region[u]) { if (!upOpen) { push(x, py - 1); upOpen = true; } }
+        else { if (ub & barrier) { if (ub & 1) hardHits++; else softHits++; } upOpen = false; }
       }
       if (py < mh - 1) {
         const d = idx + mw;
-        if (!(mask[d] & barrier) && !region[d]) { if (!downOpen) { stack.push([x, py + 1]); downOpen = true; } }
-        else { if (mask[d] & barrier) { if (mask[d] & 1) hardHits++; else softHits++; } downOpen = false; }
+        const db = dil ? (dtA[d] <= dilR ? 1 : 0) | (mask[d] & 2) : mask[d];
+        if (!(db & barrier) && !region[d]) { if (!downOpen) { push(x, py + 1); downOpen = true; } }
+        else { if (db & barrier) { if (db & 1) hardHits++; else softHits++; } downOpen = false; }
       }
     }
-    if (count > cap) return { status: "leak" };
+    if (count > cap) { dropRegion(region); return { status: "leak" }; }
   }
-  if (leaked) return { status: "leak" };
   // hatch/text slivers: plenty of cells but no room-like thickness
-  if (count < tinyPx || bx1 - bx0 + 1 < minThick || by1 - by0 + 1 < minThick) return { status: "tiny", count };
+  if (count < tinyPx || bx1 - bx0 + 1 < minThick || by1 - by0 + 1 < minThick) { dropRegion(region); return { status: "tiny", count }; }
+  regionBox.set(region, { x0: bx0, y0: by0, x1: bx1, y1: by1 });
   return { status: "ok", region, count, mw, mh, ws, mppf: mppf || undefined, hardHits, softHits };
 }
 
@@ -972,8 +1052,10 @@ export function sealRadiiFor(maskPxPerFt: number): number[] {
 // Distance transforms + dilated masks are pure functions of the mask; memoized
 // per mask identity so hover-preview and click share the work (a sheet's mask
 // object is cached upstream).
-interface SealScratch { dt: Uint8Array; byR: Map<number, MaskObj>; }
+interface SealScratch { dt: Uint8Array; }
 const sealCache = new WeakMap<Uint8Array, SealScratch>();
+/** Dilated masks used to be memoized per radius here too. They are no longer
+ *  built at all — see dilatedView — so the only thing worth keeping is `dt`. */
 
 // MANHATTAN (city-block) distance to the nearest HARD cell, two-pass chamfer,
 // saturating at 255 (radii are capped far below). One O(n) pass pair makes
@@ -986,8 +1068,12 @@ const sealCache = new WeakMap<Uint8Array, SealScratch>();
 // doorway (where two jamb fronts tie) stays a strict-descent dead end.
 // Chessboard contours are squares whose flat faces plateau for r cells at a
 // stretch — descent stalls inside rooms and creeps through doorways instead.
-function hardDT(mask: Uint8Array, mw: number, mh: number): Uint8Array {
-  const dt = new Uint8Array(mw * mh).fill(255);
+function hardDT(mask: Uint8Array, mw: number, mh: number, out?: Uint8Array): Uint8Array {
+  // `out` lets the caller supply a scratch buffer (the per-arc-cluster retries
+  // want one field, not one per cluster). Every cell is written by the forward
+  // pass before anything reads it, so a dirty buffer is safe; the fill is kept
+  // for a fresh allocation's sake only.
+  const dt = out || new Uint8Array(mw * mh).fill(255);
   for (let y = 0; y < mh; y++) {                       // forward: W, N
     const row = y * mw;
     for (let x = 0; x < mw; x++) {
@@ -1012,6 +1098,84 @@ function hardDT(mask: Uint8Array, mw: number, mh: number): Uint8Array {
   return dt;
 }
 
+// ── A8: the SAME transform, for a mask that differs in a handful of cells ───
+// The door-swing retry re-runs the distance transform once per arc cluster,
+// against a mask that differs from the sheet's by the few hundred cells of one
+// arc — and that recomputation, not the fills, is the largest single cost on
+// the interactive path (12 clusters × two passes over the whole raster, per
+// hovered room). It does not have to be global.
+//
+// Opening a set of cells C can only RAISE distances, and only for cells whose
+// every nearest hard cell lay in C. So dt is unchanged at every cell i with
+//     L1(i, box(C)) > dt[i]
+// — i keeps a hard cell at least as close as anything in C. Both sides of that
+// inequality are 1-Lipschitz in L1, so if it holds on the ring just outside a
+// window B ⊇ box(C) it holds everywhere beyond B too: step away from the box
+// and the left side gains 1 while the right gains at most 1. Grow B until the
+// ring passes, and the transform only has to be redone INSIDE B, seeded from
+// the unchanged values on its edge.
+//
+// The seeding is exact for the same reason the two-pass chamfer is exact at
+// all: an L1 geodesic from an interior cell to a hard cell outside B is a
+// monotone staircase, so it crosses the edge at a cell whose distance is
+// already known, and `edge value + steps to the edge` is the true distance.
+
+/** L1 distance from (x, y) to the box [bx0..bx1] × [by0..by1] (0 inside). */
+function l1ToBox(x: number, y: number, bx0: number, by0: number, bx1: number, by1: number): number {
+  const dx = x < bx0 ? bx0 - x : x > bx1 ? x - bx1 : 0;
+  const dy = y < by0 ? by0 - y : y > by1 ? y - by1 : 0;
+  return dx + dy;
+}
+
+/** Window big enough that opening `cl` cannot change dt outside it, or null
+ *  when no window short of the whole raster qualifies. */
+function dtDirtyWindow(cl: number[], mw: number, mh: number, dt: Uint8Array): RegionBox | null {
+  let cx0 = mw, cy0 = mh, cx1 = -1, cy1 = -1;
+  for (const i of cl) {
+    const y = (i / mw) | 0, x = i - y * mw;
+    if (x < cx0) cx0 = x; if (x > cx1) cx1 = x; if (y < cy0) cy0 = y; if (y > cy1) cy1 = y;
+  }
+  if (cx1 < 0) return null;
+  for (let w = 16; ; w *= 2) {
+    const x0 = cx0 - w, y0 = cy0 - w, x1 = cx1 + w, y1 = cy1 + w;
+    if (x0 <= 0 && y0 <= 0 && x1 >= mw - 1 && y1 >= mh - 1) return null;   // no cheaper than the full pass
+    // the ring immediately outside the window, corners included (cells off the
+    // raster pass vacuously — there is nothing out there to be wrong about)
+    const clear = (x: number, y: number): boolean =>
+      x < 0 || y < 0 || x >= mw || y >= mh || dt[y * mw + x] < l1ToBox(x, y, cx0, cy0, cx1, cy1);
+    let ok = true;
+    for (let x = x0 - 1; x <= x1 + 1 && ok; x++) ok = clear(x, y0 - 1) && clear(x, y1 + 1);
+    for (let y = y0; y <= y1 && ok; y++) ok = clear(x0 - 1, y) && clear(x1 + 1, y);
+    if (ok) return { x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(mw - 1, x1), y1: Math.min(mh - 1, y1) };
+  }
+}
+
+/** Two-pass chamfer restricted to `b`, reading the unchanged field outside it
+ *  straight out of `dt` — the same recurrence hardDT runs, same saturation. */
+function hardDTWindow(mask: Uint8Array, mw: number, mh: number, dt: Uint8Array, b: RegionBox): void {
+  for (let y = b.y0; y <= b.y1; y++) {
+    const row = y * mw;
+    for (let x = b.x0; x <= b.x1; x++) {
+      const i = row + x;
+      if (mask[i] & 1) { dt[i] = 0; continue; }
+      let d = 255;
+      if (x > 0) d = Math.min(d, dt[i - 1] + 1);
+      if (y > 0) d = Math.min(d, dt[i - mw] + 1);
+      dt[i] = Math.min(255, d);
+    }
+  }
+  for (let y = b.y1; y >= b.y0; y--) {
+    const row = y * mw;
+    for (let x = b.x1; x >= b.x0; x--) {
+      const i = row + x;
+      let d = dt[i];
+      if (x < mw - 1) d = Math.min(d, dt[i + 1] + 1);
+      if (y < mh - 1) d = Math.min(d, dt[i + mw] + 1);
+      dt[i] = Math.min(255, d);
+    }
+  }
+}
+
 /** Diamond (Manhattan) dilation of the HARD cells by r — every cell within
  *  city-block distance r of a wall becomes barrier; along a wall's axis a gap
  *  of ≤ 2r closes. Soft (bit 2) cells carry over untouched; a soft cell
@@ -1025,6 +1189,18 @@ export function dilateHardMask(mo: MaskObj, r: number, dt?: Uint8Array): MaskObj
   const out = new Uint8Array(n);
   for (let i = 0; i < n; i++) out[i] = (d[i] <= r ? 1 : 0) | (mask[i] & 2);
   return { mask: out, mw, mh, ws, softCount, mppf };
+}
+
+/** The same dilation, UNMATERIALIZED: a MaskObj floodPass reads through
+ *  `dt[i] <= r` per visited cell instead of a precomputed buffer. Bit-identical
+ *  to dilateHardMask(mo, r, dt) at every index — that function's whole body is
+ *  this expression — but it costs no 9 MB write and no O(mw·mh) pass, which is
+ *  what the seal ladder needed: five rungs × one arc cluster each, per hover.
+ *  Only floodPass ever reads a dilated mask (growback and the boundary
+ *  fractions read the ORIGINAL mask and the dt directly), so nothing else has
+ *  to know. */
+function dilatedView(mo: MaskObj, r: number, dt: Uint8Array): DilatedMask {
+  return { mask: mo.mask, mw: mo.mw, mh: mo.mh, ws: mo.ws, softCount: mo.softCount, mppf: mo.mppf, dilDT: dt, dilR: r };
 }
 
 // Grow the sealed-mask region back toward the true linework (4-connected BFS,
@@ -1044,17 +1220,23 @@ export function dilateHardMask(mo: MaskObj, r: number, dt?: Uint8Array): MaskObj
 function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: number }, orig: MaskObj, r: number, barrier: number, dt: Uint8Array): void {
   const { region, mw, mh } = f;
   const mask = orig.mask;
+  const b = boxOf(region, mw, mh);        // frontier cells are region cells
+  regionBox.set(region, b);               // ...and the growth below extends it
   let frontier: number[] = [];
-  for (let y = 0; y < mh; y++) {
+  for (let y = b.y0; y <= b.y1; y++) {
     const row = y * mw;
-    for (let x = 0; x < mw; x++) {
+    for (let x = b.x0; x <= b.x1; x++) {
       const i = row + x;
       if (!region[i]) continue;
       if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) frontier.push(i);
     }
   }
   const tryGrow = (from: number, to: number, next: number[]) => {
-    if (!region[to] && !(mask[to] & barrier) && dt[to] <= r && dt[to] <= dt[from]) { region[to] = 1; f.count++; next.push(to); }
+    if (!region[to] && !(mask[to] & barrier) && dt[to] <= r && dt[to] <= dt[from]) {
+      region[to] = 1; f.count++; next.push(to);
+      const y = (to / mw) | 0, x = to - y * mw;
+      if (x < b.x0) b.x0 = x; if (x > b.x1) b.x1 = x; if (y < b.y0) b.y0 = y; if (y > b.y1) b.y1 = y;
+    }
   };
   while (frontier.length) {
     const next: number[] = [];
@@ -1124,11 +1306,16 @@ export function doorWedgeCapPx(maskPxPerFt: number): number {
 function boundaryCurveClusters(mo: MaskObj, region: Uint8Array): number[][] {
   const { mw, mh } = mo;
   const src = mo.mask;
-  const isNear = new Uint8Array(mw * mh);
   const near: number[] = [];
-  for (let y = 0; y < mh; y++) {
+  // A cell can only be within Chebyshev 3 of the region if it is within 3 of
+  // the region's own box, so the search window is the box grown by 3 — scanline
+  // order inside it is the same order the full-raster scan visited them in.
+  const b = boxOf(region, mw, mh);
+  const y0 = Math.max(0, b.y0 - 3), y1 = Math.min(mh - 1, b.y1 + 3);
+  const x0 = Math.max(0, b.x0 - 3), x1 = Math.min(mw - 1, b.x1 + 3);
+  for (let y = y0; y <= y1; y++) {
     const row = y * mw;
-    for (let x = 0; x < mw; x++) {
+    for (let x = x0; x <= x1; x++) {
       const i = row + x;
       if (!(src[i] & MASK_CURVE_BIT)) continue;
       let n = false;
@@ -1140,7 +1327,7 @@ function boundaryCurveClusters(mo: MaskObj, region: Uint8Array): number[][] {
           if (nx >= 0 && nx < mw && region[ny * mw + nx]) { n = true; break; }
         }
       }
-      if (n) { near.push(i); isNear[i] = 1; }
+      if (n) near.push(i);
     }
   }
   // expand from the near cells through EVERY connected curve cell: a door
@@ -1149,12 +1336,16 @@ function boundaryCurveClusters(mo: MaskObj, region: Uint8Array): number[][] {
   // the WHOLE arc — a partial cluster's bounding box under-sizes the wedge
   // and the door is wrongly rejected
   const clusters: number[][] = [];
-  const seen = new Uint8Array(mw * mh);
+  // `seen` is SPARSE — only curve cells are ever marked, a few hundred per
+  // door — so a Set costs a few KB where the full-raster flag plane cost 9 MB
+  // per hover. Cluster order still comes from `near` (scanline) and the walk
+  // order from the stack, both untouched.
+  const seen = new Set<number>();
   for (const s of near) {                    // scanline order ⇒ deterministic clusters
-    if (seen[s]) continue;
+    if (seen.has(s)) continue;
     const cl: number[] = [];
     const stack = [s];
-    seen[s] = 1;
+    seen.add(s);
     while (stack.length) {
       const i = stack.pop() as number;
       cl.push(i);
@@ -1166,7 +1357,7 @@ function boundaryCurveClusters(mo: MaskObj, region: Uint8Array): number[][] {
           const nx = x + dx;
           if (nx < 0 || nx >= mw) continue;
           const j = ny * mw + nx;
-          if (!seen[j] && (src[j] & MASK_CURVE_BIT)) { seen[j] = 1; stack.push(j); }
+          if (!seen.has(j) && (src[j] & MASK_CURVE_BIT)) { seen.add(j); stack.push(j); }
         }
       }
     }
@@ -1366,18 +1557,21 @@ function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: numb
 // Both are only set when minPassDelta > 0. The rule runs on essentially every
 // scaled click and usually changes nothing; provenance for "a rule ran and did
 // not matter" is noise, and a confidence deduction for it would be a lie.
-function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], minPassPx = 0): FloodResult {
+function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], minPassPx = 0, given?: SealScratch): FloodResult {
+  // `given` is the caller's own scratch — the per-arc-cluster retries run
+  // against a REUSED mask buffer, which the sealCache (keyed on mask identity)
+  // must never see: it would hand back the previous cluster's distance field.
   const scratch = (): SealScratch => {
+    if (given) return given;
     let s = sealCache.get(mo.mask);
-    if (!s) { s = { dt: hardDT(mo.mask, mo.mw, mo.mh), byR: new Map() }; sealCache.set(mo.mask, s); }
+    if (!s) { s = { dt: hardDT(mo.mask, mo.mw, mo.mh) }; sealCache.set(mo.mask, s); }
     return s;
   };
   let raw: FloodResult | null = null;
   const rawFlood = (): FloodResult => (raw ??= floodRegion(mo, ix, iy, sensitivity));
   if (minPassPx > 0) {
     const s = scratch();
-    let dm = s.byR.get(minPassPx);
-    if (!dm) { dm = dilateHardMask(mo, minPassPx, s.dt); s.byR.set(minPassPx, dm); }
+    const dm = dilatedView(mo, minPassPx, s.dt);
     const [ax, ay] = ascendSeed(s.dt, mo.mw, mo.mh, mo.ws, ix, iy, minPassPx);
     const f = floodRegion(dm, ax, ay, sensitivity);
     if (f.status === "ok") {
@@ -1407,8 +1601,7 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
   const sc = scratch();
   for (const r of radii) {
     if (r <= minPassPx) continue;   // a subset of the primary's dilation — already failed harder
-    let dm = sc.byR.get(r);
-    if (!dm) { dm = dilateHardMask(mo, r, sc.dt); sc.byR.set(r, dm); }
+    const dm = dilatedView(mo, r, sc.dt);
     const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
     const f = floodRegion(dm, ax, ay, sensitivity);
     if (f.status !== "ok") continue;
@@ -1474,28 +1667,65 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
     })
     .filter((c) => c.allow >= 1)
     .sort((a, b) => (b.rank - a.rank) || (a.at - b.at));
+  // ONE mask buffer and ONE distance field for the whole ladder of clusters
+  // (A8): each cluster used to slice a fresh copy of the mask and run a fresh
+  // hardDT over it, so a six-door room allocated and refilled twelve
+  // full-raster arrays before it drew anything. The buffers are private to
+  // this call, so the sealCache — keyed on mask IDENTITY — must be bypassed
+  // for them; sealAttempt takes the scratch explicitly instead.
+  let m2mask: Uint8Array | null = null, m2dt: Uint8Array | null = null;
+  let openedCl: number[] | null = null, dirty: RegionBox | null = null;
+  const rb1 = boxOf(r1.region, mw, mh);
+  // the sheet's own distance field — computed once per MASK (this is the
+  // WeakMap the per-cluster copies used to defeat) and never recomputed here
+  let base = sealCache.get(mo.mask);
+  if (!base) { base = { dt: hardDT(mo.mask, mw, mh) }; sealCache.set(mo.mask, base); }
+  const baseDT = base.dt;
   for (const { cl, allow: clusterAllowance } of ranked.slice(0, WEDGE_MAX_DOORS)) {
-    // open ONLY this cluster's cells
-    const m2mask = mo.mask.slice();
+    // open ONLY this cluster's cells, and undo the previous cluster's — mask
+    // and distance field alike — so both buffers hold exactly "the sheet with
+    // this one arc opened" without either being rebuilt from scratch
+    if (!m2mask) { m2mask = mo.mask.slice(); m2dt = baseDT.slice(); }
+    else {
+      if (openedCl) for (const i of openedCl) m2mask[i] = mo.mask[i];
+      if (dirty) for (let y = dirty.y0; y <= dirty.y1; y++) { const r = y * mw; (m2dt as Uint8Array).set(baseDT.subarray(r + dirty.x0, r + dirty.x1 + 1), r + dirty.x0); }
+      else (m2dt as Uint8Array).set(baseDT);
+    }
     for (const i of cl) m2mask[i] = m2mask[i] & ~1;
+    openedCl = cl;
     const m2: MaskObj = { mask: m2mask, mw, mh, ws: mo.ws, softCount: mo.softCount, mppf: mo.mppf };
-    let sc2 = sealCache.get(m2.mask);
-    if (!sc2) { sc2 = { dt: hardDT(m2.mask, mw, mh), byR: new Map() }; sealCache.set(m2.mask, sc2); }
+    dirty = dtDirtyWindow(cl, mw, mh, baseDT);
+    if (dirty) hardDTWindow(m2mask, mw, mh, m2dt as Uint8Array, dirty);
+    else hardDT(m2mask, mw, mh, m2dt as Uint8Array);
+    const sc2: SealScratch = { dt: m2dt as Uint8Array };
     // retry from the ROOM'S most interior cell, not the click — the retry's
     // sealed floods dilate the walls, and a click near a wall (or a hover
     // sweeping in from a neighbor) would start inside the dilated barrier.
     // Any cell of r1's region floods the same space, so pick the deepest
     // one; this also makes the retry deterministic per room per door.
     let bi = -1, bd = -1;
-    for (let i = 0; i < r1.region.length; i++) if (r1.region[i] && sc2.dt[i] > bd) { bd = sc2.dt[i]; bi = i; }
+    for (let y = rb1.y0; y <= rb1.y1; y++) {          // r1's own box: every region cell is in it
+      const row = y * mw;
+      for (let x = rb1.x0; x <= rb1.x1; x++) { const i = row + x; if (r1.region[i] && sc2.dt[i] > bd) { bd = sc2.dt[i]; bi = i; } }
+    }
     const sx = bi < 0 ? ix : (bi % mw) / mo.ws, sy = bi < 0 ? iy : Math.floor(bi / mw) / mo.ws;
-    const r2 = sealAttempt(m2, sx, sy, sensitivity, radii, minPassPx);
+    const r2 = sealAttempt(m2, sx, sy, sensitivity, radii, minPassPx, sc2);
     if (r2.status !== "ok" || r2.count <= r1.count) continue;
     const growth = r2.count - r1.count;
     if (growth > clusterAllowance) continue;           // curved wall / open paper, not a door
     if (count - r1.count + growth > globalAllowance) continue;
-    if (!region) region = r1.region.slice();
-    for (let i = 0; i < region.length; i++) if (r2.region[i] && !region[i]) { region[i] = 1; count++; }
+    if (!region) { region = r1.region.slice(); regionBox.set(region, { ...rb1 }); }
+    const rb = regionBox.get(region) as RegionBox, b2 = boxOf(r2.region, mw, mh);
+    for (let y = b2.y0; y <= b2.y1; y++) {            // r2's box: every cell it could add is in it
+      const row = y * mw;
+      for (let x = b2.x0; x <= b2.x1; x++) {
+        const i = row + x;
+        if (r2.region[i] && !region[i]) {
+          region[i] = 1; count++;
+          if (x < rb.x0) rb.x0 = x; if (x > rb.x1) rb.x1 = x; if (y < rb.y0) rb.y0 = y; if (y > rb.y1) rb.y1 = y;
+        }
+      }
+    }
     wedges++;
     if (r2.hatchFiltered) hatchFiltered = true;
     if (r2.hatchTier && HATCH_TIER_RISK[r2.hatchTier] > (hatchTier ? HATCH_TIER_RISK[hatchTier] : -1)) hatchTier = r2.hatchTier;
@@ -1520,10 +1750,15 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
   // baseboard genuinely runs around those.
   const reg = region, reg1 = r1.region, mask = mo.mask;
   const isDelta = (i: number) => reg[i] && !reg1[i];
+  // An absorbed cell is pinched BETWEEN two region cells, so it lies strictly
+  // inside the region's own box — and absorbing it cannot widen that box.
+  const rbA = boxOf(reg, mw, mh);
+  const ay0 = Math.max(1, rbA.y0), ay1 = Math.min(mh - 2, rbA.y1);
+  const ax0 = Math.max(1, rbA.x0), ax1 = Math.min(mw - 2, rbA.x1);
   for (let pass = 0; pass < 2; pass++) {               // Bresenham lines raster up to 2 px thick
-    for (let y = 1; y < mh - 1; y++) {
+    for (let y = ay0; y <= ay1; y++) {
       const row = y * mw;
-      for (let x = 1; x < mw - 1; x++) {
+      for (let x = ax0; x <= ax1; x++) {
         const i = row + x;
         if (reg[i] || !(mask[i] & 1)) continue;
         const pinchH = reg[i - 1] && reg[i + 1], pinchV = reg[i - mw] && reg[i + mw];
@@ -1541,10 +1776,11 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
 // seal, large for a dilation-starved blob whose edges sit in open space.
 function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, dt: Uint8Array): number {
   const { region, mw, mh } = f;
+  const b = boxOf(region, mw, mh);        // boundary cells are region cells
   let boundary = 0, virtual = 0;
-  for (let y = 0; y < mh; y++) {
+  for (let y = b.y0; y <= b.y1; y++) {
     const row = y * mw;
-    for (let x = 0; x < mw; x++) {
+    for (let x = b.x0; x <= b.x1; x++) {
       const i = row + x;
       if (!region[i]) continue;
       if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) {
@@ -1571,10 +1807,11 @@ function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, 
 function curveBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, mo: MaskObj): number {
   const { region, mw, mh } = f;
   const mask = mo.mask;
+  const b = boxOf(region, mw, mh);        // boundary cells are region cells
   let boundary = 0, curved = 0;
-  for (let y = 0; y < mh; y++) {
+  for (let y = b.y0; y <= b.y1; y++) {
     const row = y * mw;
-    for (let x = 0; x < mw; x++) {
+    for (let x = b.x0; x <= b.x1; x++) {
       const i = row + x;
       if (!region[i]) continue;
       const w = x > 0 ? i - 1 : -1, e = x < mw - 1 ? i + 1 : -1, n = y > 0 ? i - mw : -1, s = y < mh - 1 ? i + mw : -1;
@@ -1592,7 +1829,14 @@ function curveBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, mo
 export function traceRegion(reg: RegionResult, epsMaskPx = 1.5): Point[] {
   const { region, mw, mh, ws } = reg;
   let s = -1;
-  for (let i = 0; i < region.length; i++) if (region[i]) { s = i; break; }
+  // first set cell in scanline order — the region's own box holds all of them,
+  // so restricting the search finds the same one (A8: this scan alone was a
+  // full 9 MB sweep on every hovered room)
+  const b = boxOf(region, mw, mh);
+  for (let y = b.y0; y <= b.y1 && s < 0; y++) {
+    const row = y * mw;
+    for (let x = b.x0; x <= b.x1; x++) if (region[row + x]) { s = row + x; break; }
+  }
   if (s < 0) return [];
   const sx = s % mw, sy = (s / mw) | 0;
   const at = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < mw && y < mh && !!region[y * mw + x];
