@@ -196,6 +196,41 @@ scale-free". False: `:318` (`len < 0.5`) and `:425` (`tol = max(0.75, r*FRAC)`) 
 image-px, and `markPolylineArcs` runs before any `ws` scaling. At r ≈ 5–25 px the 0.75 px
 floor is a 3–15% residual tolerance, far looser than the advertised 3%.
 
+### A5b — HIGH: the bench scores a quantity the product never returns
+
+**Found in cycle-3 review of the remediation plan; missed by all six auditors.**
+
+Production applies vertex snapping to every traced ring — `TakeoffCanvas.jsx:2882` (commit),
+`:3144` (hover), `:3986` (agent), and `mcp/src/session.ts:344`, `:398` — computing `area_sf`
+from the *snapped* ring. **`bench/run.mts:53` and `bench/pin-goldens.mts:86` call bare
+`traceRegion(f)`; neither imports `snapVertices` at all.**
+
+So every engine-pinned golden pins a number the product never displays:
+
+| probe | pinned golden | bench (raw trace) | production (snapped) |
+|---|---|---|---|
+| `enclosed-room` | 120.000 | 117.568 (−2.03%) | **120.000 (0.00%)** |
+| `two-doorways/center` | 19.753 | 18.898 (−4.33%) | **19.753 (0.00%)** |
+| `patient-room-137` | 161.37 | 161.33 | 167.99 (**+4.10%**) |
+| `patient-room-137-band` | 19.04 | 19.04 | 20.67 (**+8.52%**) |
+| `elevator-e01` | 136.79 | 136.75 | 142.67 (**+4.30%**) |
+
+Independent confirmation that production is exact: `e2e/one-click.e2e.cjs:84` asserts the
+enclosed room previews **120 SF** through real Chromium and passes.
+
+Three consequences:
+1. **This is A6's failure class on the bench surface** — two code paths measuring the same
+   thing differently, with no test that they agree.
+2. **It silently corrupts the answer-key pipeline.** `from-takeoff.mts` builds the human golden
+   from *exported, snapped* shapes while `run.mts` scores against *un-snapped* engine rings — a
+   systematic ~4% offset on the VA plan against a 2.5% gate (C2, C7).
+3. It invalidates any bench-derived claim about absolute accuracy, including the rasterisation
+   bias the remediation plan originally proposed to fix — that bias is a harness artifact, and
+   "correcting" it inside the tracer would push the shipped answer *above* truth.
+
+Whether snapping is itself *correct* is a separate open question: it inflated the 19 SF
+annotation band by 8.5%.
+
 ### A6 — MEDIUM: the MCP surface measures `one_click` with a different, older engine
 
 `mcp/src/session.ts:246` calls `buildMask` **without** `pxPerFt` → `mppf = 0` → every guard
