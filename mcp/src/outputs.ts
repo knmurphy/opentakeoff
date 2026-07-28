@@ -60,6 +60,11 @@ export const oneClickOutput = {
   area_px2: z.number().optional().describe("Preview mode (no scale): raw area in px²"),
   perimeter_px: z.number().optional().describe("Preview mode (no scale): raw perimeter in px"),
   warning: z.string().optional().describe("Preview mode (no scale): why quantities are unavailable and what to do"),
+  confidence: z.number().optional().describe("traceConfidence 0-1: how much of this boundary is the plan's own linework vs inferred (1.0 = verbatim vector)"),
+  confidence_factors: z.array(z.string()).optional().describe("Named deductions behind `confidence`, e.g. \"sealed-opening(12% synthetic boundary)\""),
+  gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
+  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 };
 
 /** One batch-detected room — same per-room shape as oneClickOutput's scaled/
@@ -76,6 +81,11 @@ const detectedRoom = z.object({
   shape_id: z.string().optional().describe("Scaled mode: id of the committed shape, when condition was passed"),
   area_px2: z.number().optional().describe("Preview mode (no scale): raw area in px²"),
   perimeter_px: z.number().optional().describe("Preview mode (no scale): raw perimeter in px"),
+  confidence: z.number().optional().describe("traceConfidence 0-1: how much of this boundary is the plan's own linework vs inferred (1.0 = verbatim vector)"),
+  confidence_factors: z.array(z.string()).optional().describe("Named deductions behind `confidence`, e.g. \"sealed-opening(12% synthetic boundary)\""),
+  gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
+  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 });
 
 /** detect_rooms: one flood per room-number label found on the sheet's text
