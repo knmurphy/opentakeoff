@@ -184,11 +184,14 @@ export default function PlanNavigator({
     return () => { seqRef.current++; };
   }, [sheets, getDoc]);
 
-  const allKeys = sheets.flatMap((s) => {
+  // Memoized because it is a DEPENDENCY, not just a list: keySet and the search
+  // results key off it, and a fresh array every render meant a full plan-set
+  // search re-ran on every unrelated re-render (thumbnail arrival, selection…).
+  const allKeys = useMemo(() => sheets.flatMap((s) => {
     const n = pages[s.name];
     if (!n) return [];
     return Array.from({ length: n }, (_, i) => (i ? `${s.name}#${i + 1}` : s.name));
-  });
+  }), [sheets, pages]);
 
   // a one-sheet project has nothing to choose — open it, but ONLY on the first
   // landing (no tab open yet). Without the openTabs guard this fires on every
@@ -262,7 +265,13 @@ export default function PlanNavigator({
   const indexSheet = useCallback((key, tc, vp) => {
     if (!planIndexRef || planIndexRef.current.has(key)) return;
     const items = extractRegionText(tc, vp, { x0: 0, y0: 0, x1: vp.width, y1: vp.height });
-    if (items.length) planIndexRef.current.set(key, buildSheetIndex(key, items, "text", Date.now()));
+    // Record the sheet even when it has NO text (a scan). buildSheetIndex returns
+    // a valid empty index and searchPlan can never produce a hit from one, so this
+    // costs nothing — while skipping it left the sheet permanently "unindexed":
+    // `unindexed` never reached 0, so the "still reading…" message never cleared
+    // and the scanned-sheet message it should have shown was unreachable, and
+    // ensureIndexed re-read every scan on every keystroke.
+    planIndexRef.current.set(key, buildSheetIndex(key, items, "text", Date.now()));
   }, [planIndexRef]);
 
   // Index every sheet the pump hasn't reached. Triggered by typing, not by
@@ -270,6 +279,15 @@ export default function PlanNavigator({
   // published every 8 sheets rather than every sheet — the label pass upstream
   // batches the same way, and a 200-sheet set would otherwise re-render the
   // whole grid 200 times.
+  //
+  // DELIBERATELY does NOT yield on busyRef the way the thumbnail pump does, and
+  // this was measured, not assumed: adding the pump's
+  // `while (busyRef.current === "rendering") await sleep(150)` took first-search
+  // latency on the bundled sample from 800ms to 6.4s. The pump yields because it
+  // RASTERIZES — it contends for canvas and GPU against an in-flight sheet
+  // render. This pass only calls getTextContent, which is worker-side and costs
+  // ~10-50ms per page, so the contention it avoids is far cheaper than the wait
+  // it would impose on the one interaction the user is actively waiting on.
   const ensureIndexed = useCallback(async () => {
     if (!planIndexRef || indexingRef.current) return;
     indexingRef.current = true;
@@ -298,7 +316,20 @@ export default function PlanNavigator({
   }, [allKeys, getDoc, planIndexRef, indexSheet]);
 
   const query = find.trim();
+  // recomputed off indexedN/allKeys — the same two invalidation signals `hits` uses
+  const unindexed = planIndexRef ? allKeys.filter((k) => !planIndexRef.current.has(k)).length : 0;
   const keySet = useMemo(() => new Set(allKeys), [allKeys]);
+
+  // ensureIndexed snapshots allKeys and bails on a seqRef bump, so sheets that
+  // arrive DURING a pass (page counts still enumerating on first open, or a
+  // freshly added PDF) would otherwise never be indexed — the pass is only
+  // re-triggered by focus/keystroke, and the user has already typed. Re-arm it
+  // whenever a search is live and something is still unindexed. This terminates:
+  // indexSheet now records every sheet it reads, including text-less scans, so
+  // `unindexed` reaches 0 rather than sticking above it forever.
+  useEffect(() => {
+    if (query && unindexed > 0) ensureIndexed();
+  }, [query, unindexed, allKeys, ensureIndexed]);
   // Results are INTERSECTED with the live plan set, which is what makes a ghost
   // card structurally impossible rather than merely unlikely: the index is a ref
   // whose entries outlive nothing in particular, and a hit naming a sheet that is
@@ -317,7 +348,6 @@ export default function PlanNavigator({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, indexedN, planIndexRef, keySet]);
   const hitByKey = useMemo(() => new Map((hits ?? []).map((h) => [h.key, h])), [hits]);
-  const unindexed = planIndexRef ? allKeys.filter((k) => !planIndexRef.current.has(k)).length : 0;
 
   const toggleSel = (key) => setSel((g) => (g.includes(key) ? g.filter((k) => k !== key) : [...g, key]));
   const shapeCount = (key) => shapes.reduce((n, s) => n + (s.sheet_id === key ? 1 : 0), 0);
@@ -408,7 +438,7 @@ export default function PlanNavigator({
   // Plan-set search. Indexing starts on the first keystroke, not on mount, and
   // results refill live as it runs — so a big set is usable before it finishes
   // rather than blocking behind a spinner.
-  const searchBox = mode !== "plan" ? null : (
+  const searchBox = mode !== "plan" || !allKeys.length ? null : (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
       <input
         name="plan-search" value={find} autoComplete="off"
@@ -452,7 +482,7 @@ export default function PlanNavigator({
           ))}
         </div>
       ) : (
-        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>{subtitle}</span>
+        <span aria-live="polite" style={{ fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>{subtitle}</span>
       )}
 
       <div style={{ flex: 1 }} />

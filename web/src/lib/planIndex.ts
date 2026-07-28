@@ -98,6 +98,30 @@ export function splitRun(str: string): string[] {
   return (str || "").split(/\s+/);
 }
 
+/** One normalized token → every term it should be findable under.
+ *
+ *  A two-material callout is written as ONE whitespace-delimited token —
+ *  "PT-1/PT-2", "CPT-1,LVT-2" — and indexing only the whole thing makes the
+ *  right-hand half silently unfindable: a search for PT-2 misses a sheet that
+ *  plainly specifies PT-2. So a token joined by '/' or ',' is indexed under the
+ *  whole AND each part.
+ *
+ *  Only '/' and ',' split. '-' and '.' must NOT: they are internal to single
+ *  codes ("CPT-1", "S1.1"), and splitting them would shred the vocabulary this
+ *  index exists to find — the same reason normalizeTerm keeps them.
+ *
+ *  The whole is kept so typing the callout exactly as drawn still matches, and
+ *  so a term like "AND/OR" doesn't lose its literal form. */
+export function expandTerm(term: string): string[] {
+  if (!term.includes("/") && !term.includes(",")) return [term];
+  const out = [term];
+  for (const part of term.split(/[/,]+/)) {
+    const p = normalizeTerm(part);
+    if (p && p !== term && !out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
 /** Build one sheet's index from its positioned text.
  *
  *  Anchors are the run's own origin, not the sub-token's: pdf.js gives a
@@ -114,12 +138,14 @@ export function buildSheetIndex(
   let tokenCount = 0;
   for (const it of items || []) {
     for (const raw of splitRun(it.str)) {
-      const term = normalizeTerm(raw);
-      if (!term) continue;
-      tokenCount++;
-      if (!isSearchable(term)) continue;
-      const anchors = (terms[term] ??= []);
-      if (anchors.length < MAX_ANCHORS * 2) anchors.push(it.x, it.y);
+      const token = normalizeTerm(raw);
+      if (!token) continue;
+      tokenCount++;   // counts TOKENS as drawn, not the terms they expand into
+      for (const term of expandTerm(token)) {
+        if (!isSearchable(term)) continue;
+        const anchors = (terms[term] ??= []);
+        if (anchors.length < MAX_ANCHORS * 2) anchors.push(it.x, it.y);
+      }
     }
   }
   return { key, source, builtAt, terms, tokenCount };

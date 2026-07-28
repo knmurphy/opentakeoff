@@ -105,7 +105,10 @@ import * as panelGeom from "../lib/panelGeometry.js";
 function indexSheetText(map, key, textContent, viewport) {
   if (!key || map.has(key)) return;
   const items = extractRegionText(textContent, viewport, { x0: 0, y0: 0, x1: viewport.width, y1: viewport.height });
-  if (items.length) map.set(key, buildSheetIndex(key, items, "text", Date.now()));
+  // recorded even when empty (a scan): a valid empty index can never produce a
+  // hit, and skipping it leaves the sheet forever "unindexed" — see the matching
+  // note in PlanNavigator's indexSheet.
+  map.set(key, buildSheetIndex(key, items, "text", Date.now()));
 }
 
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
@@ -1243,7 +1246,12 @@ export default function TakeoffCanvas() {
         if (stale()) return;
         const lbl = extractSheetNumber(tc, lead.viewport);
         if (lbl) setPageLabels((m) => (m[lead.pageNum] === lbl ? m : { ...m, [lead.pageNum]: lbl }));
-        indexSheetText(planIndexRef.current, lead.key, tc, lead.viewport);
+        // NOT lead.viewport: that is the PANEL's scale (min(RENDER_SCALE, auto),
+        // or the auto budget on a hi-res sheet), so anchors would land in panel px
+        // while the per-page pass below records RENDER_SCALE px — the same file's
+        // page 1 in different units than its pages 2+. The index's coordinate
+        // contract is image px at RENDER_SCALE; mint a viewport that honours it.
+        indexSheetText(planIndexRef.current, lead.key, tc, lead.pageObj.getViewport({ scale: RENDER_SCALE }));
       }).catch(() => {});
       if (labeledFileRef.current !== active) {
         labeledFileRef.current = active;

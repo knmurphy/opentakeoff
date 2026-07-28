@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  normalizeTerm, splitRun, isCode, isSearchable, buildSheetIndex, matchTerm,
+  normalizeTerm, splitRun, expandTerm, isCode, isSearchable, buildSheetIndex, matchTerm,
   searchPlan, sheetCodes, dropFileFromIndex, MAX_ANCHORS, MIN_TERM_LEN,
   type IndexedTextItem, type SheetIndex,
 } from "../src/lib/planIndex.ts";
@@ -94,6 +94,37 @@ test("buildSheetIndex: index is plain JSON, so it round-trips through storage", 
   assert.equal(back.builtAt, 1234);
 });
 
+// ── expandTerm: compound callouts ───────────────────────────────────────────
+
+test("expandTerm: a '/'-joined callout is findable by EITHER half and as drawn", () => {
+  assert.deepEqual(expandTerm("PT-1/PT-2"), ["PT-1/PT-2", "PT-1", "PT-2"]);
+  assert.deepEqual(expandTerm("CPT-1,LVT-2"), ["CPT-1,LVT-2", "CPT-1", "LVT-2"]);
+});
+
+test("expandTerm: '-' and '.' never split — they are internal to single codes", () => {
+  assert.deepEqual(expandTerm("CPT-1"), ["CPT-1"]);
+  assert.deepEqual(expandTerm("S1.1"), ["S1.1"]);
+  assert.deepEqual(expandTerm("A-101"), ["A-101"]);
+});
+
+test("searchPlan: the right-hand half of a compound callout is findable", () => {
+  // regression: "PT-1/PT-2" used to index whole, so PT-2 silently missed a
+  // sheet that plainly specifies it. Verified present on demo/sample-finish-plan.pdf.
+  const ix = buildSheetIndex("A601.pdf", runs(["PT-1/PT-2", 10, 20]));
+  assert.deepEqual(searchPlan([ix], "PT-2").map((h) => h.key), ["A601.pdf"]);
+  assert.deepEqual(searchPlan([ix], "PT-1").map((h) => h.key), ["A601.pdf"]);
+  assert.deepEqual(searchPlan([ix], "PT-1/PT-2").map((h) => h.key), ["A601.pdf"], "still matches as drawn");
+  // the compound itself is not a tag (TAG_RE rejects the '/'), but both halves are —
+  // so the tag index lists the two real finishes rather than one unusable string
+  assert.deepEqual(sheetCodes(ix).tags, ["PT-1", "PT-2"]);
+});
+
+test("buildSheetIndex: tokenCount counts tokens as DRAWN, not expanded terms", () => {
+  const ix = buildSheetIndex("x", runs(["PT-1/PT-2", 0, 0]));
+  assert.equal(ix.tokenCount, 1);
+  assert.equal(Object.keys(ix.terms).length, 3);
+});
+
 // ── matchTerm ───────────────────────────────────────────────────────────────
 
 test("matchTerm: an exact hit short-circuits the prefix sweep", () => {
@@ -141,6 +172,30 @@ test("searchPlan: more occurrences outrank fewer", () => {
   assert.deepEqual(hits.map((h) => h.key), ["A101.pdf", "A102.pdf"]);
   // A101 says CORRIDOR once and A102 once, so the tie breaks on key, stably
   assert.equal(hits[0].score, hits[1].score);
+});
+
+test("searchPlan: an EXACT term outranks a prefix-only match on another sheet", () => {
+  // pins the x4 exact bonus — deleting it used to leave every test green
+  const exact = buildSheetIndex("exact.pdf", runs(["CPT-1", 0, 0]));
+  const prefixOnly = buildSheetIndex("prefix.pdf", runs(["CPT-10 CPT-11 CPT-12", 0, 0]));
+  assert.deepEqual(searchPlan([prefixOnly, exact], "CPT-1").map((h) => h.key), ["exact.pdf", "prefix.pdf"]);
+});
+
+test("searchPlan: a CODE outranks prose at equal occurrence count", () => {
+  // pins the x2 code bonus
+  const code = buildSheetIndex("code.pdf", runs(["ACT-1", 0, 0]));
+  const prose = buildSheetIndex("prose.pdf", runs(["ACTUAL", 0, 0]));
+  const hits = searchPlan([prose, code], "ACT");
+  assert.deepEqual(hits.map((h) => h.key), ["code.pdf", "prose.pdf"]);
+  assert.ok(hits[0].score > hits[1].score);
+});
+
+test("searchPlan: occurrence count breaks a tie between equal-kind terms", () => {
+  const many = buildSheetIndex("many.pdf", runs(["LOBBY", 0, 0], ["LOBBY", 1, 1], ["LOBBY", 2, 2]));
+  const one = buildSheetIndex("one.pdf", runs(["LOBBY", 0, 0]));
+  const hits = searchPlan([one, many], "LOBBY");
+  assert.deepEqual(hits.map((h) => h.key), ["many.pdf", "one.pdf"]);
+  assert.ok(hits[0].score > hits[1].score);
 });
 
 test("searchPlan: a hit carries an anchor to jump to, in image px", () => {
