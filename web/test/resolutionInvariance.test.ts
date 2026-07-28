@@ -18,11 +18,13 @@ test("minPassRadiusFor: off without a scale, feet-consistent with one", () => {
   assert.equal(minPassRadiusFor(0), 0);
   assert.equal(minPassRadiusFor(NaN), 0);
   assert.equal(minPassRadiusFor(-3), 0);
-  for (const mppf of [6, 9, 12, 18, 24, 36]) {
+  for (const mppf of [6, 8, 9, 12, 18, 24, 36]) {
     const r = minPassRadiusFor(mppf);
     const closedFt = (2 * r) / mppf;                  // widest passage the rule closes
-    assert.ok(closedFt <= MIN_PASS_FT + 1e-9, `mppf ${mppf}: closes ${closedFt} ft > ${MIN_PASS_FT}`);
-    assert.ok(closedFt >= MIN_PASS_FT - 2 / mppf - 1e-9, `mppf ${mppf}: closes only ${closedFt} ft — more than a cell short of ${MIN_PASS_FT}`);
+    // round-to-nearest radius ⇒ the effective threshold sits within ONE cell
+    // of MIN_PASS_FT on either side (the tightest band a 2r dilation allows;
+    // a floor bias closed a 0.42 ft slit at one resolution and not another)
+    assert.ok(Math.abs(closedFt - MIN_PASS_FT) <= 1 / mppf + 1e-9, `mppf ${mppf}: closes ${closedFt} ft — more than a cell off ${MIN_PASS_FT}`);
   }
 });
 

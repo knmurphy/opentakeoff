@@ -16,7 +16,8 @@ here and may become their own proposals later.
 | **B-adjacent** — failure mode #2 ("unclosed door swings") | Curve marking (mask bit 4 from `SEG_CURVE`), LOCAL curve-transparent retry with grow-but-verify, leaf absorption for perimeter integrity, `door_wedges` provenance. **Note for the PR description:** "swing wedge included, measured to the wall plane" is a measurement-policy choice — call it out explicitly as a review point, with the flooring-practice rationale | `web/src/lib/oneclick.ts` |
 | **D** — confidence + metadata | `traceConfidence`: transparent 0–1 score with named factors over engine signals; `virtualFrac` / `wedgeGrowth` surfaced on `FloodResult`; `origin.confidence` + `confidence_factors` | `web/src/lib/confidence.ts`, `web/src/lib/oneclick.ts` |
 | **E** — scored benchmark corpus | Golden fixtures (synthetic truth-by-construction + pinned reviewed real-plan traces), rasterized-IoU scorer, gating runner reporting mean/floor IoU, refusal rate, leak rate, correct-refusal rate, per-probe confidence; **cross-resolution runs** (ws × 1/0.75/0.5) gated on verdict agreement + pairwise ring IoU at-or-above the determinism floor | `web/bench/**` |
-| **Failure mode #3** — cross-resolution determinism | Feet-true thresholds through `MaskObj.mppf` (tiny/thin-region guards, seed nudge, hatch pitch cap — px behavior preserved bit-for-bit at the 18 px/ft calibration and as the scale-unknown fallback); the **minimum-passage rule** (`MIN_PASS_FT` / `minPassRadiusFor`: sub-half-foot slits never connect spaces, at any resolution); `DETERMINISM_MIN_MPPF` honesty floor + `coarse-mask` confidence factor | `web/src/lib/oneclick.ts`, `web/src/lib/confidence.ts` |
+| **C** — periodicity-based hatch classification | Per-stroke lattice evidence replaces the parallel-row run heuristic: a stroke is hatch iff same-pen overlapping neighbors sit at ±pitch both sides (lattice extending ±2 pitches; a clipped fill edge takes a 3-step one-sided lattice bounded within a pitch), gaps equal to raster precision, pitch ≤ the feet-true cap. Retires `HATCH_MIN_RUN` / `HATCH_PITCH_TOL` / `HATCH_MIN_REGULAR` / `HATCH_OVERLAP_FRAC` / `ROW_EPS` / `WIDE_PROTECT_RATIO` / `SPAN_PROTECT_RATIO` (pen width is family membership; pattern edges fail the lattice naturally). **Polyline-arc recognition** (`markPolylineArcs` + `SEG_POLYARC`): CAD-tessellated door swings — solid and dashed — are detected as circle geometry (chain → uniform turning → least-squares circle fit) and get the same `SEG_CURVE`/`MASK_CURVE_BIT` as bezier arcs, so drawn doors on polyline plans join door-swing unification instead of masquerading as hatch. The escalation floor (`HATCH_ESCALATE_FRAC` 0.35 → 0.02) reflects the classifier's precision: any real hatch run on a boundary is worth a grow-but-verify test | `web/src/lib/oneclick.ts` |
+| **Failure mode #3** — cross-resolution determinism | Feet-true thresholds through `MaskObj.mppf` (tiny/thin-region guards, seed nudge, hatch pitch cap — px behavior preserved bit-for-bit at the 18 px/ft calibration and as the scale-unknown fallback); the **minimum-passage rule** (`MIN_PASS_FT` / `minPassRadiusFor`: sub-half-foot slits never connect spaces, at any resolution; the radius rounds to NEAREST, centering the unavoidable 2-cell quantization band on the threshold); `DETERMINISM_MIN_MPPF` honesty floor — now DERIVED as `4/MIN_PASS_FT` = 8 px/ft from that same quantization — + `coarse-mask` confidence factor | `web/src/lib/oneclick.ts`, `web/src/lib/confidence.ts` |
 | Engine fixes the work surfaced | Hatch pitch-run float-noise tolerance (corpus catch); dilated-seed ascent + deepest-cell retry seeding; region-bitmap semantics | `web/src/lib/oneclick.ts` |
 | Tests for all of the above | Seal/wedge/curve suites, scorer + confidence tests, resolution-invariance suite | `web/test/geometry.test.ts` (additions), `web/test/confidence.test.ts`, `web/test/benchScore.test.ts`, `web/test/resolutionInvariance.test.ts` |
 
@@ -34,6 +35,17 @@ room, not annexed — that changed one pinned golden (`ward-room-294sf`, whose
 old 294 SF trace annexed a vestibule through a leader-tip slit that flipped
 with resolution; it is now two probes, room + vestibule, deterministic at
 every scale — see `docs/evidence/one-click/va-plan-ward-room-repin-min-passage.png`).
+
+**Second measurement-policy note (item C):** precise hatch classification
+separates FINISH ZONES. A patterned floor area (a PT-tile toilet room, a
+patterned flooring patch) is bounded by its pattern's own edge rows, so it
+measures as its own click instead of merging with the adjacent room — the
+old classifier merged `patient-room-137` with its toilet room only because
+the toilet's dashed door arc misclassified as hatch. Six VA goldens were
+deliberately re-pinned for this and for polyline-arc door unification, and a
+dense-hatch toilet-room probe was added — see
+`docs/evidence/one-click/va-plan-item-c-hatch-vs-arcs.png` and
+`docs/evidence/one-click/va-plan-item-c-repins.png`.
 
 ## Fork extensions — NOT in the RFC, stay out of the PR
 

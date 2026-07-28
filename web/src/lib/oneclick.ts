@@ -15,8 +15,8 @@
 //
 // Hatch (2026-07-05): hatch/poché strokes are constructPath linework too, so a
 // naive mask traps the fill between hatch lines. The cure is a TIERED mask —
-// walls plot bit 1, segments classified as hatch (regular runs of overlapping
-// parallel rows — classifyHatchSegs) plot bit 2 — plus an escalating flood:
+// walls plot bit 1, segments classified as hatch (members of a periodic
+// parallel family — classifyHatchSegs) plot bit 2 — plus an escalating flood:
 // the primary pass treats both as barrier (bit-identical to the original), and
 // when it comes back trapped (tiny/boundary), predominantly hatch-bounded (a
 // tile-grid cell), or MODERATELY hatch-bounded (a hatch-lined room — issue #32),
@@ -72,42 +72,61 @@ export const NUDGE_FT = NUDGE_PX / CAL_MPPF;                   // = 2 inches
 // its vestibule through exactly such a slit at ws × 0.5 only).
 export const MIN_PASS_FT = 0.5;
 /** Dilation radius that closes sub-MIN_PASS_FT passages at maskPxPerFt.
- *  0 (rule off) when the scale is unknown or the mask is too coarse to say. */
+ *  0 (rule off) when the scale is unknown or the mask is too coarse to say.
+ *  ROUND, not floor: a dilation of r closes gaps ≤ 2r, so the effective
+ *  threshold quantizes in TWO-cell steps and no rounding can implement the
+ *  half-foot rule exactly — but rounding to nearest centers the error band
+ *  at MIN_PASS_FT ± one cell. Flooring biased it a full band low, so a
+ *  0.42 ft slit closed at one gated resolution and stayed open at another
+ *  (bench, patient-room-137); ceiling biased it high and severed a real
+ *  0.56 ft waist between two open door leaves (ward room). Features inside
+ *  the ± one-cell band are genuinely undecidable from the raster — that is
+ *  what DETERMINISM_MIN_MPPF's derivation bounds. */
 export function minPassRadiusFor(maskPxPerFt: number): number {
   if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return 0;
-  return Math.min(SEAL_R_MAX, Math.floor((MIN_PASS_FT * maskPxPerFt) / 2));
+  return Math.min(SEAL_R_MAX, Math.round((MIN_PASS_FT * maskPxPerFt) / 2));
 }
-// The engine's honesty line, not a tunable: every topology decision on a
-// raster carries ±1 cell of quantization, which is ±(1/mppf) ft. Below this
-// resolution that error band rivals MIN_PASS_FT itself — whether a half-foot
-// waist between two open door leaves connects or separates two spaces is
-// genuinely UNDECIDABLE from the mask (a cell is wider than 2"), and verdicts
-// near the threshold may differ from a finer mask's. Above it, the feet-true
-// constants keep verdicts resolution-independent. Consumers: traceConfidence
-// deducts on coarser masks; the bench gates cross-resolution agreement only
-// at-or-above the floor (coarser runs are tracked, non-gating).
-export const DETERMINISM_MIN_MPPF = 6;   // mask px per foot (a cell ≤ 2 inches)
+// The engine's honesty line, not a tunable — DERIVED from the minimum-passage
+// rule rather than picked: the rule is implemented by dilation, a dilation of
+// r closes gaps ≤ 2r, so the effective threshold quantizes in TWO-cell steps
+// (±(2/mppf) ft around MIN_PASS_FT even with best-centered rounding). For a
+// verdict near the threshold to be decidable at all, that quantization must
+// stay within half the threshold itself: 2/mppf ≤ MIN_PASS_FT/2, i.e.
+// mppf ≥ 4/MIN_PASS_FT. Below the floor, whether a half-foot waist between
+// two open door leaves connects or separates two spaces is genuinely
+// UNDECIDABLE from the mask, and verdicts near the threshold may differ from
+// a finer mask's. Above it, the feet-true constants keep verdicts
+// resolution-independent. Consumers: traceConfidence deducts on coarser
+// masks; the bench gates cross-resolution agreement only at-or-above the
+// floor (coarser runs are tracked, non-gating).
+export const DETERMINISM_MIN_MPPF = 4 / MIN_PASS_FT;   // = 8 mask px per foot (a cell ≤ 1.5")
 
 // segment meta bits (extractVectorGeometry emits, classifyHatchSegs consumes)
-export const SEG_CURVE = 1;         // bezier chord — never classified as hatch (door swings close gaps)
+export const SEG_CURVE = 1;         // curve chord (bezier tessellation OR a detected polyline arc) — never hatch (door swings close gaps)
 export const SEG_CLIP = 2;          // clip-only path (endPath) — invisible ink, never a wall
 export const SEG_FILLONLY = 4;      // filled-not-stroked path (solid poché outlines classify normally)
+export const SEG_POLYARC = 8;       // provenance: SEG_CURVE came from markPolylineArcs, not a bezier op
 // meta high nibble = device line width, ceil'd and capped at 15 (0 = hairline)
 
-// hatch classification — a family is many similar-angle rows, regularly pitched,
-// stacking tangentially; walls don't do that (see classifyHatchSegs)
+// polyline arc detection (markPolylineArcs) — all thresholds are DIMENSIONLESS
+// geometry (turn angles, ratios), so detection is resolution- and scale-free
+export const ARC_MIN_CHORDS = 4;       // fewer chords is a corner chamfer, not an arc
+export const ARC_MIN_TOTAL_TURN = 30;  // deg — shallower chains are gentle wall sweeps; door swings are ~90°
+export const ARC_CHORD_TURN_MIN = 2;   // deg — near-collinear chains are straight runs with drafting jitter
+export const ARC_CHORD_TURN_MAX = 45;  // deg — sharper turns are zigzags/symbols, not tessellation
+export const ARC_FIT_TOL_FRAC = 0.03;  // circle-fit residual cap as a fraction of the radius (ellipse fixtures fail this)
+
+// hatch classification — a hatch/poché member is a stroke INSIDE a periodic
+// parallel family: same-pen neighbors at ±pitch on both sides (and the lattice
+// extending ±2 pitches at least one way), gaps equal to raster precision,
+// pitch at fill scale. Walls never sit inside such a lattice; the outermost
+// rows of a real fill fail it too, so hatch-region edges stay hard for free
+// (see classifyHatchSegs).
 export const HATCH_ANGLE_TOL = 2;      // deg — CAD hatch angle jitter is ≪ 1°
-export const HATCH_MIN_RUN = 10;       // rows — fewer evenly-spaced parallels is plausibly walls
 export const HATCH_MAX_PITCH = 24;     // mask px — scale-unknown fallback for the pitch cap
 export const HATCH_MAX_PITCH_FT = HATCH_MAX_PITCH / 18;  // = 4/3 ft at the 18 px/ft calibration — keeps room-scale rhythm (demising walls) hard, at every resolution
-export const HATCH_PITCH_TOL = 0.35;   // regularity band around the median pitch
-export const HATCH_MIN_REGULAR = 0.7;  // fraction of gaps that must sit inside the band
-export const HATCH_OVERLAP_FRAC = 0.5; // successive rows must overlap tangentially this much
-export const ROW_EPS = 1.5;            // mask px — collinear/dashed pieces merge into one row
-export const WIDE_PROTECT_RATIO = 2;   // heavier-pen member of a hairline family stays hard (wall overprint)
-export const SPAN_PROTECT_RATIO = 3;   // a row spanning ≫ the run's median row is a wall riding the rhythm, not hatch
 export const HATCH_BOUND_FRAC = 0.7;   // ≥ this soft-bounded fraction ⇒ PREDOMINANTLY hatch (tile-grid cell): escalate unbounded
-export const HATCH_ESCALATE_FRAC = 0.35; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation (issue #32 — real hatch-lined rooms top out ~0.63, so 0.70 alone never fired). This is the Balanced-preset value; see escalationParams.
+export const HATCH_ESCALATE_FRAC = 0.02; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation. Was 0.35 when hatch classification was a loose rhythm heuristic and a high bar kept its false positives from escalating everything; with per-stroke periodicity evidence (item C), ANY real hatch run on the boundary is worth testing — a hatched alcove of a room is often < 35% of its boundary — and grow-but-verify remains the gate. The floor only skips re-floods over boundary specks. Balanced-preset value; see escalationParams.
 export const HATCH_GROWTH_MAX = 2.5;     // grow-but-verify cap: reject a walls-only escalation that balloons past this × the strict area (a misclassified wall would leak or overgrow). Balanced-preset value.
 
 // Fill sensitivity — a single 0..1 knob the estimator can dial per drawing to
@@ -125,7 +144,7 @@ export const SENS_AGGRESSIVE = 1;
 const SENS_ANCHORS: Array<[number, number, number]> = [
   [SENS_STRICT, HATCH_BOUND_FRAC, 1.5],                     // moderate band empties (escalateFrac == HATCH_BOUND_FRAC) ⇒ pre-#32
   [SENS_BALANCED, HATCH_ESCALATE_FRAC, HATCH_GROWTH_MAX],   // calibrated on the sample plan (issue #32)
-  [SENS_AGGRESSIVE, 0.20, 4.0],                            // cross more hatch, tolerate more growth
+  [SENS_AGGRESSIVE, 0, 4.0],                               // cross any hatch, tolerate more growth
 ];
 export function escalationParams(sensitivity: number): { escalateFrac: number; growthMax: number } {
   const s = Math.max(0, Math.min(1, Number.isFinite(sensitivity) ? sensitivity : SENS_BALANCED));
@@ -257,33 +276,186 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
       }
     }
   }
-  return { points, segs, meta: Uint8Array.from(metaArr), imageArea };
+  const meta = Uint8Array.from(metaArr);
+  markPolylineArcs(segs, meta);
+  return { points, segs, meta, imageArea };
+}
+
+// ── 1b. polyline arc detection ─────────────────────────────────────────────
+// Door swings on many real plans are POLYLINES, not beziers — CAD exports
+// tessellate the arc into lineTo chords — so they carry no SEG_CURVE bit: the
+// mask can't recognize them as door linework (no curve-transparent retry, no
+// wedge unification), and to a rhythm-based hatch classifier their chords can
+// masquerade as pattern rows. An arc is GEOMETRY, not rhythm: consecutive
+// chained chords, turning consistently in one direction by similar amounts,
+// whose vertices all sit on one circle. Detect exactly that and give the
+// chords the same SEG_CURVE the bezier tessellation gets (SEG_POLYARC records
+// the provenance). Chains tolerate endpoint gaps up to a chord length so
+// DASHED arcs (phantom door leaves) detect too, while a dashed straight line
+// has no turn and never qualifies. Ellipse fixtures (toilets, sinks) fail the
+// circle fit; chamfers are too short; zigzag symbols flip turn sign.
+export function markPolylineArcs(segs: number[], meta: Uint8Array): number {
+  const n = segs.length >> 2;
+  if (!meta || n < ARC_MIN_CHORDS) return 0;
+  let marked = 0;
+  const len = (i: number) => Math.hypot(segs[i * 4 + 2] - segs[i * 4], segs[i * 4 + 3] - segs[i * 4 + 1]);
+  // chains hold CHORD indices — segments long enough to carry a direction.
+  // Sub-half-px slivers (dash-pattern pen-down artifacts) neither join nor
+  // break a chain: they're bridged, and marked with the window they sit in.
+  let chain: number[] = [];
+  const flush = () => {
+    if (chain.length >= ARC_MIN_CHORDS) marked += scanChainForArcs(segs, meta, chain);
+    chain = [];
+  };
+  for (let i = 0; i < n; i++) {
+    if (meta[i] & (SEG_CURVE | SEG_CLIP)) { flush(); continue; }
+    if (len(i) < 0.5) continue;                        // sliver — bridge it
+    if (chain.length) {
+      const p = chain[chain.length - 1];
+      // same path & pen (identical meta), endpoints joined or dash-gapped
+      // less than the longer of the two chords (dash gaps run shorter than
+      // their dashes; anything longer is separate linework)
+      const gap = Math.hypot(segs[i * 4] - segs[p * 4 + 2], segs[i * 4 + 1] - segs[p * 4 + 3]);
+      if (meta[i] !== meta[p] || gap > Math.max(len(i), len(p))) flush();
+    }
+    chain.push(i);
+  }
+  flush();
+  return marked;
+}
+
+// One chain of joined same-pen chords: find maximal windows of consistent
+// uniform turning, then confirm each window's vertices against a fitted
+// circle before marking. The fit is the arbiter — turn statistics alone
+// would admit near-circular polylines that aren't arcs.
+function scanChainForArcs(segs: number[], meta: Uint8Array, chain: number[]): number {
+  const m = chain.length;
+  const dirs: number[] = [], lens: number[] = [];
+  for (const i of chain) {
+    const dx = segs[i * 4 + 2] - segs[i * 4], dy = segs[i * 4 + 3] - segs[i * 4 + 1];
+    dirs.push(Math.atan2(dy, dx) * 180 / Math.PI);
+    lens.push(Math.hypot(dx, dy));
+  }
+  // turn[k] = signed direction change entering chord k (k ≥ 1), in (−180, 180]
+  const turn: number[] = [0];
+  for (let k = 1; k < m; k++) {
+    let t = dirs[k] - dirs[k - 1];
+    if (t > 180) t -= 360; if (t <= -180) t += 360;
+    turn.push(t);
+  }
+  const ratioOk = (k: number) => {
+    const r = Math.max(lens[k], lens[k - 1]) / Math.max(1e-9, Math.min(lens[k], lens[k - 1]));
+    return r <= 3;                     // uniform tessellation (dash phase shortens end dashes)
+  };
+  const signedTurn = (k: number) => Math.abs(turn[k]) >= ARC_CHORD_TURN_MIN && Math.abs(turn[k]) <= ARC_CHORD_TURN_MAX && ratioOk(k);
+  // a dash pattern can split ONE tessellation chord into two near-collinear
+  // pieces, so an ISOLATED sub-threshold turn continues a window; two in a
+  // row is a straight run and breaks it
+  const neutral = (k: number) => Math.abs(turn[k]) < ARC_CHORD_TURN_MIN && ratioOk(k);
+  let marked = 0;
+  let s = 1;
+  while (s < m) {
+    if (!signedTurn(s)) { s++; continue; }
+    const sgn = Math.sign(turn[s]);
+    let e = s, bridged = false;
+    for (let k = s + 1; k < m; k++) {
+      if (signedTurn(k) && Math.sign(turn[k]) === sgn) { e = k; bridged = false; continue; }
+      if (neutral(k) && !bridged) { bridged = true; continue; }
+      break;
+    }
+    // window of turns [s..e] covers chords s-1 .. e (trailing neutrals excluded)
+    if (e - s + 2 >= ARC_MIN_CHORDS) {
+      let total = 0; for (let j = s; j <= e; j++) total += Math.abs(turn[j]);
+      if (total >= ARC_MIN_TOTAL_TURN && circleFitOk(segs, chain, s - 1, e)) {
+        // mark the whole seg-index RANGE, so bridged slivers ride along
+        for (let j = chain[s - 1]; j <= chain[e]; j++) meta[j] |= SEG_CURVE | SEG_POLYARC;
+        marked += e - s + 2;
+      }
+    }
+    s = e + 1;
+  }
+  return marked;
+}
+
+// Kasa least-squares circle through the chords' vertices, centroid-centered
+// for conditioning; accept when every vertex sits on the circle to within
+// ARC_FIT_TOL_FRAC of the radius (a hair of absolute slack for PDF coordinate
+// rounding). Tessellation vertices of a true arc lie exactly on it.
+function circleFitOk(segs: number[], chain: number[], c0: number, c1: number): boolean {
+  const xs: number[] = [], ys: number[] = [];
+  xs.push(segs[chain[c0] * 4]); ys.push(segs[chain[c0] * 4 + 1]);
+  for (let k = c0; k <= c1; k++) { const i = chain[k]; xs.push(segs[i * 4 + 2]); ys.push(segs[i * 4 + 3]); }
+  const m = xs.length;
+  let mx = 0, my = 0;
+  for (let i = 0; i < m; i++) { mx += xs[i]; my += ys[i]; }
+  mx /= m; my /= m;
+  let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+  for (let i = 0; i < m; i++) {
+    const x = xs[i] - mx, y = ys[i] - my, z = x * x + y * y;
+    sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z;
+  }
+  const det = sxx * syy - sxy * sxy;
+  if (Math.abs(det) < 1e-9) return false;              // collinear — no circle
+  const cx = (sxz * syy - syz * sxy) / (2 * det);
+  const cy = (syz * sxx - sxz * sxy) / (2 * det);
+  let r = 0;
+  for (let i = 0; i < m; i++) r += Math.hypot(xs[i] - mx - cx, ys[i] - my - cy);
+  r /= m;
+  if (!(r > 0)) return false;
+  const tol = Math.max(0.75, r * ARC_FIT_TOL_FRAC);
+  for (let i = 0; i < m; i++) {
+    if (Math.abs(Math.hypot(xs[i] - mx - cx, ys[i] - my - cy) - r) > tol) return false;
+  }
+  return true;
 }
 
 // ── 2. hatch classification ────────────────────────────────────────────────
-// A hatch family is what walls never are: MANY same-angle rows (collinear
-// pieces merged), REGULARLY pitched at fill scale, each row OVERLAPPING the
-// next tangentially (hatch stacks; scattered parallel walls don't). Marks
-// suspected hatch segments soft (1). Curve chords are exempt (door swings must
-// keep closing gaps); clip-only paths are soft outright (invisible ink). Two
-// wall guards inside a family: the EXTREMAL rows stay hard (tile/hatch edges
-// coincide with walls), and heavier-pen members stay hard (wall overprint).
-interface HatchCand { i: number; ang: number; x1: number; y1: number; x2: number; y2: number; w: number; }
-interface HatchRow { d: number; t0: number; t1: number; segs: HatchCand[]; }
+// PERIODICITY evidence, decided per stroke (issue #184 item C — replaces the
+// parallel-row run heuristic). A stroke is hatch iff it sits INSIDE a local
+// periodic lattice of its own family: same-angle, SAME-PEN neighbors at ±p on
+// both sides — and the lattice extending to ±2p on at least one side — every
+// gap equal to within half a mask cell, for some pitch p at fill scale
+// (≤ pitchCapPx, feet-true when the scale is known). That one statement
+// replaces five knobs of the old classifier:
+//   • run length / regularity band / majority vote — CAD hatch pitch is
+//     machine-exact, so gaps match to raster precision or the family isn't
+//     hatch; five equal-pitched overlapping rows is the evidence, not ten
+//     loosely-similar gaps out-voting their outliers.
+//   • tangential-overlap fraction — each lattice neighbor must overlap the
+//     stroke at all (≥ half a cell): hatch is an areal fill, so its rows
+//     stack; scattered same-angle linework that happens to be evenly offset
+//     (door arc chords, dimension ticks) doesn't.
+//   • pen-width protect ratio — the pen IS part of the pattern: lattice
+//     neighbors must match the stroke's width nibble, so a heavy wall
+//     overprinting a hairline family finds no same-pen lattice and stays
+//     hard, without a ratio to tune.
+//   • span protect ratio — a wall riding a fill's rhythm still needs same-pen
+//     equal-pitch neighbors BOTH sides; where it does ride them, the
+//     escalation's grow-but-verify cap is the backstop (unchanged).
+//   • extremal-row protection — the outermost rows of a fill have no ±p
+//     neighbor outside the fill, so they fail the lattice and stay hard for
+//     free (tile/hatch edges coincide with walls).
+// Curve chords are exempt (bezier AND detected polyline arcs — door swings
+// must keep closing gaps, and an arc is never a periodic family); clip-only
+// paths are soft outright (invisible ink); filled-not-stroked outlines bound
+// SOLID ink (wall poché) and are exempt — making them transparent lets the
+// escalated fill cross a solid black band. The half-cell tolerances are the
+// raster's own honesty floor (two lines closer than half a cell plot on the
+// same cells; offsets carry ~1e-14 float noise — the corpus caught a pitch
+// sitting exactly ON the cap splitting on that noise at one resolution), not
+// tunables.
+interface HatchPiece { i: number; d: number; t0: number; t1: number; w: number; }
 export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, pitchCapPx: number = HATCH_MAX_PITCH): Uint8Array {
   const n = segs.length >> 2;
   const soft = new Uint8Array(n);
   if (!meta || !n) return soft;
-  const cand: HatchCand[] = [];
+  const HALF_CELL = 0.5;                         // mask px — raster resolution floor
+  interface Cand { i: number; ang: number; x1: number; y1: number; x2: number; y2: number; w: number; }
+  const cand: Cand[] = [];
   for (let i = 0; i < n; i++) {
     const mt = meta[i];
     if (mt & SEG_CURVE) continue;
     if (mt & SEG_CLIP) { soft[i] = 1; continue; }
-    // Filled-not-stroked outlines bound SOLID ink (wall poché). Their short
-    // 0°/90° edges ride a tile grid's rhythm and would classify as hatch — but
-    // making them transparent lets the escalated fill cross a solid black band
-    // (the leak that turned hatched-room clicks into "dense linework" guards).
-    // Hatch itself is stroked linework, so exempting fills costs nothing.
     if (mt & SEG_FILLONLY) continue;
     const x1 = segs[i * 4] * ws, y1 = segs[i * 4 + 1] * ws, x2 = segs[i * 4 + 2] * ws, y2 = segs[i * 4 + 3] * ws;
     const dx = x2 - x1, dy = y2 - y1;
@@ -293,11 +465,11 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
     if (ang < 0) ang += 180; if (ang >= 180) ang -= 180;
     cand.push({ i, ang, x1, y1, x2, y2, w: meta[i] >> 4 });
   }
-  if (cand.length < HATCH_MIN_RUN) return soft;
+  if (cand.length < 5) return soft;              // a lattice is 5 rows minimum
   cand.sort((a, b) => a.ang - b.ang);
   // sweep into angle clusters; a near-0° cluster merges with a near-180° one
-  const clusters: HatchCand[][] = [];
-  let cl: HatchCand[] = [cand[0]];
+  const clusters: Cand[][] = [];
+  let cl: Cand[] = [cand[0]];
   for (let k = 1; k < cand.length; k++) {
     if (cand[k].ang - cand[k - 1].ang <= HATCH_ANGLE_TOL) cl.push(cand[k]);
     else { clusters.push(cl); cl = [cand[k]]; }
@@ -311,66 +483,86 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
       clusters.pop();
     }
   }
-  const median = (arr: number[]): number => { const a = arr.slice().sort((x, y) => x - y); return a[a.length >> 1]; };
   for (const members of clusters) {
-    if (members.length < HATCH_MIN_RUN) continue;
+    if (members.length < 5) continue;
     let sum = 0; for (const s of members) sum += s.ang;
     const th = (sum / members.length) * Math.PI / 180;
     const dxu = Math.cos(th), dyu = Math.sin(th);      // along the family
     const nxu = -dyu, nyu = dxu;                        // across it
-    const rowsIn = members.map((s) => ({
-      s,
+    const pieces: HatchPiece[] = members.map((s) => ({
+      i: s.i,
       d: ((s.x1 + s.x2) / 2) * nxu + ((s.y1 + s.y2) / 2) * nyu,
       t0: Math.min(s.x1 * dxu + s.y1 * dyu, s.x2 * dxu + s.y2 * dyu),
       t1: Math.max(s.x1 * dxu + s.y1 * dyu, s.x2 * dxu + s.y2 * dyu),
+      w: s.w,
     })).sort((a, b) => a.d - b.d);
-    // collinear/dashed pieces at the same offset merge into one ROW
-    const rows: HatchRow[] = [];
-    let row: HatchRow = { d: rowsIn[0].d, t0: rowsIn[0].t0, t1: rowsIn[0].t1, segs: [rowsIn[0].s] };
-    for (let k = 1; k < rowsIn.length; k++) {
-      const r = rowsIn[k];
-      if (r.d - row.d <= ROW_EPS) { row.t0 = Math.min(row.t0, r.t0); row.t1 = Math.max(row.t1, r.t1); row.segs.push(r.s); }
-      else { rows.push(row); row = { d: r.d, t0: r.t0, t1: r.t1, segs: [r.s] }; }
-    }
-    rows.push(row);
-    // maximal RUNS of rows: pitched within cap AND stacking tangentially
-    let runStart = 0;
-    const flushRun = (a: number, b: number) => {        // rows[a..b] inclusive
-      const count = b - a + 1;
-      if (count < HATCH_MIN_RUN) return;
-      const gaps: number[] = [];
-      for (let k = a + 1; k <= b; k++) gaps.push(rows[k].d - rows[k - 1].d);
-      const med = median(gaps);
-      if (!med) return;
-      let reg = 0; for (const g of gaps) if (Math.abs(g - med) <= med * HATCH_PITCH_TOL) reg++;
-      if (reg / gaps.length < HATCH_MIN_REGULAR) return;
-      const widths: number[] = [];
-      for (let k = a; k <= b; k++) for (const s of rows[k].segs) widths.push(s.w);
-      const modalW = Math.max(1, median(widths));
-      // hatch rows span a room; a wall at the family's angle spans the wing.
-      // A row much longer than the run's median is a wall riding the pattern's
-      // rhythm — softening it would let the escalated fill breach the room.
-      const spans: number[] = [];
-      for (let k = a; k <= b; k++) spans.push(rows[k].t1 - rows[k].t0);
-      const medSpan = Math.max(1, median(spans));
-      for (let k = a + 1; k < b; k++) {                 // extremal rows stay hard
-        if (rows[k].t1 - rows[k].t0 > SPAN_PROTECT_RATIO * medSpan) continue;
-        for (const s of rows[k].segs)
-          if (s.w < WIDE_PROTECT_RATIO * modalW) soft[s.i] = 1;
+    // group into ROWS at raster resolution (anchor-based: a piece joins the
+    // row when its offset is within half a cell of the row's first piece —
+    // dashed/collinear pieces of one drawn line land together)
+    const rowOf = new Int32Array(pieces.length);
+    const rowD: number[] = [];
+    const rowPieces: HatchPiece[][] = [];
+    for (let k = 0; k < pieces.length; k++) {
+      if (rowD.length && pieces[k].d - rowD[rowD.length - 1] <= HALF_CELL) {
+        rowOf[k] = rowD.length - 1; rowPieces[rowPieces.length - 1].push(pieces[k]);
+      } else {
+        rowOf[k] = rowD.length; rowD.push(pieces[k].d); rowPieces.push([pieces[k]]);
       }
-    };
-    for (let k = 1; k < rows.length; k++) {
-      const gap = rows[k].d - rows[k - 1].d;
-      const ov = Math.min(rows[k].t1, rows[k - 1].t1) - Math.max(rows[k].t0, rows[k - 1].t0);
-      const need = HATCH_OVERLAP_FRAC * Math.min(rows[k].t1 - rows[k].t0, rows[k - 1].t1 - rows[k - 1].t0);
-      // half-cell tolerance on the pitch cap: row offsets carry ~1e-14 float
-      // noise (the family angle's cosine is never exactly 0), and a grid whose
-      // pitch sits exactly ON the cap would otherwise split its run on that
-      // noise at some resolutions — stranding a sub-run too short to classify
-      // (found by the benchmark corpus: tile-grid at ws=1 vs ws=0.5)
-      if (gap > pitchCapPx + 0.5 || ov < need) { flushRun(runStart, k - 1); runStart = k; }
     }
-    flushRun(runStart, rows.length - 1);
+    // does row j hold a piece of pen width w overlapping [t0, t1]?
+    const rowHas = (j: number, w: number, t0: number, t1: number): boolean => {
+      for (const p of rowPieces[j]) {
+        if (p.w !== w) continue;
+        if (Math.min(p.t1, t1) - Math.max(p.t0, t0) >= HALF_CELL) return true;
+      }
+      return false;
+    };
+    // nearest row from j (exclusive) in direction dir with a matching piece,
+    // within the pitch cap; −1 when none
+    const nearestRow = (j: number, dir: 1 | -1, w: number, t0: number, t1: number): number => {
+      for (let r = j + dir; r >= 0 && r < rowD.length; r += dir) {
+        if (Math.abs(rowD[r] - rowD[j]) > pitchCapPx + HALF_CELL) break;
+        if (rowHas(r, w, t0, t1)) return r;
+      }
+      return -1;
+    };
+    // any row at offset ≈ target (± half cell) with a matching piece?
+    const rowAt = (target: number, w: number, t0: number, t1: number): boolean => {
+      let lo = 0, hi = rowD.length - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (rowD[mid] < target - HALF_CELL) lo = mid + 1; else hi = mid; }
+      for (let r = lo; r < rowD.length && rowD[r] <= target + HALF_CELL; r++) {
+        // the bisection can land on the last row when target is beyond every
+        // row — enforce the lower bound too, or the nearest-below row would
+        // spuriously validate lattice positions that don't exist
+        if (rowD[r] >= target - HALF_CELL && rowHas(r, w, t0, t1)) return true;
+      }
+      return false;
+    };
+    for (let k = 0; k < pieces.length; k++) {
+      const c = pieces[k];
+      const j = rowOf[k];
+      const up = nearestRow(j, 1, c.w, c.t0, c.t1);
+      const dn = nearestRow(j, -1, c.w, c.t0, c.t1);
+      // a true pattern edge (nothing of the family beyond it within a pitch)
+      // stays hard — tile/hatch edges coincide with walls
+      if (up < 0 || dn < 0) continue;
+      const pUp = rowD[up] - rowD[j], pDn = rowD[j] - rowD[dn];
+      const at = (mult: number, p: number) => rowAt(rowD[j] + mult * p, c.w, c.t0, c.t1);
+      for (const p of pUp === pDn ? [pUp] : [pUp, pDn]) {
+        if (p < HALF_CELL || p > pitchCapPx + HALF_CELL) continue;
+        // interior: ±p both sides, lattice extending to ±2p at least one way
+        const interior = at(1, p) && at(-1, p) && (at(2, p) || at(-2, p));
+        // clipped edge: a fill's LAST row before its bounding wall has a
+        // remainder gap (< pitch) to the wall, not a pitch gap — accept a
+        // deeper three-step lattice on one side when the other side is
+        // bounded within a pitch (the clip signature; a lone pattern edge
+        // with open space beyond stays hard via the nearestRow test above)
+        const clipped =
+          (Math.min(pUp, pDn) <= p + HALF_CELL) &&
+          ((at(1, p) && at(2, p) && at(3, p)) || (at(-1, p) && at(-2, p) && at(-3, p)));
+        if (interior || clipped) { soft[c.i] = 1; break; }
+      }
+    }
   }
   return soft;
 }
@@ -490,12 +682,14 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
 //     clean re-flood beats nothing).
 //   • predominantly soft (≥ HATCH_BOUND_FRAC, e.g. a lone tile-grid cell): the
 //     strict fill is a sliver of the real room — escalate UNBOUNDED.
-//   • moderate ([HATCH_ESCALATE_FRAC, HATCH_BOUND_FRAC)): where real hatch-lined
-//     rooms sit (issue #32 measured max ~0.63, so the 0.70 gate never fired).
-//     Escalate GROW-BUT-VERIFY: accept walls-only only if it stays a clean "ok"
-//     AND grows the area ≤ HATCH_GROWTH_MAX×. A misclassified wall then either
-//     leaks or balloons and is discarded — the escalation can never do worse
-//     than the strict pass.
+//   • moderate ([HATCH_ESCALATE_FRAC, HATCH_BOUND_FRAC)): any real hatch run on
+//     the boundary (hatched alcoves of a room are often well under a third of
+//     its boundary; the floor only skips boundary specks). Escalate
+//     GROW-BUT-VERIFY: accept walls-only only if it stays a clean "ok", GROWS
+//     the region (an escalation that changes nothing isn't one — and must not
+//     cost confidence), and stays ≤ growthMax×. A misclassified wall then
+//     either leaks or balloons and is discarded — the escalation can never do
+//     worse than the strict pass.
 //   • lightly soft (< escalateFrac) or a leak: strict result stands
 //     (removing linework only leaks more).
 // `sensitivity` (0..1) dials the moderate tier's escalateFrac/growthMax via
@@ -513,7 +707,7 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
     if (softFrac < HATCH_BOUND_FRAC) growthCap = growthMax; // moderate ⇒ grow-but-verify
   }
   const r2 = floodPass(maskObj, ix, iy, 1);
-  if (r2.status === "ok" && (r1.status !== "ok" || r2.count <= r1.count * growthCap)) {
+  if (r2.status === "ok" && (r1.status !== "ok" || (r2.count > r1.count && r2.count <= r1.count * growthCap))) {
     r2.hatchFiltered = true;
     return r2;
   }

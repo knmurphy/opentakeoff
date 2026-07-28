@@ -4,8 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
-  extractVectorGeometry, classifyHatchSegs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY,
-  SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE,
+  extractVectorGeometry, classifyHatchSegs, markPolylineArcs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY, SEG_POLYARC,
+  SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE, MASK_CURVE_BIT,
   floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX, doorWedgeCapPx,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
@@ -625,6 +625,145 @@ test("classifyHatchSegs: extremal rows hard, wide member hard, curve exempt, cli
   assert.equal(soft[n], 0, "heavy-pen member protected");
   assert.equal(soft[n + 1], 0, "curve chord exempt");
   assert.equal(soft[n + 2], 1, "clip-only soft");
+});
+
+// ── polyline arc detection + periodicity classification (issue #184 item C) ─
+// Chords of a circle: tessellated like CAD exports draw door swings (lineTo
+// runs, no bezier ops). dashEvery drops every 2nd chord to fake a dash pattern.
+function arcChords(cx: number, cy: number, r: number, a0: number, a1: number, steps: number, dashed = false): number[] {
+  const segs: number[] = [];
+  let px = cx + r * Math.cos(a0), py = cy + r * Math.sin(a0);
+  for (let k = 1; k <= steps; k++) {
+    const a = a0 + (a1 - a0) * (k / steps);
+    const qx = cx + r * Math.cos(a), qy = cy + r * Math.sin(a);
+    if (!dashed || k % 2 === 1) segs.push(px, py, qx, qy);
+    px = qx; py = qy;
+  }
+  return segs;
+}
+
+test("markPolylineArcs: a tessellated quarter-arc polyline gets SEG_CURVE|SEG_POLYARC", () => {
+  const arc = arcChords(200, 200, 54, 0, Math.PI / 2, 10);
+  const meta = new Uint8Array(arc.length >> 2);
+  const marked = markPolylineArcs(arc, meta);
+  assert.equal(marked, 10, "every chord marked");
+  for (let i = 0; i < meta.length; i++) assert.equal(meta[i], SEG_CURVE | SEG_POLYARC);
+});
+
+test("markPolylineArcs: a DASHED arc (gaps between dashes, dash-split chords) still detects", () => {
+  // 9° dashes with 3° gaps around a quarter circle — gaps run shorter than
+  // dashes, like real dash patterns. One dash is split into two collinear
+  // halves (dash patterns cut chords mid-segment, leaving an isolated
+  // near-zero turn inside the arc).
+  const segs: number[] = [];
+  const r = 54, deg = Math.PI / 180;
+  for (let a = 0; a + 9 <= 90; a += 12) {
+    const p = (t: number): [number, number] => [200 + r * Math.cos(t * deg), 200 + r * Math.sin(t * deg)];
+    const [ax, ay] = p(a), [mx, my] = p(a + 4.5), [bx, by] = p(a + 9);
+    if (a === 24) {  // split this dash's first chord collinearly
+      const qx = (ax + mx) / 2, qy = (ay + my) / 2;
+      segs.push(ax, ay, qx, qy, qx, qy, mx, my, mx, my, bx, by);
+    } else {
+      segs.push(ax, ay, mx, my, mx, my, bx, by);
+    }
+  }
+  const meta = new Uint8Array(segs.length >> 2);
+  const marked = markPolylineArcs(segs, meta);
+  assert.ok(marked >= (segs.length >> 2) - 2, `dashed arc chords marked (got ${marked}/${segs.length >> 2})`);
+  let curveBits = 0;
+  for (let i = 0; i < meta.length; i++) if (meta[i] & SEG_POLYARC) curveBits++;
+  assert.ok(curveBits >= (segs.length >> 2) - 2, "chords carry the polyarc provenance bit");
+});
+
+test("markPolylineArcs: straight dashed lines, zigzags, and ellipses are NOT arcs", () => {
+  const dashedLine: number[] = [];
+  for (let x = 100; x < 180; x += 8) dashedLine.push(x, 50, x + 4.5, 50);
+  const zigzag: number[] = [];
+  for (let k = 0; k < 12; k++) zigzag.push(100 + k * 10, k % 2 ? 60 : 50, 110 + k * 10, k % 2 ? 50 : 60);
+  const ellipse: number[] = [];
+  { // 2:1 ellipse, 24 chords — turns are arc-like but no single circle fits
+    let px = 260, py = 300;
+    for (let k = 1; k <= 24; k++) {
+      const a = (k / 24) * 2 * Math.PI;
+      const qx = 200 + 60 * Math.cos(a), qy = 300 + 30 * Math.sin(a);
+      ellipse.push(px, py, qx, qy); px = qx; py = qy;
+    }
+  }
+  for (const [name, segs] of [["dashed line", dashedLine], ["zigzag", zigzag], ["ellipse", ellipse]] as const) {
+    const meta = new Uint8Array(segs.length >> 2);
+    markPolylineArcs(segs, meta);
+    for (let i = 0; i < meta.length; i++) assert.equal(meta[i] & SEG_POLYARC, 0, `${name} seg ${i} must not be an arc`);
+  }
+});
+
+test("markPolylineArcs → buildMask: detected arc cells carry MASK_CURVE_BIT (door-swing unification path)", () => {
+  const segs = [...squareSegs(20, 20, 380, 380), ...arcChords(200, 200, 54, 0, Math.PI / 2, 10)];
+  const meta = new Uint8Array(segs.length >> 2);
+  markPolylineArcs(segs, meta);
+  const m = buildMask(segs, 400, 400, 400, meta);
+  const mid = [200 + 54 * Math.cos(Math.PI / 4), 200 + 54 * Math.sin(Math.PI / 4)];
+  const cell = m.mask[Math.round(mid[1] * m.ws) * m.mw + Math.round(mid[0] * m.ws)];
+  assert.equal(cell & 1, 1, "arc cell is a hard barrier");
+  assert.equal(cell & MASK_CURVE_BIT, MASK_CURVE_BIT, "arc cell is recognizable as curve linework");
+});
+
+test("periodicity: resolvably-IRREGULAR pitch is not hatch (the old ±35% band said it was)", () => {
+  // gaps jitter by several mask cells around a ~33 px rhythm — every one of
+  // them inside the old regularity band, none of them a lattice at raster
+  // precision. (Sub-cell jitter at tight pitches is a different story: the
+  // raster genuinely cannot resolve it, so it may classify — honestly.)
+  const segs: number[] = [];
+  let x = 100;
+  for (const gap of [0, 30, 36, 31, 38, 33, 30.5, 37, 32, 35.5, 30, 36.5]) {
+    x += gap;
+    segs.push(x, 100, x, 500);
+  }
+  const soft = classifyHatchSegs(segs, new Uint8Array(segs.length >> 2), 0.5);
+  for (let i = 0; i < soft.length; i++) assert.equal(soft[i], 0, `irregular row ${i} stays hard`);
+});
+
+test("periodicity: door-arc chords are not a periodic family (unmarked arcs, the round-7 failure)", () => {
+  // six identical door swings along a wall — WITHOUT arc marking, straight to
+  // the classifier: same-angle chords repeat across doors, but their normal
+  // offsets are door positions, not a fill pitch. The old run heuristic
+  // soft-flagged exactly these (VA plan, round 7).
+  const segs: number[] = [];
+  for (let d = 0; d < 6; d++) segs.push(...arcChords(150 + d * 90, 200, 54, 0, Math.PI / 2, 10));
+  const soft = classifyHatchSegs(segs, new Uint8Array(segs.length >> 2), 0.5);
+  for (let i = 0; i < soft.length; i++) assert.equal(soft[i], 0, `arc chord ${i} stays hard`);
+});
+
+test("periodicity: dashed hatch rows (pieces) still classify soft", () => {
+  const segs: number[] = [];
+  for (let k = 0; k < 14; k++) {
+    const y = 100 + k * 4;
+    for (let x = 100; x < 300; x += 20) segs.push(x, y, x + 14, y);   // dashes per row
+  }
+  const soft = classifyHatchSegs(segs, new Uint8Array(segs.length >> 2), 0.5);
+  let cnt = 0; for (let i = 0; i < soft.length; i++) cnt += soft[i];
+  assert.ok(cnt > soft.length * 0.6, `interior dashed rows classify soft (got ${cnt}/${soft.length})`);
+});
+
+test("periodicity: a floating hatch patch is a finish zone — two clicks, two regions, both measured", () => {
+  // 600×400 room; the left quarter carries a floor pattern whose edge row
+  // (the outermost hatch line) has no lattice beyond it, so it stays hard:
+  // it IS the finish boundary. A click in the open side reads up to it; a
+  // click inside the pattern escalates and measures the patch wall-to-wall
+  // (dense hatch, failure mode #1 — the VA toilet-room case).
+  const hatch: number[] = [];
+  for (let x = 104; x <= 240; x += 4) hatch.push(x, 100, x, 500);
+  const all = [...border, ...room, ...hatch];
+  const m = buildMask(all, IMG_W, IMG_H, MAXDIM, zeroMeta(all));
+  const open = floodRegion(m, 500, 300);               // open (unhatched) side
+  assert.equal(open.status, "ok");
+  if (open.status !== "ok") return;
+  const openArea = ringArea(traceRegion(open));
+  assert.ok(approx(openArea, (700 - 240) * 400, 0.04), `open side reads to the pattern edge, got ${openArea}`);
+  const patch = floodRegion(m, 170, 300);              // inside the pattern
+  assert.equal(patch.status, "ok");
+  if (patch.status !== "ok") return;
+  assert.equal(patch.hatchFiltered, true, "the dense-hatch click escalates instead of refusing");
+  assert.ok(approx(ringArea(traceRegion(patch)), (240 - 100) * 400, 0.06), `patch reads wall-to-wall, got ${ringArea(traceRegion(patch))}`);
 });
 
 test("extractVectorGeometry: meta emission — paint ops, line width, form XObject matrix", () => {

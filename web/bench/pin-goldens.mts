@@ -28,9 +28,18 @@ const PINNED = [
   },
   {
     file: "va-finish-plan.json", pdf: "../../demo/sample-finish-plan.pdf", scale: 2, ptPerFt: 9 * 2,
-    note: "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4). Includes drawn-door rooms and the cloud-bounded corridor.",
+    note: "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor.",
     probes: [
+      // Round-8 re-pin (item C): the patient room no longer annexes its
+      // toilet room — the toilet's PT-tile floor is a different finish zone
+      // that the OLD classifier's loose rhythm heuristic merged in by
+      // accident (its dashed door arc classified as hatch, so the escalated
+      // fill walked through the doorway). With arcs recognized as arcs, the
+      // room reads to its own boundaries + entry wedge, and the toilet is
+      // its own one-click probe (dense hatch, failure mode #1: the click
+      // lands between cross-hatch lines and must measure, not refuse).
       { name: "patient-room-137", seed: [2592, 756], expect: "golden" as const, tags: ["door-swing"] },
+      { name: "patient-toilet-137a", seed: [2668, 1112], expect: "golden" as const, tags: ["hatch", "dense-hatch-room"] },
       { name: "elevator-e01", seed: [2538, 1566], expect: "golden" as const, tags: ["door-swing"] },
       // ward room + its vestibule are TWO probes since the min-passage rule:
       // the old single 294 SF trace reached the vestibule only through a
@@ -38,6 +47,11 @@ const PINNED = [
       // (a raster accident that flipped with resolution — bench round 7).
       // Deterministically they are two spaces behind a double door, clicked
       // separately; nothing the reviewer approved is lost, it's just two rows.
+      // Round 8: the ward room's own double doors (polyline arcs, now
+      // curve-recognized) unify — the click measures through the open pair,
+      // both swing wedges included, down to the vestibule's swing arc; the
+      // vestibule keeps the complementary side, so the two tile with no
+      // overlap and no gap.
       { name: "ward-room-294sf", seed: [4050, 486], expect: "golden" as const, tags: ["door-swing"] },
       { name: "ward-vestibule", seed: [4045, 1230], expect: "golden" as const, tags: ["door-swing", "vestibule"] },
       { name: "cloud-corridor", seed: [1814, 1814], expect: "golden" as const, tags: ["cloud-boundary", "corridor"] },
