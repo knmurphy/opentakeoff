@@ -10,6 +10,21 @@ every pinned golden across commit history — not by reading prose.
 **Scope note.** No auditor exercised a real PDF beyond the two committed fixtures, and no
 auditor could verify any "verified visually" browser claim. Those remain unaudited.
 
+**Correction (post-audit).** Two errors in this document, found by adversarial review of the
+remediation plan and fixed in place below: the confidence readout is at
+`TakeoffCanvas.jsx:3168`, not `:3178`; and `origin.confidence` *is* always persisted
+(`:3034`), so "the estimator sees no flag at all" in A2 applies to the **live hover readout**,
+not to provenance.
+
+**Scope gap (post-audit).** This audit covers rounds 1–8 plus `7605315`. **Round 9
+(`5100108769`, branch `claude/research-prioritization-gm6w75`) postdates it and was missed.**
+Round 9 independently confirms B1 (12 of 21 goldens engine-pinned, 0 human) and C1 (the three
+gates inert), quantifies A6 at **560 SF double-counted, 16.6%**, softens the round-8 "not
+fixable by caps" claim (`partition-bank-15in` recovers IoU 0.197 → 0.937 at a 1.0–1.1 ft
+cap), and adds the first independent truth signal in the project: the VA plan's own 9 printed
+`NNN SF` callouts, against which the engine reads +11.1% to −43.8%. See the remediation plan's
+Scope section.
+
 ---
 
 ## What holds up
@@ -87,7 +102,7 @@ partition-bank-15in / mid-bay      IoU 0.197  SF±384.2% LEAK  conf 0.95  [known
 tile-demising-same-pen / room-a    IoU 0.497  SF±97.4%  LEAK  conf 0.95  [known-fail]
 ```
 
-A −35% measurement scores **1.00**, and `TakeoffCanvas.jsx:3178` renders the badge only when
+A −35% measurement scores **1.00**, and `TakeoffCanvas.jsx:3168` appends it to the hover readout only when
 `cf < 1` — so the estimator sees *no flag at all*. A +384% error scores 0.95, visually
 indistinguishable from the 0.97 a correct door-swing trace earns.
 
@@ -97,9 +112,12 @@ As a review prioritizer it is anti-correlated with error on exactly the cases th
 and nothing in `bench/score.ts` gates confidence against IoU, so this is untested.
 
 Three sub-defects in `confidence.ts:41-53`:
-- **`wedgeGrowth` is accepted and never read** (`:30` declares it, `:41-53` ignores it). The
-  issue lists "wedge growth" as a folded signal. `traceConfidence({wedges:1,
-  wedgeGrowth:1.01})` and `({wedges:12, wedgeGrowth:2.49})` both return 0.97.
+- **`wedgeGrowth` is accepted and never read** (`:30` declares it, `:41-53` ignores it) —
+  and no caller supplies it either (`TakeoffCanvas.jsx:2887`, `:3147`, `:3994`,
+  `bench/run.mts:63` all omit it), so wiring it up is plumbing at four sites, not a one-line
+  read. The issue lists "wedge growth" as a folded signal.
+  `traceConfidence({wedges:1, wedgeGrowth:1.01})` and `({wedges:12, wedgeGrowth:2.49})` both
+  return 0.97.
 - **The coarse-mask deduction can never fire on scans** — `buildRasterMask` returns no
   `mppf` (`rastermask.ts:159`), and `:52` requires `mppf > 0`. The least trustworthy path
   gets only ×0.90.
