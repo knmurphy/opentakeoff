@@ -44,7 +44,7 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], provenanceCounters = null, clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [], units = "imperial" }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], provenanceCounters = null, clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [], units = "imperial", extraExportItems = [] }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
   // imported report theme → { vars, name, warnings }. vars are spread onto this
@@ -542,6 +542,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
             { section: "Shapes" },
             { id: "shapes-csv", icon: "document", label: "Shapes CSV", disabled: !shapes.length, title: "Per-shape measured quantities — no multiplier, no waste", onSelect: exportShapesCsv },
             { id: "shapes-json", icon: "document", label: "Shapes JSON", disabled: !shapes.length, title: "Per-shape measured quantities — no multiplier, no waste", onSelect: exportShapesJson },
+            // Plugin-contributed export formats (#169) — pre-bound items built by
+            // the canvas via the shared ctx façade; empty (no section) in a core
+            // build that ships no export plugins.
+            ...(extraExportItems.length ? [{ section: "Plugins" }, ...extraExportItems] : []),
           ]}
         />
         <ToolMenu

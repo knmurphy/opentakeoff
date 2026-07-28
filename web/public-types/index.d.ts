@@ -1,0 +1,10 @@
+export { validateDescriptor } from "./descriptor.ts";
+export type { PluginDescriptor, OverlaySlot, ExportSlot, ValidateResult, } from "./descriptor.ts";
+export { buildCanvasContext, CANVAS_CONTEXT_VERSION } from "./context.ts";
+export type { CanvasContext, CanvasCommands, Condition, Shape, ShapeCommand, DispatchOpts, } from "./context.ts";
+export type { PluginStorage, StorageScope, StorageOpts } from "./storage.ts";
+export { selectRenderablePlugins } from "./select.ts";
+export type { SelectResult, SkippedPlugin } from "./select.ts";
+export { loadFeaturePlugins } from "./registry.ts";
+export type { PluginModuleMap } from "./registry.ts";
+export type { CtxVersion } from "./version.ts";

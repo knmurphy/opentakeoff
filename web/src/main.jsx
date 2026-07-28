@@ -14,6 +14,12 @@ import { initTheme } from "./lib/theme.js";
 
 initTheme();   // index.html set data-theme pre-paint; this keeps it live
 
+// The feature-plugin loader (lib/plugins/registry.ts, with its lazy
+// `import.meta.glob` over features/*) is driven by PluginOverlayHost when the
+// canvas mounts — the host is the real consumer, so no eager warm-up here. The
+// glob stays live in the entry graph via the host's static import of registry.ts
+// (the CI Axis-A guard verifies the __ci_probe__ canary chunk still emits).
+
 // Client-only SPA. By default there is no backend: the canvas runs entirely in
 // the browser and persists to IndexedDB / localStorage (anonymous local mode).
 // Bare `/` ALWAYS lands here first — open the bundled demo plan or drop your
