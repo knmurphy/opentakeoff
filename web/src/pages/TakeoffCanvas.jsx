@@ -789,22 +789,37 @@ export default function TakeoffCanvas() {
     }
     if (name === active) { setActive(list[0].name); setPage(1); setSheetGroup([]); }
   }, [active]);
+  // Evict ONE file from the doc cache. Required whenever that file's bytes change
+  // or go away, because the cache is keyed on NAME and otherwise lives until the
+  // project view unmounts: re-adding a reissued A101.pdf would keep serving the
+  // SUPERSEDED document to every reader — the canvas, the thumbnails, and the
+  // search index, which would then faithfully re-index text that is no longer on
+  // the sheet (defeating dropFileFromIndex entirely). Destroy is best-effort and
+  // async, matching the unmount teardown below.
+  const evictDoc = useCallback((file) => {
+    const t = pdfDocsRef.current.get(file);
+    if (!t) return;
+    pdfDocsRef.current.delete(file);
+    t.then((task) => { try { task.destroy(); } catch { /* already gone */ } }).catch(() => {});
+  }, []);
   // Close a PDF: drop it from the working set (cloud: manifest only, file stays
   // in Drive; local: deletes the stored bytes), refresh, then reconcile the view.
   // Shapes on the closed sheets persist in annotations and restore on re-add.
   const closePdf = useCallback(async (name) => {
     await store.removePdf(name);
+    evictDoc(name);
     dropFileFromIndex(planIndexRef.current, name);   // else a hit can name a sheet that is gone
     reconcileAfterRemoval(name, await refreshSheets());
-  }, [refreshSheets, reconcileAfterRemoval]);
+  }, [refreshSheets, reconcileAfterRemoval, evictDoc]);
   // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
   // file, then drop it from the working set.
   const removeFromProject = useCallback(async (name) => {
     if (typeof store.removeFromProject !== "function") return;
     await store.removeFromProject(name);
+    evictDoc(name);
     dropFileFromIndex(planIndexRef.current, name);
     reconcileAfterRemoval(name, await refreshSheets());
-  }, [refreshSheets, reconcileAfterRemoval]);
+  }, [refreshSheets, reconcileAfterRemoval, evictDoc]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -823,7 +838,7 @@ export default function TakeoffCanvas() {
     // addPdf keys IndexedDB on the NAME, so re-adding a reissued sheet replaces
     // the bytes under the same sheet key — its index entry must go with them or
     // search keeps answering with the superseded sheet's text.
-    for (const f of pdfs) { try { await store.addPdf(f); dropFileFromIndex(planIndexRef.current, f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
+    for (const f of pdfs) { try { await store.addPdf(f); evictDoc(f.name); dropFileFromIndex(planIndexRef.current, f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
     await refreshSheets();
     const names = pdfs.map((f) => f.name);
     const tail = skipped.length ? ` · ${skipped.length} skipped` : "";

@@ -8,8 +8,8 @@
 // Why hand-rolled and not MiniSearch/FlexSearch: a plan sheet carries ~1k text
 // runs (measured on demo/sample-finish-plan.pdf), so a 200-sheet set is ~200k
 // tokens — three orders of magnitude below where those libraries start earning
-// their keep. web/package.json runs on 7 runtime deps; an inverted Map is not
-// worth an eighth. See docs/CLIENT_SIDE_OCR_RESEARCH.md §6.
+// their keep. web/package.json runs on 6 runtime deps; an inverted Map is not
+// worth a seventh. See docs/CLIENT_SIDE_OCR_RESEARCH.md §6.
 //
 import { parseSheetKey } from "./sheetKey";
 
@@ -39,8 +39,10 @@ export interface SheetIndex {
   builtAt: number;
   /** term → flat [x0,y0, x1,y1, …] anchors in image px, capped at MAX_ANCHORS. */
   terms: Record<string, number[]>;
-  /** distinct terms seen, INCLUDING ones dropped as unsearchable — the honest
-   *  denominator for "did this sheet have text at all". */
+  /** total tokens seen AS DRAWN, including ones dropped as unsearchable and
+   *  counting repeats — the honest denominator for "did this sheet have text at
+   *  all". Not a distinct-term count, and not the size of `terms`: one token can
+   *  expand into several terms (see expandTerm). Zero means a text-less sheet. */
   tokenCount: number;
 }
 
@@ -156,9 +158,11 @@ export interface SheetHit {
   key: string;
   source: IndexSource;
   score: number;
-  /** the index terms that satisfied the query, best first */
+  /** the index term each QUERY TOKEN matched, in query order (not ranked) —
+   *  matched[i] is what tokens[i] hit, so it lines up with what the user typed */
   matched: string[];
-  /** first anchor of the best-matching term, image px — or null if unanchored */
+  /** first anchor of the term matched by the FIRST query token, image px — or
+   *  null if unanchored. Not a "best" anchor: there is no cross-term ranking. */
   anchor: [number, number] | null;
 }
 

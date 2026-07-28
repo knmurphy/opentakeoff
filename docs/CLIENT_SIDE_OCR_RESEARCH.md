@@ -26,19 +26,19 @@ This matters more than any engine comparison, because it changes what OCR is
 
 | Capability | Where | Note |
 |---|---|---|
-| Per-page positioned text | `TakeoffCanvas.jsx:1205`, `:1216`, `:1232` | `getTextContent()` per page |
-| **A full-document text pass already runs** | `TakeoffCanvas.jsx:1224-1244` | loops every page of the active PDF, extracts sheet number + scale, **discards the rest** |
-| Title-block sheet number | `sheets.ts:87` `extractSheetNumber` | lower-right heuristic + regex |
-| Drawn-scale note parsing | `sheets.ts:141` `detectScale` | title-block-first, page-wide fallback |
-| Positioned tokens in a rect | `sheets.ts:164` `extractRegionText` | already returns `{str, x, y, h}` — the exact shape an index wants |
-| Room-label detection from text | `detectRooms.ts:48` `roomLabelSeeds` | `/^\d{2,3}[A-Z]?$/` |
-| Vector op-list walk incl. Form XObjects | `oneclick.ts:105` `extractVectorGeometry` | pushes/pops the form matrix at `:135-136` |
-| Raster/vector discrimination | `oneclick.ts` → `sheetStatsRef` (`TakeoffCanvas.jsx:1192`), `rastermask.ts:40-41` | `segCount` + `imageFrac` — **this is already the "is this a scan?" oracle** |
+| Per-page positioned text | `TakeoffCanvas.jsx` render effect | `getTextContent()` per page |
+| **A full-document text pass already runs** | `TakeoffCanvas.jsx`, the `labeledFileRef` block in the render effect | loops every page of the active PDF, extracts sheet number + scale, and (before this work) **discarded the rest** |
+| Title-block sheet number | `sheets.ts` `extractSheetNumber` | lower-right heuristic + regex |
+| Drawn-scale note parsing | `sheets.ts` `detectScale` | title-block-first, page-wide fallback |
+| Positioned tokens in a rect | `sheets.ts` `extractRegionText` | already returns `{str, x, y, h}` — the exact shape an index wants |
+| Room-label detection from text | `detectRooms.ts` `roomLabelSeeds` | `/^\d{2,3}[A-Z]?$/` |
+| Vector op-list walk incl. Form XObjects | `oneclick.ts` `extractVectorGeometry` | pushes/pops the form matrix around `paintFormXObjectBegin`/`End` |
+| Raster/vector discrimination | `oneclick.ts` → `sheetStatsRef` (`TakeoffCanvas.jsx`), `rastermask.ts` | `segCount` + `imageFrac` — **this is already the "is this a scan?" oracle** |
 | Raster binarization (adaptive threshold, deskew-free) | `rastermask.ts` | ~~ready-made OCR preprocessing~~ — **§9 measured this: not reusable as-is, its 135 px window destroys 19 px text** |
 | Per-sheet cache refs, thumbnail cache | `snapGridsRef`, `thumbCacheRef` | the place an index would live |
 | IndexedDB persistence | `store.js` (`opentakeoff`, v2, stores `pdfs`/`meta`/`snapshots`) | where an index would persist |
 
-**The single most important finding:** `TakeoffCanvas.jsx:1224-1244` already
+**The single most important finding:** the per-file label pass in `TakeoffCanvas.jsx` already
 walks *every page* of the active PDF and calls `getTextContent()` on each, purely
 to find sheet numbers and scale notes. It then drops the text. A search index over
 a vector plan set costs **one extra function call inside a loop that already
@@ -48,8 +48,10 @@ runs** — no new I/O, no new PDF parsing, no OCR.
 ~1,047 text-show operators on the sheet, 6 image XObjects, **0 Form XObjects**,
 6.2 MB of decompressed content streams. So order-of-magnitude ~1k tokens per
 sheet ⇒ a 200-sheet set is ~200k tokens — trivially in-memory for any JS search
-library. (The zero Form XObjects is a caveat for §5, not for search — this sample
-is script-generated, not CAD-plotted.)
+library. (The zero Form XObjects is a caveat for §5, not for search. Note this
+file is a REAL CAD-plotted VA drawing — see §9 — so "no Form XObjects" is a data
+point about real plots, not an artifact of a synthetic fixture. The repo's other
+demo asset, `demo/sample-plan.pdf`, IS script-generated; this is not that file.)
 
 ## 2. Prior art in this repo — and why this is not a re-run of it
 
@@ -87,7 +89,7 @@ that's the case for looking again:
 
 The trigger already exists and is already computed per sheet: `sheetStatsRef`'s
 `{segCount, imageFrac}` versus `RASTER_MIN_IMG_FRAC = 0.10` /
-`RASTER_MIN_SEGS = 500` (`rastermask.ts:40-41`). No new detection work.
+`RASTER_MIN_SEGS = 500` (`rastermask.ts`). No new detection work.
 
 Note the honest framing: **OCR is the fallback branch, not the feature.** If the
 search index shipped vector-only it would still cover the majority of plan sets.
@@ -304,12 +306,12 @@ results already are.
 - Fuse.js is fuzzy-only, no real inverted index — wrong tool.
 - Honestly: for ~1k tokens/sheet, **a hand-rolled inverted index over normalized
   tokens is ~50 lines** and adds zero dependencies. Given this repo's dependency
-  discipline (7 runtime deps total in `web/package.json`), that deserves serious
+  discipline (6 runtime deps total in `web/package.json`), that deserves serious
   consideration before adding MiniSearch.
 
 ### Where it hooks in
 
-`TakeoffCanvas.jsx:1224-1244` — the loop that already visits every page. Add the
+The per-file label loop in `TakeoffCanvas.jsx` — which already visits every page. Add the
 token capture there; it is a handful of lines in the hot file, which matters
 because of #166's constraint that `TakeoffCanvas.jsx` conflicts on nearly every
 upstream sync. Keep all the actual logic in a new pure, DOM-free, pdfjs-free
@@ -335,7 +337,8 @@ One-Click already uses:
 ## 7. Risks and open questions
 
 1. ~~**Rotated text.**~~ **MEASURED (§9)** — real, and worse than feared under
-   PSM 11 (17% recall on the sheet's 32 rotated items) but fixable: PSM 3's
+   PSM 11 (17% recall over the 69 WORDS in the sheet's 32 rotated text items —
+   the scores are word-based; the item count is not the denominator) but fixable: PSM 3's
    layout analysis gets 81%, at 7.5× the runtime. The text layer still handles
    rotation for free.
 2. ~~**Sheet size vs. OCR cost.**~~ **MEASURED (§9)** — the sheet is 26.1 MP at
@@ -367,11 +370,16 @@ One-Click already uses:
 Each step is independently shippable and each one is useful without the next.
 
 1. ~~**Vector search index.**~~ **SHIPPED** — `web/src/lib/planIndex.ts`
-   (pure, 22 node tests), capture in both text passes that already run (the
+   (pure, 33 node tests), capture in both text passes that already run (the
    canvas' full-document loop and `PlanNavigator`'s thumbnail pump), plus an
    on-demand pass for sheets neither has reached, and a search box in
    `PlanNavigator` that filters the gallery in relevance order. No new
-   dependency, no OCR, no CSP change — exactly as scoped.
+   dependency, no OCR, no CSP change.
+   **One deviation from §6, stated plainly:** the index is held in memory for the
+   session (a ref) and is NOT persisted to IndexedDB. §6's storage shape is still
+   the design for persistence; nothing has shipped against it, so a reload
+   re-indexes. That is cheap for a vector set and was not worth a schema until
+   OCR'd entries (which are expensive to rebuild) actually exist.
 2. **Tag index (symbol Tier 1).** `sheetCodes()` in `planIndex.ts` already
    splits finish tags from room numbers off the indexed terms and is tested;
    what is left is the UI — "where does CPT-1 appear?" as a browsable list
