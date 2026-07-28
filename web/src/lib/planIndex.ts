@@ -37,8 +37,15 @@ export interface SheetIndex {
   key: string;
   source: IndexSource;
   builtAt: number;
-  /** term → flat [x0,y0, x1,y1, …] anchors in image px, capped at MAX_ANCHORS. */
+  /** term → flat [x0,y0, x1,y1, …] anchors, capped at MAX_ANCHORS. The units are
+   *  the px of whatever viewport the caller extracted with — described by w/h
+   *  below, so a consumer never has to know or guess which scale that was. */
   terms: Record<string, number[]>;
+  /** the anchor space: viewport width/height in the same px the anchors use. 0
+   *  when the caller supplied none, which normalizedAnchor reports honestly
+   *  rather than guessing a scale. */
+  w: number;
+  h: number;
   /** total tokens seen AS DRAWN, including ones dropped as unsearchable and
    *  counting repeats — the honest denominator for "did this sheet have text at
    *  all". Not a distinct-term count, and not the size of `terms`: one token can
@@ -135,6 +142,7 @@ export function buildSheetIndex(
   items: IndexedTextItem[],
   source: IndexSource = "text",
   builtAt = 0,
+  size: { w: number; h: number } = { w: 0, h: 0 },
 ): SheetIndex {
   const terms: Record<string, number[]> = {};
   let tokenCount = 0;
@@ -150,7 +158,7 @@ export function buildSheetIndex(
       }
     }
   }
-  return { key, source, builtAt, terms, tokenCount };
+  return { key, source, builtAt, terms, tokenCount, w: size.w || 0, h: size.h || 0 };
 }
 
 /** One sheet that matched, with what it matched on and where to jump. */
@@ -229,6 +237,21 @@ export function searchPlan(indexes: Iterable<SheetIndex>, query: string): SheetH
   return hits.sort((a, b) => b.score - a.score || compareSheetKeys(a.key, b.key));
 }
 
+/** An anchor as a 0..1 fraction of the sheet, or null when this index recorded
+ *  no anchor space.
+ *
+ *  Normalized is the app's cross-surface convention: markups store positions this
+ *  way and the canvas centres on `anchor * panel.img.w`, which is what lets a
+ *  jump land correctly at whatever scale that panel happens to be rendered —
+ *  including a hi-res sheet whose panel scale is not RENDER_SCALE at all. Doing
+ *  the division HERE (against the index's own recorded space) is what makes the
+ *  page-1-vs-pages-2+ unit mismatch structurally impossible rather than a
+ *  convention every caller has to remember. */
+export function normalizedAnchor(index: SheetIndex, anchor: [number, number] | null | undefined): [number, number] | null {
+  if (!anchor || !index.w || !index.h) return null;
+  return [anchor[0] / index.w, anchor[1] / index.h];
+}
+
 /** Drop every page of one file from an index map.
  *
  *  MUST run whenever a file's BYTES change or the file goes away. store.addPdf
@@ -264,4 +287,62 @@ export function sheetCodes(index: SheetIndex): { tags: string[]; rooms: string[]
     else if (TAG_RE.test(term)) tags.push(term);
   }
   return { tags: tags.sort(), rooms: rooms.sort() };
+}
+
+/** Persisted shape: a plain array of SheetIndex, versioned so a future field
+ *  change can be detected rather than silently mis-read. */
+export const PLAN_INDEX_SCHEMA = "opentakeoff.plan_index.v1";
+export interface PersistedPlanIndex {
+  schema: string;
+  entries: SheetIndex[];
+}
+
+/** Serialize a live index map for storage. */
+export function serializePlanIndex(map: Map<string, SheetIndex>): PersistedPlanIndex {
+  return { schema: PLAN_INDEX_SCHEMA, entries: [...map.values()] };
+}
+
+/** Rehydrate a persisted index, dropping anything that can't be trusted.
+ *
+ *  Sanitize on LOAD, not just on save — the `sanitizeTemplates` precedent. This
+ *  record survives reloads and app versions, so a malformed entry from any past
+ *  writer must degrade to "that sheet isn't indexed yet" (it simply gets re-read)
+ *  rather than throwing inside hydrate and wedging the gallery.
+ *
+ *  `validFiles` is the CURRENT plan set's FILE names — not sheet keys, because a
+ *  file's page count isn't known at load time (it's discovered by enumeration).
+ *  Any entry whose file is absent is dropped, so a stored index can never
+ *  resurrect a sheet the project no longer has — the same guarantee the live
+ *  search gets by intersecting hits with the plan set.
+ *  A wrong/absent schema drops everything, which costs one re-index and is the
+ *  safe direction to fail. */
+export function sanitizePlanIndex(raw: unknown, validFiles: Iterable<string>): Map<string, SheetIndex> {
+  const out = new Map<string, SheetIndex>();
+  const o = raw as PersistedPlanIndex | undefined;
+  if (!o || typeof o !== "object" || o.schema !== PLAN_INDEX_SCHEMA || !Array.isArray(o.entries)) return out;
+  const allow = new Set(validFiles);
+  for (const e of o.entries) {
+    if (!e || typeof e !== "object") continue;
+    const key = typeof e.key === "string" ? e.key : "";
+    if (!key || out.has(key) || !allow.has(parseSheetKey(key).file)) continue;
+    if (!e.terms || typeof e.terms !== "object" || Array.isArray(e.terms)) continue;
+    const terms: Record<string, number[]> = {};
+    for (const term in e.terms) {
+      const a = (e.terms as Record<string, unknown>)[term];
+      // anchors are flat [x,y,…] pairs of finite numbers; anything else is dropped
+      if (!Array.isArray(a) || a.length % 2 !== 0) continue;
+      if (!a.every((n) => typeof n === "number" && Number.isFinite(n))) continue;
+      terms[term] = a as number[];
+    }
+    out.set(key, {
+      key,
+      source: e.source === "ocr" ? "ocr" : "text",
+      builtAt: typeof e.builtAt === "number" && Number.isFinite(e.builtAt) ? e.builtAt : 0,
+      terms,
+      tokenCount: typeof e.tokenCount === "number" && Number.isFinite(e.tokenCount) ? e.tokenCount : 0,
+      w: typeof e.w === "number" && Number.isFinite(e.w) ? e.w : 0,
+      h: typeof e.h === "number" && Number.isFinite(e.h) ? e.h : 0,
+    });
+  }
+  return out;
 }

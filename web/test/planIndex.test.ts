@@ -4,7 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeTerm, splitRun, expandTerm, isCode, isSearchable, buildSheetIndex, matchTerm,
-  searchPlan, sheetCodes, dropFileFromIndex, MAX_ANCHORS, MIN_TERM_LEN,
+  searchPlan, sheetCodes, dropFileFromIndex, normalizedAnchor,
+  serializePlanIndex, sanitizePlanIndex, PLAN_INDEX_SCHEMA, MAX_ANCHORS, MIN_TERM_LEN,
   type IndexedTextItem, type SheetIndex,
 } from "../src/lib/planIndex.ts";
 
@@ -289,4 +290,85 @@ test("dropFileFromIndex: a reissued sheet stops answering with the old text", ()
 test("splitRun: a run carrying a whole label splits into its words", () => {
   assert.deepEqual(splitRun("OFFICE 101"), ["OFFICE", "101"]);
   assert.deepEqual(splitRun(""), [""]);
+});
+
+// ── normalizedAnchor ────────────────────────────────────────────────────────
+
+test("normalizedAnchor: divides against the index's OWN recorded anchor space", () => {
+  const ix = buildSheetIndex("a", runs(["CPT-1", 300, 150]), "text", 0, { w: 1200, h: 600 });
+  assert.deepEqual(normalizedAnchor(ix, [300, 150]), [0.25, 0.25]);
+});
+
+test("normalizedAnchor: an index with no recorded space reports null, never a guess", () => {
+  const ix = buildSheetIndex("a", runs(["CPT-1", 300, 150]));   // no size passed
+  assert.equal(normalizedAnchor(ix, [300, 150]), null);
+  assert.equal(normalizedAnchor(ix, null), null);
+});
+
+test("normalizedAnchor: two pages at DIFFERENT scales normalize to the same point", () => {
+  // the page-1-vs-pages-2+ unit mismatch this exists to make impossible
+  const panelScale = buildSheetIndex("p1", runs(["X", 150, 75]), "text", 0, { w: 600, h: 300 });
+  const renderScale = buildSheetIndex("p2", runs(["X", 300, 150]), "text", 0, { w: 1200, h: 600 });
+  assert.deepEqual(normalizedAnchor(panelScale, [150, 75]), normalizedAnchor(renderScale, [300, 150]));
+});
+
+// ── persistence ─────────────────────────────────────────────────────────────
+
+test("plan index round-trips through serialize → JSON → sanitize", () => {
+  const map = new Map<string, SheetIndex>([
+    ["A101.pdf", buildSheetIndex("A101.pdf", runs(["CPT-1 CORRIDOR", 10, 20]), "text", 5, { w: 100, h: 50 })],
+    ["A102.pdf", buildSheetIndex("A102.pdf", runs(["LOBBY", 1, 2]), "ocr", 6, { w: 100, h: 50 })],
+  ]);
+  const back = sanitizePlanIndex(JSON.parse(JSON.stringify(serializePlanIndex(map))), ["A101.pdf", "A102.pdf"]);
+  assert.deepEqual([...back.keys()].sort(), ["A101.pdf", "A102.pdf"]);
+  assert.deepEqual(back.get("A101.pdf"), map.get("A101.pdf"));
+  assert.equal(back.get("A102.pdf")?.source, "ocr", "source tag survives the round trip");
+});
+
+test("sanitizePlanIndex: drops entries for sheets the project no longer has", () => {
+  const map = new Map<string, SheetIndex>([["gone.pdf", buildSheetIndex("gone.pdf", runs(["X1", 0, 0]))]]);
+  const back = sanitizePlanIndex(serializePlanIndex(map), ["other.pdf"]);
+  assert.equal(back.size, 0, "a stored index must never resurrect a missing sheet");
+});
+
+test("sanitizePlanIndex: a wrong/absent schema drops everything rather than guessing", () => {
+  const good = serializePlanIndex(new Map([["a.pdf", buildSheetIndex("a.pdf", runs(["X1", 0, 0]))]]));
+  assert.equal(sanitizePlanIndex({ ...good, schema: "something.else" }, ["a.pdf"]).size, 0);
+  assert.equal(sanitizePlanIndex(undefined, ["a.pdf"]).size, 0);
+  assert.equal(sanitizePlanIndex({ schema: PLAN_INDEX_SCHEMA }, ["a.pdf"]).size, 0);
+  assert.equal(sanitizePlanIndex("nonsense", ["a.pdf"]).size, 0);
+});
+
+test("sanitizePlanIndex: corrupt entries degrade to unindexed, never throw", () => {
+  const raw = {
+    schema: PLAN_INDEX_SCHEMA,
+    entries: [
+      null,
+      { key: 123, terms: {} },                                   // non-string key
+      { key: "a.pdf", terms: "nope" },                           // terms not an object
+      { key: "b.pdf", terms: { OK: [1, 2], ODD: [1, 2, 3], BAD: ["x", "y"], NAN: [NaN, 1] } },
+    ],
+  };
+  const back = sanitizePlanIndex(raw, ["a.pdf", "b.pdf"]);
+  assert.deepEqual([...back.keys()], ["b.pdf"]);
+  assert.deepEqual(Object.keys(back.get("b.pdf")!.terms), ["OK"], "odd-length, non-numeric and NaN anchors dropped");
+  assert.equal(back.get("b.pdf")!.source, "text", "missing source defaults, not undefined");
+});
+
+test("sanitizePlanIndex: a rehydrated index is immediately searchable", () => {
+  const map = new Map<string, SheetIndex>([["A101.pdf", buildSheetIndex("A101.pdf", runs(["CPT-1", 10, 20]), "text", 0, { w: 100, h: 50 })]]);
+  const back = sanitizePlanIndex(JSON.parse(JSON.stringify(serializePlanIndex(map))), ["A101.pdf"]);
+  const [hit] = searchPlan(back.values(), "cpt-1");
+  assert.equal(hit.key, "A101.pdf");
+  assert.deepEqual(normalizedAnchor(back.get("A101.pdf")!, hit.anchor), [0.1, 0.4]);
+});
+
+test("sanitizePlanIndex: validity is by FILE, so every page of a kept file survives", () => {
+  // a file's page count isn't known at load time — keying on sheet keys would
+  // have needed a guessed page ceiling
+  const map = new Map<string, SheetIndex>();
+  for (const k of ["set.pdf", "set.pdf#2", "set.pdf#37"]) map.set(k, buildSheetIndex(k, runs(["LOBBY", 0, 0])));
+  map.set("dropped.pdf#4", buildSheetIndex("dropped.pdf#4", runs(["LOBBY", 0, 0])));
+  const back = sanitizePlanIndex(serializePlanIndex(map), ["set.pdf"]);
+  assert.deepEqual([...back.keys()].sort(), ["set.pdf", "set.pdf#2", "set.pdf#37"]);
 });

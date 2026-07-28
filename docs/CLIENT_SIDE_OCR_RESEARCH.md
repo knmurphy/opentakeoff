@@ -375,15 +375,16 @@ Each step is independently shippable and each one is useful without the next.
    on-demand pass for sheets neither has reached, and a search box in
    `PlanNavigator` that filters the gallery in relevance order. No new
    dependency, no OCR, no CSP change.
-   **One deviation from §6, stated plainly:** the index is held in memory for the
-   session (a ref) and is NOT persisted to IndexedDB. §6's storage shape is still
-   the design for persistence; nothing has shipped against it, so a reload
-   re-indexes. That is cheap for a vector set and was not worth a schema until
-   OCR'd entries (which are expensive to rebuild) actually exist.
-2. **Tag index (symbol Tier 1).** `sheetCodes()` in `planIndex.ts` already
-   splits finish tags from room numbers off the indexed terms and is tested;
-   what is left is the UI — "where does CPT-1 appear?" as a browsable list
-   rather than a search you have to think to type.
+   §6's persistence has since shipped too: the index is serialized to the meta
+   store under `planindex:<project>`, sanitized on load (the `sanitizeTemplates`
+   precedent) and revalidated against the current plan set, so a stored index can
+   never resurrect a sheet the project no longer has.
+2. ~~**Tag index (symbol Tier 1).**~~ **SHIPPED** — `sheetCodes()` aggregated
+   across the set behind a "Finishes" toggle in the gallery: every finish code
+   the set uses, with per-tag sheet counts, click to search. This is the half
+   search alone cannot do, since a search only helps once you can guess the code.
+   Room numbers are counted but not yet listed (a 300-room set needs grouping
+   the tag strip doesn't have).
 3. **Measurement spike — no code shipped.** Two questions, both cheap:
    (a) ~~run tesseract.js over real sheets and record wall-clock, accuracy, and
    whether tiling is needed~~ — **done, see §9**; still worth repeating on

@@ -23,7 +23,7 @@ import { Icon } from "../brand/icons.jsx";
 import AuthChip from "./AuthChip.jsx";
 import { useGoogleAuth } from "../lib/google/AuthContext.jsx";
 import { parseSheetKey, extractSheetNumber, detectScale, extractRegionText, RENDER_SCALE, MAX_GROUP } from "../lib/sheets";
-import { buildSheetIndex, searchPlan } from "../lib/planIndex";
+import { buildSheetIndex, searchPlan, normalizedAnchor, sheetCodes } from "../lib/planIndex";
 import { isGoogleConfigured } from "../lib/google/auth.js";
 import { projectHomeFolderId } from "../lib/projectHome.js";
 import { groupSheetsByLevel, sortGalleryGroups } from "../lib/sheetLevels.js";
@@ -52,7 +52,7 @@ export default function PlanNavigator({
   canClose, onExit, initialMode = "plan", cloudMode,
   // plan-set (gallery) data
   sheets, getDoc, scales, detectedScales, shapes, labels, onLabel, onDetect,
-  thumbCacheRef, busyRef, planIndexRef, openTabs, onOpen,
+  thumbCacheRef, busyRef, planIndexRef, onIndexed, openTabs, onOpen,
   onAddFiles, onClosePdf, onRemoveFromProject, onTransferShapes,
   onCloseProject, onBrowseProjects,
   levels = {}, onAssignLevel,
@@ -233,6 +233,7 @@ export default function PlanNavigator({
           const det = detectScale(tc, vpL);
           if (det) onDetect(key, det);
           indexSheet(key, tc, vpL);   // free: the text layer is already in hand
+          onIndexed?.();
         }
       } catch { /* destroyed doc on unmount / render-cancel — skip */ }
     }
@@ -271,7 +272,7 @@ export default function PlanNavigator({
     // `unindexed` never reached 0, so the "still reading…" message never cleared
     // and the scanned-sheet message it should have shown was unreachable, and
     // ensureIndexed re-read every scan on every keystroke.
-    planIndexRef.current.set(key, buildSheetIndex(key, items, "text", Date.now()));
+    planIndexRef.current.set(key, buildSheetIndex(key, items, "text", Date.now(), { w: vp.width, h: vp.height }));
   }, [planIndexRef]);
 
   // Index every sheet the pump hasn't reached. Triggered by typing, not by
@@ -312,8 +313,9 @@ export default function PlanNavigator({
         if (++done % 8 === 0) setIndexedN((n) => n + 1);
       }
       setIndexedN((n) => n + 1);
+      onIndexed?.();   // bank the pass so a reload doesn't redo it
     } finally { indexingRef.current = false; }
-  }, [allKeys, getDoc, planIndexRef, indexSheet]);
+  }, [allKeys, getDoc, planIndexRef, indexSheet, onIndexed]);
 
   const query = find.trim();
   // recomputed off indexedN/allKeys — the same two invalidation signals `hits` uses
@@ -348,6 +350,43 @@ export default function PlanNavigator({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, indexedN, planIndexRef, keySet]);
   const hitByKey = useMemo(() => new Map((hits ?? []).map((h) => [h.key, h])), [hits]);
+
+  // Where on the sheet to land when opening a search hit: the anchor of the term
+  // it matched, normalized against the index's own recorded anchor space so it
+  // is correct at whatever scale that panel renders. null (no live search, or an
+  // index built without an anchor space) simply opens the sheet as before.
+  // ── tag browser: the set's own finish vocabulary ────────────────────────
+  // The other half of "which sheet says CPT-1?" — you can only search a code you
+  // already know. This lists what the set actually uses, aggregated off the same
+  // indexed terms (sheetCodes), so it costs no new extraction. Opt-in behind a
+  // toggle for the same reason indexing is: a user who never opens it pays
+  // nothing, and opening it is what triggers the index pass.
+  const [showCodes, setShowCodes] = useState(false);
+  const codeIndex = useMemo(() => {
+    const tags = new Map();
+    let rooms = 0;
+    if (planIndexRef) {
+      const seenRooms = new Set();
+      for (const ix of planIndexRef.current.values()) {
+        const c = sheetCodes(ix);
+        for (const t of c.tags) tags.set(t, (tags.get(t) || 0) + 1);   // sheets carrying it
+        for (const r of c.rooms) seenRooms.add(r);
+      }
+      rooms = seenRooms.size;
+    }
+    // most-used first: the finishes that dominate a set are what an estimator
+    // reaches for; alphabetical within a tie so the order is stable
+    return { tags: [...tags].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])), rooms };
+    // indexedN (entries added) and allKeys (entries removed) are the ref-backed
+    // index's only invalidation signals — the body reads neither, same as `hits`
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexedN, planIndexRef, allKeys]);
+
+  const hitFocus = (key) => {
+    const hit = hitByKey.get(key);
+    const ix = hit && planIndexRef?.current.get(key);
+    return ix ? normalizedAnchor(ix, hit.anchor) : null;
+  };
 
   const toggleSel = (key) => setSel((g) => (g.includes(key) ? g.filter((k) => k !== key) : [...g, key]));
   const shapeCount = (key) => shapes.reduce((n, s) => n + (s.sheet_id === key ? 1 : 0), 0);
@@ -450,6 +489,40 @@ export default function PlanNavigator({
       {find && (
         <button onClick={() => setFind("")} title="Clear the search (Esc)"
           style={{ ...ctrlBtn, padding: "6px 8px" }}>✕</button>
+      )}
+      <button
+        onClick={() => { setShowCodes((v) => !v); ensureIndexed(); }}
+        title="List the finish tags this plan set actually uses — you can only search a code you already know"
+        style={{ ...ctrlBtn, padding: "6px 9px", background: showCodes ? "var(--ink)" : "transparent", color: showCodes ? "var(--paper-bright)" : "var(--ink)" }}>
+        Finishes{codeIndex.tags.length ? ` (${codeIndex.tags.length})` : ""}
+      </button>
+    </div>
+  );
+
+  // the chip strip itself — sits above the grid, only while toggled open
+  const codeStrip = !showCodes || mode !== "plan" ? null : (
+    <div style={{ padding: "10px 18px", borderBottom: "1px solid var(--ink-faint)", background: "var(--well)" }}>
+      {codeIndex.tags.length === 0 ? (
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, color: "var(--ink-muted)" }}>
+          {unindexed > 0 ? `Reading ${unindexed} sheet${unindexed === 1 ? "" : "s"}…` : "No finish tags found in this set's text."}
+        </span>
+      ) : (
+        <>
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.14em", textTransform: "uppercase", color: "var(--ink-muted)", marginBottom: 7 }}>
+            Finish tags in this set · {codeIndex.rooms} room number{codeIndex.rooms === 1 ? "" : "s"}
+            {unindexed > 0 ? ` · reading ${unindexed} more…` : ""}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {codeIndex.tags.map(([tag, n]) => (
+              <button key={tag} onClick={() => setFind(tag)} title={`On ${n} sheet${n === 1 ? "" : "s"} — click to search`}
+                style={{ display: "inline-flex", alignItems: "baseline", gap: 5, padding: "3px 8px", border: "1px solid var(--ink-faint)",
+                  background: query === tag ? "var(--cobalt)" : "var(--paper-bright)", color: query === tag ? "var(--paper-bright)" : "var(--ink)",
+                  cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 11.5 }}>
+                {tag}<span style={{ opacity: 0.6, fontSize: 10 }}>{n}</span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -619,6 +692,7 @@ export default function PlanNavigator({
   // ── PLAN body + footer ──────────────────────────────────────────────────
   const planBody = (
     <>
+      {codeStrip}
       <div style={{ flex: 1, overflow: "auto", padding: 18 }}>
         {hits && hits.length === 0 && (
           <div style={{ padding: "28px 8px", fontFamily: "var(--f-mono)", fontSize: 12.5, color: "var(--ink-muted)", lineHeight: 1.7 }}>
@@ -655,7 +729,8 @@ export default function PlanNavigator({
                     <button onClick={(e) => { e.stopPropagation(); requestClose(parsed.file); }} title={cloudMode ? "Close this PDF — unload it from the plan set (it stays in Drive)" : "Close this PDF — remove it from the plan set (local plans aren't stored elsewhere)"}
                       style={{ padding: "5px 8px", border: "none", background: "var(--paper-bright)", color: "var(--ink-muted)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 11, boxShadow: "var(--shadow-1)" }}>✕</button>
                   )}
-                  <button onClick={(e) => { e.stopPropagation(); onOpen([key], false); }} title="Open just this sheet"
+                  <button onClick={(e) => { e.stopPropagation(); onOpen([key], false, hitFocus(key)); }}
+                    title={hitByKey.get(key) ? `Open at “${hitByKey.get(key).matched[0]}”` : "Open just this sheet"}
                     style={{ padding: "5px 12px", border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase" }}>View</button>
                 </div>
                 <div style={{ height: 185, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--well)", borderBottom: "1px solid var(--ink-faint)", overflow: "hidden" }}>
