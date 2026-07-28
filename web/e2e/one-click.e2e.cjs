@@ -2,7 +2,8 @@
 // SELF-VERIFIES the three doorway conditions in the fixture plan:
 //   1. hover an enclosed room   → live preview reads "120 SF"
 //   2. hover the cased opening  → preview reads "sealed a small opening"
-//   3. hover the door-swing room→ preview ≈ 113 SF, NOT sealed (arc bounds it)
+//   3. hover the door-swing room→ preview reads 120 SF, "incl. door swing" (the
+//                                  wedge is INCLUDED; the arc no longer bounds the fill)
 //   4. hover open sheet space   → no preview at all
 //   5. Enter                    → "Created 3 takeoffs" toast
 // Screenshots + a video land in e2e/out/. Exit code 0 = all checks passed.

@@ -68,7 +68,7 @@ export const NUDGE_FT = NUDGE_PX / CAL_MPPF;                   // = 2 inches
 // Openings narrower than this never connect two spaces — a slit between an
 // annotation leader tip and a wall corner, a hairline drafting gap. Without a
 // feet-true rule the answer depends on which side of a cell boundary the
-// linework rounds to at the current resolution (bench: ward-room-294sf lost
+// linework rounds to at the current resolution (bench: ward-room lost
 // its vestibule through exactly such a slit at ws × 0.5 only).
 export const MIN_PASS_FT = 0.5;
 /** Dilation radius that closes sub-MIN_PASS_FT passages at maskPxPerFt.

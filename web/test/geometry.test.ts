@@ -942,3 +942,33 @@ test("extractVectorGeometry: a folded *Repeat op's area still scales with the am
   const g = extractVectorGeometry(opList as any, [1, 0, 0, 1, 0, 0], OPS);
   assert.ok(Math.abs(g.imageArea - 96) < 1e-9, `imageArea ${g.imageArea}`);
 });
+
+// The O(N²) lattice-query fix (adversarial review, round 8) shipped with NO
+// regression test — reverting the bisect + prefix-max in rowHas to the naive
+// full-row scan left the whole suite AND the bench green (audit finding D7).
+// This is the missing guard.
+//
+// The degenerate shape is the one the comment at oneclick.ts:532-536 names: a
+// dense band of same-angle, same-pen, NON-overlapping pieces. Note it needs many
+// pieces in FEW rows, not many rows — a first attempt at this test used 400 rows
+// of 100 and passed happily against the reverted code, because the naive scan
+// over 100 pieces is cheap. Measured here at 40k segments in 4 rows:
+// fixed ~123 ms, naive ~5,671 ms. The 1.5 s bound sits 12× above the fixed path
+// and 3.8× below the naive one.
+test("classifyHatchSegs stays sub-quadratic on a dense same-angle tick swarm", () => {
+  const ROWS = 4, PER_ROW = 10000;            // 40,000 segments, 4 rows
+  const segs: number[] = [];
+  for (let r = 0; r < ROWS; r++) {
+    const y = 100 + r * 3;                    // distinct rows, inside the pitch cap
+    for (let i = 0; i < PER_ROW; i++) {
+      const x = 100 + i * 11;                 // staggered, non-overlapping ticks
+      segs.push(x, y, x + 6, y);
+    }
+  }
+  const meta = new Uint8Array(segs.length / 4);
+  const t0 = performance.now();
+  const soft = classifyHatchSegs(segs, meta, 1, 24);
+  const ms = performance.now() - t0;
+  assert.equal(soft.length, segs.length / 4);
+  assert.ok(ms < 1500, `classifyHatchSegs took ${Math.round(ms)} ms on 40k same-angle segments in ${ROWS} rows — the row query has gone quadratic again`);
+});

@@ -60,7 +60,7 @@ const PINNED = [
       // both swing wedges included, down to the vestibule's swing arc; the
       // vestibule keeps the complementary side, so the two tile with no
       // overlap and no gap.
-      { name: "ward-room-294sf", seed: [4050, 486], expect: "golden" as const, tags: ["door-swing"] },
+      { name: "ward-room", seed: [4050, 486], expect: "golden" as const, tags: ["door-swing"] },
       { name: "ward-vestibule", seed: [4045, 1230], expect: "golden" as const, tags: ["door-swing", "vestibule"] },
       { name: "cloud-corridor", seed: [1814, 1814], expect: "golden" as const, tags: ["cloud-boundary", "corridor"] },
       { name: "shaded-wing-office", seed: [659, 1551], expect: "golden" as const, tags: ["shaded-wing"] },
