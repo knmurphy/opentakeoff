@@ -16,8 +16,10 @@ restated here.
 These files are Google Fonts' `latin` / `latin-ext` woff2 subsets of the
 upstream releases. Under OFL 1.1 §1 that makes them Modified Versions (glyphs
 removed, format changed); they remain under OFL 1.1, and no Reserved Font Name
-is used by a renamed derivative. See THIRD-PARTY-NOTICES.md for versions,
-hashes and the reasoning on family naming.
+is used by a renamed derivative. Per-file SHA-256 hashes, versions and source
+URLs are in MANIFEST.txt beside this file (verify with `python3
+scripts/fetch-fonts.py --verify`); THIRD-PARTY-NOTICES.md carries the artifact
+table and the reasoning on family naming.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
