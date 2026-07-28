@@ -183,6 +183,40 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 
 ---
 
+## Implementation status (2026-07-28)
+
+All seven engine defects are fixed on `claude/issue-184-hatch-periodicity-fduafy`
+(`94a5d46`). **934 web tests, MCP 36/36, bench green, typecheck/lint/build clean.**
+
+| finding | state |
+|---|---|
+| A1 resolution / Hi-Res | fixed, vector (`1a02b15`) and raster (`39f8f47`) |
+| A2 confidence anti-correlation | fixed (`086843b`) — **but see the caveat below** |
+| A3 seal path bypassed its guards | fixed (`086843b`), guards now applied |
+| A4 curved-wall annexation | fixed (`974cf43`) |
+| A5 non-doors read as door arcs | fixed (`974cf43`) |
+| A5b bench scored the wrong quantity | fixed (`67df53b`), corpus re-pinned through 0.9 |
+| A6 MCP/batch engine divergence | fixed (`57c9cc7`), re-closed at `f81e41f` |
+| A8 hover cost | fixed (`94a5d46`) — 3535→685 ms cold, 585→81 MB |
+
+Phase 0 gates: 0.1a, 0.1b, 0.2–0.7, 0.9, 0.11, 0.12 done. Corpus headline is now
+**mean 0.999 / floor 0.990** measuring the ring the product returns, with rasterisation
+error preserved as an ungated fidelity metric (0.969 / 0.860).
+
+**Caveat on A2, recorded against interest.** The A5b work showed the confidence gate was
+partly passing *because the bench was wrong*: the bench's 0.8–4.3% rasterisation error
+parked all nine synthetic probes in the gate's dead zone, so none entered either
+population. With the product's ring measured, `tile-grid-room` (0.0% error) and
+`partition-bank-15in` (400% error) carry the **identical** factor `hatch-filtered(override)`
+at the **identical** 0.850. So `hatchTier` reports the regime an escalation was accepted
+under, not whether the result is plausible — weaker than "A2 fixed" implies. No threshold
+was weakened; the two probes are exempt with xfail directions that fail the day any signal
+separates them.
+
+**Still open, and none of it is an engine defect:** 0.8 (ledger), 0.10 (callout harness),
+2.8 (item-F seeding metrics), C1 (the answer-key campaign — needs measured plans),
+and RFC item A for `annotation-ring-room`, which no confidence tuning closes.
+
 ## Phase 0 — make the gates real
 
 > **✅ IMPLEMENTED** in `5e92a11` on `claude/issue-184-hatch-periodicity-fduafy`.
