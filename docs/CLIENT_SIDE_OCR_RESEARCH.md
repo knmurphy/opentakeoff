@@ -1,6 +1,7 @@
 # Client-side OCR for a search + symbol index — research
 
-**Status:** research only. No code, no commitment. Written 2026-07-28.
+**Status:** research + a measured spike. No app code, no commitment.
+Written 2026-07-28; §9 adds real tesseract.js numbers on the sample plan.
 **Question:** can OpenTakeoff build a plan-set **search index** and a **symbol
 index** entirely in the browser — no server, no upload — and where does OCR
 actually fit?
@@ -33,7 +34,7 @@ This matters more than any engine comparison, because it changes what OCR is
 | Room-label detection from text | `detectRooms.ts:48` `roomLabelSeeds` | `/^\d{2,3}[A-Z]?$/` |
 | Vector op-list walk incl. Form XObjects | `oneclick.ts:105` `extractVectorGeometry` | pushes/pops the form matrix at `:135-136` |
 | Raster/vector discrimination | `oneclick.ts` → `sheetStatsRef` (`TakeoffCanvas.jsx:1192`), `rastermask.ts:40-41` | `segCount` + `imageFrac` — **this is already the "is this a scan?" oracle** |
-| Raster binarization (adaptive threshold, deskew-free) | `rastermask.ts` | ready-made OCR preprocessing |
+| Raster binarization (adaptive threshold, deskew-free) | `rastermask.ts` | ~~ready-made OCR preprocessing~~ — **§9 measured this: not reusable as-is, its 135 px window destroys 19 px text** |
 | Per-sheet cache refs, thumbnail cache | `snapGridsRef`, `thumbCacheRef` | the place an index would live |
 | IndexedDB persistence | `store.js` (`opentakeoff`, v2, stores `pdfs`/`meta`/`snapshots`) | where an index would persist |
 
@@ -333,16 +334,13 @@ One-Click already uses:
 
 ## 7. Risks and open questions
 
-1. **Rotated text.** Plans routinely carry vertical text (left-edge notes,
-   rotated view titles). The text layer handles this for free — the transform is
-   right there in the text item. **OCR does not**: Tesseract's line segmentation
-   degrades badly on skew, and PSM 12's OSD is per-page, not per-region. Expect
-   to lose rotated text on scans, or to pay for a 90°-rotated second pass.
-2. **Sheet size vs. OCR cost.** A plan sheet at `RENDER_SCALE = 2.0` is far
-   larger than a receipt. Tesseract wants ≥300 DPI but its runtime is
-   superlinear in a way that punishes 5000×3500 inputs. Tiling with overlap is
-   likely mandatory, and no benchmark I found covers this input class — **this
-   is the biggest unmeasured cost in the whole proposal.**
+1. ~~**Rotated text.**~~ **MEASURED (§9)** — real, and worse than feared under
+   PSM 11 (17% recall on the sheet's 32 rotated items) but fixable: PSM 3's
+   layout analysis gets 81%, at 7.5× the runtime. The text layer still handles
+   rotation for free.
+2. ~~**Sheet size vs. OCR cost.**~~ **MEASURED (§9)** — the sheet is 26.1 MP at
+   144 DPI and takes 19.2 s whole / 11.6 s tiled. Tiling helps speed, not
+   accuracy. Rendering at 288 DPI made accuracy *worse*, not better.
 3. **Form XObject prevalence is unknown.** §5 Tier 2 rests on it. Sample of one
    (the demo plan) says zero. Needs real plan sets.
 4. **Index invalidation.** Sheets get reissued (the revision-transfer feature
@@ -369,10 +367,11 @@ Each step is independently shippable and each one is useful without the next.
    same tokens, surfaced as "where does CPT-1 appear?" Reuses `scheduleParse`'s
    clustering.
 3. **Measurement spike — no code shipped.** Two questions, both cheap:
-   (a) run tesseract.js over 5 real scanned sheets and record wall-clock,
-   accuracy, and whether tiling is needed; (b) count Form XObjects and repeated
-   geometry signatures across 5–10 real CAD plan sets. Steps 4 and 5 are
-   unestimatable until this is done.
+   (a) ~~run tesseract.js over real sheets and record wall-clock, accuracy, and
+   whether tiling is needed~~ — **done, see §9**; still worth repeating on
+   genuinely scanned sheets rather than a rasterized vector one.
+   (b) count Form XObjects and repeated geometry signatures across 5–10 real CAD
+   plan sets — **still open**; step 5 stays unestimatable until it's answered.
 4. **OCR fallback**, opt-in per sheet, self-hosted tesseract.js, gated on the
    spike.
 5. **Symbol index Tier 2**, gated on the spike.
@@ -383,6 +382,149 @@ skipped. Given §4.4 — `ocrs` plausibly one browser package away from being th
 better answer, PP-OCRv6 blocked only by a headers conflict that FedCM migration
 would clear — deferring is worth real money. Don't buy into an engine before
 step 3 forces the question.
+
+---
+
+## 9. Spike results — tesseract.js on the sample plan (run 2026-07-28)
+
+Step 3(a) of §8, actually run. This supersedes the guesses in §7.1 and §7.2.
+
+**Method.** `demo/sample-finish-plan.pdf` page 1 — a real VA hospital first-floor
+finish plan (AF101), E-size 42" × 30" — rendered by **pdf.js in real Chromium**
+(Playwright) at the app's `RENDER_SCALE = 2.0`, then OCR'd with **self-hosted
+tesseract.js 7** (no CDN, `corePath`/`workerPath`/`langPath` all local, `eng`
+`4.0.0_fast`). Because the sheet is vector, its **text layer is exact ground
+truth** — 764 items / 1,163 words — so the scores below are real, not eyeballed.
+Scoring is case-folded and punctuation-stripped; runs are 4-core, WASM, no SIMD
+threading.
+
+Confirmed payload numbers from §4.1: `eng.traineddata` `fast` = **1.98 MB gz /
+4.11 MB on disk**; worker init including traineddata load = **470–930 ms**.
+
+### 9.1 The sheet is big
+
+| | |
+|---|---|
+| Raster at `RENDER_SCALE = 2.0` | **6048 × 4320 px = 26.1 MP**, i.e. **144 DPI** |
+| pdf.js render time (Chromium) | ~2.6–2.8 s |
+| Median text cap height | **19.1 px** |
+| Text-layer items | 764, of which **32 (4.2%) are rotated −90°** |
+
+144 DPI is **half** Tesseract's recommended 300 DPI, and 26 MP is ~40× a receipt.
+Both concerns in §7.2 were real.
+
+### 9.2 Results
+
+| Config | Time | Word recall | Word precision | Finish tags | Room #s | Rotated text |
+|---|---|---|---|---|---|---|
+| **PSM 11 (sparse), full sheet** | **19.2 s** (0.73 s/MP) | 50.7% | 70.0% | 83.3% | 60.3% | 17.4% |
+| PSM 11, 3×3 tiles + 6% overlap | **11.6 s** (0.44 s/MP) | 52.9% | 60.2% | 83.3% | 58.6% | 18.8% |
+| PSM 3 (auto), full sheet | **144.7 s** (5.54 s/MP) | 49.2% | 72.4% | 16.7% | 31.0% | **81.2%** |
+| Union of PSM 11 + PSM 3 | ~164 s | **59.3%** | 42.3% | 83.3% | 65.5% | **87.0%** |
+| PSM 11, 4×4 tiles @ **288 DPI** | 26.5 s | 49.7% | 57.6% | 50.0% | 27.6% | 21.7% |
+| PSM 11, 3×3, **`rastermask` binarized** | 10.1 s | 36.1% | 50.8% | 16.7% | 12.1% | 13.0% |
+
+### 9.3 What the numbers actually say
+
+**1. Raw word recall (~50%) is the wrong metric — and it's hiding good news.**
+For a search index what matters is whether a *term* is findable on the sheet at
+all, not whether every instance was read. Scored on **distinct searchable terms**
+(≥3 chars or room-number-shaped — dropping list numbering like "1." and stray
+single letters):
+
+| Config | Searchable-term coverage |
+|---|---|
+| PSM 11 full sheet (19 s) | **80.4%** (288/358) |
+| PSM 11 3×3 tiles (11.6 s) | **80.7%** (289/358) |
+| PSM 3 full sheet (145 s) | 76.0% (272/358) |
+| **Union PSM 11 + PSM 3** | **86.6%** (310/358) |
+
+**80% of the searchable vocabulary from one 12-second pass** is a usable search
+index. That is a materially better answer than the 50% word recall suggests, and
+it's the number to plan against.
+
+**2. Precision barely matters here, which makes union-of-passes nearly free.**
+A spurious index token (`SSSSSS`, `GANSTIE`, `FYUWO`) costs index bytes and
+nothing else — nobody types it, so it can never surface a wrong hit. Dropping
+precision from 70% → 42% to gain 6 points of term coverage is a *good* trade for
+search. It would be a terrible trade for text extraction. **This is the one place
+where the search use case is genuinely easier than OCR generally**, and it's why
+this is worth doing even at Tesseract's accuracy.
+
+**3. No single PSM covers a plan sheet — they're complementary, not ranked.**
+PSM 11 (sparse) gets isolated tags: finish tags 83%, room numbers 60%, rotated
+text 17%. PSM 3 (auto) inverts it: rotated text **81%**, tags 17%. Layout
+analysis finds rotated *blocks*; sparse mode finds scattered *labels*. §7.1
+predicted the rotated-text weakness and was right about PSM 11 — but wrong that
+it's unavoidable. It costs a second pass at **7.5× the runtime**.
+
+**4. More DPI is worse, not better.** Re-rendering at 288 DPI (104 MP) *halved*
+room-number recall (60% → 28%). At higher resolution the plan's linework and
+hatching gain as much detail as the glyphs do, and Tesseract's layout analysis
+eats more of it as text. The resolution intuition from general OCR guidance does
+not transfer to drawings. **Don't spend render budget here.**
+
+**5. The repo's own binarizer is not reusable as-is** — and this was worth
+finding out cheaply. Porting `rastermask.ts` verbatim (`toGray` → Bradley–Roth
+`adaptiveThreshold` → `closeMask`) made everything dramatically worse: room
+numbers 60% → **12%**. The cause is `RASTER_WIN_DIV = 32`, which on a 4320 px
+sheet yields a **135 px** adaptive window — correct for finding wall boundaries,
+catastrophic for 19 px text. Reuse would need the window retuned to ~2–3× cap
+height (~40–50 px), i.e. a genuinely different parameterization, not a shared
+call.
+
+**6. Tiling is a speed optimization, not an accuracy one.** 3×3 with 6% overlap
+cut wall-clock 40% (19.2 s → 11.6 s) at flat term coverage. Take it for the
+speed; don't expect accuracy.
+
+### 9.4 The dominant failure mode is boxed tags, not resolution
+
+The missed searchable terms cluster hard: `125 133 137A 138A 139A 144A 150 154
+157 160 161A 167 170`, plus `VCT`, `LVT`, `STORAGE`, `VENDING`. Cropping the
+sheet at 1:1 shows why:
+
+![Boxed room tags and text over hatch — the dominant OCR failure mode](img/ocr-spike-boxed-room-tags.png)
+
+Room numbers on this sheet are **drawn inside a tight rectangle**. Tesseract
+reads the box as table rule or merges the stroke into the digits, and the tag is
+lost — while unboxed text right beside it (`PATIENT ROOM`, `ABA TOILET`, `P-1`,
+`CPT-1`) reads fine. Finish tags over hatch fill (`PT-1/PT-2` on the diagonal
+poché) fail the same way.
+
+That is an unusually tractable failure. Boxed room tags are exactly what
+`detectRooms.ts`'s `ROOM_LABEL_RE` targets, the boxes are strong rectangular
+features, and the app already has a raster mask pipeline that finds rectangles.
+A "detect small rectangles → OCR each crop at PSM 8 (single word)" pass is a
+plausible large win, and it's a *geometry* problem, not an OCR one.
+
+### 9.5 Verdict
+
+**Client-side OCR clears the bar for a search index, and does not clear it for
+anything that feeds measurement.**
+
+- **Good enough for search.** ~80% of searchable terms per sheet from a 12 s
+  self-hosted pass, ~87% if you spend 164 s. Low precision is nearly free here.
+  A ~2 s/sheet vector pass beats all of it, so OCR stays the *fallback* branch
+  exactly as §3 argued.
+- **Not good enough to seed geometry.** 60% room-number recall by count, worse
+  by distinct term, with a failure mode concentrated precisely on room tags.
+  Independent confirmation that closing #129 was right.
+- **§4's engine recommendation stands**, and §4.4's `ocrs` interest goes up: its
+  oriented word boxes target the rotated-text gap that currently costs a 145 s
+  second pass.
+- **Practical config:** PSM 11, 3×3 tiles with ~6% overlap, at the existing
+  `RENDER_SCALE = 2.0` — no re-render, no binarization. Offer PSM 3 as an
+  explicit "deep scan" for sheets whose notes blocks matter.
+
+**Caveats, stated plainly.** One sheet, one plan set, one language. It is a
+*vector* sheet rasterized to stand in for a scan — a real scan adds JPEG noise,
+skew, and paper artifacts, so treat these as an **optimistic ceiling**. OCR ran
+under Node, not in-browser (same WASM core; browser adds worker/postMessage
+overhead). The §8 step-3 spike is only half done — the Form XObject prevalence
+question (§5 Tier 2) is still unmeasured.
+
+Spike scripts are throwaway and were not committed; they live in the session
+scratchpad (`render.mjs` via Playwright, `ocr.mjs`, `binarize.mjs`).
 
 ---
 
