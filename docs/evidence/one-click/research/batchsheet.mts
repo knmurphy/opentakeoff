@@ -60,7 +60,7 @@ function cellsOf(ring: number[][]): Set<number> {
   return out;
 }
 
-for (const [label, sealed] of [["raw floodRegion (shipped detectRegions)", false], ["floodRegionSealed (click-path parity)", true]] as const) {
+for (const [label, sealed] of [["raw floodRegion (the pre-fix batch path)", false], ["floodRegionSealed (what detectRegions calls since round 9)", true]] as const) {
   const rings: { str: string; ring: number[][]; sf: number }[] = [];
   let leak = 0, tiny = 0, other = 0;
   for (const s of seeds) {

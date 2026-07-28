@@ -1,7 +1,7 @@
 // Research probe (throwaway) — run: node --import tsx docs/evidence/one-click/research/<file>.mts
 // Run from anywhere; paths are absolute to this checkout. Not part of `npm run bench`.
 // Research probe (throwaway): what would RFC item F (batch fill) score TODAY,
-// using the shipped detectRooms path, measured against the pinned corpus
+// using the PRE-FIX detectRooms path (raw flood), measured against the pinned corpus
 // goldens? Also: how far apart are detectRegions' raw flood and the click
 // path's sealed flood on the SAME seeds?
 import { createRequire } from "module";
