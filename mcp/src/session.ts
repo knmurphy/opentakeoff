@@ -9,10 +9,11 @@ import { openPdf, positionedText, OPS, type DocHandle, type PageHandle } from ".
 import { UserError, round1, round2 } from "./format.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import {
-  extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea,
-  MASK_MAX_DIM, type MaskObj, type VectorGeometry, type Point,
+  extractVectorGeometry, buildMask, traceRegion, snapVertices, ringArea,
+  MASK_MAX_DIM, SENS_BALANCED, type MaskObj, type VectorGeometry, type Point, type FloodResult,
 } from "../../web/src/lib/oneclick.ts";
-import { roomLabelSeeds, detectRegions } from "../../web/src/lib/detectRooms.ts";
+import { traceConfidence } from "../../web/src/lib/confidence.ts";
+import { roomLabelSeeds, detectRegions, floodAtSeed, oneClickArgs } from "../../web/src/lib/detectRooms.ts";
 import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
 
@@ -63,6 +64,16 @@ export interface ShapeOrigin {
   hatch_filtered?: true;
   raster_traced?: true;
   fill_sensitivity?: number;
+  /** traceConfidence's 0–1 score and the factors behind it (web/src/lib/
+   *  confidence.ts) — the same receipt the canvas stamps at Create. */
+  confidence?: number;
+  confidence_factors?: string[];
+  /** Gap-sealing / door-swing receipts, mirroring the canvas's origin. */
+  gap_sealed_px?: number;
+  door_wedges?: number;
+  /** The sheet had no scale when this was measured, so the engine ran with
+   *  its scale-blind fallbacks (see Session.engineArgs). */
+  scale_blind?: true;
   /** Machine's original trace, frozen on first human edit (provenance.js). */
   proposed_verts_norm?: [number, number][];
   edited?: boolean;
@@ -100,6 +111,11 @@ interface SheetState {
   snap?: ReturnType<typeof buildSnapGrid>;
   /** undefined = not built yet; null = sheet has zero vector segments (a scan) */
   mask?: MaskObj | null;
+  /** the `upp` the cached mask was built at. The mask carries the sheet scale
+   *  (mppf), so set_scale after a mask was built INVALIDATES it — otherwise the
+   *  first tool call on a sheet would pin a scale-blind raster for the session
+   *  and every later measurement would silently use px fallbacks. */
+  maskUpp?: number | null;
   /** rendered-page PNG at IMAGE_MAX_EDGE, built on first resource read */
   png?: Uint8Array;
 }
@@ -238,14 +254,59 @@ export class Session {
 
   /** v1 masks come from the sheet's vector linework only. Raster seam: a scanned
    * sheet would render via a node canvas into a future rastermask module that
-   * returns this same MaskObj shape. */
+   * returns this same MaskObj shape.
+   *
+   * A6 (audit): the SHEET SCALE rides into the mask, exactly as the canvas does
+   * it (TakeoffCanvas.jsx ensureMask). Without it MaskObj.mppf was 0 and every
+   * feet-true guard in the engine — the hatch pitch cap, the tiny/thickness
+   * floors, the seed nudge — silently fell back to raw pixel constants, so the
+   * same seed measured differently here than on the canvas. This server always
+   * works at RENDER_SCALE (pdf.ts pins the viewport there), so the baseline
+   * px/ft equals this render's px/ft and buildMask's render-independence factor
+   * k is exactly 1 — passing both is documentation, not arithmetic. */
   async ensureMask(name: string): Promise<MaskObj | null> {
     const s = this.sheet(name);
-    if (s.mask === undefined) {
+    if (s.mask === undefined || s.maskUpp !== s.upp) {
       const geo = await this.ensureGeometry(s);
-      s.mask = geo.segs.length ? buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta) : null;
+      const pxPerFt = s.upp != null && s.upp > 0 ? 1 / s.upp : 0;
+      s.mask = geo.segs.length
+        ? buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta, pxPerFt, pxPerFt)
+        : null;
+      s.maskUpp = s.upp;
     }
     return s.mask;
+  }
+
+  /** The engine arguments for a flood on `mask` — derived by the SHARED
+   *  oneClickArgs (web/src/lib/detectRooms.ts), which is pinned against the
+   *  canvas's own inline call in web/test/engineParity.test.ts. `mask.mppf`
+   *  comes from buildMask above and IS the canvas's `mo.ws / upp`.
+   *
+   *  NO SCALE, NO PRETEND SCALE. When the sheet has no scale set, mppf is 0 and
+   *  every rule falls back to what oneclick.ts documents for the scale-unknown
+   *  case: the hairline SEAL_RADII floor (drafting gaps only, never a doorway),
+   *  no door-swing wedge retry, and the minimum-passage rule OFF. That is a
+   *  DIFFERENT measurement from the scaled one, so `scaleBlind` is surfaced in
+   *  every reply and provenance receipt it produces rather than left silent. */
+  private engineArgs(mask: MaskObj) {
+    return oneClickArgs(mask.mppf || 0);
+  }
+
+  /** The confidence + engine receipts shared by one_click and detect_rooms —
+   *  the same fields the canvas puts on a proposal's origin. */
+  private receipts(f: Extract<FloodResult, { status: "ok" }>, scaleBlind: boolean) {
+    const conf = traceConfidence({
+      hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac,
+      wedges: f.wedges, mppf: f.mppf,
+    });
+    return {
+      confidence: conf.score,
+      ...(conf.factors.length ? { confidence_factors: conf.factors } : {}),
+      ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
+      ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+      ...(f.wedges ? { door_wedges: f.wedges } : {}),
+      ...(scaleBlind ? { scale_blind: true as const } : {}),
+    };
   }
 
   async sheetInfo(name: string) {
@@ -338,17 +399,25 @@ export class Session {
     const s = this.sheet(name);
     const mask = await this.ensureMask(name);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    const f = floodRegion(mask, x, y);
+    // A6 (audit): the SEALED flood, through the shared floodAtSeed — the same
+    // entry point detect_rooms uses and the canvas's engine with the canvas's
+    // scale-derived arguments. This used to be the raw floodRegion: no gap
+    // sealing, no minimum-passage rule, no door wedges, so an MCP one_click and
+    // a canvas One-Click on the same seed disagreed while both stamped
+    // origin.method "one_click_v1".
+    const eng = this.engineArgs(mask);
+    const f = floodAtSeed(mask, x, y, SENS_BALANCED, eng.mppf);
     if (f.status === "leak") throw new UserError("That space isn't enclosed on the plan linework — the fill spilled through a gap or opening.");
     if (f.status !== "ok") throw new UserError("Landed in dense linework (hatching or text).");
     const ring = snapVertices(traceRegion(f), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
     if (ring.length < 3) throw new UserError("Couldn't trace that space into a polygon.");
     const areaPx2 = ringArea(ring);
     const perimPx = closedMetrics(ring).perim;
+    const rec = this.receipts(f, eng.scaleBlind);
     const common = {
       status: "ok" as const,
       nverts: ring.length,
-      ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
+      ...rec,
       ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
     };
     if (s.upp == null) {
@@ -357,7 +426,7 @@ export class Session {
         ...common,
         area_px2: round1(areaPx2),
         perimeter_px: round1(perimPx),
-        warning: `No scale set for ${s.key} — quantities unavailable. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.`,
+        warning: `No scale set for ${s.key} — quantities unavailable, and the fill ran SCALE-BLIND (gap sealing limited to hairline drafting gaps, door-swing inclusion and the minimum-passage rule off), so this outline can differ from the scaled one. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""} and re-run.`,
       };
     }
     const upp = s.upp;
@@ -372,7 +441,8 @@ export class Session {
         actor: "agent",
         seed_norm: [x / s.widthPx, y / s.heightPx],
         reviewed: false,
-        ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
+        fill_sensitivity: SENS_BALANCED,
+        ...rec,
       }).id;
     }
     return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
@@ -392,17 +462,23 @@ export class Session {
     const mask = await this.ensureMask(name);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
     const seeds = roomLabelSeeds(s.text);
-    const regions = detectRegions(mask, seeds);
+    // A6 (audit): detectRegions now runs the sealed engine; the mask carries the
+    // sheet scale, so it derives the same seal radii / wedge cap / min-passage
+    // radius the canvas uses. Nothing here re-gates the result — the batch gate
+    // is still flood STATUS alone.
+    const eng = this.engineArgs(mask);
+    const regions = detectRegions(mask, seeds, SENS_BALANCED, eng.mppf);
     const rooms = regions
       .map((r) => {
         const ring = snapVertices(traceRegion(r.flood), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
         if (ring.length < 3) return null; // couldn't trace into a polygon — drop, don't sink the batch
         const areaPx2 = ringArea(ring);
         const perimPx = closedMetrics(ring).perim;
+        const rec = this.receipts(r.flood, eng.scaleBlind);
         const common = {
           label: r.str,
           nverts: ring.length,
-          ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+          ...rec,
           ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
         };
         if (s.upp == null) {
@@ -418,7 +494,8 @@ export class Session {
             actor: "agent",
             seed_norm: [r.seed[0] / s.widthPx, r.seed[1] / s.heightPx],
             reviewed: false,
-            ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+            fill_sensitivity: SENS_BALANCED,
+            ...rec,
           }).id;
         }
         return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
@@ -427,7 +504,7 @@ export class Session {
     return {
       detected: rooms.length,
       rooms,
-      ...(s.upp == null ? { warning: `No scale set for ${s.key} — quantities unavailable. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.` } : {}),
+      ...(s.upp == null ? { warning: `No scale set for ${s.key} — quantities unavailable, and every fill ran SCALE-BLIND (gap sealing limited to hairline drafting gaps, door-swing inclusion and the minimum-passage rule off), so these outlines can differ from the scaled ones. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""} and re-run.` } : {}),
     };
   }
 
