@@ -971,11 +971,17 @@ the entanglement audit.)*
 > 6.15, 6.17). **The historical comments were deliberately left unedited** — the original
 > claims should stay visible next to their retractions.
 >
-> **Not applied, and why:** 6.14 (slice doc) and 6.19 (`IMPROVE_WITH_USE.md`) target files that
-> exist only on the feature branches, not on the audit branch, and pushing there is outside
-> this branch's authorisation. 6.7 (rename `ward-room-294sf`), 6.12 (the missing O(N²)
-> regression test) and 6.13 (e2e header comments) are code/corpus changes that belong with the
-> engineering phases — 6.7 in particular moves a corpus key and must go through 0.9.
+> **The remaining five are also applied**, in `104d480` on
+> `claude/issue-184-hatch-periodicity-fduafy` — the branch that actually holds those files.
+> 6.7 (probe rename, no golden moves), 6.12 (the missing O(N²) guard), 6.13 (e2e headers),
+> 6.14 (entanglement audit), 6.19 (round 9's two `IMPROVE_WITH_USE.md` corrections).
+> 844 tests, typecheck clean, bench green.
+>
+> **6.12 is worth reading before writing any other regression test here.** The first fixture —
+> 400 rows of 100 ticks — passed happily against the *reverted* code, because a naive scan over
+> 100 pieces is cheap. The blowup needs many pieces in FEW rows. Measured at 40k segments in 4
+> rows: fixed ~123 ms, naive ~5,671 ms. **A test is not a guard until the revert has been
+> tried** — which is D7's finding recurring inside D7's own fix.
 >
 > One self-inflicted note: the first two body writes reproduced the exact malformed-link defect
 > 6.5 exists to fix (GitHub mangled `[`code`](url)` constructs into double-backticked text).
