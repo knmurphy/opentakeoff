@@ -58,7 +58,13 @@ Press `G` (or click **Sheets** in the toolbar) for the visual gallery: one card 
 - **Open one sheet**: hover a card and hit **View**.
 - **Open several**: click cards to select them — each gets a numbered badge, and that order is the left-to-right order. Then **Open N as tabs** or **Open N side-by-side** (side-by-side maxes at **4 sheets**; one pan/zoom moves the whole row).
 - **Close a PDF**: hover the file's first card and hit **✕**. Takeoffs on its sheets are preserved and restore if you re-add the same file.
-- `Esc` closes the gallery (when a sheet is open behind it).
+- **Search every sheet**: the box in the gallery header searches the *text* of every sheet in the set — `CPT-1`, `corridor`, a room number like `139A`. The gallery filters to matching sheets in relevance order and chips the matched term on each card. Several words means "sheets with all of them"; a partial code works too (`CPT` finds `CPT-1`). Indexing starts the moment you click into the box, and results fill in as it reads — a big set is usable before it finishes.
+- **Open a result at its match**: hit **View** on a matching card and the sheet opens centred on the text you searched for, zoomed in far enough to read it (if you're already zoomed in closer, your zoom is kept).
+- **Browse the finishes**: the **Finishes** button lists every finish tag the plan set actually uses, with how many sheets carry each — click one to search it. Useful when you don't yet know the codes: search only helps if you can guess the tag.
+- The index is remembered between sessions, so reopening a project searches instantly instead of re-reading every sheet.
+- `Esc` clears the search; a second `Esc` closes the gallery (when a sheet is open behind it).
+
+> **Scanned sheets can't be searched yet.** Search reads the PDF's own text layer, which a scan doesn't have — the sheet stays in the gallery, it just never matches. Nothing is uploaded to search; it all happens in your browser.
 
 ### Tabs, groups, and Regroup
 

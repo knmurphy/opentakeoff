@@ -17,7 +17,7 @@ import { flushSync } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { store, isStaleTabError, STALE_TAB_MESSAGE, projectIdFromUrl } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, projectIdFromUrl, metaGet, metaPut } from "../lib/store.js";
 import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
 import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
 import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
@@ -30,6 +30,7 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
+import { buildSheetIndex, dropFileFromIndex, serializePlanIndex, sanitizePlanIndex } from "../lib/planIndex";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
@@ -96,9 +97,31 @@ import { applyShapeCommand, geomSnapshot, vertsEqual, recordCommand } from "../l
 import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
 
+// Feed one sheet's text layer into the plan-set search index. Module-scope and
+// map-in/map-out so it adds nothing to any hook's dependency list — this is
+// called from inside the render effect, which already holds the textContent and
+// viewport for sheet numbers and scale notes. Rebuilding an existing entry is
+// pointless work but never wrong, so the guard is a cheap early-out, not a
+// correctness gate. Best-effort throughout: a sheet that throws just stays
+// unsearchable (the caller's .catch swallows it), exactly like a missing
+// title-block label.
+function indexSheetText(map, key, textContent, viewport) {
+  if (!key || map.has(key)) return;
+  const items = extractRegionText(textContent, viewport, { x0: 0, y0: 0, x1: viewport.width, y1: viewport.height });
+  // recorded even when empty (a scan): a valid empty index can never produce a
+  // hit, and skipping it leaves the sheet forever "unindexed" — see the matching
+  // note in PlanNavigator's indexSheet.
+  map.set(key, buildSheetIndex(key, items, "text", Date.now(), { w: viewport.width, h: viewport.height }));
+}
+
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
 const CARPET_ROLL_FT = 12;
+
+// Zoom a search jump lands at when the view is more zoomed-out than this. Picked
+// so a sheet's typical 19px cap height (measured on demo/sample-finish-plan.pdf
+// at RENDER_SCALE) lands around 14 screen px — readable without hunting for it.
+const SEARCH_FLY_SCALE = 0.75;
 
 // Click-select against a curved line's DRAWN path: flatten the control points and
 // hand hitShape a stand-in shape (lib/geometry.js stays byte-identical with Spline's).
@@ -432,6 +455,14 @@ export default function TakeoffCanvas() {
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
   const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
   const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
+  // Same idea for a bare POINT (a search hit). Deliberately a separate ref and
+  // effect rather than widening pendingFlyRef: the markup path is upstream code
+  // this fork re-merges constantly, and leaving it byte-identical is worth a few
+  // duplicated lines (#166).
+  const pendingPointFlyRef = useRef(null);
+  const persistIndexTimerRef = useRef(0);
+  const [flyEpoch, setFlyEpoch] = useState(0);   // re-arms the point fly-to when panel state alone wouldn't
+  const persistIndexRef = useRef(() => {});   // late-bound: the render effect runs above persistIndex's definition
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
@@ -486,6 +517,7 @@ export default function TakeoffCanvas() {
   const detailWatchdogRef = useRef(0);       // recovers a render stuck by a backgrounded/throttled tab (see DETAIL_STALL_MS)
   const renderTasksRef = useRef(new Map());  // sheetKey → pdf.js RenderTask
   const pdfDocsRef = useRef(new Map());      // file name → pdf.js loading task (doc cache)
+  const [sheetsEpoch, setSheetsEpoch] = useState(0);   // bumped when a file's BYTES change — forces a re-render the sheet key alone can't signal
   const renderSeqRef = useRef(0);            // monotonic token — stale render chains bail out
   const scanBusyRef = useRef(false);         // a paid schedule OCR read is in flight — blocks re-fire from a rapid re-draw
   const panRef = useRef(null);
@@ -541,6 +573,12 @@ export default function TakeoffCanvas() {
   // arrow here would re-count an open menu on every canvas render
   const onMenuDepth = useCallback((o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }, []);
   const thumbCacheRef = useRef(new Map()); // sheetKey → thumbnail dataURL — survives gallery close
+  // sheetKey → SheetIndex for plan-set search. Filled by the text passes that
+  // ALREADY run for sheet numbers and scale notes (below, and PlanNavigator's
+  // thumbnail pump), so a vector plan set costs no extra PDF work — see
+  // docs/CLIENT_SIDE_OCR_RESEARCH.md §1. A ref, like thumbCacheRef: it survives
+  // gallery close and must never re-render the canvas.
+  const planIndexRef = useRef(new Map());
   const legacyPinnedRef = useRef(null);    // old `pinned` page numbers awaiting their one-shot tab migration
   const tabInitRef = useRef(false);        // snap to the first restored tab exactly once
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
@@ -645,12 +683,24 @@ export default function TakeoffCanvas() {
     setSheetGroup([]);
   }
   // gallery open: every key becomes a tab; side-by-side also groups (2–4)
-  function openSheets(keys, sideBySide) {
+  // `focus` (optional) is a normalized [0..1, 0..1] point on keys[0] to centre on
+  // once that sheet's bitmap exists — how a search hit lands ON its match rather
+  // than merely on the right sheet. Same two-phase shape as the markup fly-to:
+  // openSheets only fires state setters, and panel dims load async.
+  function openSheets(keys, sideBySide, focus) {
     if (!keys.length) return;
     setOpenTabs((t) => { const merged = [...t]; for (const k of keys) if (!merged.includes(k)) merged.push(k); return merged; });
     if (sideBySide && keys.length >= 2) { setSheetGroup(keys.slice(0, MAX_GROUP)); setFocusKey(keys[0]); }
     else goToSheet(keys[0]);
     setView("canvas");
+    // Bump an epoch alongside the ref. Without it the phase-2 effect below can
+    // miss entirely: opening a hit on the sheet that is ALREADY active changes
+    // no panel state, so [panelImgs, groupSig, status] never fire. Centring
+    // inline here instead would be worse — when the target is a different sheet,
+    // the re-render calls fitToView afterwards and would clobber it. Deferring
+    // always, and re-arming the effect explicitly, handles both.
+    pendingPointFlyRef.current = focus ? { sheet_id: keys[0], at: focus } : null;
+    if (focus) setFlyEpoch((e) => e + 1);
   }
   function closeTab(key) {
     const i = openTabs.indexOf(key);
@@ -789,20 +839,49 @@ export default function TakeoffCanvas() {
     }
     if (name === active) { setActive(list[0].name); setPage(1); setSheetGroup([]); }
   }, [active]);
+  // Evict ONE file from the doc cache. Required whenever that file's bytes change
+  // or go away, because the cache is keyed on NAME and otherwise lives until the
+  // project view unmounts: re-adding a reissued A101.pdf would keep serving the
+  // SUPERSEDED document to every reader — the canvas, the thumbnails, and the
+  // search index, which would then faithfully re-index text that is no longer on
+  // the sheet (defeating dropFileFromIndex entirely). Destroy is best-effort and
+  // async, matching the unmount teardown below.
+  const evictDoc = useCallback((file) => {
+    const t = pdfDocsRef.current.get(file);
+    if (!t) return;
+    pdfDocsRef.current.delete(file);
+    t.then((task) => { try { task.destroy(); } catch { /* already gone */ } }).catch(() => {});
+  }, []);
+  // Forget EVERYTHING cached about one file — call whenever its bytes change or
+  // it leaves the working set. The three things that outlive a replacement are
+  // the pdf.js document (keyed on name), the search index, and the gallery
+  // thumbnails; the render effect's own per-key caches are wholesale-cleared on
+  // every run, so they only need the run to actually happen — which is what the
+  // epoch bump forces. Without it a same-name reissue kept rendering the OLD
+  // drawing: the sheet key never changes, so `groupSig` never changes, so the
+  // render effect had no reason to re-run.
+  const forgetFile = useCallback((file) => {
+    evictDoc(file);
+    dropFileFromIndex(planIndexRef.current, file);
+    for (const k of [...thumbCacheRef.current.keys()]) if (parseSheetKey(k).file === file) thumbCacheRef.current.delete(k);
+    setSheetsEpoch((e) => e + 1);
+  }, [evictDoc]);
   // Close a PDF: drop it from the working set (cloud: manifest only, file stays
   // in Drive; local: deletes the stored bytes), refresh, then reconcile the view.
   // Shapes on the closed sheets persist in annotations and restore on re-add.
   const closePdf = useCallback(async (name) => {
     await store.removePdf(name);
+    forgetFile(name);
     reconcileAfterRemoval(name, await refreshSheets());
-  }, [refreshSheets, reconcileAfterRemoval]);
+  }, [refreshSheets, reconcileAfterRemoval, forgetFile]);
   // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
   // file, then drop it from the working set.
   const removeFromProject = useCallback(async (name) => {
     if (typeof store.removeFromProject !== "function") return;
     await store.removeFromProject(name);
+    forgetFile(name);
     reconcileAfterRemoval(name, await refreshSheets());
-  }, [refreshSheets, reconcileAfterRemoval]);
+  }, [refreshSheets, reconcileAfterRemoval, forgetFile]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -818,7 +897,10 @@ export default function TakeoffCanvas() {
         : "No supported files found. Drop a PDF, an image, or a .zip plan set.");
       return;
     }
-    for (const f of pdfs) { try { await store.addPdf(f); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
+    // addPdf keys IndexedDB on the NAME, so re-adding a reissued sheet replaces
+    // the bytes under the same sheet key — its index entry must go with them or
+    // search keeps answering with the superseded sheet's text.
+    for (const f of pdfs) { try { await store.addPdf(f); forgetFile(f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
     await refreshSheets();
     const names = pdfs.map((f) => f.name);
     const tail = skipped.length ? ` · ${skipped.length} skipped` : "";
@@ -1251,6 +1333,12 @@ export default function TakeoffCanvas() {
         if (stale()) return;
         const lbl = extractSheetNumber(tc, lead.viewport);
         if (lbl) setPageLabels((m) => (m[lead.pageNum] === lbl ? m : { ...m, [lead.pageNum]: lbl }));
+        // NOT lead.viewport: that is the PANEL's scale (min(RENDER_SCALE, auto),
+        // or the auto budget on a hi-res sheet), so anchors would land in panel px
+        // while the per-page pass below records RENDER_SCALE px — the same file's
+        // page 1 in different units than its pages 2+. The index's coordinate
+        // contract is image px at RENDER_SCALE; mint a viewport that honours it.
+        indexSheetText(planIndexRef.current, lead.key, tc, lead.pageObj.getViewport({ scale: RENDER_SCALE }));
       }).catch(() => {});
       if (labeledFileRef.current !== active) {
         labeledFileRef.current = active;
@@ -1267,14 +1355,14 @@ export default function TakeoffCanvas() {
               const vp2 = p2.getViewport({ scale: RENDER_SCALE });
               const lbl = extractSheetNumber(tc, vp2);
               if (lbl) { found[n] = lbl; if (Object.keys(found).length % 8 === 0) setPageLabels((m) => ({ ...found, ...m })); }
+              const key = n > 1 ? `${active}#${n}` : active;
               const det = detectScale(tc, vp2);
-              if (det) {
-                const key = n > 1 ? `${active}#${n}` : active;
-                setDetectedScales((d) => (d[key]?.label === det.label ? d : { ...d, [key]: det }));
-              }
+              if (det) setDetectedScales((d) => (d[key]?.label === det.label ? d : { ...d, [key]: det }));
+              indexSheetText(planIndexRef.current, key, tc, vp2);
             } catch { /* skip */ }
           }
           if (!stale() && Object.keys(found).length) setPageLabels((m) => ({ ...found, ...m }));
+          if (!stale()) persistIndexRef.current();   // the whole file is indexed by here
         })();
       }
     })().catch((e) => { if (stale() || e?.name === "RenderingCancelledException") return; setErr(String(e.message || e)); setStatus("error"); });
@@ -1285,7 +1373,7 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { renderSeqRef.current++; for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupSig, hiResKeys.join(" ")]);
+  }, [groupSig, hiResKeys.join(" "), sheetsEpoch]);
 
   // ── detail view: re-render the visible region at the current zoom ───────────
   // The base panel bitmap is the fast first paint and the zoomed-out view. Once
@@ -1428,6 +1516,65 @@ export default function TakeoffCanvas() {
     if (sp && sp.img.w) { centerOnMarkup(m); pendingFlyRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelImgs, groupSig, status]);
+
+  // ── search index persistence (docs/CLIENT_SIDE_OCR_RESEARCH.md §6) ────────
+  // Namespaced per project: two projects can each hold an "A101.pdf", and a
+  // shared key would serve one project's text for the other's sheet. Rehydration
+  // also drops any entry outside the CURRENT plan set, so even a key collision
+  // could not resurrect a foreign sheet.
+  const indexStoreKey = `planindex:${projectIdFromUrl() || "local"}`;
+  const indexLoadedRef = useRef(false);
+  useEffect(() => {
+    if (indexLoadedRef.current || !sheets.length) return;
+    indexLoadedRef.current = true;
+    (async () => {
+      try {
+        const restored = sanitizePlanIndex(await metaGet(indexStoreKey), sheets.map((sh) => sh.name));
+        // never clobber entries the live passes already built this session
+        for (const [k, v] of restored) if (!planIndexRef.current.has(k)) planIndexRef.current.set(k, v);
+      } catch { /* a bad record just means everything re-indexes */ }
+    })();
+  }, [sheets, indexStoreKey]);
+
+  // Persist on a debounce. Best-effort by design: this is a rebuildable cache,
+  // never a source of truth, so a failed write must stay silent — losing it costs
+  // one re-index, and surfacing a storage error for a search cache would be noise
+  // on top of the real annotations save.
+  const persistIndex = useCallback(() => {
+    clearTimeout(persistIndexTimerRef.current);
+    persistIndexTimerRef.current = setTimeout(() => {
+      metaPut(indexStoreKey, serializePlanIndex(planIndexRef.current)).catch(() => {});
+    }, 1500);
+  }, [indexStoreKey]);
+  useEffect(() => { persistIndexRef.current = persistIndex; }, [persistIndex]);
+  useEffect(() => () => clearTimeout(persistIndexTimerRef.current), []);
+
+  // point fly-to phase 2 — the search-hit twin of the markup effect above. Centres
+  // once the target panel has a real bitmap, then clears the ref unconditionally
+  // so a hit on an unanchored term (or a sheet that failed to render) can never
+  // fire later against an unrelated sheet.
+  useEffect(() => {
+    const f = pendingPointFlyRef.current;
+    if (!f) return;
+    if (status === "error") { pendingPointFlyRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(f.sheet_id)) return;
+    const sp = panels.find((p) => p.key === f.sheet_id);
+    if (!sp || !sp.img.w) return;
+    const el = containerRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      // Zoom IN to a readable level if we're below it, but never zoom OUT: at a
+      // fit-to-view ~16% the whole sheet is already on screen, so centring alone
+      // would move the page without showing the estimator anything new. A user
+      // already zoomed in past the threshold keeps their zoom — this is a jump,
+      // not a zoom reset.
+      const scale = clamp(Math.max(tfRef.current.scale, SEARCH_FLY_SCALE));
+      const sx = f.at[0] * sp.img.w + sp.xOffset, sy = f.at[1] * sp.img.h;
+      setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    }
+    pendingPointFlyRef.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status, flyEpoch]);
 
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
@@ -6535,7 +6682,7 @@ export default function TakeoffCanvas() {
           shapes={shapes} labels={galleryLabels}
           onLabel={(k, lbl) => setGalleryLabels((m) => (m[k] === lbl ? m : { ...m, [k]: lbl }))}
           onDetect={(k, det) => setDetectedScales((d) => (d[k]?.label === det.label ? d : { ...d, [k]: det }))}
-          thumbCacheRef={thumbCacheRef} busyRef={statusRef}
+          thumbCacheRef={thumbCacheRef} busyRef={statusRef} planIndexRef={planIndexRef} onIndexed={persistIndex}
           openTabs={openTabs} onOpen={openSheets}
           onAddFiles={handleFiles}
           levels={sheetLevels}
