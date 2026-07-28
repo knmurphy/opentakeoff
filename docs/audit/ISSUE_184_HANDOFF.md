@@ -16,7 +16,8 @@ are written to be pasted to an agent nearly verbatim.
 | Corpus | re-pinned at `67df53b` through the 0.9 protocol | Verified honest by an independent reviewer: 100% of the +2.74% is the change of measurand (un-snapped traces at HEAD match old goldens to ≤0.068 px); 0% engine drift. |
 | Issue #184 body | github.com/knmurphy/opentakeoff/issues/184 | ⚠️ **Overwritten at 17:35Z** by an unknown editor. My 09:59Z Phase 6 corrections were verified present, then lost — the body now again asserts the disproven "can never admit the closet behind it" claim, and correction comment `5102667000` points readers at body content that no longer exists. |
 | CI | `.github/workflows/ci.yml` on the engine branch | `web` job runs typecheck/lint/test/**bench**/build; separate `web-e2e` job with pinned Playwright. On `main`, CI is the old set until the engine branch merges. |
-| Review transcripts | this session only | Three reviews complete (correctness; re-pin; claims-vs-delivery). **Two agents may still be running or lost with the session: the test-quality reviewer and the before/after evidence pack** (deliverable was `docs/evidence/ONE_CLICK_BEFORE_AFTER.md`, written but uncommitted in a scratch worktree). If their outputs are not in the repo, treat them as never delivered and re-run (§4, agents F and G). |
+| Review transcripts | four reviews complete | Correctness, re-pin and claims-vs-delivery: REQUEST CHANGES (findings in §3). Test quality: **APPROVE WITH COMMENTS — 34 of 35 revert checks independently reproduced**; the 35th (MCP strip-mode conformance) is now fixed and guarded (`71c53aa`, proven both directions). Residual weaknesses W1–W6 folded into §3/§4. |
+| Evidence pack | **committed at `23e87f7`** on the engine branch: `docs/evidence/ONE_CLICK_BEFORE_AFTER.md` + `probes/*.mts` | Measured before/after for every defect, reproduction commands included. **Its headline finding upgrades F3 — read §3 before trusting any prior "A1 fixed" claim.** |
 
 Key commits on the engine branch, in order: `5e92a11` Phase-0 gates · `1a02b15` A1 vector ·
 `341def8` re-pin protocol · `57c9cc7` A6 · `39f8f47` A1 raster · `ec945dc` e2e CI ·
@@ -68,11 +69,20 @@ the primary path.
 **F2 — BLOCKING, same gate.** Flips previously-returned rooms `ok → leak` (~0.2% of 1044
 probes). A user's existing measurement becomes "that space isn't enclosed".
 
-**F3 — A1 vector half incomplete.** `ensureMask` passes `Math.ceil`'d viewport dims;
-`buildMask` reconstructs baseline as `imgW * k`, carrying the rounding back in. Measured:
-same click, three SFs across render scales (47.6928/47.7028/47.6969), and vector vs
-raster masks of one sheet land on different grids (1225×1585 vs 1224×1584). ~0.02%
-magnitude but the claimed invariant is exact, and the guard can't see it (rule 1).
+**F3 — A1 is NOT fixed on cap-bound sheets — a no-op, not a residual.** The evidence
+pack proved (and it was independently re-confirmed against `buildMask` before committing)
+that for a cap-bound sheet the new formula collapses algebraically to the old one
+(`ws = k·wsB = maxDim/imgW`): **zero differing mask cells fix-vs-nofix at both render
+scales**, and the VA plan's entire A1 probe block is byte-identical BEFORE/AFTER, still
+drifting up to **−7.03%** across the Hi-Res toggle (drift is scale-rounding-sensitive:
+−0.83% at the true `autoRenderScale` 2.0704 vs −7.03% at 2.070). The `1a02b15` commit
+claimed cap-bound coverage; its verification scene was sub-cap — the guard never tested
+the case it claimed (rule 1, again). Separately, the sub-cap residual: `ensureMask`
+passes `Math.ceil`'d viewport dims, so vector vs raster masks of one sheet land on
+different grids (1225×1585 vs 1224×1584) and one click yields three SFs across render
+scales at the ~0.02% level. The fix direction for both: derive the baseline from **page
+points** (as `rasterMaskScale` already does, with the reason documented) — and the
+`a1Scene` guard must feed `ceil`'d dims and a cap-bound variant.
 
 **F4 — re-pin protocol drops a removed probe's adjudication.** `pin-goldens.mts` write
 path: a `removed` row has no new probe to attach to → reason silently discarded. This is
@@ -94,11 +104,27 @@ fixed" — the confidence gate is red without its two new exemptions; `annotatio
 still 1.00 at 33% short; `cf < 1` readout rule untouched; exempt pair is
 `tile-grid-room` + `two-doorways`, not `partition-bank`. (b) `oneClickRing`'s comment
 claims every surface calls it; **zero production call sites** — bench-only with a
-source-scan guard. (c) MCP conformance validates in zod strip mode, so
-`additionalProperties:false` is unguarded (diagnosed in `b2c1ba7`, left unfixed).
+source-scan guard. (c) ~~MCP strip-mode conformance~~ **FIXED at `71c53aa`** — `.strict()` on all SCHEMAS
+entries + nested `detectedRoom`, proven to fail on an injected undeclared key.
 (d) MCP `receipts()` lacks `min_pass_px`/`min_pass_delta` — A6's class again. (e) Issue
 #184 body (see §1 — **coordinate with the repo owner before rewriting; it was
-overwritten once already and the editor is unknown**). (f) Smaller: round column still
+overwritten once already and the editor is unknown**). (f) Test-review residuals W1–W6, owned by agents D/E: the perf guard's churn counter
+misses `.slice()` allocations (stub `Uint8Array.prototype.slice` or measure `external`);
+its raster-unit ruler recomputes a full `hardDT` per call while the warm hover no longer
+does (pass the cached `dt`, or denominate in a cold `floodRegion`) — and `dilateHardMask`
+is now production-dead code kept alive by two tests; the "8 raster units" budget is
+fixture-specific (8 doors = 12.0 units, 1500px mask = 35.8 — budget per pinned scene and
+narrow the prose); `score.ts`'s populated-case absolute floor has no test (fixture:
+inaccurate median 0.60, accurate probe 0.70 — must fail the absolute floor); the gate's
+floor has 0.01 headroom and its relative term is currently inert; `xfailAtMost` on
+`two-doorways` tolerates collapse — pair it with an `xfailAtLeast` (~0.80). Also from the
+evidence pack: A5's **bezier-ellipse** negative control fails on both states (32/32
+chords marked, allowance 19.7→19.9 SF) and the duct elbow is unflagged on both; A3's
+virtual-boundary guard never fires on a dashed-line-as-wall scene (vf 0.000 — a dashed
+property line still measures as a 484 SF room, caught only by a confidence deduction);
+A6's fix surfaced two uncontrolled canvas-side changes on the VA sheet (seeds 159:
+0.58→4.71 SF and 557: 638.01→624.23 SF — neither in the corpus, so neither gated).
+(g) Smaller: round column still
 gets a full door wedge (`wedgeAllowance` admits clean circle fits — a column is a deduct,
 not floor, for flooring); adjudication texts F1/F2 from the re-pin review (spread cause,
 band arithmetic); A8's two disagreeing measurement sets; `bench/corpus.ts` comment says
@@ -173,20 +199,17 @@ gate fires: perturb, run, restore.
   over-claims). Minimum: pin the current behaviour in a test + honest comment; flag the
   deduct-vs-floor policy question to the operator rather than deciding it.
 
-### Agent F — re-run the test-quality review (read-only)
-The cycle's fourth reviewer (tests/gates) never reported. Re-run it against the
-integrated tree: independently revert each fix and record which tests fail; try the
-`() => 0.5` confidence stub; check the three `CONF_GATE_EXEMPT` xfail directions flip;
-check `EXPECT` corpus-shape assertions; hunt tautologies (start with the wall-semantics
-constant-vs-constant gate C is fixing, and `benchProductionRing`'s A-equals-B risk — the
-guard must keep its absolute 120-SF assertion).
+### Agent F — DONE (test-quality review delivered; APPROVE WITH COMMENTS)
+34/35 revert checks reproduced; the 35th fixed at `71c53aa`. Its residuals W1–W6 are
+distributed into §3 F7(f) and owned by agents D/E. Do not re-run; do re-run **one revert
+per agent at integration** (rule 5 stands).
 
-### Agent G — before/after evidence pack (read-only, two worktrees)
-Deliverable `docs/evidence/ONE_CLICK_BEFORE_AFTER.md`: identical probes against
-`21e57a0` and the integrated head, one section per defect (A1–A8 + F1 post-fix), BEFORE
-and AFTER numbers, reproduction commands, a **what-did-NOT-change** section, and
-limitations. Report prominently anything less severe than claimed or unchanged. This is
-the evidence the operator asked for and it must not be assembled from commit messages.
+### Agent G — evidence pack DELIVERED (`23e87f7`); re-run required post-fix
+The pack exists with committed probe sources. After agents A–E land, re-run the affected
+probes against the new head and update the pack: F1/F2 (the A3 fall-through scene must
+stop answering +89% at 1.00), F3 (cap-bound A1 — currently **NOT fixed**, the pack's
+headline), A5's ellipse/elbow gaps if agent E addresses them. Keep the pack's discipline:
+probe sources committed, limitations stated, contradictions reported prominently.
 
 ### Integration (the coordinating session, not an agent)
 Merge A→E in dependency order, re-run the full matrix (rule 5), re-run one revert per
