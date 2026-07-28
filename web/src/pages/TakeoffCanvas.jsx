@@ -30,7 +30,7 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
-import { buildSheetIndex } from "../lib/planIndex";
+import { buildSheetIndex, dropFileFromIndex } from "../lib/planIndex";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
@@ -791,6 +791,7 @@ export default function TakeoffCanvas() {
   // Shapes on the closed sheets persist in annotations and restore on re-add.
   const closePdf = useCallback(async (name) => {
     await store.removePdf(name);
+    dropFileFromIndex(planIndexRef.current, name);   // else a hit can name a sheet that is gone
     reconcileAfterRemoval(name, await refreshSheets());
   }, [refreshSheets, reconcileAfterRemoval]);
   // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
@@ -798,6 +799,7 @@ export default function TakeoffCanvas() {
   const removeFromProject = useCallback(async (name) => {
     if (typeof store.removeFromProject !== "function") return;
     await store.removeFromProject(name);
+    dropFileFromIndex(planIndexRef.current, name);
     reconcileAfterRemoval(name, await refreshSheets());
   }, [refreshSheets, reconcileAfterRemoval]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
@@ -815,7 +817,10 @@ export default function TakeoffCanvas() {
         : "No supported files found. Drop a PDF, an image, or a .zip plan set.");
       return;
     }
-    for (const f of pdfs) { try { await store.addPdf(f); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
+    // addPdf keys IndexedDB on the NAME, so re-adding a reissued sheet replaces
+    // the bytes under the same sheet key — its index entry must go with them or
+    // search keeps answering with the superseded sheet's text.
+    for (const f of pdfs) { try { await store.addPdf(f); dropFileFromIndex(planIndexRef.current, f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
     await refreshSheets();
     const names = pdfs.map((f) => f.name);
     const tail = skipped.length ? ` · ${skipped.length} skipped` : "";

@@ -11,6 +11,8 @@
 // their keep. web/package.json runs on 7 runtime deps; an inverted Map is not
 // worth an eighth. See docs/CLIENT_SIDE_OCR_RESEARCH.md §6.
 //
+import { parseSheetKey } from "./sheetKey";
+
 // The index is deliberately SOURCE-TAGGED. A vector sheet's text layer is exact;
 // an OCR'd scan is ~80% of searchable terms with junk mixed in (measured, §9 of
 // the same doc). Both are worth indexing, but a hit must be able to say which it
@@ -191,6 +193,28 @@ export function searchPlan(indexes: Iterable<SheetIndex>, query: string): SheetH
     });
   }
   return hits.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+}
+
+/** Drop every page of one file from an index map.
+ *
+ *  MUST run whenever a file's BYTES change or the file goes away. store.addPdf
+ *  keys IndexedDB on the file NAME, so re-adding a reissued A101.pdf overwrites
+ *  the old bytes under the very same sheet key — an index entry that isn't
+ *  dropped with them keeps answering with the superseded sheet's text, silently.
+ *  Reissued sheets are the normal bid cycle here (#149/#161), not an edge case.
+ *
+ *  Closing a PDF has a second, louder failure if this is skipped: the stale
+ *  entries stay searchable, so a hit can name a sheet that is no longer in the
+ *  working set and the gallery renders a card for a sheet it cannot load.
+ *
+ *  Keys are snapshotted before deleting — mutating a Map while iterating its own
+ *  live key view is the kind of thing that works until it doesn't. */
+export function dropFileFromIndex(map: Map<string, SheetIndex>, file: string): number {
+  let dropped = 0;
+  for (const key of [...map.keys()]) {
+    if (parseSheetKey(key).file === file) { map.delete(key); dropped++; }
+  }
+  return dropped;
 }
 
 /** Every code term on a sheet, split by kind — the "symbol Tier 1" tag index

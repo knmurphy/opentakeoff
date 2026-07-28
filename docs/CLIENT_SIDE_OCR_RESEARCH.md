@@ -343,10 +343,16 @@ One-Click already uses:
    accuracy. Rendering at 288 DPI made accuracy *worse*, not better.
 3. **Form XObject prevalence is unknown.** §5 Tier 2 rests on it. Sample of one
    (the demo plan) says zero. Needs real plan sets.
-4. **Index invalidation.** Sheets get reissued (the revision-transfer feature
-   #149/#161 exists precisely for this). The index must key on the same
-   `sheetKey` codec and invalidate on replacement, or search silently returns
-   stale hits.
+4. ~~**Index invalidation.**~~ **HANDLED, and it bit twice.** `store.addPdf`
+   keys IndexedDB on the file NAME, so a reissued `A101.pdf` replaces the bytes
+   under the same sheet key — `dropFileFromIndex()` now runs on add, close, and
+   remove-from-project, and `ensureIndexed` carries the pump's `seqRef` guard so
+   a close mid-pass can't resurrect an entry. The second bite was subtler and
+   only showed up in the browser: dropping the entries wasn't enough, because
+   `hits` was memoized on signals that a *removal* never changes, so the gallery
+   served a cached result and rendered "1 OF 0 SHEETS MATCH" over an empty
+   project. Results are now intersected with the live plan set, which makes a
+   hit naming a missing sheet structurally impossible rather than merely tidy.
 5. **#166 plugin seam.** A 4.9 MB OCR engine is close to the archetypal
    "opt-in feature that shouldn't ship in core". If the plugin seam lands first,
    OCR is a natural first tenant. If it doesn't, the lazy `import()` pattern

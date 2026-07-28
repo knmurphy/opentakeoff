@@ -275,7 +275,14 @@ export default function PlanNavigator({
     indexingRef.current = true;
     try {
       let done = 0;
+      // Same staleness guard the thumbnail pump uses: seqRef bumps whenever
+      // `sheets` changes, so closing a PDF mid-pass stops us here. Without it a
+      // page enumerated before the close could be written back AFTER
+      // dropFileFromIndex ran, resurrecting an entry for a sheet that is gone —
+      // and a search hit naming a missing sheet renders a card nothing can load.
+      const seq = seqRef.current;
       for (const key of allKeys) {
+        if (seq !== seqRef.current) break;
         if (planIndexRef.current.has(key)) continue;
         try {
           const { file, page } = parseSheetKey(key);
@@ -291,11 +298,24 @@ export default function PlanNavigator({
   }, [allKeys, getDoc, planIndexRef, indexSheet]);
 
   const query = find.trim();
-  // indexedN is a real dependency even though the body never reads it: the index
-  // lives in a REF (deliberately non-reactive — it must not re-render the canvas),
-  // so the counter is the only signal that there are new entries worth searching.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const hits = useMemo(() => (query && planIndexRef ? searchPlan(planIndexRef.current.values(), query) : null), [query, indexedN, planIndexRef]);
+  const keySet = useMemo(() => new Set(allKeys), [allKeys]);
+  // Results are INTERSECTED with the live plan set, which is what makes a ghost
+  // card structurally impossible rather than merely unlikely: the index is a ref
+  // whose entries outlive nothing in particular, and a hit naming a sheet that is
+  // no longer in `sheets` renders a card the gallery cannot load. Dropping a
+  // closed file's entries (dropFileFromIndex, canvas side) is the tidy half; this
+  // is the half that holds even if some future path forgets to.
+  //
+  // The deps are the two invalidation signals for a ref-backed index:
+  // `indexedN` (entries were ADDED — the body never reads it, hence the disable)
+  // and `keySet` (the plan set changed, so entries may have been REMOVED). Without
+  // the latter, closing a PDF left the previous result memoized and the gallery
+  // showed "1 OF 0 SHEETS MATCH" over an empty project.
+  const hits = useMemo(() => {
+    if (!query || !planIndexRef) return null;
+    return searchPlan(planIndexRef.current.values(), query).filter((h) => keySet.has(h.key));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, indexedN, planIndexRef, keySet]);
   const hitByKey = useMemo(() => new Map((hits ?? []).map((h) => [h.key, h])), [hits]);
   const unindexed = planIndexRef ? allKeys.filter((k) => !planIndexRef.current.has(k)).length : 0;
 

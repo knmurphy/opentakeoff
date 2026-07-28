@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeTerm, splitRun, isCode, isSearchable, buildSheetIndex, matchTerm,
-  searchPlan, sheetCodes, MAX_ANCHORS, MIN_TERM_LEN,
+  searchPlan, sheetCodes, dropFileFromIndex, MAX_ANCHORS, MIN_TERM_LEN,
   type IndexedTextItem, type SheetIndex,
 } from "../src/lib/planIndex.ts";
 
@@ -183,6 +183,44 @@ test("sheetCodes: a sheet number is neither a room number nor a finish tag", () 
   // categorisation and findability are separate: it stays in the search index
   assert.ok(ix.terms.A101, "still indexed");
   assert.deepEqual(searchPlan([ix], "a101").map((h) => h.key), ["x"], "still findable");
+});
+
+// ── dropFileFromIndex (index invalidation) ──────────────────────────────────
+
+test("dropFileFromIndex: drops every page of the named file, leaves others", () => {
+  const map = new Map<string, SheetIndex>();
+  for (const k of ["A101.pdf", "A101.pdf#2", "A101.pdf#3", "A102.pdf", "A102.pdf#2"]) {
+    map.set(k, buildSheetIndex(k, runs(["CORRIDOR", 0, 0])));
+  }
+  assert.equal(dropFileFromIndex(map, "A101.pdf"), 3);
+  assert.deepEqual([...map.keys()], ["A102.pdf", "A102.pdf#2"]);
+});
+
+test("dropFileFromIndex: a file name that happens to contain '#' is not mis-split", () => {
+  // parseSheetKey only splits on a trailing NUMERIC tail, so this is one file
+  const map = new Map<string, SheetIndex>();
+  map.set("plan #4 rev.pdf", buildSheetIndex("plan #4 rev.pdf", runs(["LOBBY", 0, 0])));
+  map.set("plan #4 rev.pdf#2", buildSheetIndex("plan #4 rev.pdf#2", runs(["LOBBY", 0, 0])));
+  assert.equal(dropFileFromIndex(map, "plan #4 rev.pdf"), 2);
+  assert.equal(map.size, 0);
+});
+
+test("dropFileFromIndex: dropping an unknown file is a no-op, not a throw", () => {
+  const map = new Map<string, SheetIndex>([["A101.pdf", buildSheetIndex("A101.pdf", runs(["X", 0, 0]))]]);
+  assert.equal(dropFileFromIndex(map, "nope.pdf"), 0);
+  assert.equal(map.size, 1);
+});
+
+test("dropFileFromIndex: a reissued sheet stops answering with the old text", () => {
+  // the bug this exists to prevent: store.addPdf keys on NAME, so a revised
+  // A101.pdf overwrites the bytes under the same sheet key
+  const map = new Map<string, SheetIndex>();
+  map.set("A101.pdf", buildSheetIndex("A101.pdf", runs(["CARPET DEMO", 0, 0])));
+  assert.deepEqual(searchPlan(map.values(), "carpet").map((h) => h.key), ["A101.pdf"]);
+  dropFileFromIndex(map, "A101.pdf");
+  map.set("A101.pdf", buildSheetIndex("A101.pdf", runs(["TERRAZZO", 0, 0])));
+  assert.deepEqual(searchPlan(map.values(), "carpet"), [], "superseded text is gone");
+  assert.deepEqual(searchPlan(map.values(), "terrazzo").map((h) => h.key), ["A101.pdf"]);
 });
 
 test("splitRun: a run carrying a whole label splits into its words", () => {
