@@ -50,3 +50,4 @@ mcp/dist-mcpb/
 # One-Click E2E harness output (screenshots, video, fixture)
 web/e2e/out/
 web/bench/results.json
+web/bench/callout-results.json
