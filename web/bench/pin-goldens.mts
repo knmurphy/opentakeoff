@@ -39,6 +39,18 @@
 // `npm run bench` prints it back on every run. Nothing is written to disk
 // unless every case passes: a failed re-pin leaves the goldens untouched.
 //
+// ORPHAN ADJUDICATIONS (defect F4). A probe REMOVED by a re-pin — including the
+// removal half of a rename — has no new probe object to hang its reason on, and
+// the first version of this write path did `probes.find(...); if (!out) continue`,
+// so the one class of change the protocol calls MOST dangerous was the one class
+// whose reason was silently thrown away. Removal reasons (and the removed
+// probe's own earlier adjudications, which vanish with the probe object) are
+// therefore appended to the CASE-level `adjudications` array, scoped
+// `removed-probe <name>`, next to the case-total and overlap rows. Same
+// append-only rule, same reprint by `npm run bench`. The write path is covered
+// end-to-end by test/repinWritePath.test.ts, which runs THIS script against a
+// throwaway copy of the corpus — `diffRepin` unit tests cannot see main().
+//
 // WHAT GETS PINNED (audit A5b). The golden is THE PRODUCTION RING — traced and
 // then vertex-SNAPPED, via `oneClickRing`, exactly as TakeoffCanvas.jsx and
 // mcp/src/session.ts compute the `area_sf` a user reads. Until A5b this file
@@ -48,7 +60,7 @@
 // in the corpus JSON. Goldens also declare `wallSemantics` — see bench/corpus.ts.
 import { createRequire } from "module";
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, oneClickRing, snapNearest, MASK_MAX_DIM } from "../src/lib/oneclick.ts";
 import type { Point } from "../src/lib/oneclick.ts";
@@ -56,6 +68,13 @@ import { polyIoU, polyOverlapPx2, ringAreaAbs } from "./score.ts";
 import { WALL_SEMANTICS } from "./corpus.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/** Where cases are read from and written to. Defaults to the real corpus; the
+ *  write-path acceptance test points it at a throwaway copy so it can run this
+ *  script for real — main(), argv, exit codes, `writeFileSync` — without ever
+ *  putting the repo's goldens at risk (F4's test brief: a perturbed COPY).
+ *  Case `pdf` paths stay relative to this directory, exactly as on disk. */
+const corpusDir = process.env.REPIN_CORPUS_DIR ? resolve(process.env.REPIN_CORPUS_DIR) : join(here, "corpus");
 
 // Coordinates are image px at the pinned scale below. Probes chosen and
 // reviewed on screen — see docs/evidence/one-click/ for the captures.
@@ -354,6 +373,19 @@ export function formatRepinDiff(d: CaseRepinDiff): string {
 
 interface PinnedProbeOut { name: string; seed?: number[]; expect: string; tags?: string[]; knownFail?: boolean; golden?: Point[]; adjudications?: object[] }
 
+/** A row in the CASE-level `adjudications` array. `scope` is what `bench/run.mts`
+ *  prints as the subject of a case-level row, so for an orphan it carries the
+ *  probe name — two removals in one re-pin must not print identically. `probe`
+ *  is the machine-readable copy of that name.
+ *
+ *  A removal has no `to_sf`: the probe stopped being measured, which is not the
+ *  same claim as "it now measures 0 SF". `removed_sf` is what it last measured.
+ *  (`from_sf`/`to_sf` are written as a pair or not at all — run.mts's printer
+ *  formats `to_sf` unconditionally once it sees a `from_sf`.) Verified against
+ *  `npm run bench`: it prints scope, date and reason for these rows; it does not
+ *  yet format `removed_sf`, so that number currently lives in the JSON only. */
+type CaseAdjudicationOut = Record<string, unknown>;
+
 async function main() {
   const { adjudications, dryRun } = parseRepinArgs(process.argv.slice(2));
   const req = createRequire(import.meta.url);
@@ -365,7 +397,7 @@ async function main() {
 
   for (const c of PINNED) {
     // case pdf paths are relative to the CASE FILE's directory (bench/corpus/)
-    const doc = await pdfjs.getDocument({ url: join(here, "corpus", c.pdf), useSystemFonts: true }).promise;
+    const doc = await pdfjs.getDocument({ url: join(corpusDir, c.pdf), useSystemFonts: true }).promise;
     const page = await doc.getPage(1);
     const vp = page.getViewport({ scale: c.scale });
     const ops = await page.getOperatorList();
@@ -386,7 +418,7 @@ async function main() {
     }
 
     // 0.9: compare against what is ON DISK, before anything is overwritten.
-    const path = join(here, "corpus", c.file);
+    const path = join(corpusDir, c.file);
     const prior = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
     // pooled across cases below — an adjudication naming a probe in the OTHER
     // corpus file has not "matched nothing", it just matched somewhere else.
@@ -398,16 +430,33 @@ async function main() {
     // Adjudications are append-only and live in the corpus JSON, so the reason
     // outlives the terminal it was typed into and every later re-pin keeps it.
     const priorByName = new Map<string, PinnedProbeOut>((prior?.probes ?? []).map((p: PinnedProbeOut) => [p.name, p]));
+    const caseAdj: CaseAdjudicationOut[] = [...(prior?.adjudications ?? [])];
     for (const row of diff.probes) {
       if (!row.adjudication) continue;
-      const out = probes.find((p) => p.name === row.name);
-      if (!out) continue;
-      out.adjudications = [...(priorByName.get(row.name)?.adjudications ?? []),
-        { at, from_sf: row.oldSF === null ? null : +row.oldSF.toFixed(2), to_sf: row.newSF === null ? null : +row.newSF.toFixed(2), delta_pct: row.deltaPct === null ? null : +(row.deltaPct * 100).toFixed(2), iou_old_new: row.iou === null ? null : +row.iou.toFixed(3), reason: row.adjudication }];
+      const target = probes.find((p) => p.name === row.name);
+      if (target) {
+        target.adjudications = [...(priorByName.get(row.name)?.adjudications ?? []),
+          { at, from_sf: row.oldSF === null ? null : +row.oldSF.toFixed(2), to_sf: row.newSF === null ? null : +row.newSF.toFixed(2), delta_pct: row.deltaPct === null ? null : +(row.deltaPct * 100).toFixed(2), iou_old_new: row.iou === null ? null : +row.iou.toFixed(3), reason: row.adjudication }];
+        continue;
+      }
+      // F4: ORPHAN — the probe was REMOVED by this re-pin (or is the removal
+      // half of a rename), so there is no new probe object to attach to. Park
+      // the reason on the CASE instead; dropping it here is what falsified the
+      // protocol's own "the reason survives every later re-pin" claim, in
+      // precisely the case the header calls most dangerous.
+      const scope = `removed-probe ${row.name}`;
+      // The removed probe's earlier adjudications go with the probe object when
+      // it disappears. Carry them onto the case first, in order, so the removal
+      // reason lands at the end of that probe's own history rather than instead
+      // of it.
+      for (const earlier of (priorByName.get(row.name)?.adjudications ?? []) as CaseAdjudicationOut[]) {
+        const { at: earlierAt, ...rest } = earlier;      // keeps the case-level key order: at, scope, …
+        caseAdj.push({ at: earlierAt, scope, probe: row.name, ...rest });
+      }
+      caseAdj.push({ at, scope, probe: row.name, removed_sf: row.oldSF === null ? null : +row.oldSF.toFixed(2), reason: row.adjudication });
     }
     for (const p of probes) if (!p.adjudications && priorByName.get(p.name)?.adjudications) p.adjudications = priorByName.get(p.name)!.adjudications;
 
-    const caseAdj = [...(prior?.adjudications ?? [])];
     if (diff.caseTotal.adjudication) caseAdj.push({ at, scope: "case-total", from_sf: +diff.caseTotal.oldSF.toFixed(2), to_sf: +diff.caseTotal.newSF.toFixed(2), delta_pct: +((diff.caseTotal.deltaPct ?? 0) * 100).toFixed(2), reason: diff.caseTotal.adjudication });
     if (diff.overlap.adjudication) caseAdj.push({ at, scope: "pairwise-overlap", overlap_sf: +diff.overlap.sf.toFixed(2), frac_pct: +(diff.overlap.frac * 100).toFixed(3), reason: diff.overlap.adjudication });
 
