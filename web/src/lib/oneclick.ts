@@ -15,8 +15,8 @@
 //
 // Hatch (2026-07-05): hatch/poché strokes are constructPath linework too, so a
 // naive mask traps the fill between hatch lines. The cure is a TIERED mask —
-// walls plot bit 1, segments classified as hatch (regular runs of overlapping
-// parallel rows — classifyHatchSegs) plot bit 2 — plus an escalating flood:
+// walls plot bit 1, segments classified as hatch (members of a periodic
+// parallel family — classifyHatchSegs) plot bit 2 — plus an escalating flood:
 // the primary pass treats both as barrier (bit-identical to the original), and
 // when it comes back trapped (tiny/boundary), predominantly hatch-bounded (a
 // tile-grid cell), or MODERATELY hatch-bounded (a hatch-lined room — issue #32),
@@ -33,41 +33,106 @@ export type OpsTable = Record<string, number>;
 /** meta: one byte per segment — SEG_* bits + device line width in the high nibble.
  *  imageArea: total placed image area in device px² (scan/photo underlay detection). */
 export interface VectorGeometry { points: Point[]; segs: number[]; meta: Uint8Array; imageArea: number; }
-export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number; softCount: number; }
+export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number; softCount: number; mppf?: number; }  // mppf: mask px per foot (0/absent = scale unknown)
 export interface RegionResult { region: Uint8Array; mw: number; mh: number; ws: number; count?: number; }
 export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
 export const MASK_MAX_DIM = 3000;   // working raster cap (Uint8 ≈ 6–7 MB)
-const LEAK_FRACTION = 0.30;         // fill > 30% of the sheet ⇒ not an enclosed space
-const TINY_PX = 30;                 // fill < 30 mask px ⇒ landed in dense linework
-const MIN_THICK = 4;                // region bbox thinner than 4 mask px ⇒ hatch sliver, not a room
+const LEAK_FRACTION = 0.30;         // fill > 30% of the sheet ⇒ not an enclosed space (ws-invariant: a fraction)
 const CURVE_STEPS = 8;              // chords per bezier (door swings stay closed)
 
+// ── resolution-independent thresholds (RFC failure mode #3) ─────────────────
+// A verdict must not depend on the working raster's resolution, so every
+// threshold that MEANS something physical is denominated in FEET and converted
+// through the sheet scale (MaskObj.mppf). The px values are (a) the exact
+// calibration point — all four ft constants reproduce the historical px
+// behavior bit-for-bit at 18 mask px/ft, the corpus convention — and (b) the
+// fallback when the scale is unknown, plus raster-honesty FLOORS below which
+// a threshold can't shrink (you cannot tell a 1-cell room from noise no
+// matter what the feet say).
+const CAL_MPPF = 18;                    // calibration resolution (mask px per foot)
+const TINY_PX = 30;                     // fill < this many mask px ⇒ landed in dense linework
+export const TINY_SF = TINY_PX / (CAL_MPPF * CAL_MPPF);        // ≈ 0.093 SF
+const TINY_PX_FLOOR = 8;
+const MIN_THICK = 4;                    // region bbox thinner than this ⇒ hatch sliver, not a room
+export const MIN_THICK_FT = MIN_THICK / CAL_MPPF;              // ≈ 0.22 ft
+const MIN_THICK_FLOOR = 2;
+const NUDGE_PX = 3;                     // seed nudge: nearest open cell (clicks land on hatch lines)
+export const NUDGE_FT = NUDGE_PX / CAL_MPPF;                   // = 2 inches
+// Openings narrower than this never connect two spaces — a slit between an
+// annotation leader tip and a wall corner, a hairline drafting gap. Without a
+// feet-true rule the answer depends on which side of a cell boundary the
+// linework rounds to at the current resolution (bench: ward-room-294sf lost
+// its vestibule through exactly such a slit at ws × 0.5 only).
+export const MIN_PASS_FT = 0.5;
+/** Dilation radius that closes sub-MIN_PASS_FT passages at maskPxPerFt.
+ *  0 (rule off) when the scale is unknown or the mask is too coarse to say.
+ *  ROUND, not floor: a dilation of r closes AXIS-ALIGNED gaps ≤ 2r (the
+ *  Manhattan dilation reaches only r/√2 across a 45° slit, so the rule's
+ *  effective threshold for diagonal gaps is ≈ MIN_PASS_FT/√2 — a known
+ *  anisotropy, stable across resolutions). The effective threshold
+ *  quantizes in TWO-cell steps, so no rounding can implement the half-foot
+ *  rule exactly — rounding to nearest centers the error band at
+ *  MIN_PASS_FT ± ONE cell (±1/mppf ft). Flooring biased it a full band
+ *  low, so a 0.42 ft slit closed at one resolution and stayed open at
+ *  another (bench, patient-room-137); ceiling biased it high and severed a
+ *  real 0.56 ft waist between two open door leaves (ward room). Features
+ *  inside the ± one-cell band remain genuinely undecidable from the raster
+ *  at ANY floor — see DETERMINISM_MIN_MPPF for what is and isn't promised. */
+export function minPassRadiusFor(maskPxPerFt: number): number {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return 0;
+  return Math.min(SEAL_R_MAX, Math.round((MIN_PASS_FT * maskPxPerFt) / 2));
+}
+// The engine's honesty line — a PRAGMATIC CHOICE, not a derivation (an
+// earlier comment here claimed to derive it; adversarial review showed the
+// claimed band was off by 2× and the criterion didn't follow). What is
+// true: the min-passage dilation quantizes its effective threshold to
+// MIN_PASS_FT ± one cell (±1/mppf ft), so a drawn feature within a cell of
+// the threshold — a 0.56 ft waist, a 0.42 ft slit — is UNDECIDABLE from the
+// raster at ANY practical floor, and its verdict can differ between two
+// resolutions that are both above this line. The floor bounds the band's
+// WIDTH (at 8 px/ft it is ±1.5", a quarter of the threshold), not the
+// existence of near-threshold flips; full resolution-independence for
+// connectivity needs vector-native topology (RFC item A). In production the
+// working raster is pinned by MASK_MAX_DIM, so a given sheet always sees one
+// resolution. Consumers: traceConfidence deducts on coarser masks; the bench
+// gates cross-resolution agreement only at-or-above the floor (coarser runs
+// are tracked, non-gating; a case with fewer than two gated resolutions is
+// NOT cross-checked and says so).
+export const DETERMINISM_MIN_MPPF = 8;   // mask px per foot (a cell ≤ 1.5")
+
 // segment meta bits (extractVectorGeometry emits, classifyHatchSegs consumes)
-export const SEG_CURVE = 1;         // bezier chord — never classified as hatch (door swings close gaps)
+export const SEG_CURVE = 1;         // curve chord (bezier tessellation OR a detected polyline arc) — never hatch (door swings close gaps)
 export const SEG_CLIP = 2;          // clip-only path (endPath) — invisible ink, never a wall
 export const SEG_FILLONLY = 4;      // filled-not-stroked path (solid poché outlines classify normally)
+export const SEG_POLYARC = 8;       // provenance: SEG_CURVE came from markPolylineArcs, not a bezier op
 // meta high nibble = device line width, ceil'd and capped at 15 (0 = hairline)
 
-// hatch classification — a family is many similar-angle rows, regularly pitched,
-// stacking tangentially; walls don't do that (see classifyHatchSegs)
+// polyline arc detection (markPolylineArcs) — all thresholds are DIMENSIONLESS
+// geometry (turn angles, ratios), so detection is resolution- and scale-free
+export const ARC_MIN_CHORDS = 4;       // fewer chords is a corner chamfer, not an arc
+export const ARC_MIN_TOTAL_TURN = 30;  // deg — shallower chains are gentle wall sweeps; door swings are ~90°
+export const ARC_CHORD_TURN_MIN = 2;   // deg — near-collinear chains are straight runs with drafting jitter
+export const ARC_CHORD_TURN_MAX = 45;  // deg — sharper turns are zigzags/symbols, not tessellation
+export const ARC_FIT_TOL_FRAC = 0.03;  // circle-fit residual cap as a fraction of the radius (ellipse fixtures fail this)
+
+// hatch classification — a hatch/poché member is a stroke INSIDE a periodic
+// parallel family: same-pen neighbors at ±pitch on both sides (and the lattice
+// extending ±2 pitches at least one way), gaps equal to raster precision,
+// pitch at fill scale. Walls never sit inside such a lattice; the outermost
+// rows of a real fill fail it too, so hatch-region edges stay hard for free
+// (see classifyHatchSegs).
 export const HATCH_ANGLE_TOL = 2;      // deg — CAD hatch angle jitter is ≪ 1°
-export const HATCH_MIN_RUN = 10;       // rows — fewer evenly-spaced parallels is plausibly walls
-export const HATCH_MAX_PITCH = 24;     // mask px — keeps room-scale rhythm (demising walls) hard
-export const HATCH_PITCH_TOL = 0.35;   // regularity band around the median pitch
-export const HATCH_MIN_REGULAR = 0.7;  // fraction of gaps that must sit inside the band
-export const HATCH_OVERLAP_FRAC = 0.5; // successive rows must overlap tangentially this much
-export const ROW_EPS = 1.5;            // mask px — collinear/dashed pieces merge into one row
-export const WIDE_PROTECT_RATIO = 2;   // heavier-pen member of a hairline family stays hard (wall overprint)
-export const SPAN_PROTECT_RATIO = 3;   // a row spanning ≫ the run's median row is a wall riding the rhythm, not hatch
+export const HATCH_MAX_PITCH = 24;     // mask px — scale-unknown fallback for the pitch cap
+export const HATCH_MAX_PITCH_FT = HATCH_MAX_PITCH / 18;  // = 4/3 ft at the 18 px/ft calibration — keeps room-scale rhythm (demising walls) hard, at every resolution
 export const HATCH_BOUND_FRAC = 0.7;   // ≥ this soft-bounded fraction ⇒ PREDOMINANTLY hatch (tile-grid cell): escalate unbounded
-export const HATCH_ESCALATE_FRAC = 0.35; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation (issue #32 — real hatch-lined rooms top out ~0.63, so 0.70 alone never fired). This is the Balanced-preset value; see escalationParams.
+export const HATCH_ESCALATE_FRAC = 0.02; // MODERATE band [this, HATCH_BOUND_FRAC): grow-but-verify escalation. Was 0.35 when hatch classification was a loose rhythm heuristic and a high bar kept its false positives from escalating everything; with per-stroke periodicity evidence (item C), ANY real hatch run on the boundary is worth testing — a hatched alcove of a room is often < 35% of its boundary — and grow-but-verify remains the gate. The floor only skips re-floods over boundary specks. Balanced-preset value; see escalationParams.
 export const HATCH_GROWTH_MAX = 2.5;     // grow-but-verify cap: reject a walls-only escalation that balloons past this × the strict area (a misclassified wall would leak or overgrow). Balanced-preset value.
 
 // Fill sensitivity — a single 0..1 knob the estimator can dial per drawing to
@@ -85,7 +150,7 @@ export const SENS_AGGRESSIVE = 1;
 const SENS_ANCHORS: Array<[number, number, number]> = [
   [SENS_STRICT, HATCH_BOUND_FRAC, 1.5],                     // moderate band empties (escalateFrac == HATCH_BOUND_FRAC) ⇒ pre-#32
   [SENS_BALANCED, HATCH_ESCALATE_FRAC, HATCH_GROWTH_MAX],   // calibrated on the sample plan (issue #32)
-  [SENS_AGGRESSIVE, 0.20, 4.0],                            // cross more hatch, tolerate more growth
+  [SENS_AGGRESSIVE, 0, 4.0],                               // cross any hatch, tolerate more growth
 ];
 export function escalationParams(sensitivity: number): { escalateFrac: number; growthMax: number } {
   const s = Math.max(0, Math.min(1, Number.isFinite(sensitivity) ? sensitivity : SENS_BALANCED));
@@ -217,33 +282,200 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
       }
     }
   }
-  return { points, segs, meta: Uint8Array.from(metaArr), imageArea };
+  const meta = Uint8Array.from(metaArr);
+  markPolylineArcs(segs, meta);
+  return { points, segs, meta, imageArea };
+}
+
+// ── 1b. polyline arc detection ─────────────────────────────────────────────
+// Door swings on many real plans are POLYLINES, not beziers — CAD exports
+// tessellate the arc into lineTo chords — so they carry no SEG_CURVE bit: the
+// mask can't recognize them as door linework (no curve-transparent retry, no
+// wedge unification), and to a rhythm-based hatch classifier their chords can
+// masquerade as pattern rows. An arc is GEOMETRY, not rhythm: consecutive
+// chained chords, turning consistently in one direction by similar amounts,
+// whose vertices all sit on one circle. Detect exactly that and give the
+// chords the same SEG_CURVE the bezier tessellation gets (SEG_POLYARC records
+// the provenance). Chains tolerate endpoint gaps up to a chord length so
+// DASHED arcs (phantom door leaves) detect too, while a dashed straight line
+// has no turn and never qualifies. Ellipse fixtures (toilets, sinks) fail the
+// circle fit; chamfers are too short; zigzag symbols flip turn sign.
+export function markPolylineArcs(segs: number[], meta: Uint8Array): number {
+  const n = segs.length >> 2;
+  if (!meta || n < ARC_MIN_CHORDS) return 0;
+  let marked = 0;
+  const len = (i: number) => Math.hypot(segs[i * 4 + 2] - segs[i * 4], segs[i * 4 + 3] - segs[i * 4 + 1]);
+  // chains hold CHORD indices — segments long enough to carry a direction.
+  // Sub-half-px slivers (dash-pattern pen-down artifacts) neither join nor
+  // break a chain: they're bridged, and marked with the window they sit in.
+  let chain: number[] = [];
+  const flush = () => {
+    if (chain.length >= ARC_MIN_CHORDS) marked += scanChainForArcs(segs, meta, chain);
+    chain = [];
+  };
+  for (let i = 0; i < n; i++) {
+    if (meta[i] & (SEG_CURVE | SEG_CLIP)) { flush(); continue; }
+    if (len(i) < 0.5) continue;                        // sliver — bridge it
+    if (chain.length) {
+      const p = chain[chain.length - 1];
+      // same path & pen (identical meta), endpoints joined or dash-gapped
+      // less than the longer of the two chords (dash gaps run shorter than
+      // their dashes; anything longer is separate linework)
+      const gap = Math.hypot(segs[i * 4] - segs[p * 4 + 2], segs[i * 4 + 1] - segs[p * 4 + 3]);
+      if (meta[i] !== meta[p] || gap > Math.max(len(i), len(p))) flush();
+    }
+    chain.push(i);
+  }
+  flush();
+  return marked;
+}
+
+// One chain of joined same-pen chords: find maximal windows of consistent
+// uniform turning, then confirm each window's vertices against a fitted
+// circle before marking. The fit is the arbiter — turn statistics alone
+// would admit near-circular polylines that aren't arcs.
+function scanChainForArcs(segs: number[], meta: Uint8Array, chain: number[]): number {
+  const m = chain.length;
+  const dirs: number[] = [], lens: number[] = [];
+  for (const i of chain) {
+    const dx = segs[i * 4 + 2] - segs[i * 4], dy = segs[i * 4 + 3] - segs[i * 4 + 1];
+    dirs.push(Math.atan2(dy, dx) * 180 / Math.PI);
+    lens.push(Math.hypot(dx, dy));
+  }
+  // turn[k] = signed direction change entering chord k (k ≥ 1), in (−180, 180]
+  const turn: number[] = [0];
+  for (let k = 1; k < m; k++) {
+    let t = dirs[k] - dirs[k - 1];
+    if (t > 180) t -= 360; if (t <= -180) t += 360;
+    turn.push(t);
+  }
+  const ratioOk = (k: number) => {
+    const r = Math.max(lens[k], lens[k - 1]) / Math.max(1e-9, Math.min(lens[k], lens[k - 1]));
+    return r <= 3;                     // uniform tessellation (dash phase shortens end dashes)
+  };
+  const signedTurn = (k: number) => Math.abs(turn[k]) >= ARC_CHORD_TURN_MIN && Math.abs(turn[k]) <= ARC_CHORD_TURN_MAX && ratioOk(k);
+  // a dash pattern can split ONE tessellation chord into two near-collinear
+  // pieces, so an ISOLATED sub-threshold turn continues a window; two in a
+  // row is a straight run and breaks it
+  const neutral = (k: number) => Math.abs(turn[k]) < ARC_CHORD_TURN_MIN && ratioOk(k);
+  let marked = 0;
+  let s = 1;
+  while (s < m) {
+    if (!signedTurn(s)) { s++; continue; }
+    const sgn = Math.sign(turn[s]);
+    let e = s, bridged = false;
+    for (let k = s + 1; k < m; k++) {
+      if (signedTurn(k) && Math.sign(turn[k]) === sgn) { e = k; bridged = false; continue; }
+      if (neutral(k) && !bridged) { bridged = true; continue; }
+      break;
+    }
+    // window of turns [s..e] covers chords s-1 .. e (trailing neutrals
+    // excluded). A joined stub meeting the arc at a plausible turn (a
+    // threshold tick, a leader drawn continuous with the swing) rides in as
+    // the window's first or last chord and its off-circle vertex fails the
+    // fit — so on failure, retry with the end chords trimmed instead of
+    // discarding the whole arc (adversarial review, round 8).
+    if (e - s + 2 >= ARC_MIN_CHORDS) {
+      let total = 0; for (let j = s; j <= e; j++) total += Math.abs(turn[j]);
+      if (total >= ARC_MIN_TOTAL_TURN) {
+        for (const [c0, c1] of [[s - 1, e], [s, e], [s - 1, e - 1], [s, e - 1]] as const) {
+          if (c1 - c0 + 1 < ARC_MIN_CHORDS) continue;
+          let t = 0; for (let j = c0 + 1; j <= c1; j++) t += Math.abs(turn[j]);
+          if (t < ARC_MIN_TOTAL_TURN || !circleFitOk(segs, chain, c0, c1)) continue;
+          // mark the seg-index RANGE so bridged slivers ride along — but
+          // only segs sharing the chain's meta (a foreign path's sliver
+          // interleaved in the stream must not be stamped)
+          const cm = meta[chain[c0]];
+          for (let j = chain[c0]; j <= chain[c1]; j++) if (meta[j] === cm) meta[j] |= SEG_CURVE | SEG_POLYARC;
+          marked += c1 - c0 + 1;
+          break;
+        }
+      }
+    }
+    s = e + 1;
+  }
+  return marked;
+}
+
+// Kasa least-squares circle through the chords' vertices, centroid-centered
+// for conditioning; accept when every vertex sits on the circle to within
+// ARC_FIT_TOL_FRAC of the radius (a hair of absolute slack for PDF coordinate
+// rounding). Tessellation vertices of a true arc lie exactly on it.
+function circleFitOk(segs: number[], chain: number[], c0: number, c1: number): boolean {
+  const xs: number[] = [], ys: number[] = [];
+  xs.push(segs[chain[c0] * 4]); ys.push(segs[chain[c0] * 4 + 1]);
+  for (let k = c0; k <= c1; k++) { const i = chain[k]; xs.push(segs[i * 4 + 2]); ys.push(segs[i * 4 + 3]); }
+  const m = xs.length;
+  let mx = 0, my = 0;
+  for (let i = 0; i < m; i++) { mx += xs[i]; my += ys[i]; }
+  mx /= m; my /= m;
+  let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+  for (let i = 0; i < m; i++) {
+    const x = xs[i] - mx, y = ys[i] - my, z = x * x + y * y;
+    sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z;
+  }
+  const det = sxx * syy - sxy * sxy;
+  if (Math.abs(det) < 1e-9) return false;              // collinear — no circle
+  const cx = (sxz * syy - syz * sxy) / (2 * det);
+  const cy = (syz * sxx - sxz * sxy) / (2 * det);
+  let r = 0;
+  for (let i = 0; i < m; i++) r += Math.hypot(xs[i] - mx - cx, ys[i] - my - cy);
+  r /= m;
+  if (!(r > 0)) return false;
+  const tol = Math.max(0.75, r * ARC_FIT_TOL_FRAC);
+  for (let i = 0; i < m; i++) {
+    if (Math.abs(Math.hypot(xs[i] - mx - cx, ys[i] - my - cy) - r) > tol) return false;
+  }
+  return true;
 }
 
 // ── 2. hatch classification ────────────────────────────────────────────────
-// A hatch family is what walls never are: MANY same-angle rows (collinear
-// pieces merged), REGULARLY pitched at fill scale, each row OVERLAPPING the
-// next tangentially (hatch stacks; scattered parallel walls don't). Marks
-// suspected hatch segments soft (1). Curve chords are exempt (door swings must
-// keep closing gaps); clip-only paths are soft outright (invisible ink). Two
-// wall guards inside a family: the EXTREMAL rows stay hard (tile/hatch edges
-// coincide with walls), and heavier-pen members stay hard (wall overprint).
-interface HatchCand { i: number; ang: number; x1: number; y1: number; x2: number; y2: number; w: number; }
-interface HatchRow { d: number; t0: number; t1: number; segs: HatchCand[]; }
-export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number): Uint8Array {
+// PERIODICITY evidence, decided per stroke (issue #184 item C — replaces the
+// parallel-row run heuristic). A stroke is hatch iff it sits INSIDE a local
+// periodic lattice of its own family: same-angle, SAME-PEN neighbors at ±p on
+// both sides — and the lattice extending to ±2p on at least one side — every
+// gap equal to within half a mask cell, for some pitch p at fill scale
+// (≤ pitchCapPx, feet-true when the scale is known). That one statement
+// replaces five knobs of the old classifier:
+//   • run length / regularity band / majority vote — CAD hatch pitch is
+//     machine-exact, so gaps match to raster precision or the family isn't
+//     hatch; five equal-pitched overlapping rows is the evidence, not ten
+//     loosely-similar gaps out-voting their outliers.
+//   • tangential-overlap fraction — each lattice neighbor must overlap the
+//     stroke at all (≥ half a cell): hatch is an areal fill, so its rows
+//     stack; scattered same-angle linework that happens to be evenly offset
+//     (door arc chords, dimension ticks) doesn't.
+//   • pen-width protect ratio — the pen IS part of the pattern: lattice
+//     neighbors must match the stroke's width nibble, so a heavy wall
+//     overprinting a hairline family finds no same-pen lattice and stays
+//     hard, without a ratio to tune.
+//   • span protect ratio — a wall riding a fill's rhythm still needs same-pen
+//     equal-pitch neighbors BOTH sides; where it does ride them, the
+//     escalation's grow-but-verify cap is the backstop (unchanged).
+//   • extremal-row protection — the outermost rows of a fill have no ±p
+//     neighbor outside the fill, so they fail the lattice and stay hard for
+//     free (tile/hatch edges coincide with walls).
+// Curve chords are exempt (bezier AND detected polyline arcs — door swings
+// must keep closing gaps, and an arc is never a periodic family); clip-only
+// paths are soft outright (invisible ink); filled-not-stroked outlines bound
+// SOLID ink (wall poché) and are exempt — making them transparent lets the
+// escalated fill cross a solid black band. The half-cell tolerances are the
+// raster's own honesty floor (two lines closer than half a cell plot on the
+// same cells; offsets carry ~1e-14 float noise — the corpus caught a pitch
+// sitting exactly ON the cap splitting on that noise at one resolution), not
+// tunables.
+interface HatchPiece { i: number; d: number; t0: number; t1: number; w: number; }
+export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, pitchCapPx: number = HATCH_MAX_PITCH): Uint8Array {
   const n = segs.length >> 2;
   const soft = new Uint8Array(n);
   if (!meta || !n) return soft;
-  const cand: HatchCand[] = [];
+  const HALF_CELL = 0.5;                         // mask px — raster resolution floor
+  interface Cand { i: number; ang: number; x1: number; y1: number; x2: number; y2: number; w: number; }
+  const cand: Cand[] = [];
   for (let i = 0; i < n; i++) {
     const mt = meta[i];
     if (mt & SEG_CURVE) continue;
     if (mt & SEG_CLIP) { soft[i] = 1; continue; }
-    // Filled-not-stroked outlines bound SOLID ink (wall poché). Their short
-    // 0°/90° edges ride a tile grid's rhythm and would classify as hatch — but
-    // making them transparent lets the escalated fill cross a solid black band
-    // (the leak that turned hatched-room clicks into "dense linework" guards).
-    // Hatch itself is stroked linework, so exempting fills costs nothing.
     if (mt & SEG_FILLONLY) continue;
     const x1 = segs[i * 4] * ws, y1 = segs[i * 4 + 1] * ws, x2 = segs[i * 4 + 2] * ws, y2 = segs[i * 4 + 3] * ws;
     const dx = x2 - x1, dy = y2 - y1;
@@ -253,11 +485,11 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
     if (ang < 0) ang += 180; if (ang >= 180) ang -= 180;
     cand.push({ i, ang, x1, y1, x2, y2, w: meta[i] >> 4 });
   }
-  if (cand.length < HATCH_MIN_RUN) return soft;
+  if (cand.length < 5) return soft;              // a lattice is 5 rows minimum
   cand.sort((a, b) => a.ang - b.ang);
   // sweep into angle clusters; a near-0° cluster merges with a near-180° one
-  const clusters: HatchCand[][] = [];
-  let cl: HatchCand[] = [cand[0]];
+  const clusters: Cand[][] = [];
+  let cl: Cand[] = [cand[0]];
   for (let k = 1; k < cand.length; k++) {
     if (cand[k].ang - cand[k - 1].ang <= HATCH_ANGLE_TOL) cl.push(cand[k]);
     else { clusters.push(cl); cl = [cand[k]]; }
@@ -271,61 +503,106 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
       clusters.pop();
     }
   }
-  const median = (arr: number[]): number => { const a = arr.slice().sort((x, y) => x - y); return a[a.length >> 1]; };
   for (const members of clusters) {
-    if (members.length < HATCH_MIN_RUN) continue;
+    if (members.length < 5) continue;
     let sum = 0; for (const s of members) sum += s.ang;
     const th = (sum / members.length) * Math.PI / 180;
     const dxu = Math.cos(th), dyu = Math.sin(th);      // along the family
     const nxu = -dyu, nyu = dxu;                        // across it
-    const rowsIn = members.map((s) => ({
-      s,
+    const pieces: HatchPiece[] = members.map((s) => ({
+      i: s.i,
       d: ((s.x1 + s.x2) / 2) * nxu + ((s.y1 + s.y2) / 2) * nyu,
       t0: Math.min(s.x1 * dxu + s.y1 * dyu, s.x2 * dxu + s.y2 * dyu),
       t1: Math.max(s.x1 * dxu + s.y1 * dyu, s.x2 * dxu + s.y2 * dyu),
+      w: s.w,
     })).sort((a, b) => a.d - b.d);
-    // collinear/dashed pieces at the same offset merge into one ROW
-    const rows: HatchRow[] = [];
-    let row: HatchRow = { d: rowsIn[0].d, t0: rowsIn[0].t0, t1: rowsIn[0].t1, segs: [rowsIn[0].s] };
-    for (let k = 1; k < rowsIn.length; k++) {
-      const r = rowsIn[k];
-      if (r.d - row.d <= ROW_EPS) { row.t0 = Math.min(row.t0, r.t0); row.t1 = Math.max(row.t1, r.t1); row.segs.push(r.s); }
-      else { rows.push(row); row = { d: r.d, t0: r.t0, t1: r.t1, segs: [r.s] }; }
-    }
-    rows.push(row);
-    // maximal RUNS of rows: pitched within cap AND stacking tangentially
-    let runStart = 0;
-    const flushRun = (a: number, b: number) => {        // rows[a..b] inclusive
-      const count = b - a + 1;
-      if (count < HATCH_MIN_RUN) return;
-      const gaps: number[] = [];
-      for (let k = a + 1; k <= b; k++) gaps.push(rows[k].d - rows[k - 1].d);
-      const med = median(gaps);
-      if (!med) return;
-      let reg = 0; for (const g of gaps) if (Math.abs(g - med) <= med * HATCH_PITCH_TOL) reg++;
-      if (reg / gaps.length < HATCH_MIN_REGULAR) return;
-      const widths: number[] = [];
-      for (let k = a; k <= b; k++) for (const s of rows[k].segs) widths.push(s.w);
-      const modalW = Math.max(1, median(widths));
-      // hatch rows span a room; a wall at the family's angle spans the wing.
-      // A row much longer than the run's median is a wall riding the pattern's
-      // rhythm — softening it would let the escalated fill breach the room.
-      const spans: number[] = [];
-      for (let k = a; k <= b; k++) spans.push(rows[k].t1 - rows[k].t0);
-      const medSpan = Math.max(1, median(spans));
-      for (let k = a + 1; k < b; k++) {                 // extremal rows stay hard
-        if (rows[k].t1 - rows[k].t0 > SPAN_PROTECT_RATIO * medSpan) continue;
-        for (const s of rows[k].segs)
-          if (s.w < WIDE_PROTECT_RATIO * modalW) soft[s.i] = 1;
+    // group into ROWS at raster resolution (anchor-based: a piece joins the
+    // row when its offset is within half a cell of the row's first piece —
+    // dashed/collinear pieces of one drawn line land together)
+    const rowOf = new Int32Array(pieces.length);
+    const rowD: number[] = [];
+    const rowPieces: HatchPiece[][] = [];
+    for (let k = 0; k < pieces.length; k++) {
+      if (rowD.length && pieces[k].d - rowD[rowD.length - 1] <= HALF_CELL) {
+        rowOf[k] = rowD.length - 1; rowPieces[rowPieces.length - 1].push(pieces[k]);
+      } else {
+        rowOf[k] = rowD.length; rowD.push(pieces[k].d); rowPieces.push([pieces[k]]);
       }
-    };
-    for (let k = 1; k < rows.length; k++) {
-      const gap = rows[k].d - rows[k - 1].d;
-      const ov = Math.min(rows[k].t1, rows[k - 1].t1) - Math.max(rows[k].t0, rows[k - 1].t0);
-      const need = HATCH_OVERLAP_FRAC * Math.min(rows[k].t1 - rows[k].t0, rows[k - 1].t1 - rows[k - 1].t0);
-      if (gap > HATCH_MAX_PITCH || ov < need) { flushRun(runStart, k - 1); runStart = k; }
     }
-    flushRun(runStart, rows.length - 1);
+    // per-row t0-sorted pieces + a prefix-max of t1: queries bisect to the
+    // last piece starting before the window and walk left only while an
+    // overlap is still possible — without this, a cap-wide band of dense
+    // same-angle non-overlapping linework (stipple textures, tick swarms)
+    // makes the per-piece loop quadratic (adversarial review, round 8)
+    for (const rp of rowPieces) rp.sort((a, b) => a.t0 - b.t0);
+    const rowMaxT1: number[][] = rowPieces.map((rp) => {
+      const m: number[] = new Array(rp.length);
+      let mx = -Infinity;
+      for (let i = 0; i < rp.length; i++) { mx = Math.max(mx, rp[i].t1); m[i] = mx; }
+      return m;
+    });
+    // does row j hold a piece of pen width w overlapping [t0, t1]?
+    const rowHas = (j: number, w: number, t0: number, t1: number): boolean => {
+      const P = rowPieces[j], M = rowMaxT1[j];
+      let lo = 0, hi = P.length - 1, last = -1;
+      while (lo <= hi) { const mid = (lo + hi) >> 1; if (P[mid].t0 <= t1 - HALF_CELL) { last = mid; lo = mid + 1; } else hi = mid - 1; }
+      for (let i = last; i >= 0; i--) {
+        if (M[i] < t0 + HALF_CELL) break;              // nothing further left can overlap
+        const p = P[i];
+        if (p.w === w && Math.min(p.t1, t1) - Math.max(p.t0, t0) >= HALF_CELL) return true;
+      }
+      return false;
+    };
+    // nearest row from j (exclusive) in direction dir with a matching piece,
+    // within the pitch cap; −1 when none
+    const nearestRow = (j: number, dir: 1 | -1, w: number, t0: number, t1: number): number => {
+      for (let r = j + dir; r >= 0 && r < rowD.length; r += dir) {
+        if (Math.abs(rowD[r] - rowD[j]) > pitchCapPx + HALF_CELL) break;
+        if (rowHas(r, w, t0, t1)) return r;
+      }
+      return -1;
+    };
+    // any row at offset ≈ target (± half cell) with a matching piece?
+    const rowAt = (target: number, w: number, t0: number, t1: number): boolean => {
+      let lo = 0, hi = rowD.length - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (rowD[mid] < target - HALF_CELL) lo = mid + 1; else hi = mid; }
+      for (let r = lo; r < rowD.length && rowD[r] <= target + HALF_CELL; r++) {
+        // the bisection can land on the last row when target is beyond every
+        // row — enforce the lower bound too, or the nearest-below row would
+        // spuriously validate lattice positions that don't exist
+        if (rowD[r] >= target - HALF_CELL && rowHas(r, w, t0, t1)) return true;
+      }
+      return false;
+    };
+    for (let k = 0; k < pieces.length; k++) {
+      const c = pieces[k];
+      const j = rowOf[k];
+      const up = nearestRow(j, 1, c.w, c.t0, c.t1);
+      const dn = nearestRow(j, -1, c.w, c.t0, c.t1);
+      // a true pattern edge (nothing of the family beyond it within a pitch)
+      // stays hard — tile/hatch edges coincide with walls
+      if (up < 0 || dn < 0) continue;
+      const pUp = rowD[up] - rowD[j], pDn = rowD[j] - rowD[dn];
+      const at = (mult: number, p: number) => rowAt(rowD[j] + mult * p, c.w, c.t0, c.t1);
+      for (const p of pUp === pDn ? [pUp] : [pUp, pDn]) {
+        if (p < HALF_CELL || p > pitchCapPx + HALF_CELL) continue;
+        // interior: ±p both sides, lattice extending to ±2p at least one way
+        const interior = at(1, p) && at(-1, p) && (at(2, p) || at(-2, p));
+        // clipped edge: a fill's LAST row before its bounding wall has a
+        // remainder gap (< pitch) to the wall, not a pitch gap — accept a
+        // deeper three-step lattice on one side when the OPPOSITE side is
+        // bounded within a pitch (the clip signature; a lone pattern edge
+        // with open space beyond stays hard). The bound must be tested on
+        // the side away from the lattice: testing min(pUp, pDn) is a
+        // tautology (p is always one of them), which let any same-pen
+        // stroke within the CAP on the far side soften a pattern edge
+        // (adversarial review, round 8).
+        const clipped =
+          (at(1, p) && at(2, p) && at(3, p) && pDn <= p + HALF_CELL) ||
+          (at(-1, p) && at(-2, p) && at(-3, p) && pUp <= p + HALF_CELL);
+        if (interior || clipped) { soft[c.i] = 1; break; }
+      }
+    }
   }
   return soft;
 }
@@ -335,15 +612,23 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number):
 // Bresenham; coincident endpoints round to the same cell so chained walls stay
 // continuous. Without meta the mask is bit-identical to the original (every
 // cell 1). With meta, wall cells carry bit 1 and suspected-hatch cells bit 2 —
-// a cell crossed by both keeps bit 1, so hard always wins.
-export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null): MaskObj {
+// a cell crossed by both keeps bit 1, so hard always wins. Curve chords (door
+// swings, curved walls) additionally carry bit 4: still hard, but identifiable
+// so annexDoorWedges can recognize a swing arc on a region's boundary.
+export const MASK_CURVE_BIT = 4;
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0): MaskObj {
   const ws = Math.min(1, maxDim / Math.max(imgW, imgH, 1));
   const mw = Math.max(2, Math.ceil(imgW * ws)), mh = Math.max(2, Math.ceil(imgH * ws));
   const mask = new Uint8Array(mw * mh);
-  const soft = meta ? classifyHatchSegs(segs, meta, ws) : null;
+  // pxPerFt = IMAGE px per foot (the sheet scale at this render). When known,
+  // the hatch pitch cap converts to mask px through it, so whether a rhythm
+  // reads as hatch or as walls is a property of the DRAWING, not of ws.
+  const mppf = Number.isFinite(pxPerFt) && pxPerFt > 0 ? pxPerFt * ws : 0;
+  const soft = meta ? classifyHatchSegs(segs, meta, ws, mppf > 0 ? HATCH_MAX_PITCH_FT * mppf : HATCH_MAX_PITCH) : null;
   let softCount = 0;
   for (let i = 0, si = 0; i + 3 < segs.length; i += 4, si++) {
-    const v = soft && soft[si] ? 2 : 1;
+    let v = soft && soft[si] ? 2 : 1;
+    if (v === 1 && meta && (meta[si] & SEG_CURVE)) v = 1 | MASK_CURVE_BIT;
     if (v === 2) softCount++;
     let x0 = Math.round(segs[i] * ws), y0 = Math.round(segs[i + 1] * ws);
     const x1 = Math.round(segs[i + 2] * ws), y1 = Math.round(segs[i + 3] * ws);
@@ -358,7 +643,7 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
       if (e2 <= dx) { e += dx; y0 += sy; }
     }
   }
-  return { mask, mw, mh, ws, softCount };
+  return { mask, mw, mh, ws, softCount, mppf };
 }
 
 // ── 4. flood fill ──────────────────────────────────────────────────────────
@@ -368,12 +653,19 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
 // region from a hatch-bounded one.
 function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): FloodResult {
   const { mask, mw, mh, ws } = maskObj;
+  // feet-true guards when the scale is known (identical to the px values at
+  // the 18 px/ft calibration), px fallbacks + floors otherwise — see the
+  // resolution-independence block up top
+  const mppf = maskObj.mppf || 0;
+  const tinyPx = mppf > 0 ? Math.max(TINY_PX_FLOOR, Math.round(TINY_SF * mppf * mppf)) : TINY_PX;
+  const minThick = mppf > 0 ? Math.max(MIN_THICK_FLOOR, Math.round(MIN_THICK_FT * mppf)) : MIN_THICK;
+  const nudge = mppf > 0 ? Math.max(NUDGE_PX, Math.round(NUDGE_FT * mppf)) : NUDGE_PX;
   let sx = Math.round(ix * ws), sy = Math.round(iy * ws);
   if (sx < 0 || sy < 0 || sx >= mw || sy >= mh) return { status: "boundary" };
   if (mask[sy * mw + sx] & barrier) {
-    // nudge: nearest open cell within 3 px (clicks often land on hatch lines)
+    // nudge: nearest open cell (clicks often land on hatch lines)
     let found: Point | null = null;
-    for (let r = 1; r <= 3 && !found; r++) {
+    for (let r = 1; r <= nudge && !found; r++) {
       for (let dy = -r; dy <= r && !found; dy++) for (let dx = -r; dx <= r; dx++) {
         const nx = sx + dx, ny = sy + dy;
         if (nx >= 0 && ny >= 0 && nx < mw && ny < mh && !(mask[ny * mw + nx] & barrier)) { found = [nx, ny]; break; }
@@ -418,8 +710,8 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
   }
   if (leaked) return { status: "leak" };
   // hatch/text slivers: plenty of cells but no room-like thickness
-  if (count < TINY_PX || bx1 - bx0 + 1 < MIN_THICK || by1 - by0 + 1 < MIN_THICK) return { status: "tiny", count };
-  return { status: "ok", region, count, mw, mh, ws, hardHits, softHits };
+  if (count < tinyPx || bx1 - bx0 + 1 < minThick || by1 - by0 + 1 < minThick) return { status: "tiny", count };
+  return { status: "ok", region, count, mw, mh, ws, mppf: mppf || undefined, hardHits, softHits };
 }
 
 // The escalating fill. Pass 1 is the strict mask (walls + hatch — exactly the
@@ -430,12 +722,14 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
 //     clean re-flood beats nothing).
 //   • predominantly soft (≥ HATCH_BOUND_FRAC, e.g. a lone tile-grid cell): the
 //     strict fill is a sliver of the real room — escalate UNBOUNDED.
-//   • moderate ([HATCH_ESCALATE_FRAC, HATCH_BOUND_FRAC)): where real hatch-lined
-//     rooms sit (issue #32 measured max ~0.63, so the 0.70 gate never fired).
-//     Escalate GROW-BUT-VERIFY: accept walls-only only if it stays a clean "ok"
-//     AND grows the area ≤ HATCH_GROWTH_MAX×. A misclassified wall then either
-//     leaks or balloons and is discarded — the escalation can never do worse
-//     than the strict pass.
+//   • moderate ([HATCH_ESCALATE_FRAC, HATCH_BOUND_FRAC)): any real hatch run on
+//     the boundary (hatched alcoves of a room are often well under a third of
+//     its boundary; the floor only skips boundary specks). Escalate
+//     GROW-BUT-VERIFY: accept walls-only only if it stays a clean "ok", GROWS
+//     the region (an escalation that changes nothing isn't one — and must not
+//     cost confidence), and stays ≤ growthMax×. A misclassified wall then
+//     either leaks or balloons and is discarded — the escalation can never do
+//     worse than the strict pass.
 //   • lightly soft (< escalateFrac) or a leak: strict result stands
 //     (removing linework only leaks more).
 // `sensitivity` (0..1) dials the moderate tier's escalateFrac/growthMax via
@@ -453,11 +747,444 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
     if (softFrac < HATCH_BOUND_FRAC) growthCap = growthMax; // moderate ⇒ grow-but-verify
   }
   const r2 = floodPass(maskObj, ix, iy, 1);
-  if (r2.status === "ok" && (r1.status !== "ok" || r2.count <= r1.count * growthCap)) {
+  if (r2.status === "ok" && (r1.status !== "ok" || (r2.count > r1.count && r2.count <= r1.count * growthCap))) {
     r2.hatchFiltered = true;
     return r2;
   }
   return r1;
+}
+
+// ── 4b. leak recovery — seal door-width gaps ───────────────────────────────
+// A room with an open doorway (no door swing drawn, or a faded line on a scan)
+// is the flood's classic dead end: the fill escapes through the opening and the
+// whole click comes back "leak". Sealing recovers it: re-flood with the HARD
+// (wall) cells dilated by an escalating radius r — a square dilation closes any
+// passage up to 2r mask px wide — then grow the bounded region back r steps
+// against the ORIGINAL mask so the boundary still sits on the true linework
+// everywhere except across the sealed opening (where the fill may reach up to
+// r px past the wall ends — sub-inch at plan scales, and the seed star + review
+// gate still apply). Soft (hatch) cells are never dilated: thickening a hatch
+// family would fuse the pattern into a solid block and starve the fill.
+//
+// Every non-"ok" status gets a sealing attempt — not just "leak". A hatched
+// room behind a doorway reads as TINY, not leak: the strict pass is trapped by
+// the hatch, and the escalated walls-only pass leaks through the door and is
+// discarded. On the sealed mask that same escalation is bounded and succeeds.
+// A genuine dense-linework tiny/boundary just fails again on every radius
+// (dilation only adds barrier) and the original status stands — the retries
+// cost little because trapped floods are small and dilated masks are cached.
+//
+// RADII ARE SCALE-DEPENDENT. A doorway is feet wide, and how many mask px that
+// is depends on the sheet's scale and render resolution — at 1/4" = 1'-0" a
+// 3'-0" door can be anywhere from ~20 to ~160 mask px. Callers that know the
+// scale should pass sealRadiiFor(maskPxPerFt); the exported SEAL_RADII default
+// is the scale-blind floor (hairline drafting gaps only).
+export const SEAL_RADII = [1, 2, 4];    // fallback — seals gaps up to 2/4/8 px wide
+export const DOOR_SEAL_MAX_FT = 5;      // widest opening sealing will bridge (3'-0" doors + margin)
+export const SEAL_R_MAX = 128;          // absolute radius cap (cost + the Uint8 distance transform)
+export const SEAL_VIRTUAL_MAX = 0.25;   // a sealed region's boundary must be ≥75% real linework
+
+/** The escalation ladder for a sheet where one foot spans `maskPxPerFt` mask px:
+ *  1, 2, 4, … doubling up to the radius that bridges a DOOR_SEAL_MAX_FT opening
+ *  (a dilation of r closes gaps ≤ 2r). Falls back to SEAL_RADII when the scale
+ *  is unknown or degenerate. */
+export function sealRadiiFor(maskPxPerFt: number): number[] {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return SEAL_RADII;
+  const maxR = Math.min(SEAL_R_MAX, Math.ceil((DOOR_SEAL_MAX_FT * maskPxPerFt) / 2));
+  const radii: number[] = [];
+  for (let r = 1; r < maxR; r *= 2) radii.push(r);
+  radii.push(maxR);
+  return radii;
+}
+
+// Distance transforms + dilated masks are pure functions of the mask; memoized
+// per mask identity so hover-preview and click share the work (a sheet's mask
+// object is cached upstream).
+interface SealScratch { dt: Uint8Array; byR: Map<number, MaskObj>; }
+const sealCache = new WeakMap<Uint8Array, SealScratch>();
+
+// MANHATTAN (city-block) distance to the nearest HARD cell, two-pass chamfer,
+// saturating at 255 (radii are capped far below). One O(n) pass pair makes
+// every dilation radius an O(n) threshold instead of r erosion sweeps.
+//
+// Manhattan, not chessboard, deliberately: growRegionBack walks this field by
+// STRICT descent, and the city-block metric has no plateau faces — every open
+// cell at distance d has a 4-neighbor at d−1 (step toward its wall), so the
+// stolen band is fully recoverable, while the ridge in front of a sealed
+// doorway (where two jamb fronts tie) stays a strict-descent dead end.
+// Chessboard contours are squares whose flat faces plateau for r cells at a
+// stretch — descent stalls inside rooms and creeps through doorways instead.
+function hardDT(mask: Uint8Array, mw: number, mh: number): Uint8Array {
+  const dt = new Uint8Array(mw * mh).fill(255);
+  for (let y = 0; y < mh; y++) {                       // forward: W, N
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (mask[i] & 1) { dt[i] = 0; continue; }
+      let d = 255;
+      if (x > 0) d = Math.min(d, dt[i - 1] + 1);
+      if (y > 0) d = Math.min(d, dt[i - mw] + 1);
+      dt[i] = Math.min(255, d);
+    }
+  }
+  for (let y = mh - 1; y >= 0; y--) {                  // backward: E, S
+    const row = y * mw;
+    for (let x = mw - 1; x >= 0; x--) {
+      const i = row + x;
+      let d = dt[i];
+      if (x < mw - 1) d = Math.min(d, dt[i + 1] + 1);
+      if (y < mh - 1) d = Math.min(d, dt[i + mw] + 1);
+      dt[i] = Math.min(255, d);
+    }
+  }
+  return dt;
+}
+
+/** Diamond (Manhattan) dilation of the HARD cells by r — every cell within
+ *  city-block distance r of a wall becomes barrier; along a wall's axis a gap
+ *  of ≤ 2r closes. Soft (bit 2) cells carry over untouched; a soft cell
+ *  swallowed by the dilation becomes 3, and hard wins every barrier test.
+ *  `dt` lets floodRegionSealed reuse its cached distance transform; standalone
+ *  callers may omit it. */
+export function dilateHardMask(mo: MaskObj, r: number, dt?: Uint8Array): MaskObj {
+  const { mask, mw, mh, ws, softCount, mppf } = mo;
+  const n = mw * mh;
+  const d = dt || hardDT(mask, mw, mh);
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = (d[i] <= r ? 1 : 0) | (mask[i] & 2);
+  return { mask: out, mw, mh, ws, softCount, mppf };
+}
+
+// Grow the sealed-mask region back toward the true linework (4-connected BFS,
+// ≤ r layers) into cells open on the ORIGINAL mask. Two constraints keep the
+// growth honest at door-scale radii:
+//   • dt[cell] ≤ r — only cells the dilation actually stole are recoverable;
+//   • dt never INCREASES along a growth path — the region descends (or moves
+//     level) toward the walls it was pushed off of. Plateau moves are what
+//     recover corner blocks and wall-hugging runs (their dt is min-of-two-walls
+//     and holds constant along one axis). The doorway still can't be crossed:
+//     past the wall plane the Manhattan distance to the jambs strictly RISES,
+//     so every path out of the opening would have to ascend — forbidden. That
+//     asymmetry (plateaus inside, ascent outside) is the whole trick.
+// With ascent forbidden the walk is naturally confined; no step budget needed.
+// `barrier` mirrors the fill that produced the region: walls-only when it
+// escalated past hatch, walls+hatch otherwise.
+function growRegionBack(f: { region: Uint8Array; count: number; mw: number; mh: number }, orig: MaskObj, r: number, barrier: number, dt: Uint8Array): void {
+  const { region, mw, mh } = f;
+  const mask = orig.mask;
+  let frontier: number[] = [];
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!region[i]) continue;
+      if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) frontier.push(i);
+    }
+  }
+  const tryGrow = (from: number, to: number, next: number[]) => {
+    if (!region[to] && !(mask[to] & barrier) && dt[to] <= r && dt[to] <= dt[from]) { region[to] = 1; f.count++; next.push(to); }
+  };
+  while (frontier.length) {
+    const next: number[] = [];
+    for (const i of frontier) {
+      const x = i % mw, y = (i / mw) | 0;
+      if (x > 0) tryGrow(i, i - 1, next);
+      if (x < mw - 1) tryGrow(i, i + 1, next);
+      if (y > 0) tryGrow(i, i - mw, next);
+      if (y < mh - 1) tryGrow(i, i + mw, next);
+    }
+    frontier = next;
+  }
+}
+
+// ── 4c. door-swing inclusion — measure to the wall opening ─────────────────
+// A drawn door (leaf + swing arc) bounds the flood, which keeps rooms from
+// merging through their doorways — but the swing wedge behind the arc IS floor
+// the estimator must count: flooring runs under the door. The wedge is NOT an
+// enclosed pocket (its far edge is the open doorway itself), so it cannot be
+// annexed by flooding "behind the arc" — that walks straight out the opening.
+//
+// Instead, doorways UNIFY: re-flood with CURVE cells (bit 4) transparent so
+// the arc no longer bounds the room, and let gap sealing close the doorway at
+// the wall plane exactly as it would a cased opening. The result reads to the
+// threshold, wedge included, neighbor still excluded — with every sealing
+// sanity gate in force.
+//
+// PER ARC, not all at once (adversarial review, round 8): a room ringed by
+// several open doorways used to open every boundary arc in one retry — the
+// combined growth blew the allowance, the whole retry was rejected, and a
+// multi-door room lost every wedge (~a quarter-circle of real floor per
+// door). Now each arc CLUSTER (connected curve cells; dash gaps bridge)
+// retries independently and its acceptance is bounded by the arc's OWN
+// extent: a wedge fits inside its arc's bounding box, so the allowance is
+// that box's area (with slack), capped at two 5-ft doors' worth. That same
+// bound is what keeps curved WALLS honest — a long shallow wall arc has a
+// thin bounding box (chord × sagitta), far smaller than the neighbor space
+// behind it, so opening it can never annex a closet-sized room; ambiguity
+// still degrades to the arc-bounded measurement, never a wrong annex.
+export const WEDGE_SLACK = 1.3;        // growth head-room over the ideal quarter-circle
+export const WEDGE_GROWTH_FRAC = 0.30; // or this fraction of the region — corridors touch many doors
+export const WEDGE_MAX_DOORS = 12;     // absolute ceiling on the fractional allowance — 30% of a
+                                       // giant region (sheet-margin space) is not a door's worth
+/** Per-door growth allowance (mask cells) at maskPxPerFt: a DOOR_SEAL_MAX_FT
+ *  leaf's swing wedge, with slack. 0 (skip the door retry) when the scale is
+ *  unknown. */
+export function doorWedgeCapPx(maskPxPerFt: number): number {
+  if (!Number.isFinite(maskPxPerFt) || maskPxPerFt <= 0) return 0;
+  return Math.round((Math.PI / 4) * (DOOR_SEAL_MAX_FT * maskPxPerFt) ** 2 * WEDGE_SLACK);
+}
+
+/** Curve cells hugging THIS region's boundary (Chebyshev ≤ 3, covering a
+ *  2-px arc raster), grouped into CLUSTERS — one per door arc; gaps up to
+ *  3 cells bridge, so a dashed arc is one cluster. Locality is what makes
+ *  the retry work on dense plans: a hospital wing has dozens of drawn
+ *  doors, and opening arcs beyond the clicked room's boundary merges
+ *  spaces through doorways the seal ladder can't all close. (Per-click
+ *  build, no cache — the retry only runs on curve-adjacent rooms, and the
+ *  hover path already caches per room.) */
+function boundaryCurveClusters(mo: MaskObj, region: Uint8Array): number[][] {
+  const { mw, mh } = mo;
+  const src = mo.mask;
+  const isNear = new Uint8Array(mw * mh);
+  const near: number[] = [];
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!(src[i] & MASK_CURVE_BIT)) continue;
+      let n = false;
+      for (let dy = -3; dy <= 3 && !n; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= mh) continue;
+        for (let dx = -3; dx <= 3; dx++) {
+          const nx = x + dx;
+          if (nx >= 0 && nx < mw && region[ny * mw + nx]) { n = true; break; }
+        }
+      }
+      if (n) { near.push(i); isNear[i] = 1; }
+    }
+  }
+  // expand from the near cells through EVERY connected curve cell: a door
+  // that swings into the clicked space has only part of its arc hugging the
+  // boundary, but the retry must open (and the allowance must be sized by)
+  // the WHOLE arc — a partial cluster's bounding box under-sizes the wedge
+  // and the door is wrongly rejected
+  const clusters: number[][] = [];
+  const seen = new Uint8Array(mw * mh);
+  for (const s of near) {                    // scanline order ⇒ deterministic clusters
+    if (seen[s]) continue;
+    const cl: number[] = [];
+    const stack = [s];
+    seen[s] = 1;
+    while (stack.length) {
+      const i = stack.pop() as number;
+      cl.push(i);
+      const x = i % mw, y = (i / mw) | 0;
+      for (let dy = -3; dy <= 3; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= mh) continue;
+        for (let dx = -3; dx <= 3; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= mw) continue;
+          const j = ny * mw + nx;
+          if (!seen[j] && (src[j] & MASK_CURVE_BIT)) { seen[j] = 1; stack.push(j); }
+        }
+      }
+    }
+    clusters.push(cl);
+  }
+  return clusters;
+}
+
+// Walk the seed up the distance field until it clears the dilation radius —
+// a click near a wall lands inside the dilated barrier, where floodPass's
+// 3-px nudge can't rescue it. Strict ascent never crosses a wall (dt = 0), so
+// the walk stays in the seed's own open component; if it stalls on a ridge
+// before clearing r, the original seed stands and the attempt fails as before.
+function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: number, iy: number, r: number): [number, number] {
+  let cx = Math.max(0, Math.min(mw - 1, Math.round(ix * ws)));
+  let cy = Math.max(0, Math.min(mh - 1, Math.round(iy * ws)));
+  for (let step = 0; step < 2 * r && dt[cy * mw + cx] <= r; step++) {
+    let bx = cx, by = cy, bd = dt[cy * mw + cx];
+    if (cx > 0 && dt[cy * mw + cx - 1] > bd) { bd = dt[cy * mw + cx - 1]; bx = cx - 1; by = cy; }
+    if (cx < mw - 1 && dt[cy * mw + cx + 1] > bd) { bd = dt[cy * mw + cx + 1]; bx = cx + 1; by = cy; }
+    if (cy > 0 && dt[(cy - 1) * mw + cx] > bd) { bd = dt[(cy - 1) * mw + cx]; bx = cx; by = cy - 1; }
+    if (cy < mh - 1 && dt[(cy + 1) * mw + cx] > bd) { bd = dt[(cy + 1) * mw + cx]; bx = cx; by = cy + 1; }
+    if (bx === cx && by === cy) break;                 // stalled on a ridge
+    cx = bx; cy = by;
+  }
+  return [cx / ws, cy / ws];
+}
+
+// One base-flood + seal-ladder attempt against a specific mask. The dt used
+// for growback/virtual-boundary checks is the ATTEMPT mask's own transform, so
+// the curve-transparent retry measures distance to walls-without-arcs.
+//
+// `minPassPx` > 0 turns on the feet-true minimum-passage rule: the PRIMARY
+// flood runs against walls dilated by that radius (closing sub-MIN_PASS_FT
+// slits — see minPassRadiusFor), grown back onto the true linework. This is a
+// SEMANTIC default, not a repair: whether a hair-width slit connects two
+// spaces must be a property of the drawing, never of the mask resolution. If
+// the dilated flood fails (open space still leaks; the dilation ate a
+// sliver-sized region), everything falls back exactly to the old behavior:
+// raw flood first, then the seal ladder — sealing still only ever improves.
+function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], minPassPx = 0): FloodResult {
+  const scratch = (): SealScratch => {
+    let s = sealCache.get(mo.mask);
+    if (!s) { s = { dt: hardDT(mo.mask, mo.mw, mo.mh), byR: new Map() }; sealCache.set(mo.mask, s); }
+    return s;
+  };
+  if (minPassPx > 0) {
+    const s = scratch();
+    let dm = s.byR.get(minPassPx);
+    if (!dm) { dm = dilateHardMask(mo, minPassPx, s.dt); s.byR.set(minPassPx, dm); }
+    const [ax, ay] = ascendSeed(s.dt, mo.mw, mo.mh, mo.ws, ix, iy, minPassPx);
+    const f = floodRegion(dm, ax, ay, sensitivity);
+    if (f.status === "ok") {
+      growRegionBack(f, mo, minPassPx, f.hatchFiltered ? 1 : 3, s.dt);
+      return f;
+    }
+  }
+  const base = floodRegion(mo, ix, iy, sensitivity);
+  if (base.status === "ok") return base;
+  const sc = scratch();
+  for (const r of radii) {
+    if (r <= minPassPx) continue;   // a subset of the primary's dilation — already failed harder
+    let dm = sc.byR.get(r);
+    if (!dm) { dm = dilateHardMask(mo, r, sc.dt); sc.byR.set(r, dm); }
+    const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
+    const f = floodRegion(dm, ax, ay, sensitivity);
+    if (f.status !== "ok") continue;
+    growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3, sc.dt);
+    // Two sanity gates keep sealing honest — without them, dilating hard enough
+    // eventually STARVES any big open space (a lobby, the sheet itself) under
+    // the leak cap and reports a giant "sealed" blob:
+    //   • the grown region must still satisfy the room-size cap the plain
+    //     flood enforces (a room is never 30% of the sheet);
+    //   • the seal must be LOCAL — most of the region's boundary must hug real
+    //     linework (dt ≤ 3), with only door-width virtual runs. A starved blob
+    //     ends at descent watersheds in open space and fails this immediately.
+    if (f.count > f.mw * f.mh * 0.30) continue;
+    const vf = virtualBoundaryFrac(f, sc.dt);
+    if (vf > SEAL_VIRTUAL_MAX) continue;
+    f.sealedPx = r;
+    f.virtualFrac = +vf.toFixed(3);   // confidence signal: how much boundary is synthetic
+    return f;
+  }
+  return base;
+}
+
+/** floodRegion, plus leak recovery (see sealAttempt), plus door-swing
+ *  inclusion: when `wedgeCapPx` > 0 and the result is bounded by drawn door
+ *  linework, each boundary arc cluster gets its own curve-transparent retry
+ *  re-measuring to the wall opening; a retry is kept only when its growth
+ *  stays inside the arc's own bounding-box allowance. Accepted wedges union. */
+export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED, radii: number[] = SEAL_RADII, wedgeCapPx = 0, minPassPx = 0): FloodResult {
+  const r1 = sealAttempt(mo, ix, iy, sensitivity, radii, minPassPx);
+  if (!wedgeCapPx || r1.status !== "ok") return r1;
+  const clusters = boundaryCurveClusters(mo, r1.region);
+  if (!clusters.length) return r1;
+  // the global ceiling across all accepted wedges keeps the old semantics:
+  // a giant region's fractional allowance is still never more than
+  // WEDGE_MAX_DOORS' worth of 5-ft doors
+  const globalAllowance = Math.max(wedgeCapPx, Math.min(Math.round(r1.count * WEDGE_GROWTH_FRAC), WEDGE_MAX_DOORS * wedgeCapPx));
+  const { mw, mh } = mo;
+  let region: Uint8Array | null = null;
+  let count = r1.count;
+  let wedges = 0;
+  let hatchFiltered = !!r1.hatchFiltered;
+  let sealedPx = r1.sealedPx, virtualFrac = r1.virtualFrac;
+  for (const cl of clusters.slice(0, WEDGE_MAX_DOORS)) {
+    // per-cluster allowance from the ARC'S OWN extent: a swing wedge fits
+    // inside its arc's bounding box plus the seal's growback margin (the
+    // boundary of a sealed result hugs true linework to within 3 cells —
+    // the same dt ≤ 3 band virtualBoundaryFrac counts as real), so box
+    // area + a 3-cell rim (with slack) bounds a door retry — while a long
+    // shallow curved-wall arc gets only its thin chord × sagitta box, so a
+    // closet behind it can never ride in
+    let x0 = mw, x1 = 0, y0 = mh, y1 = 0;
+    for (const i of cl) {
+      const x = i % mw, y = (i / mw) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    const clusterAllowance = Math.min(2 * wedgeCapPx, Math.round((bw * bh + 3 * 2 * (bw + bh)) * WEDGE_SLACK));
+    if (clusterAllowance < 1) continue;
+    // open ONLY this cluster's cells
+    const m2mask = mo.mask.slice();
+    for (const i of cl) m2mask[i] = m2mask[i] & ~1;
+    const m2: MaskObj = { mask: m2mask, mw, mh, ws: mo.ws, softCount: mo.softCount, mppf: mo.mppf };
+    let sc2 = sealCache.get(m2.mask);
+    if (!sc2) { sc2 = { dt: hardDT(m2.mask, mw, mh), byR: new Map() }; sealCache.set(m2.mask, sc2); }
+    // retry from the ROOM'S most interior cell, not the click — the retry's
+    // sealed floods dilate the walls, and a click near a wall (or a hover
+    // sweeping in from a neighbor) would start inside the dilated barrier.
+    // Any cell of r1's region floods the same space, so pick the deepest
+    // one; this also makes the retry deterministic per room per door.
+    let bi = -1, bd = -1;
+    for (let i = 0; i < r1.region.length; i++) if (r1.region[i] && sc2.dt[i] > bd) { bd = sc2.dt[i]; bi = i; }
+    const sx = bi < 0 ? ix : (bi % mw) / mo.ws, sy = bi < 0 ? iy : Math.floor(bi / mw) / mo.ws;
+    const r2 = sealAttempt(m2, sx, sy, sensitivity, radii, minPassPx);
+    if (r2.status !== "ok" || r2.count <= r1.count) continue;
+    const growth = r2.count - r1.count;
+    if (growth > clusterAllowance) continue;           // curved wall / open paper, not a door
+    if (count - r1.count + growth > globalAllowance) continue;
+    if (!region) region = r1.region.slice();
+    for (let i = 0; i < region.length; i++) if (r2.region[i] && !region[i]) { region[i] = 1; count++; }
+    wedges++;
+    if (r2.hatchFiltered) hatchFiltered = true;
+    if (r2.sealedPx && (!sealedPx || r2.sealedPx > sealedPx)) sealedPx = r2.sealedPx;
+    if (r2.virtualFrac != null && (virtualFrac == null || r2.virtualFrac > virtualFrac)) virtualFrac = r2.virtualFrac;
+  }
+  if (!wedges || !region) return r1;
+  const out: FloodResult & { status: "ok" } = {
+    status: "ok", region, count, mw, mh, ws: r1.ws, mppf: r1.mppf,
+    hardHits: r1.hardHits, softHits: r1.softHits,
+    hatchFiltered: hatchFiltered || undefined, sealedPx, virtualFrac,
+  };
+  // Absorb the door LEAF: the straight leaf line stays a barrier through the
+  // retry, leaving a 1–2 px slit between the room and the annexed wedge. The
+  // outer contour would dive up that slit and back, inflating perimeter_lf by
+  // ~2 leaf lengths per door — a baseboard over-count. The leaf is exactly
+  // the barrier pinched between r1's region and the annexed delta, so absorb
+  // only that: real wall stubs (pinched between r1 and r1) keep their slit —
+  // baseboard genuinely runs around those.
+  const reg = region, reg1 = r1.region, mask = mo.mask;
+  const isDelta = (i: number) => reg[i] && !reg1[i];
+  for (let pass = 0; pass < 2; pass++) {               // Bresenham lines raster up to 2 px thick
+    for (let y = 1; y < mh - 1; y++) {
+      const row = y * mw;
+      for (let x = 1; x < mw - 1; x++) {
+        const i = row + x;
+        if (reg[i] || !(mask[i] & 1)) continue;
+        const pinchH = reg[i - 1] && reg[i + 1], pinchV = reg[i - mw] && reg[i + mw];
+        if ((pinchH && (isDelta(i - 1) || isDelta(i + 1))) || (pinchV && (isDelta(i - mw) || isDelta(i + mw)))) { reg[i] = 1; out.count++; }
+      }
+    }
+  }
+  out.wedges = wedges;
+  out.wedgeGrowth = +(out.count / r1.count).toFixed(3); // confidence signal: how much the door retries grew
+  return out;
+}
+
+// Fraction of a region's boundary cells that do NOT hug original linework
+// (dt > 3): 0 for a fully wall-bounded room, ≈ door/perimeter for a legit
+// seal, large for a dilation-starved blob whose edges sit in open space.
+function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, dt: Uint8Array): number {
+  const { region, mw, mh } = f;
+  let boundary = 0, virtual = 0;
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      const i = row + x;
+      if (!region[i]) continue;
+      if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) {
+        boundary++;
+        if (dt[i] > 3) virtual++;
+      }
+    }
+  }
+  return boundary ? virtual / boundary : 1;
 }
 
 // ── 5. contour trace + simplify ────────────────────────────────────────────

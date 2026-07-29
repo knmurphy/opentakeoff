@@ -46,3 +46,9 @@ mcp/dist/
 
 # MCPB bundle build output (release artifact, never committed)
 mcp/dist-mcpb/
+
+# One-Click E2E harness output (screenshots, video, fixture)
+web/e2e/out/
+web/bench/results.json
+web/bench/callout-results.json
+web/bench/batch-results.json
