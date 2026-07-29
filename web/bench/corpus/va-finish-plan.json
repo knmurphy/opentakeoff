@@ -2,7 +2,7 @@
  "pdf": "../../../demo/sample-finish-plan.pdf",
  "scale": 2,
  "ptPerFt": 18,
- "wallSemantics": "centerline",
+ "wallSemantics": "drawn-path-vertex",
  "note": "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor.",
  "pinnedAt": "reviewed traces, issue #184",
  "adjudications": [
@@ -12,7 +12,7 @@
    "from_sf": 2511.48,
    "to_sf": 2580.22,
    "delta_pct": 2.74,
-   "reason": "Reported here only for completeness — and note it is the check that would NOT have caught this, exactly as the protocol header says: the case total moved +2.74% while individual rooms moved up to +8.45%. Every probe on this case is re-pinned in ONE pass for ONE reason (audit A5b: the bench measured traceRegion, the product measures the snapped ring), no probe was added or removed, and each row carries its own adjudication above. The total moves because all eight rooms grew outward to their wall centrelines together."
+   "reason": "Reported here only for completeness — and note it is the check that would NOT have caught this, exactly as the protocol header says: the case total moved +2.74% while individual rooms moved up to +8.45%. Every probe on this case is re-pinned in ONE pass for ONE reason (audit A5b: the bench measured traceRegion, the product measures the snapped ring), no probe was added or removed, and each row carries its own adjudication above. The total moves because all eight rooms grew outward together onto the drawn path vertices nearest their traced corners. CORRECTED 2026-07-29 (audit F5): the original text said they grew outward 'to their wall centrelines'. That is only true where a wall is a single stroke. Most walls on this sheet are drawn as PAIRS of lines, measured 7.44-9.26 image px = 4.96-6.17 in apart at ptPerFt 18, and the snapped corners land on ONE line of the pair - a wall FACE - at offset 0.00 from it. See wallSemantics on this case and the WALL_SEMANTICS block in bench/corpus.ts."
   }
  ],
  "probes": [
@@ -270,7 +270,7 @@
      "to_sf": 20.65,
      "delta_pct": 8.45,
      "iou_old_new": 0.803,
-     "reason": "A5b re-pin, and the largest mover in the corpus BECAUSE it is the narrowest probe, not because it moved most in absolute terms. The band is the perimeter strip between the finish-tag annotation ring and the wall: 20.65 SF over a 35.9 ft perimeter is a mean width of 1.15 ft, so the same ~0.54in per-side snap correction that is +4% on a room is +8.45% here (+1.61 SF). Ring topology is unchanged (10 verts before and after); IoU 0.803 is low for the same reason — on a strip barely a foot wide, moving both long edges half an inch overlaps poorly with itself. The product returns 20.65 SF for this click."
+     "reason": "A5b re-pin, and the largest mover in the corpus BECAUSE it is the narrowest probe, not because it moved most in absolute terms. The band is the perimeter strip between the finish-tag annotation ring and the wall: 20.65 SF over a 35.9 ft perimeter is a mean width of 1.15 ft. CORRECTED 2026-07-29 (audit F5): the original text called this 'the same ~0.54in per-side snap correction that is +4% on a room'. The two corrections are NOT the same. The band's is +1.61 SF over 35.9 ft = 0.54in per side; patient-room-137's is +6.59 SF over 102.7 ft = 0.775in per side. The band moved LESS per side than the room did and still moved twice the percentage, which is the actual point: percentage is set by how much area the corrected boundary encloses per foot of perimeter, not by the size of the correction. The band encloses 0.575 SF per foot of perimeter, patient-room-137 encloses 1.64 SF per foot - a factor of 2.85 - so 0.54in on the band and 0.775in on the room give 8.45% and 4.08% (predicted ratio 1.99, observed 2.07). Ring topology is unchanged (10 verts before and after); IoU 0.803 is low for the same reason — on a strip barely a foot wide, moving both long edges half an inch overlaps poorly with itself. The product returns 20.65 SF for this click."
     }
    ]
   },
@@ -386,7 +386,7 @@
      "to_sf": 41.2,
      "delta_pct": 5,
      "iou_old_new": 0.928,
-     "reason": "A5b re-pin. Dense-hatch toilet room, 23 verts before and after, same escalated flood, IoU 0.928. The snap pulls the traced corners off the hatch-quantized raster contour onto the PT-tile room`s drawn wall vertices: 0.66in outward over a 35.3 ft perimeter = +1.96 SF. Confirms as centreline-to-centreline against the adjacent patient room, with which it still tiles (case pairwise overlap 0.004%). 41.20 SF is what the one-click returns."
+     "reason": "A5b re-pin. Dense-hatch toilet room, 23 verts before and after, same escalated flood, IoU 0.928. The snap pulls the traced corners off the hatch-quantized raster contour onto the PT-tile room`s drawn wall vertices: 0.66in outward over a 35.3 ft perimeter = +1.96 SF. CORRECTED 2026-07-29 (audit F5): the original text read 'confirms as centreline-to-centreline against the adjacent patient room'. It does not, and it was the measurement that falsified this corpus's old wallSemantics of \"centerline\". These two rings do not share a line: at their closest they are 8.79 px = 5.86 in apart, which is this sheet's drawn wall thickness, because each room's snap lands on the FACE it can see. A genuine centreline pair measures 0.00 - ward-room and ward-vestibule, whose shared boundary is one 36-px line, measure 0.000 px. What the numbers DO confirm is that the toilet and the patient room still TILE: they do not overlap (case pairwise overlap 0.004%) and neither claims the other's floor. 41.20 SF is what the one-click returns."
     }
    ]
   },
@@ -648,7 +648,7 @@
      "to_sf": 235.26,
      "delta_pct": 2.59,
      "iou_old_new": 0.982,
-     "reason": "A5b re-pin, the smallest VA mover (+2.59%) simply because 235.26 SF over a 97.4 ft perimeter is the corpus`s bulkiest room: the same 0.74in per-side correction is a smaller fraction of it. 33 verts before and after, both double-door swing wedges still included, IoU 0.982. Still tiles with ward-vestibule (no overlap, no gap) after both were re-pinned. 235.26 SF is what the product returns."
+     "reason": "A5b re-pin, the smallest VA mover (+2.59%) simply because 235.26 SF over a 97.4 ft perimeter is the corpus`s bulkiest room: its own 0.73in per-side correction is a smaller fraction of it (per-side corrections are NOT uniform across this sheet's probes — they run 0.54in to 0.92in; see shaded-wing-office's adjudication for why). 33 verts before and after, both double-door swing wedges still included, IoU 0.982. Still tiles with ward-vestibule (no overlap, no gap) after both were re-pinned. 235.26 SF is what the product returns."
     }
    ]
   },
@@ -1281,7 +1281,7 @@
      "to_sf": 160.53,
      "delta_pct": 4.43,
      "iou_old_new": 0.974,
-     "reason": "A5b re-pin. Shaded-wing office, 39 verts before and after, IoU 0.974, same flood. 0.93in outward over an 88.6 ft perimeter = +6.81 SF. Its per-side correction (0.93in) sits mid-range for this sheet — cloud-corridor's is 1.11in, patient-room-137-band's 0.54in — the spread being how much of each boundary lands on a drawn vertex within the 7px snap tolerance. 160.53 SF is what a user reads."
+     "reason": "A5b re-pin. Shaded-wing office, 39 verts before and after, IoU 0.974, same flood. 0.93in outward over an 88.6 ft perimeter = +6.81 SF. Its per-side correction (0.93in) sits mid-range for this sheet — cloud-corridor's is 1.11in, patient-room-137-band's 0.54in. CORRECTED 2026-07-29 (audit F5): the original text attributed that spread to 'how much of each boundary lands on a drawn vertex within the 7px snap tolerance'. Measurably not the cause - that coverage is 91-100% on every probe of this case (golden vertices within 7 px of a drawn path vertex: patient-toilet-137a 21/23 = 91%, ward-vestibule 24/25 = 96%, patient-room-137 42/43 = 98%, and 100% on the other five including this one), and a near-constant cannot explain a 2x spread: the two probes at 100% coverage are 0.54in and 0.93in. The spread is the WALL CLASS each boundary is drawn in. A single-stroke edge (this probe's 198-px vertical, cloud-corridor's 914-px vertical: one line at offset 0.00, nothing else within 18 px) offers one snap target; a double-line edge (this probe's 238-px horizontal and 124-px vertical: a second line 7.44-7.48 px = 4.96-4.99 in away) offers two, so how far a corner travels depends on which face carries a vertex in range. Recorded as the reviewed explanation rather than a measurement: the pre-snap traces were not retained, so a per-vertex accounting of the 2026-07-28 re-pin cannot be re-derived from the corpus. 160.53 SF is what a user reads."
     }
    ]
   },

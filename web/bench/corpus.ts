@@ -10,22 +10,65 @@
 import { SEG_CURVE } from "../src/lib/oneclick";
 import type { Point } from "../src/lib/oneclick";
 
-// ── WALL-LINE SEMANTICS (audit A5b) ─────────────────────────────────────────
-// Every golden here is CENTRELINE: a room measures wall-centre to wall-centre,
-// not interior-clear face to face. That is not a new decision, it is this
-// repo's existing one, made explicit:
-//   • e2e/one-click.e2e.cjs asserts 120 SF for OFFICE 101, which
-//     e2e/make-fixture.cjs draws as a 216×180 pt rectangle at 1.6 pt stroke.
-//     216/18 × 180/18 = 120.00 exactly; interior-clear would be
-//     (216−1.6)/18 × (180−1.6)/18 = 118.05.
-//   • demo/make_sample_plan.py draws `3 w` / `120 110 980 580 re` with
-//     partitions at x=610 and y=400 — centreline quadrants are 490×290 pt =
-//     438.58 SF each; interior-clear would be 487×287 pt = 431.39 SF.
-// Snapping traced corners onto PDF path vertices lands them on those
-// centrelines, so the snapped ring IS the centreline ring. Recorded here and in
-// each corpus JSON's `wallSemantics` so the next reader does not have to
-// re-derive it from two fixture generators.
-export const WALL_SEMANTICS = "centerline";
+// ── WALL-LINE SEMANTICS (audit A5b; RENAMED by audit F5) ────────────────────
+// This field used to read "centerline", and that was FALSE on 60% of the
+// corpus's square footage. What a golden actually traces to is a DRAWN PATH
+// VERTEX: production is trace-THEN-SNAP, pulling each traced corner onto the
+// nearest `extractVectorGeometry(...).points` entry within SNAP_TOL_PX (7) —
+// a vertex of the PDF's own paths. Whether that vertex sits on a wall's
+// centreline depends entirely on how the wall was DRAWN:
+//
+//   • SINGLE-STROKE wall ⇒ drawn vertex IS the centreline. Both fixture
+//     generators draw walls this way, which is where the old name came from:
+//       – e2e/make-fixture.cjs draws OFFICE 101 as a 216×180 pt rectangle at
+//         1.6 pt stroke and e2e/one-click.e2e.cjs asserts the product measures
+//         120 SF through real Chromium: 216/18 × 180/18 = 120.00 exactly.
+//         Interior-clear would be (216−1.6)/18 × (180−1.6)/18 = 118.05.
+//       – demo/make_sample_plan.py draws `3 w` / `120 110 980 580 re` with the
+//         two interior partitions as SEPARATE strokes ("610 110 m 610 690 l S"
+//         and "120 400 m 1100 400 l S").
+//   • DOUBLE-LINE wall ⇒ the drawn vertices are on the wall FACES and there is
+//     no centreline vertex to snap to at all. demo/sample-finish-plan.pdf (the
+//     va-finish-plan case: 2580 of the corpus's 4332 golden SF, 60%) is drawn
+//     that way. MEASURED on that sheet, scanning perpendicular across the
+//     pinned goldens' own long straight edges: the wall lines come in parallel
+//     PAIRS 7.44–9.26 image px apart at ptPerFt 18 = 4.96–6.17 in of building,
+//     and each golden edge sits at offset 0.00 from ONE line of its pair —
+//     i.e. on a face, not between them. Consequence: two rooms across such a
+//     wall do NOT share a line. patient-toilet-137a and patient-room-137 are
+//     8.79 px = 5.86 in apart at their closest, where a genuine centreline
+//     pair measures exactly 0.00 (ward-room ↔ ward-vestibule, whose shared
+//     boundary is one 36-px line, measures 0.000 px).
+//
+// A third case follows from the same rule and is what the sample plan pins:
+//   • NO vertex within tolerance ⇒ the corner stays where the raster contour
+//     put it. That is why the sample plan's quadrants pin at 437.978 SF and
+//     NOT the 438.58 SF an ideal centreline rectangle (490×290 pt) would give.
+//     The sheet has exactly 8 path vertices — the shell's 4 corners plus the
+//     2 partitions' 4 endpoints — and the interior partition CROSS at image
+//     (1220,784) is where two separate strokes cross, so it is an endpoint of
+//     neither and not a recorded vertex (nearest is 580 px away). Each
+//     quadrant's cross-corner therefore stays on the raster contour ~1 px
+//     inside, costing 0.602 SF (−0.137%) per room.
+//
+// Recorded here and in each corpus JSON's `wallSemantics`. bench/run.mts does
+// not merely compare the JSON's string to this constant (that was a tautology
+// while every writer stamped it from here) — it also VERIFIES the declaration
+// by measurement, see `wallSemanticsMinVertexCoverage`.
+export const WALL_SEMANTICS = "drawn-path-vertex";
+
+/** The semantics vocabulary the bench knows. A case declaring anything else
+ *  cannot be read, and a case declaring one of the other two cannot be graded
+ *  against the engine under bench/run.mts's SF gates — the measurands differ
+ *  by half a wall thickness (1.6% on the sample plan, 8.5% on a 1.15-ft-wide
+ *  band, and ~5.9 in per shared wall on the VA plan). Kept as a closed set so
+ *  a typo fails loudly instead of reading as "some other convention". */
+export const KNOWN_WALL_SEMANTICS = [
+  WALL_SEMANTICS,   // what the engine returns: the snapped ring's own measurand
+  "centerline",     // wall-centre to wall-centre (equals the above on single-stroke walls only)
+  "interior-clear", // face to face, wall thickness excluded
+] as const;
+export type WallSemantics = (typeof KNOWN_WALL_SEMANTICS)[number];
 
 export interface Probe {
   name: string;
@@ -45,8 +88,11 @@ export interface SyntheticCase {
   points: Point[];
   meta?: Uint8Array;
   probes: Probe[];
-  /** see WALL_SEMANTICS */
-  wallSemantics: string;
+  /** What this case's goldens measure to — see WALL_SEMANTICS. Every synthetic
+   *  case draws its walls as SINGLE strokes, so here the drawn path vertex and
+   *  the wall centreline are the same point; the declaration is verified by
+   *  measurement in test/benchProductionRing.test.ts rather than trusted. */
+  wallSemantics: WallSemantics;
 }
 
 // ── snap targets for a synthetic case (audit A5b) ───────────────────────────
