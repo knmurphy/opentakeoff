@@ -246,6 +246,22 @@ export function verticalWallSf(shapes, conditionId, heightFt, multiplier = 1) {
   return round2(perim * h * (multiplier || 1));
 }
 
+// Door-opening transitions: One-Click records each doorway span it sealed or
+// annexed (computed.door_opening_lf) — base/trim skips those (see the perimeter
+// split in oneclick's classifyPerimeter), but a floor TRANSITION / threshold
+// strip runs across each one. Sum them so the report can offer a transition
+// line item ("N doorways · X LF of transition"). Display-only derived metric,
+// like verticalWallSf — not an order quantity in the condition rows or CSV.
+// Filter by condition when given; deducts never carry openings so they're
+// excluded by the floor_area role filter.
+/** @param {any[]} shapes @param {string|null} [conditionId] @param {number} [multiplier] */
+export function transitionLf(shapes, conditionId = null, multiplier = 1) {
+  const lf = (shapes || [])
+    .filter((s) => s.measure_role === "floor_area" && (conditionId == null || s.condition_id === conditionId))
+    .reduce((n, s) => n + (s.computed?.door_opening_lf || 0), 0);
+  return round2(lf * (multiplier || 1));
+}
+
 // Combined buy list: same-named materials summed across all conditions (each
 // condition is rounded first, then summed — you order per condition).
 export function materialsSummary(rows) {

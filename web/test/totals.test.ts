@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // totals.js is plain JS (allowJs); the tsx loader resolves it from the .ts test.
-import { conditionTotals, materialsSummary, verticalWallSf, sheetTotals, reportJson } from "../src/lib/totals.js";
+import { conditionTotals, materialsSummary, verticalWallSf, transitionLf, sheetTotals, reportJson } from "../src/lib/totals.js";
 
 const area = (id: string, sf: number) => ({ condition_id: id, measure_role: "floor_area", computed: { area_sf: sf } });
 const lin = (id: string, lf: number) => ({ condition_id: id, measure_role: "linear", computed: { perimeter_lf: lf } });
@@ -251,4 +251,19 @@ test("verticalWallSf: floor perimeters × height × multiplier; 0 without a heig
   assert.equal(verticalWallSf(shapes, "c", 9, 2), 1260);  // (40+30) × 9 × 2
   assert.equal(verticalWallSf(shapes, "c", 0, 2), 0);
   assert.equal(verticalWallSf(shapes, "c", undefined, 2), 0);
+});
+
+test("transitionLf: sums door-opening spans over floor_area shapes; filters by condition", () => {
+  const shapes = [
+    { condition_id: "c", measure_role: "floor_area", computed: { area_sf: 100, perimeter_lf: 40, door_opening_lf: 3 } },
+    { condition_id: "c", measure_role: "floor_area", computed: { area_sf: 50, perimeter_lf: 30, door_opening_lf: 2.5 } },
+    { condition_id: "c", measure_role: "floor_area", computed: { area_sf: 20, perimeter_lf: 18 } },   // no opening → 0
+    { condition_id: "c", measure_role: "deduct", computed: { area_sf: 5, door_opening_lf: 99 } },      // deducts never count
+    { condition_id: "other", measure_role: "floor_area", computed: { door_opening_lf: 7 } },
+  ];
+  assert.equal(transitionLf(shapes, "c"), 5.5);          // 3 + 2.5
+  assert.equal(transitionLf(shapes, "c", 2), 11);        // × multiplier
+  assert.equal(transitionLf(shapes), 12.5);              // all conditions: 3 + 2.5 + 7
+  assert.equal(transitionLf(shapes, "none"), 0);
+  assert.equal(transitionLf([]), 0);
 });

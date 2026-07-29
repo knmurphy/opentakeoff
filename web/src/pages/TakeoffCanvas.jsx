@@ -42,7 +42,7 @@ import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS }
 import { roomLabelSeeds, detectRegions, sheetBounds, detectionReport, ROOM_LABEL_RE } from "../lib/detectRooms";
 import { roomNameFromTokens } from "../lib/roomName";
 import { traceConfidence } from "../lib/confidence";
-import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { conditionTotals, verticalWallSf, transitionLf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { shapesInStageRect } from "../lib/marquee.js";
 import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
@@ -4851,6 +4851,10 @@ export default function TakeoffCanvas() {
   // display-only Kreo-style derived metric: floor-area perimeters × the condition height
   const condH = Number(aCond?.height_ft) || 0; // the live-readout JSX below still reads this
   const vertTotal = verticalWallSf(visibleShapes, activeCond, aCond?.height_ft, condMult);
+  // display-only: total door-opening span this condition crosses (base skips
+  // doorways; a floor transition/threshold strip runs across each) — see
+  // classifyPerimeter + transitionLf. Drives the transition-strip readout/offer.
+  const transTotal = transitionLf(visibleShapes, activeCond, condMult);
   const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
   // unit-system display edge: internal math is always feet (lib/units.ts)
   const fa = (sf, d = 1) => `${num(areaVal(sf, units), d)} ${areaUnit(units)}`;
@@ -6542,6 +6546,7 @@ export default function TakeoffCanvas() {
           {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lenVal(lfTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{lenUnit(units)}</span></div>}
           {countTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(countTotal, 0)} <span style={{ fontSize: 12, fontWeight: 600 }}>EA</span></div>}
           {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{fa(vertTotal)} vert (perim × H)</div>}
+          {transTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Door openings this condition crosses — base/trim skips them; a floor transition / threshold strip runs across each. Display only, not committed.">{fl(transTotal)} transitions (doorways)</div>}
           {condTotal === 0 && lfTotal === 0 && countTotal === 0 && wallTotal === 0 && borderTotal === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginTop: 2 }}>—</div>}
           <div style={{ fontSize: 10.5, opacity: 0.45, marginTop: 6 }}>{visibleShapes.length} shapes on {groupKeys.length > 1 ? `${groupKeys.length} sheets` : "sheet"} · zoom {(tf.scale * 100).toFixed(0)}%</div>
         </div>
