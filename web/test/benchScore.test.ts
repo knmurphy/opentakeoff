@@ -207,7 +207,7 @@ test("A2 gate: the exemption list is BOUNDED, reasoned, and xfailed WITH A DIREC
   // population for the first time, where two of them fail the floor for
   // reasons that are findings, not miscalibrations. See CONF_GATE_EXEMPT.
   assert.deepEqual(Object.keys(CONF_GATE_EXEMPT).sort(),
-    ["annotation-ring-room/center", "tile-grid-room/in-cell", "two-doorways/center"],
+    ["annotation-ring-room/center", "corridor-open-ends/mid-corridor", "tile-grid-room/in-cell", "two-doorways/center"],
     "adding another needs its own argument, not a bigger list");
   // (c) EVERY entry records the signal set it was evaluated against — not just
   // "known limit" — and (a) EVERY entry carries at least one xfail DIRECTION,
@@ -262,4 +262,17 @@ test("A2/A5b gate: the xfailAtMost and xfailEquals directions flip the same way 
   // is UNCHECKABLE, which is a failure rather than a silent pass
   const orphan = confidenceGate([...base, tile(0.85)]);
   assert.ok(orphan.failures.some((f) => /XFAIL UNCHECKABLE/.test(f)), orphan.failures.join("; "));
+});
+
+test("aggregate: per-class filtering isolates a failing class from a passing one", () => {
+  const mkc = (shapeClass: string, iou: number, knownFail = false): ProbeScore =>
+    ({ caseName: "c", probeName: shapeClass + iou, expect: "golden", status: "ok", iou, sfErr: 0, shapeClass, knownFail } as ProbeScore);
+  const scores = [mkc("room", 1.0), mkc("room", 0.98), mkc("corridor", 0.33, true)];
+  const room = aggregate(scores.filter((s) => s.shapeClass === "room"));
+  const corridor = aggregate(scores.filter((s) => s.shapeClass === "corridor"));
+  assert.equal(room.goldenProbes, 2);
+  assert.ok(room.floorIoU > 0.9);
+  // known-fail-only class: no gating probes, no fabricated accuracy claim
+  assert.equal(corridor.goldenProbes, 0);
+  assert.equal(corridor.knownFails, 1);
 });

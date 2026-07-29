@@ -57,6 +57,23 @@ shared swing arc with ~zero overlap; the arc line rather than the threshold
 plane as the interface is a small known bias (threshold detection is an
 open item).
 
+**Third measurement-policy note (corridors/open space):** the raster flood is
+unreliable on spaces bounded by openings and dashed lines rather than
+continuous walls. Measured on the VA plan against the architect's own printed
+SF callouts, then hand-measured wall-to-wall
+(`docs/evidence/one-click/va-corridor-handmeasure.json`): engine vs hand
+**median −37.5%, 6 of 7 corridors undercounting** (−8% to −95%) — the flood
+fragments at openings or annexes through them. The corpus now encodes this
+engine-independently: `corridor-open-ends` (tracked leak known-fail — the
+item-A target), `corridor-min-pass-segment` (passing: the engine's
+min-passage policy measures the enclosed SEGMENT; a human measuring the whole
+run reads 3× that — a convention divergence to discuss in review, like the
+wedge note), and `corridor-dashed-boundary` (passing). The bench reports
+accuracy **per shape class × provenance** so the enclosed-room numbers can
+never speak for corridors again. This work (shapeClass, per-class metrics,
+the three corridor cases) is **item-E slice material** and travels with the
+corpus in the PR.
+
 ## Fork extensions — NOT in the RFC, stay out of the PR
 
 | Extension | Why it's ours | Files |

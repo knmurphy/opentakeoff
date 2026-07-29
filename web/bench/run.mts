@@ -58,7 +58,10 @@ const THRESHOLDS = {
 // 0.2 (audit B4): the corpus is discovered by directory listing, so a deleted
 // or unreadable fixture used to shrink the run silently and still exit 0 —
 // 21 probes became 13 with "bench passed". Pin the expected shape.
-const EXPECT = { goldenProbes: 21, refusalProbes: 3, knownFails: 4, cases: 2 };
+// Re-pinned 2026-07-28 (corridor cases): +2 gating corridor goldens
+// (corridor-min-pass-segment, corridor-dashed-boundary), +1 known-fail
+// (corridor-open-ends — the VA annexation failure, tracked for item A).
+const EXPECT = { goldenProbes: 23, refusalProbes: 3, knownFails: 5, cases: 2 };
 const RES_FACTORS = [1, 0.75, 0.5];  // ws multipliers; [0] must stay 1 (production baseline)
 const CROSS_CELL = 2;                // image-px sampling cell for cross-scale IoU (4× faster, ±~0.005)
 const here = dirname(fileURLToPath(import.meta.url));
@@ -66,7 +69,12 @@ const scores: ProbeScore[] = [];
 const crossScores: CrossScore[] = [];
 const coverages: CaseCoverage[] = [];
 
-interface CaseProbe { name: string; seed: Point; expect: "golden" | "refusal"; golden?: Point[]; tags?: string[]; knownFail?: boolean }
+interface CaseProbe { name: string; seed: Point; expect: "golden" | "refusal"; golden?: Point[]; tags?: string[]; knownFail?: boolean; shapeClass?: string }
+
+// Task-1 (corridor work): every golden probe must declare its metric shape
+// class, and a probe tagged "corridor" may not claim another class — a
+// misclassified probe silently launders its failures into another class's mean.
+const classFailures: string[] = [];
 
 /** Un-snapped reading of a probe, kept beside the production one. */
 interface MaskFidelity { caseName: string; probeName: string; iou: number; sfErr: number; prodIou: number; prodSfErr: number; minPairIoU?: number; knownFail?: boolean }
@@ -106,12 +114,14 @@ function runCase(caseName: string, segs: number[], points: Point[], imgW: number
     const conf = (f: FloodResult, ring: Point[] | null) => (f.status !== "ok" ? undefined : traceConfidence(floodSignals(f, {
       areaSF: ring && ring.length >= 3 ? ringAreaAbs(ring) / (ptPerFt * ptPerFt) : undefined,
     })).score);
+    if (p.expect === "golden" && !p.shapeClass) classFailures.push(`${caseName}/${p.name}: golden probe missing shapeClass`);
+    if (p.expect === "golden" && p.tags?.includes("corridor") && p.shapeClass !== "corridor") classFailures.push(`${caseName}/${p.name}: tagged corridor but shapeClass=${p.shapeClass}`);
     if (p.expect === "refusal") {
-      scores.push({ caseName, probeName: p.name, expect: "refusal", status: base.status, correctRefusal: base.status !== "ok", confidence: conf(base.flood, base.ring), knownFail: p.knownFail, tags: p.tags });
+      scores.push({ caseName, probeName: p.name, expect: "refusal", status: base.status, correctRefusal: base.status !== "ok", confidence: conf(base.flood, base.ring), knownFail: p.knownFail, tags: p.tags, shapeClass: p.shapeClass });
     } else {
       const f = base.flood;
       const s = scoreGolden(f.status, base.ring, p.golden!);
-      scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf(f, base.ring), knownFail: p.knownFail, tags: p.tags } as ProbeScore);
+      scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf(f, base.ring), knownFail: p.knownFail, tags: p.tags, shapeClass: p.shapeClass } as ProbeScore);
       if (!p.knownFail) coverRows.push({ golden: p.golden!, ring: base.ring });
     }
 
@@ -284,7 +294,24 @@ console.log(`  boundary", not "the raster is this good" — for that, read mask 
 console.log(`  n=${synth.goldenProbes} | mean IoU ${synth.meanIoU.toFixed(3)} | floor IoU ${synth.floorIoU.toFixed(3)}  [wall semantics: ${WALL_SEMANTICS}]`);
 console.log(`engine-pinned (REGRESSION SAFETY ONLY — not accuracy; these are the engine's own past output):`);
 console.log(`  n=${pinned.goldenProbes} | mean IoU ${pinned.meanIoU.toFixed(3)} | floor IoU ${pinned.floorIoU.toFixed(3)}`);
-console.log(`\ngolden probes: ${agg.goldenProbes} | mean IoU ${agg.meanIoU.toFixed(3)} | floor IoU ${agg.floorIoU.toFixed(3)} | refusal ${(agg.refusalRate * 100).toFixed(1)}% | leak ${(agg.leakRate * 100).toFixed(1)}% (gating aggregate — see the split above before quoting the mean)`);
+console.log(`by shape class × provenance (accuracy = synthetic only; engine-pinned = regression-only):`);
+const classes = [...new Set(scores.filter((s) => s.expect === "golden").map((s) => s.shapeClass!))].sort();
+const byClass: Record<string, { synthetic: ReturnType<typeof aggregate>; enginePinned: ReturnType<typeof aggregate>; knownFails: string[] }> = {};
+const fmtCls = (a: ReturnType<typeof aggregate>): string =>
+  a.goldenProbes === 0 ? "n=0 gating — NO accuracy claim"
+  : a.goldenProbes === 1 ? `n=1 (single observation) IoU ${a.meanIoU.toFixed(3)}`
+  : `n=${a.goldenProbes} | mean IoU ${a.meanIoU.toFixed(3)} | floor ${a.floorIoU.toFixed(3)}`;
+for (const cls of classes) {
+  const inCls = scores.filter((s) => s.shapeClass === cls);
+  const synthCls = aggregate(inCls.filter((s) => !PINNED_CASES.has(s.caseName)));
+  const pinnedCls = aggregate(inCls.filter((s) => PINNED_CASES.has(s.caseName)));
+  const kf = inCls.filter((s) => s.knownFail).map((s) => `${s.caseName}/${s.probeName}`);
+  byClass[cls] = { synthetic: synthCls, enginePinned: pinnedCls, knownFails: kf };
+  console.log(`  ${cls.padEnd(9)} accuracy(synthetic): ${fmtCls(synthCls)}`);
+  if (pinnedCls.goldenProbes) console.log(`  ${"".padEnd(9)} regression(pinned):  ${fmtCls(pinnedCls)} — self-graded, NOT accuracy`);
+  if (kf.length) console.log(`  ${"".padEnd(9)} known-fail: ${kf.join(", ")}`);
+}
+console.log(`\ngolden probes: ${agg.goldenProbes} | mean IoU ${agg.meanIoU.toFixed(3)} | floor IoU ${agg.floorIoU.toFixed(3)} | refusal ${(agg.refusalRate * 100).toFixed(1)}% | leak ${(agg.leakRate * 100).toFixed(1)}% (blended across provenance AND shape class — quote the splits above, never this line alone)`);
 console.log(`refusal probes: ${agg.refusalProbes} (all synthetic) | correct ${agg.refusalProbes ? (agg.correctRefusalRate * 100).toFixed(1) + "%" : "n/a"} | known-fail tracked: ${agg.knownFails}`);
 
 // 0.4 (audit B3): known-fails are excluded from every aggregate, so a probe that
@@ -333,9 +360,9 @@ for (const p of cgate.exempt) {
   console.log(`      ↳ ${x.reason}`);
 }
 
-writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, wallSemantics: WALL_SEMANTICS, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? Math.min(...fidPairs) : null, gated: false } }, null, 1));
+writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, split: { synthetic: synth, enginePinned: pinned, byClass }, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, wallSemantics: WALL_SEMANTICS, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? Math.min(...fidPairs) : null, gated: false } }, null, 1));
 
-const failures: string[] = [...caseSemanticsFailures];
+const failures: string[] = [...caseSemanticsFailures, ...classFailures];
 for (const cv of coverages) {
   // 0.9: adjacency tiling gates every whole-plan case (see THRESHOLDS above).
   if (cv.sumEngineSF > 0 && cv.overlapSF > cv.sumEngineSF * THRESHOLDS.pairwiseOverlapFrac) failures.push(`${cv.caseName}: ${cv.overlapSF.toFixed(1)} SF double-counted (> ${THRESHOLDS.pairwiseOverlapFrac * 100}% of total)`);

@@ -209,7 +209,8 @@
      "iou_old_new": 0.948,
      "reason": "A5b: the bench pinned bare traceRegion(); production pins the SNAPPED ring and reports area_sf from it. Nothing about the flood changed (43 verts before and after, IoU 0.948, same region) — the 43 corners moved outward onto the drawing`s own wall vertices. On this sheet the working mask is ws 0.496 (mppf 8.93), so one cell is 1.34in of building and the raster contour sat ~half a cell inside each wall: over a 102.7 ft perimeter that is a 0.78in uniform outward shift = +6.59 SF. 167.96 SF is the number TakeoffCanvas.jsx and mcp/src/session.ts return for this click; 161.37 was never displayed anywhere."
     }
-   ]
+   ],
+   "shapeClass": "room"
   },
   {
    "name": "patient-room-137-band",
@@ -272,7 +273,8 @@
      "iou_old_new": 0.803,
      "reason": "A5b re-pin, and the largest mover in the corpus BECAUSE it is the narrowest probe, not because it moved most in absolute terms. The band is the perimeter strip between the finish-tag annotation ring and the wall: 20.65 SF over a 35.9 ft perimeter is a mean width of 1.15 ft, so the same ~0.54in per-side snap correction that is +4% on a room is +8.45% here (+1.61 SF). Ring topology is unchanged (10 verts before and after); IoU 0.803 is low for the same reason — on a strip barely a foot wide, moving both long edges half an inch overlaps poorly with itself. The product returns 20.65 SF for this click."
     }
-   ]
+   ],
+   "shapeClass": "band"
   },
   {
    "name": "patient-toilet-137a",
@@ -388,7 +390,8 @@
      "iou_old_new": 0.928,
      "reason": "A5b re-pin. Dense-hatch toilet room, 23 verts before and after, same escalated flood, IoU 0.928. The snap pulls the traced corners off the hatch-quantized raster contour onto the PT-tile room`s drawn wall vertices: 0.66in outward over a 35.3 ft perimeter = +1.96 SF. Confirms as centreline-to-centreline against the adjacent patient room, with which it still tiles (case pairwise overlap 0.004%). 41.20 SF is what the one-click returns."
     }
-   ]
+   ],
+   "shapeClass": "room"
   },
   {
    "name": "elevator-e01",
@@ -495,7 +498,8 @@
      "iou_old_new": 0.946,
      "reason": "A5b re-pin. Drawn-door elevator lobby; the flood, its swing wedge and its status are unchanged. Vertex count drops 22 to 21 because two traced corners snapped onto the SAME PDF vertex and snapVertices collapsed the resulting sub-2px duplicate — the documented cleanup, not a lost feature. 0.87in outward over an 82.0 ft perimeter = +5.84 SF. 142.63 SF is the product`s reading."
     }
-   ]
+   ],
+   "shapeClass": "room"
   },
   {
    "name": "ward-room",
@@ -650,7 +654,8 @@
      "iou_old_new": 0.982,
      "reason": "A5b re-pin, the smallest VA mover (+2.59%) simply because 235.26 SF over a 97.4 ft perimeter is the corpus`s bulkiest room: the same 0.74in per-side correction is a smaller fraction of it. 33 verts before and after, both double-door swing wedges still included, IoU 0.982. Still tiles with ward-vestibule (no overlap, no gap) after both were re-pinned. 235.26 SF is what the product returns."
     }
-   ]
+   ],
+   "shapeClass": "room"
   },
   {
    "name": "ward-vestibule",
@@ -774,7 +779,8 @@
      "iou_old_new": 0.938,
      "reason": "A5b re-pin. The complementary side of the ward-room double doors; unchanged flood and status, 25 verts before and after, IoU 0.938. 0.87in outward over a 42.9 ft perimeter = +3.09 SF. Re-pinned in the same pass as ward-room precisely so the two keep tiling: the shared swing-arc boundary snaps to the same drawn arc endpoints from both sides, and the case pairwise overlap stays at 0.10 SF (0.004%). 68.92 SF is the product`s reading."
     }
-   ]
+   ],
+   "shapeClass": "room"
   },
   {
    "name": "cloud-corridor",
@@ -1104,7 +1110,8 @@
      776.9,
      1184.2
     ]
-   ]
+   ],
+   "shapeClass": "corridor"
   },
   {
    "name": "shaded-wing-office",
@@ -1283,7 +1290,8 @@
      "iou_old_new": 0.974,
      "reason": "A5b re-pin. Shaded-wing office, 39 verts before and after, IoU 0.974, same flood. 0.93in outward over an 88.6 ft perimeter = +6.81 SF. Its per-side correction (0.93in) sits mid-range for this sheet — cloud-corridor's is 1.11in, patient-room-137-band's 0.54in — the spread being how much of each boundary lands on a drawn vertex within the 7px snap tolerance. 160.53 SF is what a user reads."
     }
-   ]
+   ],
+   "shapeClass": "room"
   },
   {
    "name": "open-margin",

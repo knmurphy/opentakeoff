@@ -64,10 +64,12 @@ const PINNED = [
     file: "sample-plan.json", pdf: "../../../demo/sample-plan.pdf", scale: 2, ptPerFt: 18 * 2,
     note: "4 identical quadrant rooms; traces reviewed as exact rectangles (issue #184 round 3)",
     probes: [
-      { name: "break-103", seed: [432, 216], expect: "golden" as const },
-      { name: "corridor-104", seed: [1296, 216], expect: "golden" as const },
-      { name: "office-101", seed: [432, 864], expect: "golden" as const },
-      { name: "office-102", seed: [1296, 864], expect: "golden" as const },
+      { name: "break-103", seed: [432, 216], expect: "golden" as const, shapeClass: "room" },
+      // "corridor-104" is the sample plan's LABEL for an enclosed quadrant —
+      // geometrically a room; shapeClass tracks failure geometry, not labels.
+      { name: "corridor-104", seed: [1296, 216], expect: "golden" as const, shapeClass: "room" },
+      { name: "office-101", seed: [432, 864], expect: "golden" as const, shapeClass: "room" },
+      { name: "office-102", seed: [1296, 864], expect: "golden" as const, shapeClass: "room" },
     ],
   },
   {
@@ -82,7 +84,7 @@ const PINNED = [
       // room reads to its own boundaries + entry wedge, and the toilet is
       // its own one-click probe (dense hatch, failure mode #1: the click
       // lands between cross-hatch lines and must measure, not refuse).
-      { name: "patient-room-137", seed: [2592, 756], expect: "golden" as const, tags: ["door-swing"] },
+      { name: "patient-room-137", seed: [2592, 756], expect: "golden" as const, tags: ["door-swing"], shapeClass: "room" },
       // The room has an inset finish-tag ANNOTATION RING (solid hairline
       // offset lines, 45° corner ties) that the engine cannot yet see past —
       // the room probe reads to the ring, and the perimeter band between
@@ -90,9 +92,9 @@ const PINNED = [
       // the band's left strip so that floor is tracked, not lost; the
       // synthetic annotation-ring-room known-fail pins the wall-to-wall
       // intent. (Adversarial re-pin audit, round 8.)
-      { name: "patient-room-137-band", seed: [2550, 900], expect: "golden" as const, tags: ["annotation-band"] },
-      { name: "patient-toilet-137a", seed: [2668, 1112], expect: "golden" as const, tags: ["hatch", "dense-hatch-room"] },
-      { name: "elevator-e01", seed: [2538, 1566], expect: "golden" as const, tags: ["door-swing"] },
+      { name: "patient-room-137-band", seed: [2550, 900], expect: "golden" as const, tags: ["annotation-band"], shapeClass: "band" },
+      { name: "patient-toilet-137a", seed: [2668, 1112], expect: "golden" as const, tags: ["hatch", "dense-hatch-room"], shapeClass: "room" },
+      { name: "elevator-e01", seed: [2538, 1566], expect: "golden" as const, tags: ["door-swing"], shapeClass: "room" },
       // ward room + its vestibule are TWO probes since the min-passage rule:
       // the old single 294 SF trace reached the vestibule only through a
       // sub-half-foot slit between an annotation leader tip and a wall corner
@@ -104,10 +106,10 @@ const PINNED = [
       // both swing wedges included, down to the vestibule's swing arc; the
       // vestibule keeps the complementary side, so the two tile with no
       // overlap and no gap.
-      { name: "ward-room", seed: [4050, 486], expect: "golden" as const, tags: ["door-swing"] },
-      { name: "ward-vestibule", seed: [4045, 1230], expect: "golden" as const, tags: ["door-swing", "vestibule"] },
-      { name: "cloud-corridor", seed: [1814, 1814], expect: "golden" as const, tags: ["cloud-boundary", "corridor"] },
-      { name: "shaded-wing-office", seed: [659, 1551], expect: "golden" as const, tags: ["shaded-wing"] },
+      { name: "ward-room", seed: [4050, 486], expect: "golden" as const, tags: ["door-swing"], shapeClass: "room" },
+      { name: "ward-vestibule", seed: [4045, 1230], expect: "golden" as const, tags: ["door-swing", "vestibule"], shapeClass: "room" },
+      { name: "cloud-corridor", seed: [1814, 1814], expect: "golden" as const, tags: ["cloud-boundary", "corridor"], shapeClass: "corridor" },
+      { name: "shaded-wing-office", seed: [659, 1551], expect: "golden" as const, tags: ["shaded-wing"], shapeClass: "room" },
       { name: "open-margin", seed: [5443, 3737], expect: "refusal" as const, tags: ["sheet-margin", "known-limit"], knownFail: true },
     ],
   },
@@ -352,7 +354,7 @@ export function formatRepinDiff(d: CaseRepinDiff): string {
 
 // ── the re-pin itself ───────────────────────────────────────────────────────
 
-interface PinnedProbeOut { name: string; seed?: number[]; expect: string; tags?: string[]; knownFail?: boolean; golden?: Point[]; adjudications?: object[] }
+interface PinnedProbeOut { name: string; seed?: number[]; expect: string; tags?: string[]; knownFail?: boolean; golden?: Point[]; adjudications?: object[]; shapeClass?: string }
 
 async function main() {
   const { adjudications, dryRun } = parseRepinArgs(process.argv.slice(2));

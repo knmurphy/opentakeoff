@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-07-28
+
+### Added
+- **Bench: per-shape-class metrics + synthetic corridor cases.** Every golden probe now declares a `shapeClass` (`room`/`corridor`/`band`), and the bench reports accuracy **per class × provenance** (synthetic = accuracy, engine-pinned = regression-only) — the blended mean is no longer quotable alone. Three new truth-by-construction corridor cases encode the failure hand-measured on the VA plan (engine median −37.5% vs hand truth on 7 corridors, `docs/evidence/one-click/va-corridor-handmeasure.json`): `corridor-open-ends` (tracked leak known-fail — annexation through >5 ft openings, the item-A target), `corridor-min-pass-segment` and `corridor-dashed-boundary` (passing, policy-grounded). Also: callout cross-check harness (`npm run bench:callouts`) — the drawing's own printed `NNN SF` areas vs One-Click, reports never gates — and `web/bench/README.md` documenting corpus provenance, gates, and honest limits.
+
 ## 2026-07-21
 
 ### Added

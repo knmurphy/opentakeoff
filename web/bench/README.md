@@ -12,12 +12,14 @@ Every probe is a seed click scored through the **production pipeline** (trace + 
 
 | bucket | n | what the golden is | proves |
 |---|---|---|---|
-| synthetic | 9 | truth-by-construction: linework and golden come from the same numbers (`corpus.ts`) | **accuracy**, engine-independent |
+| synthetic | 11 | truth-by-construction: linework and golden come from the same numbers (`corpus.ts`) | **accuracy**, engine-independent |
 | engine-pinned | 12 | the engine's own reviewed traces on the two real plans (`corpus/*.json`) | **regression safety only — not accuracy** |
 | refusal | 3 | expected refusal (open space, oversized, doorway interior) | honest refusal |
-| known-fail | 4 | tracked limits, excluded from metrics but xpass-monitored | honesty |
+| known-fail | 5 | tracked limits, excluded from metric aggregates but xpass-monitored (and still read by the confidence gate) | honesty |
 
 Metrics emitted: **mean/floor IoU, refusal rate, leak rate, per-probe deltas**, plus cross-resolution agreement (ws ×1/0.75/0.5, RFC failure mode #3) and a mask-fidelity (un-snapped) reading reported but ungated.
+
+Every golden probe also declares a **`shapeClass`** (`room` | `corridor` | `band` — "corridor" is the RFC's failure-mode-#2 vocabulary), and the bench reports **per class × provenance**: accuracy rows are synthetic-only; engine-pinned rows print separately as regression-only. The blended bottom line is never quotable alone. Classes follow geometry, not labels — the sample plan's `corridor-104` is an enclosed quadrant, classed `room`.
 
 ## Plan sources
 
@@ -32,6 +34,7 @@ Shape guard (fixture count drift), floor/mean IoU, refusal/leak/correct-refusal,
 
 ## Honest limits
 
-- **No independent human-measured ground truth.** 12 of 21 goldens are the engine grading its own output, so the headline mean is 9 independent-accuracy cases + 12 regression cases. The human-measurement gates (`humanMaxSfErr`, `humanCoverageBand`, `from-takeoff.mts`) exist but no case feeds them. Closing this needs 2–3 hand-measured plans (remediation C1) — required to prove **item A** (face extraction), not required for the B/C/D/E slice.
+- **No independent human-measured ground truth in the gates.** 12 of 23 gating goldens are the engine grading its own output; accuracy rests on the 11 synthetic truth-by-construction cases. The human-measurement gates (`humanMaxSfErr`, `humanCoverageBand`, `from-takeoff.mts`) exist but no case feeds them; the 7 hand-measured VA corridors (`docs/evidence/one-click/va-corridor-handmeasure.json`) are the seed of that answer key (remediation C1) — required to prove **item A** (face extraction), not required for the B/C/D/E slice.
 - **No scanned-plan fixture.** The corpus is vector-plan only; the raster/scan path (RFC failure mode #6) is unit-tested, not corpus-covered.
 - **Confirmed: the engine is unreliable on open/corridor space — a real error, not a convention.** `npm run bench:callouts va-finish-plan` measures One-Click at the VA plan's 9 architect-printed `NNN SF` callouts (truth the engine didn't author). All 7 corridor/lobby callouts were then hand-measured wall-to-wall. **Engine vs hand: median −37.5%, 6 of 7 undercounting** (from −8% to −95%); the printed callouts track the hand measure within a few % (so the truth is solid — not a finish-zone convention). Region overlays (`docs/evidence/one-click/region_*.png`) show why: the flood **fragments at door openings or leaks through them** (the same corridor nets 152 SF from one seed and 1510 SF from another) because corridors are bounded by openings and dashed lines, not continuous walls (RFC failure mode #2). The 12 engine-pinned goldens are all enclosed rooms, so the 0.999 headline never touches this failure. **This is what item A (face extraction) fixes.** The 7 hand measures are the seed of the human answer key (C1). Reports, never gates. See `docs/evidence/one-click/va-callouts-markup.png`.
+- **Synthetic corridor cases now encode the corridor failure engine-independently:** `corridor-open-ends` (tracked leak known-fail — annexation through >5 ft openings, the item-A target, confidence-gate-exempt with an xfail direction), `corridor-min-pass-segment` (passing — the min-passage policy golden; the whole-run vs segment convention divergence is documented in `docs/UPSTREAM_CONTRIBUTION_SLICE.md`), and `corridor-dashed-boundary` (passing — seal-bridged dashes measure whole).

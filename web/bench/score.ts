@@ -47,6 +47,8 @@ export interface ProbeScore {
   correctRefusal?: boolean;    // refusal probe the engine declined
   knownFail?: boolean;         // tracked but not gating
   tags?: string[];
+  /** metric shape class ("room" | "corridor" | "band") — required on golden probes */
+  shapeClass?: string;
 }
 
 /** Area (px²) of the overlap between two rings — sampled only over the
@@ -312,6 +314,20 @@ export const CONF_GATE_EXEMPT: Record<string, ConfGateExemption> = {
       "tune away. XFAIL DIRECTION: asserted to stay AT OR BELOW 0.87, i.e. below CONF_GATE.floorAbs. If " +
       "the engine ever learns to distinguish a bridged drawn opening from an invented wall it will " +
       "score at or above the floor, this breaks, and the exemption must be dropped.",
+  },
+  "corridor-open-ends/mid-corridor": {
+    xfailAbove: 0.90,
+    reason:
+      "Corridor annexation through openings wider than DOOR_SEAL_MAX_FT (the failure hand-measured on " +
+      "the VA plan, docs/evidence/one-click/va-corridor-handmeasure.json). Signal set as measured: " +
+      "raster false, hatchFiltered false (hatchTier absent), wedges undefined, wedgeGrowth undefined, " +
+      "curveFrac undefined, sealedPx undefined (the primary flood returns ok — the seal ladder never " +
+      "runs), minPassDelta ≈ 0, mppf 18, areaSF ≈ 370 while the golden corridor is 180. Every " +
+      "confidence factor reads clean because the flood exits through a genuinely open 6 ft mouth: " +
+      "there is no engine-internal signal that annexation happened — same class as annotation-ring, " +
+      "needs vector-native topology (item A), not tuning. XFAIL DIRECTION: asserted to stay ABOVE " +
+      "0.90. The day any signal separates the annexed trace from a clean one, this breaks and the " +
+      "exemption must be dropped and the case re-pinned.",
   },
 };
 
