@@ -43,11 +43,37 @@ export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; hatchTier?: HatchTier; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number; curveFrac?: number; minPassPx?: number; minPassDelta?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; hatchTier?: HatchTier; sealedPx?: number; virtualFrac?: number; wedges?: number; ringWedges?: number; wedgeGrowth?: number; curveFrac?: number; minPassPx?: number; minPassDelta?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
 export const MASK_MAX_DIM = 3000;   // working raster cap (Uint8 ≈ 6–7 MB)
+
+/** The BASELINE bitmap dims of a page — `ceil(pageDim × baseScale)`, the exact
+ *  rounding the canvas's panel render uses. This is the ONE place the answer to
+ *  "what grid does this sheet's working raster live on" is computed: `buildMask`
+ *  (via its `page` argument) and `rastermask.rasterMaskScale` both call it, so
+ *  the vector and raster masks of one sheet cannot land on different grids.
+ *
+ *  Derived from PAGE POINTS, deliberately, NOT from the panel's bitmap dims.
+ *  The bitmap is `ceil(pageDim × renderScale)`; reconstructing the baseline from
+ *  it as `imgDim × baseScale/renderScale` carries that ceil into the baseline,
+ *  which is a render-DEPENDENT ±1 px grid — the exact class of thing the A1 pin
+ *  exists to remove (audit F3; `rasterMaskScale`'s own doc comment says the same
+ *  thing about its inputs, and it was right). */
+export function baselineImgDims(pageW: number, pageH: number, baseScale: number): { w: number; h: number } {
+  const bs = Number.isFinite(baseScale) && baseScale > 0 ? baseScale : 1;
+  const w = Number.isFinite(pageW) && pageW > 0 ? pageW : 1;
+  const h = Number.isFinite(pageH) && pageH > 0 ? pageH : 1;
+  return { w: Math.max(1, Math.ceil(w * bs)), h: Math.max(1, Math.ceil(h * bs)) };
+}
+
+/** A sheet's render-free identity, for pinning the working raster (audit A1/F3).
+ *  `pageW`/`pageH` are PDF POINTS; `renderScale` is the scale this sheet's panel
+ *  bitmap — and therefore the `segs` handed to `buildMask` — was rendered at;
+ *  `baseScale` is `sheets.RENDER_SCALE`, the pin. Same four numbers
+ *  `rasterMaskScale` takes, so the two mask paths are given the same facts. */
+export interface MaskPage { pageW: number; pageH: number; renderScale: number; baseScale: number }
 const LEAK_FRACTION = 0.30;         // fill > 30% of the sheet ⇒ not an enclosed space (ws-invariant: a fraction)
 const CURVE_STEPS = 8;              // chords per bezier (door swings stay closed)
 
@@ -742,7 +768,7 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
 // swings, curved walls) additionally carry bit 4: still hard, but identifiable
 // so annexDoorWedges can recognize a swing arc on a region's boundary.
 export const MASK_CURVE_BIT = 4;
-export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0, basePxPerFt = 0): MaskObj {
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0, basePxPerFt = 0, page: MaskPage | null = null): MaskObj {
   // A1 (audit): the working raster must be a property of the SHEET, not of the
   // render scale. It used to be `ws = min(1, maxDim/imgmax)` — a CAP, not a pin —
   // so on any sheet rendering under the cap the mask resolution just followed the
@@ -752,13 +778,46 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
   // so cap-bound sheets shifted too (VA plan: −3.96% on one probe at identical mppf).
   //
   // Fix: map into the BASELINE render (RENDER_SCALE) before choosing the raster and
-  // before quantizing. k is this render's ratio to baseline; basePxPerFt is px/ft at
-  // baseline, which is render-independent by construction. At the default render
-  // k === 1 exactly and every number below is bit-identical to the old behaviour,
-  // so this is a no-op for every existing caller that doesn't pass basePxPerFt.
-  const k = (Number.isFinite(basePxPerFt) && basePxPerFt > 0 && Number.isFinite(pxPerFt) && pxPerFt > 0)
-    ? basePxPerFt / pxPerFt : 1;
-  const bW = imgW * k, bH = imgH * k;                       // image dims at baseline
+  // before quantizing. k is this render's ratio to baseline, and the baseline dims
+  // it maps onto come from `page` — the sheet in POINTS.
+  //
+  // AUDIT F3 — WHY `page`, AND WHY THE FIRST ATTEMPT WAS A NO-OP. The first fix
+  // (1a02b15) reconstructed the baseline dims from the RENDERED ones, as
+  // `bW = imgW · k` with k from the px/ft ratio. `imgW` is `ceil(pageW · rs)`, so
+  // that reconstruction carries the render's own rounding into the baseline, and
+  // on a CAP-BOUND sheet the cap cancels k outright:
+  //     ws = k · min(1, maxDim/(imgW·k)) = maxDim/imgW
+  // — algebraically the OLD formula, render-dependent through imgW. Measured on a
+  // 2160×1440 pt sheet (baseline 4320×2880, cap-bound): mask px per POINT came out
+  // 1.388888889 at rs 2, 1.388640429 at rs 2.070 and 1.388598256 at the true
+  // autoRenderScale 2.0704, and the mask itself grew to 3000×2001 at rs 5.374.
+  // Zero mask cells differed fix-vs-nofix, and the VA plan still drifted up to
+  // −7.03% across the Hi-Res toggle. Sub-cap it was not a no-op but still ±1 cell:
+  // 1225×1585 at rs 2.07 where the RASTER mask of the same sheet is 1224×1584, so
+  // the two masks of one sheet sat on different grids and one click yielded three
+  // SFs at the ~0.02% level.
+  // With `page`, the baseline dims are `ceil(pageDim · baseScale)` — identical at
+  // every render scale — and k = baseScale/renderScale exactly (no ceil, and no
+  // dependence on a calibration having happened yet). Mask px per point is then a
+  // constant 1.388888889 / 3000×2000 at every rs above, and the vector grid equals
+  // `rasterMaskScale`'s by construction (both call `baselineImgDims`).
+  //
+  // Without `page` the legacy px/ft reconstruction stands, so this is a no-op for
+  // every existing caller (the bench and its goldens included), and at the default
+  // render k === 1, ceil(pageDim·bs) === imgDim, and the two paths agree bit-for-bit.
+  const pg = page && Number.isFinite(page.pageW) && page.pageW > 0 && Number.isFinite(page.pageH) && page.pageH > 0
+    && Number.isFinite(page.baseScale) && page.baseScale > 0 && Number.isFinite(page.renderScale) && page.renderScale > 0
+    ? page : null;
+  let k: number, bW: number, bH: number;
+  if (pg) {
+    k = pg.baseScale / pg.renderScale;
+    const bd = baselineImgDims(pg.pageW, pg.pageH, pg.baseScale);
+    bW = bd.w; bH = bd.h;                                   // the BASELINE bitmap, from points
+  } else {
+    k = (Number.isFinite(basePxPerFt) && basePxPerFt > 0 && Number.isFinite(pxPerFt) && pxPerFt > 0)
+      ? basePxPerFt / pxPerFt : 1;
+    bW = imgW * k; bH = imgH * k;                            // image dims at baseline
+  }
   const wsB = Math.min(1, maxDim / Math.max(bW, bH, 1));    // baseline raster scale
   const mw = Math.max(2, Math.ceil(bW * wsB)), mh = Math.max(2, Math.ceil(bH * wsB));
   const ws = k * wsB;                                       // image px → mask px at THIS render
@@ -1697,7 +1756,7 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
   const { mw, mh } = mo;
   let region: Uint8Array | null = null;
   let count = r1.count;
-  let wedges = 0;
+  let wedges = 0, ringWedges = 0;
   let hatchFiltered = !!r1.hatchFiltered;
   let hatchTier = r1.hatchTier;
   let sealedPx = r1.sealedPx, virtualFrac = r1.virtualFrac;
@@ -1728,7 +1787,7 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
   let base = sealCache.get(mo.mask);
   if (!base) { base = { dt: hardDT(mo.mask, mw, mh) }; sealCache.set(mo.mask, base); }
   const baseDT = base.dt;
-  for (const { cl, allow: clusterAllowance } of ranked.slice(0, WEDGE_MAX_DOORS)) {
+  for (const { cl, fit, allow: clusterAllowance } of ranked.slice(0, WEDGE_MAX_DOORS)) {
     // open ONLY this cluster's cells, and undo the previous cluster's — mask
     // and distance field alike — so both buffers hold exactly "the sheet with
     // this one arc opened" without either being rebuilt from scratch
@@ -1774,6 +1833,19 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
       }
     }
     wedges++;
+    // AUDIT F7(g) — WHAT KIND of wedge this was. `flagNonDoorArcs` marks closed
+    // circles and cloud scallops as non-doors; `wedgeAllowance` refuses them
+    // UNLESS the cluster also fits one clean circle, because then its own
+    // interior bounds the growth and the corpus's real plan counts the floor
+    // inside a drawn ring as floor (annotation-ring-room). So flagged AND
+    // clean-circle is exactly the round-column / callout-bubble case: a full
+    // sweep about a fitted centre, interior annexed, `wedges` incremented.
+    // The MEASUREMENT is deliberately unchanged (it is corpus-pinned — see
+    // test/doorArcs.test.ts "F7(g)"), but calling it a door swing was false, and
+    // three surfaces said so. Counting it separately is what lets them stop.
+    // NOT a policy decision: whether a round column is floor or a deduct belongs
+    // to the operator, and this records which happened rather than choosing.
+    if (fit.noDoorFrac > 0.5 && fit.good) ringWedges++;
     if (r2.hatchFiltered) hatchFiltered = true;
     if (r2.hatchTier && HATCH_TIER_RISK[r2.hatchTier] > (hatchTier ? HATCH_TIER_RISK[hatchTier] : -1)) hatchTier = r2.hatchTier;
     if (r2.sealedPx && (!sealedPx || r2.sealedPx > sealedPx)) sealedPx = r2.sealedPx;
@@ -1787,6 +1859,7 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
     hardHits: r1.hardHits, softHits: r1.softHits,
     hatchFiltered: hatchFiltered || undefined, hatchTier, sealedPx, virtualFrac,
     minPassPx: minPassPxOut, minPassDelta,
+    ...(ringWedges ? { ringWedges } : {}),
   };
   // Absorb the door LEAF: the straight leaf line stays a barrier through the
   // retry, leaving a 1–2 px slit between the room and the annexed wedge. The
@@ -1983,11 +2056,9 @@ export function snapVertices(poly: Point[], nearest: NearestFn, tolPx = 6, minGa
 // ── 6b. THE PRODUCTION RING ────────────────────────────────────────────────
 // `traceRegion` is NOT what the product returns. Every vector One-Click ring in
 // the product is trace-THEN-SNAP, and `area_sf` is computed from the SNAPPED
-// ring: TakeoffCanvas.jsx (propose / live-preview / agent tool) and
-// mcp/src/session.ts (one_click / detect_rooms) all compose the same two calls
-// with the same tolerance, by hand, five times over.
+// ring.
 //
-// Audit A5b measured the cost of that: `bench/run.mts` and
+// Audit A5b measured the cost of composing that by hand: `bench/run.mts` and
 // `bench/pin-goldens.mts` called bare `traceRegion` and never imported
 // `snapVertices` at all, so EVERY engine-pinned golden pinned a number the
 // product never displays — the bench read 117.568 SF on a room the product
@@ -1995,9 +2066,17 @@ export function snapVertices(poly: Point[], nearest: NearestFn, tolPx = 6, minGa
 // 120.000. The long-standing "1,751.9 vs 1,744.7" sample-plan discrepancy was
 // this, not sloppiness: 1,751.9 is the snapped production reading.
 //
-// So the composition lives HERE, once, and every surface that wants "the ring
-// the product returns" calls this. Same reasoning as confidence.ts's
-// `floodSignals`: a hand-listed call site is a call site that goes stale.
+// So the composition lives HERE, once. AUDIT F7(b): for one release it lived
+// here and NOTHING production called it — the five sites still composed the two
+// calls by hand, the only callers were the bench and a source-scan test that
+// asserted the hand-composed COUNT, and this comment nonetheless claimed "every
+// surface … calls this". The five are now converted, so the sentence is earned:
+// the callers are TakeoffCanvas.jsx (propose / live-preview / agent tool),
+// mcp/src/session.ts (one_click / detect_rooms), bench/run.mts and
+// bench/pin-goldens.mts — seven call sites, no hand-composed ones left, and
+// web/test/benchProductionRing.test.ts scans the two production files to keep it
+// that way. Same reasoning as confidence.ts's `floodSignals`: a hand-listed call
+// site is a call site that goes stale.
 /** Snap-grid bucket size, image px. Mirrors canvasConstants.SNAP_CELL. */
 export const SNAP_CELL_PX = 24;
 /** Vertex-snap tolerance, image px — how far a traced corner may be pulled onto

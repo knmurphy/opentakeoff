@@ -4,11 +4,14 @@
 // scene and probes it at two mask resolutions via buildMask's maxDim knob.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   buildMask, floodRegion, floodRegionSealed, dilateHardMask, sealRadiiFor, doorWedgeCapPx,
-  minPassRadiusFor, MIN_PASS_FT, DETERMINISM_MIN_MPPF, MASK_MAX_DIM,
+  minPassRadiusFor, MIN_PASS_FT, DETERMINISM_MIN_MPPF, MASK_MAX_DIM, baselineImgDims,
   traceRegion, ringArea, type FloodResult,
 } from "../src/lib/oneclick.ts";
+import { rasterMaskScale } from "../src/lib/rastermask.ts";
 import { traceConfidence, floodSignals, CONF_COARSE } from "../src/lib/confidence.ts";
 
 const sq = (x0: number, y0: number, x1: number, y1: number): number[] => [
@@ -132,55 +135,174 @@ test("MASK_MAX_DIM export still caps ws at 1", () => {
 // the render scale, so the per-sheet "Hi-Res render" toggle changed measured
 // square footage on the same click (11×17 at 1/8": 97.8 SF vs 134.0 SF, +37%).
 // Above the cap the resolution was pinned but Math.round(seg*ws) still quantized
-// in RENDER px, so cap-bound sheets shifted too. buildMask now takes the baseline
-// px/ft and maps into the baseline render before choosing the raster and before
-// quantizing. Reverting either half fails these.
-const A1_PT_PER_FT = 9, A1_BASE_RS = 2;              // 11×17 at 1/8" = 1'-0"
-function a1Scene(rs: number) {
-  const k = rs / A1_BASE_RS, segs: number[] = [];
-  const L = (a: number, b: number, c: number, d: number) => segs.push(a * k * 2, b * k * 2, c * k * 2, d * k * 2);
-  L(100, 100, 400, 100); L(400, 100, 400, 180); L(400, 196, 400, 340);   // right wall with a slit
+// in RENDER px, so cap-bound sheets shifted too.
+//
+// AUDIT F3 — WHY THIS BLOCK WAS REWRITTEN, and it is working rule 1's fifth
+// instance in this repo. The first A1 fix mapped into the baseline by
+// RECONSTRUCTING the baseline dims from the rendered ones (`imgW × basePxPerFt /
+// pxPerFt`), and the guard that certified it fed `w: 900 * k * 2` — an UNROUNDED
+// real — on a sheet whose baseline (1800×1400) sits under MASK_MAX_DIM. Both
+// halves of that are wrong about production:
+//   • production passes `Math.ceil(viewport.width)` (TakeoffCanvas.jsx's render
+//     effect), and the ceil is exactly what the reconstruction carries back into
+//     the baseline. With unrounded reals the reconstruction is exact and the
+//     guard passes against the broken fix.
+//   • the sheet was SUB-CAP, so the guard never ran the case the fix claimed.
+//     Cap-bound, the cap cancels the correction factor outright
+//     (ws = k·min(1, maxDim/(imgW·k)) = maxDim/imgW — the OLD formula), and the
+//     fix is a measured no-op.
+// So every scene here now feeds CEIL'D dims, and there are two sheets: one
+// sub-cap and one cap-bound. Measured on this fixture with the `page` argument
+// removed (i.e. against the pre-F3 engine): the sub-cap mask changes DIMS
+// (1800×1400 → 1801×1401 at rs 2.07 and 5.374) and the cap-bound one keeps its
+// dims but has 624 differing cells and drifts −0.205% in SF, with mppf sliding
+// 12.5000 → 12.4974. With `page` all of that is zero.
+const A1_PT_PER_FT = 9, A1_BASE_RS = 2;              // 1/8" = 1'-0" (9 pt per foot)
+interface A1Sheet { name: string; pageW: number; pageH: number; capBound: boolean }
+const A1_SHEETS: A1Sheet[] = [
+  // 900×700 pt → baseline 1800×1400, under the 3000 cap
+  { name: "sub-cap", pageW: 900, pageH: 700, capBound: false },
+  // 2160×1680 pt → baseline 4320×3360, over the cap. This is the case 1a02b15
+  // claimed and never tested; the VA plan (3024×2160 pt) is cap-bound too.
+  { name: "cap-bound", pageW: 2160, pageH: 1680, capBound: true },
+];
+/** The room, drawn in PDF POINTS and rendered at `rs` — so `segs` are image px
+ *  at this render and `w`/`h` are what production computes: ceil(pageDim × rs).
+ *  Same room on both sheets; only the page around it grows. The right wall's
+ *  16 pt (1.78 ft) break is a real opening the SEAL LADDER closes at r=16 mask
+ *  cells (verified: raw flood leaks, sealed flood is ok with sealedPx 16), which
+ *  is what makes this scene sensitive — the ladder runs on the mask grid. */
+function a1Scene(sheet: A1Sheet, rs: number) {
+  const segs: number[] = [];
+  const L = (a: number, b: number, c: number, d: number) => segs.push(a * rs, b * rs, c * rs, d * rs);
+  L(100, 100, 400, 100); L(400, 100, 400, 180); L(400, 196, 400, 340);   // right wall with a break
   L(400, 340, 100, 340); L(100, 340, 100, 100);
   L(150, 150, 380, 150); L(150, 200, 380, 200);                          // interior linework
-  return { segs, w: 900 * k * 2, h: 700 * k * 2, pxPerFt: A1_PT_PER_FT * rs, base: A1_PT_PER_FT * A1_BASE_RS };
+  return {
+    segs,
+    w: Math.ceil(sheet.pageW * rs), h: Math.ceil(sheet.pageH * rs),      // PRODUCTION's dims
+    pxPerFt: A1_PT_PER_FT * rs, base: A1_PT_PER_FT * A1_BASE_RS,
+    page: { pageW: sheet.pageW, pageH: sheet.pageH, renderScale: rs, baseScale: A1_BASE_RS },
+    seed: [250 * rs, 250 * rs] as [number, number],
+  };
 }
+// 2.07 / 2.0704 are the VA sheet's quoted and true autoRenderScale (they differ,
+// and the drift is rounding-sensitive: −0.83% vs −7.03% on the real sheet);
+// 5.374 is the audit's worked Hi-Res example on an 11×17.
+const A1_SCALES = [2.07, 2.0704, 3, 5.374];
 
-test("A1: mask is bit-identical across render scales (Hi-Res cannot change a measurement)", () => {
-  const base = a1Scene(A1_BASE_RS);
-  const mb = buildMask(base.segs, base.w, base.h, MASK_MAX_DIM, null, base.pxPerFt, base.base);
-  // 2.07 is the VA sheet's autoRenderScale; 5.374 is the audit's worked Hi-Res example.
-  for (const rs of [2.07, 3, 5.374]) {
-    const s = a1Scene(rs);
-    const m = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base);
-    assert.equal(m.mppf, mb.mppf, `mppf drifted at rs ${rs}: ${m.mppf} vs ${mb.mppf}`);
-    assert.equal(m.mw, mb.mw, `mask width drifted at rs ${rs}`);
-    assert.equal(m.mh, mb.mh, `mask height drifted at rs ${rs}`);
-    let diff = 0;
-    for (let i = 0; i < mb.mask.length; i++) if (mb.mask[i] !== m.mask[i]) diff++;
-    assert.equal(diff, 0, `${diff} mask cells differ at rs ${rs} — the raster still follows the render scale`);
+test("A1/F3: the mask is bit-identical across render scales — sub-cap AND cap-bound", () => {
+  for (const sheet of A1_SHEETS) {
+    const base = a1Scene(sheet, A1_BASE_RS);
+    const mb = buildMask(base.segs, base.w, base.h, MASK_MAX_DIM, null, base.pxPerFt, base.base, base.page);
+    assert.equal(Math.max(mb.mw, mb.mh) === MASK_MAX_DIM, sheet.capBound,
+      `${sheet.name}: the fixture must actually be ${sheet.capBound ? "cap-bound" : "sub-cap"} (mask ${mb.mw}×${mb.mh})`);
+    for (const rs of A1_SCALES) {
+      const s = a1Scene(sheet, rs);
+      const m = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base, s.page);
+      // mppf is render-independent ALGEBRAICALLY (pxPerFt·k·wsB = basePxPerFt·wsB),
+      // but pxPerFt arrives already multiplied by this render's scale, so the
+      // cancellation is a float multiply/divide and lands within one ULP — 12.5
+      // vs 12.499999999999998 on the cap-bound sheet at rs 2.07. No grouping of
+      // the products is exact for every (rs, page) pair, and 1 ULP cannot move a
+      // Math.round in sealRadiiFor/minPassRadiusFor outside a measure-zero set,
+      // so the tolerance is stated rather than engineered away. The assertions
+      // that matter — the mask grid and every cell in it — stay EXACT below.
+      assert.ok(Math.abs((m.mppf ?? 0) - (mb.mppf ?? 0)) <= 1e-12 * (mb.mppf ?? 1),
+        `${sheet.name}: mppf drifted at rs ${rs}: ${m.mppf} vs ${mb.mppf}`);
+      assert.equal(m.mw, mb.mw, `${sheet.name}: mask width drifted at rs ${rs} (${m.mw} vs ${mb.mw})`);
+      assert.equal(m.mh, mb.mh, `${sheet.name}: mask height drifted at rs ${rs} (${m.mh} vs ${mb.mh})`);
+      let diff = 0;
+      for (let i = 0; i < mb.mask.length; i++) if (mb.mask[i] !== m.mask[i]) diff++;
+      assert.equal(diff, 0, `${sheet.name}: ${diff} mask cells differ at rs ${rs} — the raster still follows the render scale`);
+    }
   }
 });
 
-test("A1: measured area is identical across render scales", () => {
-  const areas = [A1_BASE_RS, 2.07, 5.374].map((rs) => {
-    const s = a1Scene(rs);
-    const mo = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base);
-    const mppf = mo.mppf ?? 0;
-    const f = floodRegionSealed(mo, 250 * (rs / A1_BASE_RS) * 2, 220 * (rs / A1_BASE_RS) * 2, 0.5,
-      sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
-    assert.equal(f.status, "ok");
-    return ringArea(traceRegion(f)) / (s.pxPerFt * s.pxPerFt);
-  });
-  for (const a of areas) assert.ok(Math.abs(a - areas[0]) < 0.01, `SF drifted across render scales: ${areas.map((x) => x.toFixed(2)).join(" / ")}`);
+test("A1/F3: measured area is identical across render scales — sub-cap AND cap-bound", () => {
+  for (const sheet of A1_SHEETS) {
+    const areas = [A1_BASE_RS, ...A1_SCALES].map((rs) => {
+      const s = a1Scene(sheet, rs);
+      const mo = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base, s.page);
+      const mppf = mo.mppf ?? 0;
+      assert.ok(mppf >= DETERMINISM_MIN_MPPF, `${sheet.name}: fixture must sit above the determinism floor (mppf ${mppf})`);
+      const f = floodRegionSealed(mo, s.seed[0], s.seed[1], 0.5,
+        sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+      assert.equal(f.status, "ok", `${sheet.name} at rs ${rs}`);
+      return ringArea(traceRegion(f)) / (s.pxPerFt * s.pxPerFt);
+    });
+    for (const a of areas) assert.ok(Math.abs(a - areas[0]) < 0.01,
+      `${sheet.name}: SF drifted across render scales: ${areas.map((x) => x.toFixed(3)).join(" / ")}`);
+  }
 });
 
-test("A1: omitting basePxPerFt keeps the old behaviour exactly (no-op for existing callers)", () => {
-  const s = a1Scene(A1_BASE_RS);
+// F3, the sub-cap residual, stated as the thing it actually is: ONE sheet has
+// TWO mask builders (vector linework and scan pixels) and their grids have to be
+// the same grid, or a sheet that switches paths — or a scan wrapper with a little
+// vector linework — measures two different rooms. They used to disagree by a
+// cell (1225×1585 vs 1224×1584 at rs 2.07) because only the raster half read the
+// page in points. `baselineImgDims` is now the single source for both.
+test("F3: the vector and the raster mask of one sheet land on ONE grid, at every render scale", () => {
+  for (const sheet of [...A1_SHEETS, { name: "letter", pageW: 612, pageH: 792, capBound: false },
+    { name: "VA plan", pageW: 3024, pageH: 2160, capBound: true }]) {
+    for (const rs of [A1_BASE_RS, ...A1_SCALES]) {
+      const s = a1Scene(sheet, rs);
+      const vec = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base, s.page);
+      const ras = rasterMaskScale({ pageW: sheet.pageW, pageH: sheet.pageH, renderScale: rs, baseScale: A1_BASE_RS, maxDim: MASK_MAX_DIM });
+      assert.equal(vec.mw, ras.mw, `${sheet.name} at rs ${rs}: vector mask ${vec.mw}×${vec.mh}, raster mask ${ras.mw}×${ras.mh}`);
+      assert.equal(vec.mh, ras.mh, `${sheet.name} at rs ${rs}: vector mask ${vec.mw}×${vec.mh}, raster mask ${ras.mw}×${ras.mh}`);
+      assert.ok(Math.abs(vec.ws - ras.ws) < 1e-12, `${sheet.name} at rs ${rs}: ws ${vec.ws} vs ${ras.ws} — image px → mask px must be one number`);
+    }
+  }
+});
+
+test("A1/F3: omitting `page` keeps the legacy px/ft behaviour exactly (no-op for existing callers)", () => {
+  // The bench and every unit fixture call buildMask without `page`; that path
+  // must not move, or goldens move with it.
+  const s = a1Scene(A1_SHEETS[0], A1_BASE_RS);
   const withBase = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base);
   const without = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt);
   assert.equal(without.ws, withBase.ws);
   assert.equal(without.mppf, withBase.mppf);
   assert.deepEqual(Array.from(without.mask), Array.from(withBase.mask));
+  // …and at the BASELINE render `page` is itself a no-op — same grid, same cells
+  const withPage = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base, s.page);
+  assert.equal(withPage.ws, withBase.ws);
+  assert.equal(withPage.mw, withBase.mw);
+  assert.equal(withPage.mh, withBase.mh);
+  assert.deepEqual(Array.from(withPage.mask), Array.from(withBase.mask));
+  // a malformed page (0 dims, missing scales) falls back rather than dividing by zero
+  for (const bad of [{ ...s.page, pageW: 0 }, { ...s.page, baseScale: 0 }, { ...s.page, renderScale: NaN }]) {
+    const m = buildMask(s.segs, s.w, s.h, MASK_MAX_DIM, null, s.pxPerFt, s.base, bad);
+    assert.equal(m.ws, withBase.ws, `malformed page ${JSON.stringify(bad)} must fall back to the legacy path`);
+    assert.equal(m.mw, withBase.mw);
+  }
+});
+
+test("F3: baselineImgDims is ceil(pageDim × baseScale) and never zero", () => {
+  assert.deepEqual(baselineImgDims(612, 792, 2), { w: 1224, h: 1584 });
+  assert.deepEqual(baselineImgDims(611.5, 791.2, 2), { w: 1223, h: 1583 });   // ceil, both axes
+  assert.deepEqual(baselineImgDims(612, 792, 1), { w: 612, h: 792 });
+  assert.deepEqual(baselineImgDims(0, 0, 2), { w: 2, h: 2 });                 // degenerate page ⇒ 1 pt, never 0 px
+  assert.deepEqual(baselineImgDims(NaN, -5, 2), { w: 2, h: 2 });
+  assert.deepEqual(baselineImgDims(612, 792, 0), { w: 612, h: 792 });         // bad scale ⇒ 1
+});
+
+// The production wiring, which no web test can execute: TakeoffCanvas.jsx is a
+// React component and this suite has no DOM. What is checkable is that
+// `ensureMask` still hands buildMask a POINTS-derived page baseline — reverting
+// that one argument silently restores the pre-F3 behaviour with every test above
+// still green, because the tests call buildMask directly.
+test("F3: TakeoffCanvas.ensureMask still pins the mask to the page in POINTS", () => {
+  const text = readFileSync(fileURLToPath(new URL("../src/pages/TakeoffCanvas.jsx", import.meta.url)), "utf8");
+  const call = text.match(/mo = buildMask\([^;]*?\);/s);
+  assert.ok(call, "ensureMask's buildMask call not found — re-point this guard");
+  const site = call[0];
+  assert.match(site, /baseScale:\s*RENDER_SCALE/, "the baseline must be RENDER_SCALE, the pin");
+  assert.match(site, /renderScale:\s*rsNow/, "…and k must come from this sheet's own render scale");
+  assert.match(site, /pageW:\s*pgVp\.width[\s\S]*pageH:\s*pgVp\.height/, "…over the page in POINTS");
+  assert.match(text, /pgVp = pageObjsRef\.current\.get\(key\)\?\.getViewport\(\{ scale: 1 \}\)/,
+    "the points must come from a scale-1 viewport, not from the panel bitmap dims");
 });
 
 // ── audit A3: the minimum-passage path is a DILATION path, and it must take

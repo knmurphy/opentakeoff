@@ -34,6 +34,7 @@
 // hands the pixels over — never read the panel canvas (dark mode bakes an
 // inversion into those pixels).
 
+import { baselineImgDims } from "./oneclick";
 import type { MaskObj, OpList, OpsTable } from "./oneclick";
 
 // ── trigger policy (consumed by the canvas; exported for tests) ─────────────
@@ -110,7 +111,11 @@ export interface RasterScaleInput {
 export function rasterMaskScale(o: RasterScaleInput): RasterScalePlan {
   const bs = Number.isFinite(o.baseScale) && o.baseScale > 0 ? o.baseScale : 1;
   const rs = Number.isFinite(o.renderScale) && o.renderScale > 0 ? o.renderScale : bs;
-  const bW = Math.max(1, Math.ceil(o.pageW * bs)), bH = Math.max(1, Math.ceil(o.pageH * bs));  // the BASELINE bitmap
+  // the BASELINE bitmap — through the shared helper, which is also what
+  // buildMask's `page` argument resolves to, so the raster and vector masks of
+  // one sheet land on ONE grid rather than on two that agree by coincidence
+  // (audit F3: they did not agree — 1224×1584 here vs 1225×1585 there).
+  const { w: bW, h: bH } = baselineImgDims(o.pageW, o.pageH, bs);
   const cap = Math.min(1, o.maxDim / Math.max(bW, bH, 1));     // the working-raster cap
   const scanPxPerPt = Number.isFinite(o.scanPxPerPt) && (o.scanPxPerPt as number) > 0 ? (o.scanPxPerPt as number) : 0;
   let wsBase = cap, dpiLimited = false;

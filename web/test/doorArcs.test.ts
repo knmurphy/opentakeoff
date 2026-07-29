@@ -31,6 +31,8 @@ import {
   type Point,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier } from "../src/lib/geometry.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const PXFT = 18;                                   // 1/4" = 1'-0" at render scale 1 — the corpus convention
 const IMG_W = 1000, IMG_H = 800;
@@ -536,4 +538,124 @@ test("A5 the ellipse negative control still holds, and a plain door arc is untou
   const d = vetoCount(arcChords(200, 500, 3 * PXFT, -Math.PI / 2, 0, 8));
   assert.equal(d.marked, d.n, "a 3 ft door swing is detected");
   assert.equal(d.vetoed, 0, "…and not refused");
+});
+
+// ── F7(g): the round-column wedge — PINNED, not decided ────────────────────
+// A round column drawn as a closed circle inside a room is flagged a non-door
+// (MASK_NODOOR_BIT, test A5.1 above) — and it STILL gets a full wedge, because
+// `wedgeAllowance` refuses a flagged cluster only when it fits no clean circle.
+// A circle fits itself, so its own sector (0.5·2π·r² = its interior) bounds the
+// growth, the retry is accepted, and the column's interior is annexed as FLOOR.
+//
+// This is deliberate and corpus-pinned: on the VA finish plan the floor inside a
+// drawn ring counts as floor (bench probe `annotation-ring-room`, and its 1.00
+// confidence is a separate known finding). For flooring practice, though, a
+// structural column is usually a DEDUCT, not covered floor — that is a
+// measurement-POLICY question for the operator, not an engine bug, and this
+// change does not answer it. So:
+//   • the MEASUREMENT is pinned here exactly as it behaves today;
+//   • the CLAIM is corrected — `ringWedges` counts wedges that annexed a closed
+//     ring's interior, and the canvas readout no longer says "incl. door swing"
+//     for a full circle with no door in the scene (there was none: the wedge is
+//     the circle's own interior). `mcp` reports it as `ring_interiors`.
+// If the policy is ever decided the other way, the fix is at `wedgeAllowance`
+// (refuse `noDoorFrac > 0.5` unconditionally, or mint a deduct) — and THIS TEST
+// is what will fail and have to be rewritten, which is the point of pinning it.
+test("F7(g) a round column's interior is annexed as floor, and is counted as a RING, not a door swing", () => {
+  const room = sq(100, 100, 500, 400);
+  const R = 1.5 * PXFT;                                    // 3 ft dia column
+  const col = circleChords(300, 250, R, 32);
+  const all = [...border, ...room, ...col];
+  const meta = markedMeta(all, (all.length - col.length) >> 2, col.length >> 2);
+  const mask = buildMask(all, IMG_W, IMG_H, 3000, meta, PXFT, PXFT);
+  const mppf = mask.mppf!;
+
+  // the cluster is exactly the case wedgeAllowance lets through: flagged as a
+  // non-door AND a clean circle fit
+  const cl: number[] = [];
+  for (let i = 0; i < mask.mask.length; i++) if (mask.mask[i] & MASK_CURVE_BIT) cl.push(i);
+  const fit = arcClusterFit(cl, mask.mw, mask.mask);
+  assert.ok(fit.noDoorFrac > 0.5, `the column is flagged a non-door (${fit.noDoorFrac.toFixed(2)})`);
+  assert.ok(fit.good, `…and fits one clean circle (rms ${fit.rms.toFixed(2)})`);
+  assert.ok((fit.sweep * 180) / Math.PI > 350, `…closing (sweep ${((fit.sweep * 180) / Math.PI).toFixed(0)}°)`);
+  assert.ok(wedgeAllowance(fit, mppf, doorWedgeCapPx(mppf)) >= 1, "…so it receives an allowance, not a refusal");
+
+  const bare = floodRegionSealed(mask, 150, 150, SENS_BALANCED, sealRadiiFor(mppf), 0);
+  const f = floodRegionSealed(mask, 150, 150, SENS_BALANCED, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+  assert.equal(bare.status, "ok");
+  assert.equal(f.status, "ok");
+  if (bare.status !== "ok" || f.status !== "ok") return;
+
+  // MEASUREMENT, pinned: the wedge is taken and the column's interior is inside
+  // the region. (Without the retry the flood goes AROUND the column: traceRegion
+  // takes the outer contour, so the ring already spans it — what the wedge moves
+  // is the CELL COUNT, i.e. anything reading f.count/f.region.)
+  assert.equal(f.wedges, 1, "the column gets exactly one wedge");
+  const centre = Math.round(250 * mask.ws) * mask.mw + Math.round(300 * mask.ws);
+  assert.equal(bare.region[centre], 0, "control: without the retry the column's interior is NOT floor");
+  assert.equal(f.region[centre], 1, "with the retry it is — pinned behaviour, the operator's policy call");
+  const annexed = sf(f.count - bare.count);
+  const colSF = (Math.PI * R * R) / (PXFT * PXFT);         // ≈ 7.07 SF
+  assert.ok(Math.abs(annexed - colSF) / colSF < 0.20,
+    `what was annexed is the column's own interior (${annexed.toFixed(2)} SF vs πr² = ${colSF.toFixed(2)} SF), not the space beyond it`);
+
+  // CLAIM, corrected: every wedge here is a ring interior, so no surface may say
+  // "door swing". This is the assertion that fails if `ringWedges` is dropped.
+  assert.equal(f.ringWedges, 1, "the wedge is recorded as a closed-ring interior");
+  assert.equal(f.ringWedges, f.wedges, "…and there is no door in this scene at all");
+});
+
+test("F7(g) a real door swing is NOT counted as a ring — the discriminator has to discriminate", () => {
+  // Same room, a 3 ft door leaf + swing arc in the right wall. `ringWedges` must
+  // stay absent, or the corrected messaging would call every door a column.
+  const room = [
+    ...sq(100, 100, 500, 400).slice(0, 8),                 // top + right-upper
+    500, 100, 500, 200, 500, 200 + 3 * PXFT, 500, 400,     // right wall, 3 ft opening
+    500, 400, 100, 400, 100, 400, 100, 100,
+  ];
+  const leaf = [500, 200, 500 + 3 * PXFT, 200];
+  const arc = arcChords(500, 200, 3 * PXFT, 0, Math.PI / 2, 8);
+  const all = [...border, ...room, ...leaf, ...arc];
+  const meta = markedMeta(all, (all.length - arc.length) >> 2, arc.length >> 2);
+  const mask = buildMask(all, IMG_W, IMG_H, 3000, meta, PXFT, PXFT);
+  const mppf = mask.mppf!;
+  const f = floodRegionSealed(mask, 300, 250, SENS_BALANCED, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.ok((f.wedges ?? 0) >= 1, `the door's wedge is taken (wedges ${f.wedges})`);
+  assert.equal(f.ringWedges, undefined, "a door swing is not a closed ring — nothing to correct here");
+});
+
+// The messaging half of F7(g), which no test in this suite can execute:
+// TakeoffCanvas.jsx is a React component and there is no DOM here. Reverting the
+// engine's `ringWedges` counter fails the test above; reverting only the STRINGS
+// would leave every assertion green while the product went back to telling the
+// estimator a round column's interior was "incl. door swing" — with no door
+// anywhere in the scene. So the strings are scanned. (Same device as
+// benchProductionRing.test.ts's call-site guard.)
+test("F7(g) the canvas never calls a closed ring's interior a door swing", () => {
+  const canvas = readFileSync(fileURLToPath(new URL("../src/pages/TakeoffCanvas.jsx", import.meta.url)), "utf8");
+  // 1. the hover/live badge branches on ringWedges before it says "door swing"
+  assert.match(canvas, /res\.wedges \? \(res\.ringWedges >= res\.wedges \? " · incl\. ring interior"/,
+    "the live One-Click badge must read 'incl. ring interior' when every wedge was a closed ring");
+  assert.match(canvas, /res\.ringWedges \? " · incl\. door swing \+ ring interior"/,
+    "…and name both when a room has a real door AND a column");
+  // 2. the commit-message ladder has an all-rings branch, and it does not
+  //    mention a door swing — that is the whole correction.
+  const allRings = canvas.match(/else if \(f\.wedges && f\.ringWedges >= f\.wedges\) setCommitMsg\([\s\S]*?\);\n/);
+  assert.ok(allRings, "no all-rings commit-message branch — a full-circle cluster would fall through to the door-swing text");
+  // it may MENTION a door swing only to deny one; it may not assert one happened
+  assert.doesNotMatch(allRings[0], /the swing area is included|through the drawn door/,
+    "the all-rings message must not claim a door swing was measured through: a closed circle is not a door");
+  assert.match(allRings[0], /no door swing was involved/, "…it has to say so out loud");
+  assert.match(allRings[0], /closed ring/, "…and say what it actually measured");
+  // …and hand the deduct-vs-floor policy question to the estimator with the
+  // gesture that answers it, rather than deciding it in the engine
+  assert.match(allRings[0], /⌥-click carves/, "the operator's policy call needs the carve gesture named");
+  // 3. …and the plain door-swing message is only reachable when no wedge was a ring
+  const doorOnly = canvas.match(/else if \(f\.wedges\) setCommitMsg\([\s\S]*?\);\n/);
+  assert.ok(doorOnly && /door/.test(doorOnly[0]), "the real door-swing message must still exist");
+  const ladder = canvas.slice(0, canvas.indexOf(doorOnly![0]));
+  assert.ok(ladder.includes("f.ringWedges >= f.wedges") && ladder.lastIndexOf("f.wedges && f.ringWedges)") > ladder.lastIndexOf("f.ringWedges >= f.wedges"),
+    "both ring branches must sit ABOVE the bare door-swing branch, or they are unreachable");
 });

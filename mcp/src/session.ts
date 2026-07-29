@@ -9,7 +9,7 @@ import { openPdf, positionedText, OPS, type DocHandle, type PageHandle } from ".
 import { UserError, round1, round2 } from "./format.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import {
-  extractVectorGeometry, buildMask, traceRegion, snapVertices, ringArea,
+  extractVectorGeometry, buildMask, oneClickRing, ringArea,
   MASK_MAX_DIM, SENS_BALANCED, type MaskObj, type VectorGeometry, type Point, type FloodResult,
 } from "../../web/src/lib/oneclick.ts";
 import { traceConfidence, floodSignals } from "../../web/src/lib/confidence.ts";
@@ -21,7 +21,9 @@ import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
 // snap behavior minted here are identical to the browser's. PALETTE/HATCH_IDS
 // are user data — never re-theme them.
 const SNAP_CELL = 24; // snap-grid bucket, raster px
-const SNAP_TOL = 7;   // one-click vertex-snap tolerance, image px
+// The one-click vertex-snap TOLERANCE used to live here as a local `SNAP_TOL = 7`,
+// duplicating the canvas's literal 7. It is now oneclick.SNAP_TOL_PX, applied
+// inside the shared `oneClickRing` — one number, one place (audit F7(b)).
 const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
 const HATCH_IDS = ["solid", "diag", "diag2", "cross", "diagdense", "horiz", "vert", "grid", "brick", "plank", "herring", "basket", "checker", "wave", "fleur", "speckle"];
 // uid mirrors web/src/lib/provenance.js mintUuid: crypto.randomUUID is a
@@ -71,6 +73,14 @@ export interface ShapeOrigin {
   /** Gap-sealing / door-swing receipts, mirroring the canvas's origin. */
   gap_sealed_px?: number;
   door_wedges?: number;
+  /** Wedges that annexed a closed drawn RING's interior (round column, callout
+   *  bubble) rather than a door swing — a subset of `door_wedges` (audit F7(g)). */
+  ring_interiors?: number;
+  /** Minimum-passage receipts (audit F7(d)): the radius that ran and the fraction
+   *  of the verbatim flood it removed. 1 = the drawn linework bounded nothing and
+   *  the rule is the entire measurement. Both absent when the rule changed nothing. */
+  min_pass_px?: number;
+  min_pass_delta?: number;
   /** The sheet had no scale when this was measured, so the engine ran with
    *  its scale-blind fallbacks (see Session.engineArgs). */
   scale_blind?: true;
@@ -306,7 +316,28 @@ export class Session {
       ...(conf.factors.length ? { confidence_factors: conf.factors } : {}),
       ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
       ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+      // AUDIT F7(d): the minimum-passage receipts, which the canvas has minted
+      // since A3 (TakeoffCanvas.jsx, `min_pass_px` / `min_pass_delta` on the
+      // proposal's origin and on the agent one-click reply) and this list did
+      // not — A6's failure class again, a hand-listed field set going stale
+      // under a new engine signal. Without them an MCP caller cannot tell a
+      // verbatim 40 SF closet from a 40 SF closet the rule TRIMMED 26% off, or
+      // from one the rule is the sole reason exists at all: `confidence` moves
+      // but nothing says why in a machine-readable field.
+      //
+      // The condition is `minPassDelta` truthy, matching the canvas exactly, and
+      // it is the engine that decides when that is set — not this site. Since the
+      // F1/F2 fix (474c243) the TRIMMING path sets both whenever the rule removed
+      // anything (`d > 0`) and returns without running the ladder's gates, while
+      // the CREATING path (`minPassDelta === 1`, the verbatim linework bounds
+      // nothing) sets them alongside gap_sealed_px + virtualFrac. A rule that ran
+      // and changed nothing still sets neither: provenance for that is noise.
+      ...(f.minPassDelta ? { min_pass_px: f.minPassPx, min_pass_delta: f.minPassDelta } : {}),
       ...(f.wedges ? { door_wedges: f.wedges } : {}),
+      // F7(g): a wedge that annexed the interior of a closed drawn RING (a round
+      // column, a callout bubble) is not a door swing. Same measurement — this
+      // only stops `door_wedges` from being the whole story about what happened.
+      ...(f.ringWedges ? { ring_interiors: f.ringWedges } : {}),
       ...(scaleBlind ? { scale_blind: true as const } : {}),
     };
   }
@@ -411,7 +442,11 @@ export class Session {
     const f = floodAtSeed(mask, x, y, SENS_BALANCED, eng.mppf);
     if (f.status === "leak") throw new UserError("That space isn't enclosed on the plan linework — the fill spilled through a gap or opening.");
     if (f.status !== "ok") throw new UserError("Landed in dense linework (hatching or text).");
-    const ring = snapVertices(traceRegion(f), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
+    // F7(b): THE shared ring (oneclick.oneClickRing) — the canvas's three sites
+    // and the bench go through the same helper, so an MCP one_click and a canvas
+    // One-Click on one seed cannot compose the trace differently. The snap
+    // tolerance is the helper's SNAP_TOL_PX; nothing here restates it.
+    const ring = oneClickRing(f, { nearest: (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null) });
     if (ring.length < 3) throw new UserError("Couldn't trace that space into a polygon.");
     const areaPx2 = ringArea(ring);
     const perimPx = closedMetrics(ring).perim;
@@ -472,7 +507,7 @@ export class Session {
     const regions = detectRegions(mask, seeds, SENS_BALANCED, eng.mppf);
     const rooms = regions
       .map((r) => {
-        const ring = snapVertices(traceRegion(r.flood), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
+        const ring = oneClickRing(r.flood, { nearest: (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null) });   // F7(b): the shared ring, as in oneClick above
         if (ring.length < 3) return null; // couldn't trace into a polygon — drop, don't sink the batch
         const areaPx2 = ringArea(ring);
         const perimPx = closedMetrics(ring).perim;

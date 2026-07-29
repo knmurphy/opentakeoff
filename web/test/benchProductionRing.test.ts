@@ -114,37 +114,63 @@ test("A5b: oneClickRing with no snap targets degrades to the raw trace, and says
 
 test("A5b: the shared helper's constants ARE the production constants", () => {
   assert.equal(SNAP_CELL_PX, SNAP_CELL, "oneclick.SNAP_CELL_PX must track canvasConstants.SNAP_CELL");
-  assert.equal(SNAP_TOL_PX, 7, "the canvas passes a literal 7; mcp/src/session.ts's SNAP_TOL is 7");
+  // 7 image px at RENDER_SCALE 2 = 3.5 pt. This was the literal the canvas and
+  // mcp each carried; since F7(b) the helper is the only place it exists, so this
+  // assertion is what pins the VALUE (nothing else restates it to compare against).
+  assert.equal(SNAP_TOL_PX, 7, "the one-click vertex-snap tolerance is 7 image px");
 });
 
 // ── the call sites this test cannot import ─────────────────────────────────
 // TakeoffCanvas.jsx is a React component (no DOM here) and mcp/src/session.ts
 // has its own dependency tree, so neither can be executed from the web suite.
-// What CAN be checked is that they still compose trace-then-snap with the same
-// tolerance — i.e. that the parity asserted above still describes the product.
-// If a call site is added, removed, or changed to skip the snap, this fires.
+//
+// AUDIT F7(b) — WHAT THIS GUARD USED TO SAY, AND WHY IT WAS THE WRONG SHAPE.
+// It counted HAND-COMPOSED sites: three `snapVertices(traceRegion(...), …, 7)`
+// statements in the canvas and two in mcp, with the tolerance read out of each.
+// That certified the five copies were mutually consistent — and quietly made
+// them permanent, because `oneClickRing` (which exists precisely so there are no
+// copies) had ZERO production call sites while its own doc comment claimed
+// "every surface that wants 'the ring the product returns' calls this". The
+// helper was bench-only, guarded by a test that asserted the copies.
+// The five sites are now converted, so the guard asserts the OPPOSITE: the
+// helper is what production calls, and there are no hand-composed compositions
+// left to drift. `productionRing` above (the independently hand-written
+// expression) and the absolute 120.00 SF backstop are untouched — they are what
+// makes this file able to fail when the composition itself is wrong, rather than
+// merely inconsistent.
 const src = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
-test("A5b: every vector One-Click ring in the product is still trace-then-snap at tolerance 7", () => {
+test("F7(b): every vector One-Click ring in the product goes through oneClickRing", () => {
   const sites: Array<[string, string, number]> = [
-    ["../src/pages/TakeoffCanvas.jsx", "TakeoffCanvas", 3],
-    ["../../mcp/src/session.ts", "mcp session", 2],
+    ["../src/pages/TakeoffCanvas.jsx", "TakeoffCanvas", 3],   // propose / live-preview / agent tool
+    ["../../mcp/src/session.ts", "mcp session", 2],           // one_click / detect_rooms
   ];
-  for (const [rel, label, expected] of sites) {
+  for (const [rel, label, expectedVector] of sites) {
     const text = src(rel);
-    // snapVertices(traceRegion(<anything>), <nearest>, <tol>);  — `[^;]*?` keeps
-    // each match inside one statement, so the tolerance captured is the LAST
-    // argument of snapVertices, not an inner one.
-    const calls = [...text.matchAll(/snapVertices\(\s*traceRegion\([^;]*?,\s*(\d+|SNAP_TOL)\s*\)\s*;/g)];
-    assert.equal(calls.length, expected,
-      `${label}: expected ${expected} trace-then-snap call site(s), found ${calls.length}. If the count changed on purpose, update this test AND re-check bench parity — the bench models these sites.`);
-    for (const c of calls) {
-      const tol = c[1] === "SNAP_TOL" ? 7 : Number(c[1]);
-      assert.equal(tol, SNAP_TOL_PX, `${label}: snap tolerance ${c[1]} is not SNAP_TOL_PX (${SNAP_TOL_PX})`);
-    }
+    // No hand-composed ring may survive anywhere in the file: this is the exact
+    // pattern the five sites used, and it must now match nowhere.
+    const handComposed = [...text.matchAll(/snapVertices\(\s*traceRegion\(/g)];
+    assert.equal(handComposed.length, 0,
+      `${label}: ${handComposed.length} hand-composed trace-then-snap site(s) left — every One-Click ring must go through oneClickRing so the tolerance and the RDP eps live in one place`);
+    // …and the file must not even import the pieces, which is what let the copies
+    // reappear last time.
+    assert.doesNotMatch(text, /\bsnapVertices\b/, `${label}: still imports/uses snapVertices directly`);
+    // The vector call sites, by count. `{ nearest: … }` is the vector branch of
+    // OneClickRingOpts; the raster branch takes `{ raster: true, rasterEps }`.
+    const vector = [...text.matchAll(/oneClickRing\([^;]*?\{\s*nearest:/g)];
+    assert.equal(vector.length, expectedVector,
+      `${label}: expected ${expectedVector} vector oneClickRing site(s), found ${vector.length}. If the count changed on purpose, update this test AND re-check bench parity — the bench models these sites.`);
+    // No site may restate the snap tolerance — the whole point is that only
+    // SNAP_TOL_PX carries it.
+    assert.doesNotMatch(text, /oneClickRing\([^;]*?,\s*7\s*\)/, `${label}: a call site is passing a literal tolerance`);
     assert.match(text, /buildSnapGrid\(\s*[A-Za-z0-9_.]+\s*,\s*SNAP_CELL\s*\)/,
       `${label}: the snap grid must still be built at SNAP_CELL`);
   }
+  // the raster branch is the canvas's alone (mcp has no raster path yet)
+  const canvas = src("../src/pages/TakeoffCanvas.jsx");
+  assert.equal([...canvas.matchAll(/oneClickRing\(\s*f,\s*\{\s*raster:\s*true,\s*rasterEps:\s*RASTER_RDP_EPS\s*\}\s*\)/g)].length, 3,
+    "TakeoffCanvas: each of the three sites must still take the raster branch at RASTER_RDP_EPS, unsnapped");
+  assert.doesNotMatch(canvas, /traceRegion\(/, "TakeoffCanvas: no bare traceRegion — that is the un-snapped, materially wrong ring");
 });
 
 // ── the synthetic corpus's snap targets ────────────────────────────────────

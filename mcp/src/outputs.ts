@@ -63,7 +63,10 @@ export const oneClickOutput = {
   confidence: z.number().optional().describe("traceConfidence 0-1: how much of this boundary is the plan's own linework vs inferred. 1.0 means every signal the engine can see came back clean, NOT that the measurement is right — a trace that stops at an annotation ring scores 1.0 and is 35% short"),
   confidence_factors: z.array(z.string()).optional().describe("Named deductions behind `confidence`, e.g. \"sealed-opening(12% synthetic boundary)\""),
   gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
+  min_pass_px: z.number().optional().describe("Minimum-passage dilation radius (mask px) that ran, present only when the rule changed the answer — a passage narrower than 6 in was treated as not connecting"),
+  min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed (0-1). 1 means the drawn linework bounded nothing and the rule IS the measurement — read `gap_sealed_px`/`confidence_factors` beside it"),
   door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  ring_interiors: z.number().int().optional().describe("How many of `door_wedges` annexed the interior of a closed drawn ring (round column, callout bubble) rather than a door swing — same measurement, but not a door"),
   scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 };
 
@@ -84,7 +87,10 @@ const detectedRoom = z.object({
   confidence: z.number().optional().describe("traceConfidence 0-1: how much of this boundary is the plan's own linework vs inferred. 1.0 means every signal the engine can see came back clean, NOT that the measurement is right — a trace that stops at an annotation ring scores 1.0 and is 35% short"),
   confidence_factors: z.array(z.string()).optional().describe("Named deductions behind `confidence`, e.g. \"sealed-opening(12% synthetic boundary)\""),
   gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
+  min_pass_px: z.number().optional().describe("Minimum-passage dilation radius (mask px) that ran, present only when the rule changed the answer — a passage narrower than 6 in was treated as not connecting"),
+  min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed (0-1). 1 means the drawn linework bounded nothing and the rule IS the measurement — read `gap_sealed_px`/`confidence_factors` beside it"),
   door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  ring_interiors: z.number().int().optional().describe("How many of `door_wedges` annexed the interior of a closed drawn ring (round column, callout bubble) rather than a door swing — same measurement, but not a door"),
   scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 }).strict();  // published schema is additionalProperties:false; strict makes runtime + conformance match it (per-room entries carry the receipts spread, so undeclared keys would land HERE first)
 
