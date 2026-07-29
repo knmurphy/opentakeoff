@@ -188,30 +188,36 @@ Rev 1's stated rationale — *"every fix below is guarded by bench or e2e, and C
 All seven engine defects are fixed on `claude/issue-184-hatch-periodicity-fduafy`
 (`94a5d46`). **934 web tests, MCP 36/36, bench green, typecheck/lint/build clean.**
 
+> **Corrected after four post-merge reviews and a measured before/after evidence pack**
+> (`docs/evidence/ONE_CLICK_BEFORE_AFTER.md` + `probes/` at `23e87f7` on the engine branch —
+> every figure below is reproducible from committed probe sources). The original table
+> overstated three rows; this is the calibrated version. Fix queue for the remaining
+> defects: `docs/audit/ISSUE_184_HANDOFF.md`.
+
 | finding | state |
 |---|---|
-| A1 resolution / Hi-Res | fixed, vector (`1a02b15`) and raster (`39f8f47`) |
-| A2 confidence anti-correlation | fixed (`086843b`) — **but see the caveat below** |
-| A3 seal path bypassed its guards | fixed (`086843b`), guards now applied |
-| A4 curved-wall annexation | fixed (`974cf43`) |
-| A5 non-doors read as door arcs | fixed (`974cf43`) |
-| A5b bench scored the wrong quantity | fixed (`67df53b`), corpus re-pinned through 0.9 |
-| A6 MCP/batch engine divergence | fixed (`57c9cc7`), re-closed at `f81e41f` |
-| A8 hover cost | fixed (`94a5d46`) — 3535→685 ms cold, 585→81 MB |
+| A1 resolution / Hi-Res | **partly fixed.** Sub-cap sheets: fixed and proven (61/61 toggle-sensitive slot widths → 0/61; worst was −32.8%). **Cap-bound sheets: the `1a02b15` fix is algebraically a no-op** (`ws = k·wsB = maxDim/imgW`; VA probe block byte-identical before/after, still drifting to −7.03% across the toggle) — its verification scene was sub-cap, so the guard never tested the claimed case. Raster path fixed (`39f8f47`). Completion is handoff item F3. |
+| A2 confidence anti-correlation | **partly fixed.** The inert signals are live (`wedgeGrowth`, coarse-mask-on-scans, min-passage) and the `floodSignals` adapter is real. But the headline exhibit is unchanged — `annotation-ring-room` still scores **1.00 at 33.3% SF error** and the `cf < 1` readout rule still hides exactly that flag; `hatchTier` reports the regime an escalation ran under, not plausibility; and **the confidence gate is red without its two new exemptions** (`tile-grid-room/in-cell` and `two-doorways/center` — an earlier revision of this table misnamed the pair). Exemption list grew 1 → 3, each with a self-destructing xfail direction. |
+| A3 seal path bypassed its guards | **fixed, and introduced a regression.** The guards now run — but on gate refusal the code falls through to the **raw untrimmed flood with no provenance at confidence 1.00** (reproduced: 64.0 → 120.8 SF, +88.8%), and flips `ok → leak` on ~0.2% of probed geometry. The exact pathology A3 existed to remove, in the opposite direction. Handoff items F1/F2; fix in flight. |
+| A4 curved-wall annexation | fixed (`974cf43`) — evidence pack: +47.6 SF annexation → 0, with the real-door control unchanged at +7.33 SF both sides |
+| A5 non-doors read as door arcs | **partly fixed.** Cloud/millwork/column allowances reduced or zeroed — but the **bezier-ellipse negative control fails on both states** (32/32 chords marked) and the duct elbow is unflagged on both; a cleanly-fitting round column still receives a full door wedge (a column is a deduct, not floor). |
+| A5b bench scored the wrong quantity | fixed (`67df53b`), corpus re-pinned through 0.9 — **re-pin independently verified honest**: un-snapped traces match old goldens to ≤0.068 px, so 100% of the +2.74% is the measurand change, 0% engine drift. Residuals: the `wallSemantics: "centerline"` declaration is false on the VA plan (faces, not centrelines — 5.88 in gap measured) and the snap made the cross-resolution gate vacuous on 8 of 9 synthetic probes with the raw metric ungated. Handoff items F5/F6; fixes in flight. |
+| A6 MCP/batch engine divergence | fixed (`57c9cc7`, re-closed `f81e41f`) — evidence pack: 25 divergent seeds → 0. Residuals: MCP `receipts()` lacks `min_pass_px`/`min_pass_delta`, and six canvas call sites still hand-derive the flood arguments outside `oneClickArgs`. |
+| A8 hover cost | **fixed and approved** — the one row all four reviewers passed. Output proven bit-identical (13-field FloodResult over 848 seeds × 80 scenes × 2 resolutions, 0 mismatches; independently re-verified). Evidence pack: warm 1483 → 161 ms (9.2×). The 585→81 MB memory figure is **not independently verifiable in Node** (GC-event counts 671→210 are consistent with it; offered as consistency, not proof). |
 
 Phase 0 gates: 0.1a, 0.1b, 0.2–0.7, 0.9, 0.11, 0.12 done. Corpus headline is now
 **mean 0.999 / floor 0.990** measuring the ring the product returns, with rasterisation
 error preserved as an ungated fidelity metric (0.969 / 0.860).
 
-**Caveat on A2, recorded against interest.** The A5b work showed the confidence gate was
-partly passing *because the bench was wrong*: the bench's 0.8–4.3% rasterisation error
-parked all nine synthetic probes in the gate's dead zone, so none entered either
-population. With the product's ring measured, `tile-grid-room` (0.0% error) and
-`partition-bank-15in` (400% error) carry the **identical** factor `hatch-filtered(override)`
-at the **identical** 0.850. So `hatchTier` reports the regime an escalation was accepted
-under, not whether the result is plausible — weaker than "A2 fixed" implies. No threshold
-was weakened; the two probes are exempt with xfail directions that fail the day any signal
-separates them.
+**On A2, recorded against interest.** The A5b work showed the confidence gate was partly
+passing *because the bench was wrong*: its 0.8–4.3% rasterisation error parked all nine
+synthetic probes in the gate's dead zone. With the product's ring measured,
+`tile-grid-room` (0.0% error) and `partition-bank-15in` (400% error) carry the identical
+`hatch-filtered(override)` factor at the identical 0.850. An earlier revision of this
+section said "no threshold was weakened" — true of the constants, misleading about the
+outcome: **the gate is red without the two new exemptions**. The mitigations are real
+(each exemption carries a measured signal set and an xfail direction that self-destructs
+— verified to fire), but the honest statement is the one above, not the earlier one.
 
 **Still open, and none of it is an engine defect:** 0.8 (ledger), 0.10 (callout harness),
 2.8 (item-F seeding metrics), C1 (the answer-key campaign — needs measured plans),
