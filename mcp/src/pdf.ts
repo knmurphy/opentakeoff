@@ -105,14 +105,17 @@ export async function openPdf(filePath: string): Promise<DocHandle> {
 }
 
 /** Positioned page text in image px — the same viewport-transform math
- * detectScale uses (web/src/lib/sheets.ts). */
-export function positionedText(ph: PageHandle): { str: string; x: number; y: number }[] {
-  const out: { str: string; x: number; y: number }[] = [];
+ * detectScale uses (web/src/lib/sheets.ts). `h` is the glyph height in the
+ * same px, taken from the composed matrix rather than the item's own `height`
+ * (which is text-space units); room detection uses it to drop the seed clear
+ * of a tag box drawn around the label. */
+export function positionedText(ph: PageHandle): { str: string; x: number; y: number; h: number }[] {
+  const out: { str: string; x: number; y: number; h: number }[] = [];
   for (const it of ph.textContent.items || []) {
     const str = it.str || "";
     if (!str.trim()) continue;
     const t = pdfjs.Util.transform(ph.viewport.transform, it.transform);
-    out.push({ str, x: +t[4].toFixed(1), y: +t[5].toFixed(1) });
+    out.push({ str, x: +t[4].toFixed(1), y: +t[5].toFixed(1), h: +Math.hypot(t[2], t[3]).toFixed(1) });
   }
   return out;
 }

@@ -9,10 +9,11 @@ import { openPdf, positionedText, OPS, type DocHandle, type PageHandle } from ".
 import { UserError, round1, round2 } from "./format.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import {
-  extractVectorGeometry, buildMask, floodRegion, traceRegion, snapVertices, ringArea,
+  extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor,
+  traceRegion, snapVertices, ringArea,
   MASK_MAX_DIM, type MaskObj, type VectorGeometry, type Point,
 } from "../../web/src/lib/oneclick.ts";
-import { roomLabelSeeds, detectRegions } from "../../web/src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, sheetBounds } from "../../web/src/lib/detectRooms.ts";
 import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
 
@@ -61,6 +62,13 @@ export interface ShapeOrigin {
   /** one_click: the flood-fill seed, normalized to sheet dims. */
   seed_norm?: [number, number];
   hatch_filtered?: true;
+  /** Seal ladder closed a cased opening: the dilation radius used (mask px).
+   *  A boundary that is partly synthetic must say so — the canvas records the
+   *  same field (TakeoffCanvas.jsx), and a committed shape that hides it is
+   *  indistinguishable from a clean vector-bounded trace on export. */
+  gap_sealed_px?: number;
+  /** Drawn door-swing wedges annexed into the region, and how many. */
+  door_wedges?: number;
   raster_traced?: true;
   fill_sensitivity?: number;
   /** Machine's original trace, frozen on first human edit (provenance.js). */
@@ -93,13 +101,16 @@ interface SheetState {
   detected: DetectedScale | null;
   /** real feet per image px at RENDER_SCALE; null until set_scale */
   upp: number | null;
-  text: { str: string; x: number; y: number }[];
+  text: { str: string; x: number; y: number; h: number }[];
   page: PageHandle;
   // lazy per-sheet caches (built once, reused by identity)
   geo?: VectorGeometry;
   snap?: ReturnType<typeof buildSnapGrid>;
   /** undefined = not built yet; null = sheet has zero vector segments (a scan) */
   mask?: MaskObj | null;
+  /** image px per foot the cached mask was built at (0 = scale unknown then);
+   *  a scale change invalidates the mask, since mppf is baked into it */
+  maskPxPerFt?: number;
   /** rendered-page PNG at IMAGE_MAX_EDGE, built on first resource read */
   png?: Uint8Array;
 }
@@ -239,13 +250,31 @@ export class Session {
   /** v1 masks come from the sheet's vector linework only. Raster seam: a scanned
    * sheet would render via a node canvas into a future rastermask module that
    * returns this same MaskObj shape. */
+  /** The working raster, built once per sheet AND per scale. The scale matters
+   *  because the engine's thresholds are feet-true (`MaskObj.mppf`): the hatch
+   *  pitch cap, the tiny/thin guards and the seed nudge all read it, and the
+   *  seal radii / door-wedge cap / minimum-passage radius are derived from it
+   *  at every flood site. A mask built before `set_scale` carries no mppf, so
+   *  it must be rebuilt when the scale arrives — the same eviction the canvas
+   *  does on recalibration. */
   async ensureMask(name: string): Promise<MaskObj | null> {
     const s = this.sheet(name);
-    if (s.mask === undefined) {
+    const pxPerFt = s.upp && s.upp > 0 ? 1 / s.upp : 0;
+    if (s.mask === undefined || s.maskPxPerFt !== pxPerFt) {
       const geo = await this.ensureGeometry(s);
-      s.mask = geo.segs.length ? buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta) : null;
+      s.mask = geo.segs.length ? buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta, pxPerFt) : null;
+      s.maskPxPerFt = pxPerFt;
     }
     return s.mask;
+  }
+
+  /** The flood the canvas runs: sealed openings, per-arc door wedges and the
+   *  minimum-passage rule, all parameterized by the sheet scale. Every helper
+   *  degrades safely when the scale is unknown (default ladder, no wedge
+   *  retry, no min-passage dilation), so an unscaled preview still works. */
+  private sealedFlood(mask: MaskObj, x: number, y: number) {
+    const mppf = mask.mppf ?? 0;
+    return floodRegionSealed(mask, x, y, undefined, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
   }
 
   async sheetInfo(name: string) {
@@ -338,7 +367,7 @@ export class Session {
     const s = this.sheet(name);
     const mask = await this.ensureMask(name);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    const f = floodRegion(mask, x, y);
+    const f = this.sealedFlood(mask, x, y);
     if (f.status === "leak") throw new UserError("That space isn't enclosed on the plan linework — the fill spilled through a gap or opening.");
     if (f.status !== "ok") throw new UserError("Landed in dense linework (hatching or text).");
     const ring = snapVertices(traceRegion(f), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
@@ -349,6 +378,10 @@ export class Session {
       status: "ok" as const,
       nverts: ring.length,
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
+      // the sealed flood's own account of what it had to do to close the room
+      // — same provenance vocabulary the canvas records on origin.*
+      ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+      ...(f.wedges ? { door_wedges: f.wedges } : {}),
       ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
     };
     if (s.upp == null) {
@@ -373,13 +406,15 @@ export class Session {
         seed_norm: [x / s.widthPx, y / s.heightPx],
         reviewed: false,
         ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
+        ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+        ...(f.wedges ? { door_wedges: f.wedges } : {}),
       }).id;
     }
     return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
   }
 
   /** Batch room detection: read every room-number label off the sheet's text
-   *  layer, seed the existing One-Click flood at each, and trace/commit
+   *  layer, seed the same sealed One-Click flood at each, and trace/commit
    *  exactly like oneClick — just N of them from one call instead of N
    *  reasoning-heavy round-trips. Same contract as oneClick: no scale → a
    *  px-only preview per room; no condition → nothing commits (a review
@@ -391,7 +426,13 @@ export class Session {
     const s = this.sheet(name);
     const mask = await this.ensureMask(name);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    const seeds = roomLabelSeeds(s.text);
+    // Matching the room-number pattern isn't enough: a sheet's printed areas
+    // ("557 SF"), dimensions, drawing numbers and title-block text all carry
+    // 2-3 digit numerals, and the paper-space ones flood the margin — on the
+    // VA test plan that produced the largest "room" on the sheet, 847 SF of
+    // title block. The spatial gate needs the drawing extent, which only we
+    // know, so it is passed rather than assumed.
+    const seeds = roomLabelSeeds(s.text, { bounds: sheetBounds(s.widthPx, s.heightPx) });
     const regions = detectRegions(mask, seeds);
     const rooms = regions
       .map((r) => {
@@ -403,6 +444,8 @@ export class Session {
           label: r.str,
           nverts: ring.length,
           ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+          ...(r.flood.sealedPx ? { gap_sealed_px: r.flood.sealedPx } : {}),
+          ...(r.flood.wedges ? { door_wedges: r.flood.wedges } : {}),
           ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
         };
         if (s.upp == null) {
@@ -419,6 +462,8 @@ export class Session {
             seed_norm: [r.seed[0] / s.widthPx, r.seed[1] / s.heightPx],
             reviewed: false,
             ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
+            ...(r.flood.sealedPx ? { gap_sealed_px: r.flood.sealedPx } : {}),
+            ...(r.flood.wedges ? { door_wedges: r.flood.wedges } : {}),
           }).id;
         }
         return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
@@ -489,9 +534,13 @@ export class Session {
 
   readSheetText(name: string, region?: { x0: number; y0: number; x1: number; y1: number }) {
     const s = this.sheet(name);
-    const items = region
+    const hit = region
       ? s.text.filter((t) => t.x >= region.x0 && t.x <= region.x1 && t.y >= region.y0 && t.y <= region.y1)
       : s.text;
+    // {str,x,y} is this tool's published shape. positionedText also carries a
+    // glyph height for room detection; it is projected out here rather than
+    // widening the contract, and the strict conformance check enforces that.
+    const items = hit.map(({ str, x, y }) => ({ str, x, y }));
     return { sheet: s.key, items, text: items.map((t) => t.str).join(" ") };
   }
 }
