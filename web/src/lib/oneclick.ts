@@ -1187,6 +1187,51 @@ function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, 
   return boundary ? virtual / boundary : 1;
 }
 
+// Classify a traced ring's edges into WALL runs (hugging real linework) and
+// DOOR-OPENING spans. A wedge annex / gap seal bounds the room with a SYNTHETIC
+// boundary across the opening — cells far (dt > virtCells) from any hard
+// linework — which is exactly the door opening. Base/trim does not run across a
+// doorway, so that synthetic run must be excluded from the perimeter; and the
+// opening itself is worth TRACKING (its width drives a material-transition /
+// threshold line item). Returns the wall-only perimeter (image px, ×upp for ft)
+// plus each opening span. dt is reused from the seal cache when present.
+export interface PerimClass { wallPerim: number; openings: Array<{ a: Point; b: Point; len: number }>; }
+export function classifyPerimeter(ring: Point[], mo: MaskObj, virtCells = 3): PerimClass {
+  const { mask, mw, mh, ws } = mo;
+  const dt = sealCache.get(mask)?.dt ?? hardDT(mask, mw, mh);
+  const virtualAt = (x: number, y: number): boolean => {
+    const mx = Math.min(mw - 1, Math.max(0, Math.round(x * ws)));
+    const my = Math.min(mh - 1, Math.max(0, Math.round(y * ws)));
+    return dt[my * mw + mx] > virtCells;
+  };
+  // Walk the ring at mask-cell granularity and split into contiguous WALL and
+  // OPENING runs — a single RDP edge often spans both (a straight bottom wall
+  // that crosses a doorway), so per-edge majority voting would miss the opening.
+  let wallPerim = 0;
+  const openings: Array<{ a: Point; b: Point; len: number }> = [];
+  let open: { a: Point; b: Point; len: number } | null = null;
+  const flush = () => { if (open) { openings.push(open); open = null; } };
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) continue;
+    const steps = Math.max(1, Math.ceil(len * ws));
+    const seg = len / steps;
+    for (let s = 0; s < steps; s++) {
+      const p0: Point = [a[0] + dx * (s / steps), a[1] + dy * (s / steps)];
+      const p1: Point = [a[0] + dx * ((s + 1) / steps), a[1] + dy * ((s + 1) / steps)];
+      if (virtualAt((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2)) {
+        if (!open) open = { a: p0, b: p1, len: 0 };
+        open.len += seg; open.b = p1;
+      } else { flush(); wallPerim += seg; }
+    }
+  }
+  flush();
+  return { wallPerim, openings };
+}
+
 // ── 5. contour trace + simplify ────────────────────────────────────────────
 // Moore-neighbor trace of the region's OUTER boundary, then closed-ring RDP.
 // Returns image-px vertices.

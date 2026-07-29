@@ -6,7 +6,7 @@ import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
   extractVectorGeometry, classifyHatchSegs, markPolylineArcs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY, SEG_POLYARC,
   SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE, MASK_CURVE_BIT,
-  floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX, doorWedgeCapPx,
+  floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX, doorWedgeCapPx, classifyPerimeter,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
 import { cloudBezier, cloudPath, arrowheadPath, reflectVertsNorm, closedMetrics } from "../src/lib/geometry.js";
@@ -492,6 +492,54 @@ test("door wedge: a curved WALL does not annex the room behind it (cap holds)", 
   assert.ok(!f.wedges, "the far half-room must NOT annex");
   const area = ringArea(traceRegion(f));
   assert.ok(area < 214 * 178 * 0.7, `one side of the partition only, got ${area}`);
+});
+
+// ── door openings: base/trim excludes the doorway span, and it's tracked ─────
+// A door wedge/gap seal bounds the room with a SYNTHETIC line across the
+// opening. Base/trim does not run across a doorway, so classifyPerimeter must
+// exclude that span from the wall perimeter AND return it (its width drives a
+// material-transition / threshold line item).
+test("classifyPerimeter: a door opening is excluded from perimeter and tracked as a span", () => {
+  const room = [
+    100, 100, 316, 100,
+    316, 100, 316, 280,
+    316, 280, 262, 280,                                 // right of the 54px opening
+    208, 280, 100, 280,                                 // left of the opening
+    100, 280, 100, 100,
+  ];
+  const R = 54;
+  const leaf = [208, 280, 208, 280 - R];                // vertical leaf: the wedge annexes cleanly
+  const arc: number[] = [];
+  let px = 208, py = 280 - R;
+  for (let k = 1; k <= 8; k++) { const a = (k / 8) * (Math.PI / 2); const qx = 208 + R * Math.sin(a), qy = 280 - R * Math.cos(a); arc.push(px, py, qx, qy); px = qx; py = qy; }
+  const all = [...squareSegs(2, 2, 998, 798), ...room, ...leaf, ...arc];
+  const meta = zeroMeta(all);
+  const arcStart = (all.length - arc.length) >> 2;
+  for (let k = 0; k < arc.length >> 2; k++) meta[arcStart + k] = SEG_CURVE;
+  const mo = buildMask(all, 1000, 800, 3000, meta);
+  const f = floodRegionSealed(mo, 200, 200, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  const ring = traceRegion(f);
+  const naive = closedMetrics(ring).perim;              // counts the doorway crossing (over-counts base)
+  const pc = classifyPerimeter(ring, mo);
+  const span = pc.openings.reduce((n, o) => n + o.len, 0);
+  assert.ok(pc.openings.length >= 1, "the doorway is detected as an opening span");
+  assert.ok(span > 35 && span < 80, `opening span ≈ the 54px doorway, got ${Math.round(span)}`);
+  assert.ok(pc.wallPerim < naive - 25, `base perimeter excludes the doorway (naive ${Math.round(naive)} → wall ${Math.round(pc.wallPerim)})`);
+  assert.ok(approx(pc.wallPerim, 2 * (214 + 178) - span, 0.03), `wall perimeter ≈ walls minus the opening, got ${Math.round(pc.wallPerim)}`);
+});
+
+test("classifyPerimeter: a plain room with no opening reports zero spans and the full perimeter", () => {
+  const all = [...squareSegs(2, 2, 998, 798), ...squareSegs(100, 100, 316, 280)];
+  const mo = buildMask(all, 1000, 800, 3000, zeroMeta(all));
+  const f = floodRegionSealed(mo, 200, 200, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  const ring = traceRegion(f);
+  const pc = classifyPerimeter(ring, mo);
+  assert.equal(pc.openings.length, 0, "no spurious openings on solid walls");
+  assert.ok(approx(pc.wallPerim, closedMetrics(ring).perim, 0.01), "wall perimeter = the full ring (no exclusions)");
 });
 
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
