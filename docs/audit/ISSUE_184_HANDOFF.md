@@ -57,7 +57,33 @@ Key commits on the engine branch, in order: `5e92a11` Phase-0 gates · `1a02b15`
 
 ## 3. The defect queue
 
-> **Update 2026-07-29: F1, F2, F4, F5, F6 are FIXED and integrated at `b277662`** —
+> **Update 2026-07-29 (second): F3 and F7(b,d,g) are FIXED at `7650f68`** (fast-forward,
+> so the integration verification lives here: 968/968 tests, bench byte-identical to the
+> pre-E baseline — no golden moved — tsc/lint/build clean, MCP 36/36, integrator revert
+> re-run confirmed). The A1 mask pin is now essentially exact on sub-cap AND cap-bound
+> sheets, vector and raster grids byte-identical, via a shared page-points source of truth.
+>
+> **F8 — NEW ENGINE DEFECT, the wave's most important finding.** The VA plan's −7.03%
+> Hi-Res drift was never mostly a mask artefact: with the mask pinned and meta held at
+> baseline, worst probe drift is 0.000–0.24%; with production meta it is 3.96–9.27%.
+> Every differing meta byte at rs 2.07 is `markPolylineArcs`' arc marking (absolute
+> image-px thresholds; ceil'd width nibbles at high rs). **`extractVectorGeometry` is
+> render-dependent by up to 9.3% on the VA plan, independent of A1.** Fixing it changes
+> arc marking → wedges → goldens, so it needs its own reviewed change through 0.9.
+> Also filed: MCP's unrounded `viewport.width` vs the canvas's `ceil` (declined as
+> unverifiable — both corpus PDFs have integral point sizes; needs a non-integral
+> fixture first). And a guard honesty note: `.strict()` schemas would NOT have caught
+> the F7(d) omission (the conformance fixture never exercises min-passage); the real
+> guard is the web-side key-scan in `engineParity.test.ts`.
+>
+> **OPERATOR DECISION PENDING:** round column interiors currently count as floor
+> (corpus-pinned). The false "incl. door swing" messaging is fixed ("incl. ring
+> interior", `ring_interiors` in provenance — fires on real probes patient-toilet-137a
+> and ward-room). Whether a structural column should be a DEDUCT instead is a
+> measurement-policy call; the change site, the goldens it would move, and the test
+> that would need rewriting are all named in `7650f68`.
+>
+> **Update 2026-07-29 (first): F1, F2, F4, F5, F6 are FIXED and integrated at `b277662`** —
 > 960/960 tests, bench green with the new gates live, goldens byte-identical, one revert
 > per agent re-run by the integrator. F3 + F7(b,d,g) are with agent E (in flight).
 > Corrections the fix wave made to THIS document's claims: F1's root cause was NOT
