@@ -48,10 +48,10 @@ Sizes: **S** ≈ a sitting · **M** ≈ a day · **L** ≈ multi-day · **XL** �
 
 ---
 
-## Status — reconciled against `main` and open work, 2026-07-28
+## Status — reconciled against `main`, 2026-07-28 (post #190)
 
-This plan was written before PR #187 and #188 merged and without reading the
-open issue set. Both changed it. Read this before picking anything up.
+This plan was written before #187, #188 and #190 merged. All three changed it.
+Read this before picking anything up.
 
 **Shipped since, so no longer scheduled here:**
 
@@ -60,31 +60,47 @@ open issue set. Both changed it. Read this before picking anything up.
 | **T8** cross-sheet Find | **Built** — `web/src/lib/planIndex.ts` (#187): inverted index over the set, hits intersected with the live plan set, relevance ordering, jump-to-match via `normalizedAnchor`, source-tagged `text`/`ocr`. Wired in `PlanNavigator.jsx` + `TakeoffCanvas.jsx`. |
 | **T10** index persistence | **Mostly built** — `serializePlanIndex` / `sanitizePlanIndex` / `dropFileFromIndex` + `PLAN_INDEX_SCHEMA`, banked through the META store. The measurement this plan wanted first was simply done. |
 | **T6** set-indexing job | **Partly built** — `ensureIndexed` is a standalone pass with its own staleness guard, batched progress, and an `unindexed` counter. |
+| **T2** Detect Rooms in the canvas | **Built** — #190 wires `detectRegions` into `TakeoffCanvas.jsx`, *and* fixes the seeding defect that made it unsafe (below). |
+| **T5**'s room pairing half | **Built** — `web/src/lib/roomName.ts` on `main`: name+number pairing with keynote/finish-tag rejection. |
 | Ground rule 2's font violation | **Fixed** — #188. |
 
 **Also shipped and absent from this plan:** the finish-tag / `sheetCodes`
 vocabulary browser. It should be folded into T5's scope rather than reinvented.
 
-**The correction that matters most — T2 is not the safe S it was ranked as.**
-See T2. Wiring the canvas to `detectRegions` against `main` today would ship a
-feature measured at **1/8 recall**.
+**T2 shipped, and the defect that would have sunk it was fixed on the way.**
+This plan ranked T2 first as a safe S on the claim "no new engine, no new math."
+That was wrong, and #184/#190 proved it with measurement: the seed was the text
+item's baseline *origin*, so on the very common convention of a box drawn around
+the room tag it flooded the inside of that box — **37 of 41 proposals** on the VA
+finish plan. #190's fix drops the seed clear of the tag (`placement:
+"below-box"`, default when the item carries glyph height): **median proposal 3 SF
+→ 52 SF, sub-4-SF proposals 37 → 11, reachable rooms 0 of 2 → 2 of 2.**
+`detectRegions` also now runs through `floodRegionSealed` with door wedges and
+the minimum-passage rule, closing #184 bug 18. Nothing in T2 is left to do —
+the lesson is kept below because it is the plan's clearest case of a task that
+looked cheap and wasn't.
 
 **Two structural questions this plan does not answer, and should:**
 
-1. **There is no accuracy gate.** T2, T3, T11 and T12 all stack quantities on
-   the flood engine, and `npm run check` carries no accuracy regression at all.
-   Issues #171–#175 propose one (`polyscore.ts`, a corpus + replay harness, a CI
-   gate); #184's branch already has `npm run bench` with 21 golden probes and
-   cross-resolution gating. **Pick one before T2 lands** — do not add
-   quantity-producing features to an ungated engine.
+1. **The accuracy harness now exists but does not gate.** #190 brought
+   `npm run bench` (21 golden probes, IoU-scored, cross-resolution),
+   `bench:batch`, `bench:callouts` and `npm run e2e` onto `main` — so the
+   tooling question is answered. What is *not* answered: none of them run in
+   `.github/workflows/ci.yml`, and `npm run check` is still
+   typecheck+lint+test+build. An engine change can regress accuracy and ship
+   green. **Wiring bench into CI is now the open item**, not building it — and it
+   should land before T3, T11 or T12 stack more quantities on the engine.
+   (This also resolves #172/#173, whose premise was that no IoU scorer or replay
+   harness exists; both are now on `main`.)
 2. **Six tasks here add surface to `TakeoffCanvas.jsx`** (T2, T7, T9, T11, T14,
    T17) — the 6,000-line file the plugin seam (#166–#170, #177–#179) exists to
    stop growing. That is a collision, not a coincidence, and it needs an
    explicit decision rather than silence.
 
-**Issue cross-reference:** T2 ↔ #184 item F, #185 · T3 ↔ #186 · T5 ↔ #184
-auto-naming · T17/T18 ↔ #184 annotation semantics · T21 ↔ #170 · T22 ↔ #184
-scan handling · accuracy gate ↔ #171–#175.
+**Issue cross-reference:** T3 ↔ #186 (its real payoff) · T17/T18 ↔ #184
+annotation semantics · T21 ↔ #170 · T22 ↔ #184 scan handling · CI gating ↔
+#171–#175 (#172/#173 now satisfied by `main`) · #185 (doorway transitions) is
+unblocked now that T2 has shipped.
 
 ---
 
@@ -112,7 +128,7 @@ T15 and T17: schedule, defer, or drop.
 
 The highest-value work in this plan needs no new extraction at all.
 
-### T2 · Wire Detect Rooms into the canvas · ~~S~~ → **blocked on a seeding fix**
+### ~~T2 · Wire Detect Rooms into the canvas~~ · **SHIPPED in #190**
 **Goal.** Give the human the batch room detection the MCP server already has.
 **The finding.** `web/src/lib/detectRooms.ts` is complete and tested.
 Its only importers are `mcp/src/session.ts:15` and its own test — **nothing in
@@ -130,16 +146,17 @@ sealing, no door wedges and no minimum-passage rule (#184 bug 18, fixed
 branch-only): against `main` that is mean IoU 0.817 vs 0.999 and 16.6%
 double-counted floor.
 
-**Do.** Land the seeding fix and the sealed-flood parity **first** — both exist
-on #184's branch / #190. Then the toolbar action: `roomLabelSeeds` → the *fixed*
-`detectRegions` → `traceRegion` → the existing **propose → review → Create**
-gate.
-**Acceptance.** Recall and median proposal size measured on a real sheet, not
-just "proposes multiple rooms" — the original criterion would have passed at
-1/8 recall.
-**Depends on.** #184 item F (seeding) and bug 18 (sealed-flood parity), both
-carried by **PR #190**, which already wires `detectRegions` into
-`TakeoffCanvas.jsx`. If #190 merges, most of T2 arrives with it.
+**What actually shipped.** The seeding fix (`placement: "below-box"`,
+`LABEL_GAP`), sealed-flood parity via `floodRegionSealed`, per-proposal
+confidence (`confidence.ts`), and an honest readout — `detectionReport` /
+`NO_TAG_CAVEAT`, deliberately carrying no total-SF figure, because only rooms
+with a room-number tag are found (2 of 8 known rooms on the VA plan). The
+ceiling is stated in the UI rather than hidden, which is the right call.
+**The lesson worth keeping.** The original acceptance criterion — "one action
+proposes multiple rooms; accept and reject individually" — would have passed at
+1/8 recall with a median proposal of 3 SF. A criterion that doesn't measure the
+thing the feature is for isn't a criterion. Every remaining task that produces
+quantities should be read against that.
 
 ### T3 · Room label ↔ finish-schedule join · L
 **Goal.** One-Click a room and land on the correct condition automatically.
@@ -192,9 +209,9 @@ claim.)
 inference; room number ↔ name pairing — **reusing `ROOM_LABEL_RE` and
 `roomLabelSeeds` from `detectRooms.ts`**, never a second definition of "room
 label."
-**Reuse, don't rebuild.** #184's branch already has `web/src/lib/roomName.ts`
+**Reuse, don't rebuild.** `web/src/lib/roomName.ts` is **on `main`** as of #190
 (name+number pairing with keynote/finish-tag rejection) — that is this task's
-room-pairing half, built and reviewed. And `planIndex.ts`'s `sheetCodes` /
+room-pairing half, done. And `planIndex.ts`'s `sheetCodes` /
 `TAG_RE` / `ROOM_RE` vocabulary is on `main` already. What is genuinely missing
 is **sheet title, discipline class, and level** — none of which exist anywhere.
 **Out of scope.** pdf.js, DOM, caching, UI.
@@ -533,22 +550,25 @@ Found during review; independent of this plan and not blocked by it.
 
 ---
 
-## First slice — revised
+## First slice — revised again (post #190)
 
-**T4 → T5 → T7**, with the accuracy-gate decision running alongside.
+**T4 → T5 → T7**, with *wiring bench into CI* running alongside.
 
-T1 stays worth doing (cheap, gates T15/T17). **T2 is no longer the opener** —
-it is blocked on #184's seeding fix and sealed-flood parity, both carried by
-PR #190; if that merges, most of T2 arrives with it and this plan should
-re-check rather than rebuild. **T8 is done**, so it can no longer be the payoff
-that justifies the index.
+Both of this plan's original openers are gone: **T8 shipped** in #187, **T2
+shipped** in #190. What's left at the front is the plumbing they were supposed to
+justify — and it still holds up:
 
-What justifies the index now is T7 — the gallery still falls back to filenames
-and still has no sheet-number sort or discipline filter, and it is the smallest
-visible thing the index buys. T4 comes first regardless: seven uncached
-`getTextContent()` sites across three coordinate spaces is the decision
-everything downstream inherits.
+- **T4** first regardless. Seven uncached `getTextContent()` sites across three
+  coordinate spaces is the decision everything downstream inherits, and #187's
+  search added the seventh.
+- **T5** is now half-built (`roomName.ts` on `main`); what remains is sheet
+  title, discipline class and level, none of which exist anywhere.
+- **T7** is the smallest visible payoff — the gallery still falls back to
+  filenames, with no sheet-number sort and no discipline filter.
 
-**Before any of T2, T3, T11 or T12:** settle the accuracy gate (see Status).
-Adding quantity-producing features to an engine with no accuracy regression is
-how a 1/8-recall feature ships looking green.
+**Alongside, not after: wire `npm run bench` into CI.** It exists on `main` now
+and gates nothing. T3, T11 and T12 all stack quantities on the flood engine, and
+#190 is the proof that an unmeasured quantity feature can look finished at 1/8
+recall.
+
+T1 stays worth doing — cheap, and it still gates T15/T17.
