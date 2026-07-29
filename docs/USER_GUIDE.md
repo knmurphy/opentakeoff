@@ -278,6 +278,10 @@ Hover a proposed region and its grips reveal:
 
 Edits you make before Create ride into the shape's provenance as *corrected before create*, with the machine's original ring frozen alongside — the takeoff remembers what the engine proposed and what you fixed.
 
+### Doorways
+
+A drawn door (leaf + swing arc) bounds the flood, but the swing pocket is floor the estimator must count — flooring runs under the door — so One-Click measures **through the door to the wall opening**: the swing area is included in the room's SF, and the readout says so (*incl. door swing*). The doorway itself is a gap in the wall, and **base/trim does not run across it**, so each drawn door's opening (its width read from the swing arc) is **excluded from the perimeter** and tracked separately: the condition readout tallies *"N.N LF transitions (doorways)"* — the running feet a floor transition / threshold strip would cover. It's a display-only figure, like the vertical-wall estimate, not an order quantity. A doorway drawn only as a swing arc reads its opening reliably; an unusually-drawn or partly-obscured door is measured with the swing included but no transition recorded (better a missing transition than a wrong one).
+
 ### Hatched rooms, and when it refuses
 
 Hatch and poché don't fool the fill: tile grids, plank lines, and section fills are classified as *pattern*, not wall, so a click inside a fully hatched room still traces to the real walls. The escalation is conservative — a strict pass runs first, the hatch-transparent retry only engages when the strict pass comes back trapped, and a retry that balloons past sanity is discarded for the strict result. **A misread can never make the result worse than the strict fill.**

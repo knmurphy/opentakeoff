@@ -3065,7 +3065,21 @@ export default function TakeoffCanvas() {
     // and door-opening spans (excluded from perimeter, tracked for a material-
     // transition add). Plain rooms (no seal/wedge) keep the full ring perimeter.
     let perim_lf, doorSpans = null;
-    if (mo && (f.sealedPx || f.wedges)) {
+    if (mo && f.doorOpenings && f.doorOpenings.length) {
+      // Drawn door: the swing-arc circle fit gives each opening's width (image
+      // px). Base/trim skips a doorway, so exclude every opening from the
+      // perimeter and track it for a floor transition / threshold strip. (The
+      // raster ring still detours along the arc — that residual inflation isn't
+      // removable at plan scale; see oneclick's floodRegionSealed. This excludes
+      // the opening span, which is the robust, analytically-grounded part.)
+      const full = closedMetrics(ring).perim * upp;
+      const spans = f.doorOpenings.map((w) => +(w * upp).toFixed(2)).filter((l) => l > 0.3);
+      perim_lf = +Math.max(0, full - spans.reduce((a, b) => a + b, 0)).toFixed(2);
+      if (spans.length) doorSpans = spans;
+    } else if (mo && f.sealedPx) {
+      // Gap-sealed opening with no drawn door (faded scan line / cased opening):
+      // the synthetic seal boundary sits in open space (dt > 3), so the ring-walk
+      // classifier still locates it.
       const pc = classifyPerimeter(ring, mo);
       perim_lf = +(pc.wallPerim * upp).toFixed(2);
       const spans = pc.openings.map((o) => +(o.len * upp).toFixed(2)).filter((l) => l > 0.05);

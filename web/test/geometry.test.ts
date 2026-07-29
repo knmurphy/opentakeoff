@@ -470,6 +470,47 @@ test("door swing: drawn leaf + swing arc bounds the room WITHOUT sealing (the co
   assert.ok(approx(perim, 2 * (214 + 178), 0.03), `perimeter ≈ the walls (${2 * (214 + 178)}), got ${perim}`);
 });
 
+test("floodRegionSealed: a drawn door emits its opening width (swing-arc circle fit) in image px", () => {
+  // Same door symbol as above, but the mask carries a real scale (18 mask px
+  // per foot), so the annex path can circle-fit the swing arc: leaf length =
+  // opening width. R = 54 px = 3 ft, a standard door. This is the one door
+  // metric that survives a coarse raster (validated on the real plan — the
+  // traced jamb chord does not); base/trim excludes it, the report tracks it.
+  const room = [
+    100, 100, 316, 100,
+    316, 100, 316, 280,
+    316, 280, 262, 280,
+    208, 280, 100, 280,
+    100, 280, 100, 100,
+  ];
+  const R = 54;
+  const leaf = [208, 280, 208, 280 - R];
+  const arc: number[] = [];
+  let px = 208, py = 280 - R;
+  for (let k = 1; k <= 8; k++) { const a = (k / 8) * (Math.PI / 2); const qx = 208 + R * Math.sin(a), qy = 280 - R * Math.cos(a); arc.push(px, py, qx, qy); px = qx; py = qy; }
+  const all = [...squareSegs(2, 2, 998, 798), ...room, ...leaf, ...arc];
+  const meta = zeroMeta(all);
+  const arcStart = (all.length - arc.length) >> 2;
+  for (let k = 0; k < arc.length >> 2; k++) meta[arcStart + k] = SEG_CURVE;
+  const mo = buildMask(all, 1000, 800, 3000, meta, 18);   // ws = 1 → mppf = 18
+  const f = floodRegionSealed(mo, 200, 200, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.wedges, 1, "one swing wedge annexed");
+  assert.ok(f.doorOpenings && f.doorOpenings.length === 1, "the door opening width is emitted");
+  const wFt = f.doorOpenings![0] / 18;                    // image px ÷ mask-px-per-ft (ws = 1)
+  assert.ok(wFt > 2 && wFt < 4, `opening width ≈ the 3 ft door, got ${wFt.toFixed(2)}`);
+});
+
+test("floodRegionSealed: a plain room (no drawn door) emits no doorOpenings", () => {
+  const all = [...squareSegs(2, 2, 998, 798), ...squareSegs(100, 100, 316, 280)];
+  const mo = buildMask(all, 1000, 800, 3000, zeroMeta(all), 18);
+  const f = floodRegionSealed(mo, 200, 200, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  assert.equal(f.doorOpenings, undefined, "no door → no opening emitted");
+});
+
 test("door wedge: a curved WALL does not annex the room behind it (cap holds)", () => {
   // same room, but the curve is a partition arc bowing across the middle —
   // the space beyond it is a half-room, far over the door-wedge cap
