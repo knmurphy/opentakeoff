@@ -29,21 +29,60 @@
 // across mask resolutions, which would have turned the 9 truth-by-construction
 // probes into ~1.000-by-construction and voided the cross-resolution signal on
 // them. So every probe is ALSO traced un-snapped, and that reading is reported
-// as MASK FIDELITY (ungated) beside the production one — rasterisation error
-// stays visible, it just stops being mistaken for the product's accuracy.
+// as MASK FIDELITY beside the production one — rasterisation error stays
+// visible, it just stops being mistaken for the product's accuracy. Audit F6
+// GATED that reading (it shipped ungated, so a regression to raw IoU 0.60
+// passed) and ratcheted the snapped thresholds onto the post-A5b baseline.
 import { createRequire } from "module";
 import { readFileSync, readdirSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, oneClickRing, snapNearest, MASK_MAX_DIM, DETERMINISM_MIN_MPPF } from "../src/lib/oneclick.ts";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, oneClickRing, snapNearest, MASK_MAX_DIM, DETERMINISM_MIN_MPPF, SNAP_TOL_PX } from "../src/lib/oneclick.ts";
 import type { FloodResult, Point, NearestFn } from "../src/lib/oneclick.ts";
-import { syntheticCorpus, WALL_SEMANTICS } from "./corpus.ts";
-import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, ringAreaAbs, caseCoverage, confidenceGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage } from "./score.ts";
+import { syntheticCorpus, WALL_SEMANTICS, KNOWN_WALL_SEMANTICS } from "./corpus.ts";
+import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, ringAreaAbs, caseCoverage, confidenceGate, checkWallSemantics, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage, type SemanticsCoverage } from "./score.ts";
 import { traceConfidence, floodSignals } from "../src/lib/confidence.ts";
 
 const THRESHOLDS = {
-  floorIoU: 0.90, meanIoU: 0.95, maxRefusalRate: 0, maxLeakRate: 0, minCorrectRefusal: 1,
-  maxCrossDisagreements: 0, crossFloorIoU: 0.90,
+  // ── RATCHETED by audit F6 (was floor 0.90 / mean 0.95 / cross 0.90) ───────
+  // Those numbers were set when the bench scored the UN-SNAPPED trace. A5b made
+  // it score the product's snapped ring and the actuals went to floor 0.990,
+  // mean 0.999, cross-floor 0.994 — while the gates never moved. A gate sitting
+  // 0.09 below its own baseline is not a gate: the corpus's worst probe could
+  // lose a third of its agreement and still ship green.
+  //
+  // THE MARGIN IS MEASURED, not chosen for comfort. The largest legitimate
+  // movement any GATED (snapped) IoU shows on this corpus is 0.006:
+  // curved-partition/left-half reads 0.990 / 0.991 / 0.985 against its golden
+  // across ws ×1 / ×0.75 / ×0.5 — a 2× change of working raster resolution,
+  // which is the biggest environmental change the bench simulates. FLOORS get
+  // 0.02, more than 3× that, rounded down to 2 dp:
+  //     floorIoU       0.990 − 0.02 → 0.97
+  //     crossFloorIoU  0.994 − 0.02 → 0.97
+  // The MEAN gets 0.01, because it averages 21 probes: for the mean to fall
+  // 0.01 the equivalent of ten probes must each lose 0.02.
+  //     meanIoU        0.999 − 0.01 → 0.99
+  floorIoU: 0.97, meanIoU: 0.99, maxRefusalRate: 0, maxLeakRate: 0, minCorrectRefusal: 1,
+  maxCrossDisagreements: 0, crossFloorIoU: 0.97,
+  // ── MASK FIDELITY, NO LONGER UNGATED (audit F6) ───────────────────────────
+  // The un-snapped reading below used to be printed and forgotten. It is the
+  // only rasterisation signal left after the snap made 8 of 9 synthetic probes
+  // agree at exactly 1.000 across resolutions, so leaving it ungated meant a
+  // rasterisation regression to raw IoU 0.60 shipped green. Actuals: raw floor
+  // 0.860 (va-finish-plan/patient-room-137-band), raw cross-resolution pair
+  // floor 0.962 (two-doorways/center). These floors bind against regression
+  // without binding today:
+  //   rawFloorIoU 0.80 — the binding probe is a 1.15-ft-wide perimeter band on
+  //     a sheet whose working mask cell is 1.34 in, so a half-cell contour
+  //     error on both long edges is already ~10% of its area. 0.80 is "one more
+  //     half-cell than today, on the narrowest thing the corpus measures".
+  //   rawCrossFloorIoU 0.90 — 0.06 under the actual, and ~10× the 0.006 spread
+  //     the SNAPPED rings show across the same resolution range: the raw
+  //     contour is allowed to be resolution-sensitive, not resolution-random.
+  // A raw MEAN floor was considered and rejected as redundant: any regression
+  // broad enough to move the mean also moves the floor, which binds first.
+  rawFloorIoU: 0.80,
+  rawCrossFloorIoU: 0.90,
   // hard gates for HUMAN-MEASURED cases only (engine-pinned cases would gate
   // trivially against their own output; these numbers only mean something
   // when the answer key is independent):
@@ -54,6 +93,33 @@ const THRESHOLDS = {
   // double-counted SF whoever authored the answer key, so it gates every
   // whole-plan case, engine-pinned included.
   pairwiseOverlapFrac: 0.005,  // double-counted floor ≤ 0.5% of the engine total
+  // ── per-ROOM ABSOLUTE square footage (audit F6) ───────────────────────────
+  // Every SF check above is RELATIVE, and a relative band is blind on the room
+  // that dominates a case. bench/pin-goldens.mts's ±2.5% re-pin band let
+  // va-finish-plan/cloud-corridor move 36.7 SF — 54% of the whole case's delta
+  // — with no adjudication, because 36.7 is 2.1% of 1743 SF. The equivalent
+  // protection available HERE is the same trigger applied to the engine's
+  // divergence from its pin, in square feet: it gates every whole-plan case
+  // (engine-pinned included, on the pairwiseOverlapFrac argument — a room that
+  // has silently moved 30 SF away from its answer key is 30 SF of somebody's
+  // bid, whoever authored the key). Actual worst divergence today is 0.0505 SF
+  // (va-finish-plan/ward-room), so 1.0 SF is ~20× the noise and still an order
+  // of magnitude below anything a human would call a measurement difference.
+  // NOTE the asymmetry this deliberately creates: on cloud-corridor 1.0 SF is
+  // 0.06%, far tighter than humanMaxSfErr's 2.5%; on the 20.65 SF annotation
+  // band it is 4.8%, looser — so the two triggers cover each other's blind
+  // spots rather than duplicating each other.
+  maxRoomSfAbs: 1.0,
+  // ── the wall-semantics declaration must be EARNED (audit F5) ──────────────
+  // Fraction of a probe's golden vertices that must sit within SNAP_TOL_PX of a
+  // real drawn path vertex for the case's `wallSemantics: "drawn-path-vertex"`
+  // to be a statement about the data rather than a stamp. Measured actuals per
+  // probe: va-finish-plan 0.91–1.00 (worst: patient-toilet-137a, 21/23),
+  // sample-plan 0.75 (3/4 — the fourth corner is the partition CROSS at
+  // (1220,784), which is not an endpoint of either stroke and so not a vertex
+  // at all; see bench/corpus.ts). 0.60 sits below both and above zero, which is
+  // what a golden re-pinned onto something other than the drawn linework scores.
+  wallSemanticsMinVertexCoverage: 0.60,
 };
 // 0.2 (audit B4): the corpus is discovered by directory listing, so a deleted
 // or unreadable fixture used to shrink the run silently and still exit 0 —
@@ -80,7 +146,7 @@ function runCase(caseName: string, segs: number[], points: Point[], imgW: number
   // same object at every mask resolution — exactly as in production, where the
   // canvas caches one grid per sheet independent of the working raster.
   const nearest: NearestFn = snapNearest(points);
-  const coverRows: Array<{ golden: Point[]; ring: Point[] | null }> = [];
+  const coverRows: Array<{ golden: Point[]; ring: Point[] | null; name: string }> = [];
   for (const p of probes) {
     const runs: Array<CrossRun & { flood: FloodResult; rawRing: Point[] | null }> = masks.map((mo, k) => {
       const mppf = mo.ws * ptPerFt;
@@ -112,7 +178,7 @@ function runCase(caseName: string, segs: number[], points: Point[], imgW: number
       const f = base.flood;
       const s = scoreGolden(f.status, base.ring, p.golden!);
       scores.push({ caseName, probeName: p.name, expect: "golden", status: f.status, ...s, confidence: conf(f, base.ring), knownFail: p.knownFail, tags: p.tags } as ProbeScore);
-      if (!p.knownFail) coverRows.push({ golden: p.golden!, ring: base.ring });
+      if (!p.knownFail) coverRows.push({ golden: p.golden!, ring: base.ring, name: p.name });
     }
 
     // cross-resolution agreement — gate only where the mask is at or above the
@@ -195,6 +261,8 @@ const realCaseNames: string[] = [];   // 0.7: which cases are engine-pinned
 interface CorpusAdjudication { at?: string; scope?: string; from_sf?: number; to_sf?: number; delta_pct?: number; iou_old_new?: number; overlap_sf?: number; frac_pct?: number; reason: string }
 const adjudications: Array<{ caseName: string; subject: string; a: CorpusAdjudication }> = [];
 const caseSemanticsFailures: string[] = [];
+/** F5: the measured backing for each case's `wallSemantics` declaration. */
+const semanticsCoverage: SemanticsCoverage[] = [];
 for (const file of caseFiles) {
   const c = JSON.parse(readFileSync(file, "utf8"));
   const doc = await pdfjs.getDocument({ url: join(dirname(file), c.pdf), useSystemFonts: true }).promise;
@@ -207,10 +275,29 @@ for (const file of caseFiles) {
   for (const a of (c.adjudications ?? []) as CorpusAdjudication[]) adjudications.push({ caseName: name, subject: a.scope ?? "case", a });
   for (const p of c.probes as Array<{ name: string; adjudications?: CorpusAdjudication[] }>)
     for (const a of p.adjudications ?? []) adjudications.push({ caseName: name, subject: p.name, a });
-  // A5b: a corpus case that does not declare its wall-line semantics cannot be
-  // read (centreline vs interior-clear is a ~1.6% difference on the sample plan
-  // and 8.5% on a narrow band). Loud, not assumed.
-  if (c.wallSemantics !== WALL_SEMANTICS) caseSemanticsFailures.push(`${name}: wallSemantics is ${JSON.stringify(c.wallSemantics ?? null)} — the corpus is pinned "${WALL_SEMANTICS}" (see bench/corpus.ts)`);
+  // ── wall-line semantics: DECLARED, and then VERIFIED (A5b; fixed by F5) ────
+  // A case that does not declare which line its goldens measure to cannot be
+  // read (the measurands differ by ~1.6% on the sample plan, 8.5% on a narrow
+  // band, and ~5.9 in per shared wall on the VA plan). But the declaration used
+  // to be checked ONLY against the constant every writer stamped it from —
+  // `bench/from-takeoff.mts` for human keys, `bench/pin-goldens.mts` for
+  // engine-pinned ones — so the check compared a constant to itself and passed
+  // for three months while the value it certified ("centerline") was false on
+  // 60% of the corpus's square footage. Two changes fix that: from-takeoff now
+  // requires the semantics as an explicit CLI argument (a person declares what
+  // a person measured), and the string is now checked against the DATA below.
+  // The check itself is `checkWallSemantics` in bench/score.ts — pure, so its
+  // three failure branches are unit-tested (test/benchScore.test.ts) instead of
+  // being reachable only by perturbing the corpus.
+  {
+    const ws = checkWallSemantics({
+      caseName: name, declared: c.wallSemantics, engine: WALL_SEMANTICS, known: KNOWN_WALL_SEMANTICS,
+      probes: c.probes as Array<{ name: string; golden?: Point[] }>, points: g.points,
+      tolPx: SNAP_TOL_PX, minCoverage: THRESHOLDS.wallSemanticsMinVertexCoverage,
+    });
+    caseSemanticsFailures.push(...ws.failures);
+    semanticsCoverage.push(...ws.coverage);
+  }
   runCase(name, g.segs, g.points, vp.width, vp.height, g.meta, c.ptPerFt, c.probes, !!c.humanMeasured, c.deducts_sf || 0, true);   // ptPerFt is image px/ft at the pinned scale
 }
 
@@ -229,13 +316,24 @@ if (coverages.length) {
   console.log("\n── case coverage (Σ engine vs Σ golden, double-counted floor) ──");
   for (const cv of coverages) {
     const ov = cv.sumEngineSF > 0 ? (cv.overlapSF / cv.sumEngineSF) * 100 : 0;
-    console.log(`${cv.caseName.padEnd(28)} ${String(cv.probes).padStart(2)} probes | golden ${cv.sumGoldenSF.toFixed(1)} SF | engine ${cv.sumEngineSF.toFixed(1)} SF (×${cv.ratio.toFixed(3)}) | overlap ${cv.overlapSF.toFixed(2)} SF (${ov.toFixed(3)}%, gate ${THRESHOLDS.pairwiseOverlapFrac * 100}%) | worst room SF±${(cv.maxSfErr * 100).toFixed(1)}%${cv.humanMeasured ? "  [HUMAN-MEASURED — gated]" : ""}`);
+    console.log(`${cv.caseName.padEnd(28)} ${String(cv.probes).padStart(2)} probes | golden ${cv.sumGoldenSF.toFixed(1)} SF | engine ${cv.sumEngineSF.toFixed(1)} SF (×${cv.ratio.toFixed(3)}) | overlap ${cv.overlapSF.toFixed(2)} SF (${ov.toFixed(3)}%, gate ${THRESHOLDS.pairwiseOverlapFrac * 100}%) | worst room SF±${(cv.maxSfErr * 100).toFixed(1)}% / ±${cv.maxSfAbs.toFixed(2)} SF abs (gate ${THRESHOLDS.maxRoomSfAbs} SF, ${cv.maxSfAbsProbe})${cv.humanMeasured ? "  [HUMAN-MEASURED — gated]" : ""}`);
   }
   // 0.9: these are whole-CASE figures. They catch floor no probe covers and
   // floor counted twice — they do NOT catch a single room losing a third of
   // its area, because 2730050 → 92c1242 did exactly that while this line would
   // have read +0.5%. The per-probe rule in bench/pin-goldens.mts is that guard.
   console.log("  (whole-case figures — a per-ROOM regression can hide inside them; see bench/pin-goldens.mts)");
+  console.log(`  (the per-room ABSOLUTE SF trigger above is the part a relative band cannot do: 2.5% of`);
+  console.log(`   cloud-corridor is 43.6 SF, which is how 36.7 SF moved without an adjudication — see THRESHOLDS)`);
+}
+// F5: what backs each case's `wallSemantics` declaration, measured.
+if (semanticsCoverage.length) {
+  console.log(`\n── wall semantics "${WALL_SEMANTICS}" — golden vertices ON a drawn path vertex (≤ ${SNAP_TOL_PX} px) ──`);
+  for (const s of semanticsCoverage)
+    console.log(`${(s.caseName + " / " + s.probeName).padEnd(44)} ${String(s.onVertex).padStart(3)}/${String(s.verts).padEnd(3)} = ${(s.cov * 100).toFixed(0).padStart(3)}%  (floor ${(THRESHOLDS.wallSemanticsMinVertexCoverage * 100).toFixed(0)}%)`);
+  console.log(`  ↑ the declaration is checked against the DATA, not against the constant every writer stamps`);
+  console.log(`    it from. It equals the wall CENTRELINE only where walls are single strokes; on the VA`);
+  console.log(`    plan's double-line walls (pairs measured 4.96–6.17 in apart) it lands on a FACE.`);
 }
 if (adjudications.length) {
   console.log("\n── re-pin adjudications on record (bench/pin-goldens.mts, task 0.9) ──");
@@ -267,15 +365,18 @@ const fidMeanIoU = fidGate.length ? fidGate.reduce((a, f) => a + f.iou, 0) / fid
 const fidFloorIoU = fidGate.length ? Math.min(...fidGate.map((f) => f.iou)) : 1;
 const fidWorstSf = fidGate.length ? Math.max(...fidGate.map((f) => f.sfErr)) : 0;
 const fidPairs = fidGate.map((f) => f.minPairIoU).filter((v): v is number => v !== undefined);
-console.log(`\n── mask fidelity: the SAME probes traced UN-SNAPPED (REPORTED, NOT GATED) ──`);
+console.log(`\n── mask fidelity: the SAME probes traced UN-SNAPPED (GATED since audit F6) ──`);
 console.log(`   ${"probe".padEnd(42)} ${"raw IoU".padStart(8)} ${"raw SF±".padStart(9)}   ${"prod IoU".padStart(8)} ${"prod SF±".padStart(9)}   raw x-res pair IoU`);
 for (const f of fidelity) {
   console.log(`   ${(f.caseName + " / " + f.probeName).padEnd(42)} ${f.iou.toFixed(3).padStart(8)} ${(`${(f.sfErr * 100).toFixed(2)}%`).padStart(9)}   ${f.prodIou.toFixed(3).padStart(8)} ${(`${(f.prodSfErr * 100).toFixed(2)}%`).padStart(9)}   ${f.minPairIoU !== undefined ? f.minPairIoU.toFixed(3) : "—"}${f.knownFail ? "  [known-fail]" : ""}`);
 }
-console.log(`   raw (rasterisation only, known-fails excluded): n=${fidGate.length} | mean IoU ${fidMeanIoU.toFixed(3)} | floor IoU ${fidFloorIoU.toFixed(3)} | worst SF ${(fidWorstSf * 100).toFixed(2)}%`);
-console.log(`   raw cross-resolution pair-IoU floor: ${fidPairs.length ? Math.min(...fidPairs).toFixed(3) : "n/a"} (${fidPairs.length} probe(s) with ≥2 gated resolutions)`);
-console.log(`   ↑ this is the rasterisation error the snap hides. It is deliberately UNGATED: the`);
-console.log(`     product ships the snapped ring, so gating the raw one would gate a quantity nobody buys.`);
+const fidCrossFloor = fidPairs.length ? Math.min(...fidPairs) : 1;
+console.log(`   raw (rasterisation only, known-fails excluded): n=${fidGate.length} | mean IoU ${fidMeanIoU.toFixed(3)} | floor IoU ${fidFloorIoU.toFixed(3)} (gate ${THRESHOLDS.rawFloorIoU}) | worst SF ${(fidWorstSf * 100).toFixed(2)}%`);
+console.log(`   raw cross-resolution pair-IoU floor: ${fidPairs.length ? fidCrossFloor.toFixed(3) : "n/a"} (gate ${THRESHOLDS.rawCrossFloorIoU}; ${fidPairs.length} probe(s) with ≥2 gated resolutions)`);
+console.log(`   ↑ this is the rasterisation error the snap hides, and since audit F6 it GATES. It used to be`);
+console.log(`     reported only, on the argument that the product ships the snapped ring — true, but the snap`);
+console.log(`     had also made cross-resolution pair-IoU exactly 1.000 on 8 of 9 synthetic probes, so this`);
+console.log(`     was the corpus's last rasterisation signal and nothing was holding it. See THRESHOLDS.`);
 
 console.log(`\nsynthetic — PRODUCTION RINGS (trace+snap) vs goldens authored from the same numbers.`);
 console.log(`  Independent of the engine's own past output, but NOT a raw accuracy figure: the snap`);
@@ -333,12 +434,14 @@ for (const p of cgate.exempt) {
   console.log(`      ↳ ${x.reason}`);
 }
 
-writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, wallSemantics: WALL_SEMANTICS, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? Math.min(...fidPairs) : null, gated: false } }, null, 1));
+writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, thresholds: THRESHOLDS, wallSemantics: WALL_SEMANTICS, semanticsCoverage, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? fidCrossFloor : null, gated: true, floorGate: THRESHOLDS.rawFloorIoU, crossFloorGate: THRESHOLDS.rawCrossFloorIoU } }, null, 1));
 
 const failures: string[] = [...caseSemanticsFailures];
 for (const cv of coverages) {
   // 0.9: adjacency tiling gates every whole-plan case (see THRESHOLDS above).
   if (cv.sumEngineSF > 0 && cv.overlapSF > cv.sumEngineSF * THRESHOLDS.pairwiseOverlapFrac) failures.push(`${cv.caseName}: ${cv.overlapSF.toFixed(1)} SF double-counted (> ${THRESHOLDS.pairwiseOverlapFrac * 100}% of total)`);
+  // F6: the ABSOLUTE per-room trigger, on every whole-plan case (see THRESHOLDS)
+  if (cv.maxSfAbs > THRESHOLDS.maxRoomSfAbs) failures.push(`${cv.caseName}/${cv.maxSfAbsProbe}: engine diverges from its answer key by ${cv.maxSfAbs.toFixed(2)} SF > ${THRESHOLDS.maxRoomSfAbs} SF (absolute per-room trigger — a big room can move real square footage inside a relative band)`);
   if (!cv.humanMeasured) continue;                     // the rest gate human-measured cases only
   if (cv.maxSfErr > THRESHOLDS.humanMaxSfErr) failures.push(`${cv.caseName}: worst room SF error ${(cv.maxSfErr * 100).toFixed(1)}% > ${THRESHOLDS.humanMaxSfErr * 100}%`);
   if (Math.abs(cv.ratio - 1) > THRESHOLDS.humanCoverageBand) failures.push(`${cv.caseName}: engine total ×${cv.ratio.toFixed(3)} of the human total (band ±${THRESHOLDS.humanCoverageBand * 100}%)`);
@@ -366,6 +469,9 @@ if (agg.leakRate > THRESHOLDS.maxLeakRate) failures.push(`leak rate ${(agg.leakR
 if (agg.correctRefusalRate < THRESHOLDS.minCorrectRefusal) failures.push(`correct-refusal ${(agg.correctRefusalRate * 100).toFixed(1)}%`);
 if (xagg.disagreements > THRESHOLDS.maxCrossDisagreements) failures.push(`${xagg.disagreements} cross-resolution verdict flip(s)`);
 if (xagg.crossFloorIoU < THRESHOLDS.crossFloorIoU) failures.push(`cross-resolution pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} < ${THRESHOLDS.crossFloorIoU}`);
+// F6: mask fidelity — the un-snapped reading, no longer merely printed.
+if (fidGate.length && fidFloorIoU < THRESHOLDS.rawFloorIoU) failures.push(`raw (un-snapped) IoU floor ${fidFloorIoU.toFixed(3)} < ${THRESHOLDS.rawFloorIoU} — the snap is covering for a rasterisation regression`);
+if (fidPairs.length && fidCrossFloor < THRESHOLDS.rawCrossFloorIoU) failures.push(`raw (un-snapped) cross-resolution pair-IoU floor ${fidCrossFloor.toFixed(3)} < ${THRESHOLDS.rawCrossFloorIoU} — the mask contour moves with resolution even where the snapped ring does not`);
 failures.push(...cgate.failures);
 if (failures.length) { console.error(`\nBENCH FAILED: ${failures.join("; ")}`); process.exit(1); }
 console.log("\nbench passed");

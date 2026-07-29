@@ -3,7 +3,8 @@
 // viewport lookup) is a thin wrapper around these functions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractCase, interiorSeed, sheetPage } from "../bench/from-takeoff.mts";
+import { extractCase, interiorSeed, sheetPage, parseWallSemantics } from "../bench/from-takeoff.mts";
+import { WALL_SEMANTICS, KNOWN_WALL_SEMANTICS } from "../bench/corpus.ts";
 
 const VP_W = 1000, VP_H = 800, UPP = 1 / 18;          // 18 image px per foot
 
@@ -69,4 +70,35 @@ test("sheetPage: bare name is page 1; #N suffix parses; # in file names survives
   assert.equal(sheetPage("plan.pdf"), 1);
   assert.equal(sheetPage("plan.pdf#3"), 3);
   assert.equal(sheetPage("job#12 plan.pdf"), 1);
+});
+
+// ── F5: wall semantics is DECLARED by the human, never defaulted ────────────
+// This exporter used to stamp `wallSemantics: WALL_SEMANTICS` onto every answer
+// key it wrote, which made bench/run.mts's semantics check compare a constant to
+// itself on the one kind of case where the field carries information. A human
+// answer key is the only place a measurand is CHOSEN rather than produced, so
+// the person has to say which line they measured to — and the failure mode of a
+// silent default is exactly what happened: the corpus asserted "centerline" for
+// three months while the VA plan's goldens sat on wall faces ~5.9 in apart.
+const ARGS = ["ann.json", "plan.pdf", "plan.pdf", "out.json"];
+
+test("F5: --wall-semantics is REQUIRED — no default, and the omission says why", () => {
+  assert.throws(() => parseWallSemantics(ARGS), /REQUIRED/,
+    "a missing declaration must fail, not fall back to the engine's own measurand");
+  assert.throws(() => parseWallSemantics(ARGS), new RegExp(WALL_SEMANTICS));
+  // the flag with no value after it is the same omission
+  assert.throws(() => parseWallSemantics([...ARGS, "--wall-semantics"]), /REQUIRED/);
+  assert.throws(() => parseWallSemantics([...ARGS, "--wall-semantics", "--allow-machine"]), /REQUIRED/,
+    "the NEXT FLAG is not a value");
+});
+
+test("F5: --wall-semantics accepts the vocabulary and only the vocabulary", () => {
+  for (const v of KNOWN_WALL_SEMANTICS)
+    assert.equal(parseWallSemantics([...ARGS, "--wall-semantics", v]), v);
+  assert.equal(parseWallSemantics(["--wall-semantics", "centerline", ...ARGS]), "centerline",
+    "position-independent — flags may precede the positionals");
+  // a typo is not "some other convention the bench should trust"
+  assert.throws(() => parseWallSemantics([...ARGS, "--wall-semantics", "centreline"]), /not one of/,
+    "British spelling is a typo here, and a silently-accepted typo is how the field stopped meaning anything");
+  assert.throws(() => parseWallSemantics([...ARGS, "--wall-semantics", "face-to-face"]), /not one of/);
 });

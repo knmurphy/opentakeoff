@@ -2,7 +2,7 @@
  "pdf": "../../../demo/sample-plan.pdf",
  "scale": 2,
  "ptPerFt": 36,
- "wallSemantics": "centerline",
+ "wallSemantics": "drawn-path-vertex",
  "note": "4 identical quadrant rooms; traces reviewed as exact rectangles (issue #184 round 3)",
  "pinnedAt": "reviewed traces, issue #184",
  "probes": [

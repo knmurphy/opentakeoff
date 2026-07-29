@@ -35,7 +35,7 @@ import {
 } from "../src/lib/oneclick.ts";
 import { buildSnapGrid, nearestSnap } from "../src/lib/geometry.js";
 import { SNAP_CELL } from "../src/lib/canvasConstants.js";
-import { syntheticCorpus, snapPointsFor, WALL_SEMANTICS } from "../bench/corpus.ts";
+import { syntheticCorpus, snapPointsFor, WALL_SEMANTICS, KNOWN_WALL_SEMANTICS } from "../bench/corpus.ts";
 
 // ── the fixture: e2e/make-fixture.cjs's OFFICE 101 at RENDER_SCALE 2 ────────
 // 216 × 180 pt = 12 × 10 ft. At scale 2 that is 432 × 360 image px and
@@ -171,11 +171,61 @@ test("A5b: snapPointsFor mirrors extractVectorGeometry's visit() rule", () => {
   assert.equal(snapPointsFor(leafThenArc, null).length, 5);
 });
 
+// ── the wall-semantics declaration, VERIFIED not stamped (audit F5) ─────────
+// `mk()` stamps every synthetic case with WALL_SEMANTICS, so
+// `assert.equal(c.wallSemantics, WALL_SEMANTICS)` — which is what this file used
+// to assert — is a constant compared to itself. What the declaration CLAIMS is
+// checkable: "drawn-path-vertex" says a golden's corners are vertices of the
+// drawn paths. Every synthetic case draws its walls as single strokes (see
+// `sq()` in bench/corpus.ts), which is why that same point is also the wall
+// centreline here and is NOT on the VA plan, whose walls are drawn as pairs of
+// lines ~5–6 in apart.
+test("F5: the synthetic corpus's wallSemantics declaration is TRUE of its goldens, not just stamped", () => {
+  assert.equal(WALL_SEMANTICS, "drawn-path-vertex", "the name has to say what the measurand IS; 'centerline' was false on the VA plan");
+  assert.ok((KNOWN_WALL_SEMANTICS as readonly string[]).includes(WALL_SEMANTICS));
+  const distToSegs = (p: Point, segs: number[]) => {
+    let best = Infinity;
+    for (let i = 0; i < segs.length; i += 4) {
+      const [ax, ay, bx, by] = [segs[i], segs[i + 1], segs[i + 2], segs[i + 3]];
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      const t = L2 ? Math.max(0, Math.min(1, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L2)) : 0;
+      best = Math.min(best, Math.hypot(p[0] - (ax + t * dx), p[1] - (ay + t * dy)));
+    }
+    return best;
+  };
+  const nearestTarget = (p: Point, pts: Point[]) => Math.min(...pts.map((q) => Math.hypot(q[0] - p[0], q[1] - p[1])));
+  let checked = 0;
+  for (const c of syntheticCorpus()) {
+    assert.ok((KNOWN_WALL_SEMANTICS as readonly string[]).includes(c.wallSemantics), `${c.name}: undeclared semantics`);
+    for (const p of c.probes) {
+      if (!p.golden) continue;
+      checked++;
+      // (1) every golden vertex is ON the drawn linework — exactly, because
+      //     linework and golden are authored from the same numbers
+      for (const v of p.golden)
+        assert.ok(distToSegs(v, c.segs) < 1e-9, `${c.name}/${p.name}: golden vertex ${v} is not on the drawn linework (${distToSegs(v, c.segs).toFixed(4)} px off)`);
+      // (2) and it is a RECORDED PATH VERTEX — the thing the snap can reach.
+      const off = p.golden.filter((v) => nearestTarget(v, c.points) > 0);
+      if (c.name === "curved-partition") {
+        // The one documented exception, and it is the rule working: this
+        // golden's curved side runs along a SEG_CURVE chord run, whose interior
+        // vertices `extractVectorGeometry` never records (see snapPointsFor).
+        // They are on the linework — assertion (1) just proved it — but there is
+        // no target there, so those corners keep whatever the raster gave them.
+        assert.equal(off.length, 7, "curved-partition/left-half: 7 of its 11 corners are bezier chord interiors");
+        assert.equal(p.golden.length - off.length, 4, "...and 4 are real vertices");
+      } else {
+        assert.deepEqual(off, [], `${c.name}/${p.name}: golden corners that are not drawn path vertices — the case declares "${c.wallSemantics}"`);
+      }
+    }
+  }
+  assert.ok(checked >= 12, `all golden probes checked, got ${checked}`);
+});
+
 test("A5b: every synthetic golden corner that is a drawn vertex is a snap target", () => {
   const cases = syntheticCorpus();
   assert.ok(cases.length >= 9);
   for (const c of cases) {
-    assert.equal(c.wallSemantics, WALL_SEMANTICS);
     assert.ok(c.points.length > 0, `${c.name} has no snap targets`);
     const key = new Set(c.points.map(([x, y]) => `${x},${y}`));
     // the border rectangle is on every case

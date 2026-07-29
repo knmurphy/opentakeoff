@@ -77,7 +77,15 @@ export interface CaseCoverage {
   sumEngineSF: number;         // Σ engine areas
   ratio: number;               // sumEngine / sumGolden — missed or phantom floor shows here
   overlapSF: number;           // Σ pairwise engine-region overlap — double-counted floor
-  maxSfErr: number;            // worst per-probe SF error
+  maxSfErr: number;            // worst per-probe RELATIVE SF error
+  /** worst per-probe ABSOLUTE SF divergence, |engine − golden| in square feet
+   *  (audit F6). The relative figure above is blind on a room that dominates a
+   *  case: 2.5% of the VA plan's cloud-corridor is 43.6 SF, so a 37 SF move
+   *  sits inside the band and ships without an adjudication. Square feet are
+   *  what a bid is written in, so they get their own trigger. */
+  maxSfAbs: number;
+  /** the probe that set `maxSfAbs`, so the failure message names a room. */
+  maxSfAbsProbe: string;
   humanMeasured: boolean;      // hard gates apply only where truth is human-authored
 }
 
@@ -85,20 +93,23 @@ export interface CaseCoverage {
  *  can't see floor that NO probe covers or floor counted twice — the case's
  *  totals and pairwise overlaps can. pxPerFt converts ring px² to SF;
  *  deductsSF (columns, casework the human deducted) reduces the golden total. */
-export function caseCoverage(caseName: string, rows: Array<{ golden: Point[]; ring: Point[] | null }>, pxPerFt: number, humanMeasured: boolean, deductsSF = 0, cell = 2): CaseCoverage {
+export function caseCoverage(caseName: string, rows: Array<{ golden: Point[]; ring: Point[] | null; name?: string }>, pxPerFt: number, humanMeasured: boolean, deductsSF = 0, cell = 2): CaseCoverage {
   const sf = (px2: number) => px2 / (pxPerFt * pxPerFt);
-  let sumG = 0, sumE = 0, maxErr = 0;
+  let sumG = 0, sumE = 0, maxErr = 0, maxAbs = 0, maxAbsProbe = "";
   const rings: Point[][] = [];
   for (const r of rows) {
     const g = sf(ringAreaAbs(r.golden));
     sumG += g;
+    const bumpAbs = (d: number) => { if (d > maxAbs || maxAbsProbe === "") { maxAbs = d; maxAbsProbe = r.name ?? "(unnamed)"; } };
     if (r.ring && r.ring.length >= 3) {
       const e = sf(ringAreaAbs(r.ring));
       sumE += e;
       rings.push(r.ring);
       if (g > 0) maxErr = Math.max(maxErr, Math.abs(e - g) / g);
+      bumpAbs(Math.abs(e - g));
     } else {
       maxErr = Math.max(maxErr, 1);        // refused probe: 100% of that room missing
+      bumpAbs(g);                          // ...and 100% of its square footage, absolutely
     }
   }
   let overlapPx2 = 0;
@@ -113,8 +124,74 @@ export function caseCoverage(caseName: string, rows: Array<{ golden: Point[]; ri
     ratio: g > 0 ? sumE / g : 1,
     overlapSF: sf(overlapPx2),
     maxSfErr: maxErr,
+    maxSfAbs: maxAbs,
+    maxSfAbsProbe: maxAbsProbe,
     humanMeasured,
   };
+}
+
+// ── the wall-semantics declaration, CHECKED (audit F5) ──────────────────────
+// A corpus case declares `wallSemantics`: which line its goldens measure to.
+// The check used to be `c.wallSemantics !== WALL_SEMANTICS`, i.e. a comparison
+// against the constant that every writer of the field stamped it FROM
+// (bench/from-takeoff.mts for human keys, bench/pin-goldens.mts for engine-
+// pinned ones) — so it could not fail, and it did not, for the three months the
+// value it certified ("centerline") was false on 60% of the corpus's SF.
+// This is the version with something to say. Three separate things can be
+// wrong, and they are three separate messages:
+//   (1) the value is not in the vocabulary at all — a typo, or a convention the
+//       bench has no measurand for;
+//   (2) the value is a real measurand, but not the one the engine returns — the
+//       SF gates would be comparing a human's tape to a different line;
+//   (3) the value IS the engine's, but the goldens do not actually sit on drawn
+//       path vertices — the declaration is unearned, whoever stamped it.
+// Only (3) needs the data, and (3) is the whole point.
+
+export interface SemanticsCoverage { caseName: string; probeName: string; onVertex: number; verts: number; cov: number }
+
+/** Fraction of a golden ring's vertices that coincide (within `tolPx`) with a
+ *  drawn path vertex — the measurable content of "drawn-path-vertex". */
+export function goldenVertexCoverage(golden: Point[], points: Point[], tolPx: number): SemanticsCoverage["cov"] {
+  if (!golden.length) return 1;
+  let on = 0;
+  for (const [gx, gy] of golden) {
+    for (const [px, py] of points) {
+      if (Math.hypot(px - gx, py - gy) <= tolPx) { on++; break; }
+    }
+  }
+  return on / golden.length;
+}
+
+export function checkWallSemantics(opts: {
+  caseName: string;
+  declared: unknown;
+  engine: string;
+  known: readonly string[];
+  probes: Array<{ name: string; golden?: Point[] }>;
+  points: Point[];
+  tolPx: number;
+  minCoverage: number;
+}): { failures: string[]; coverage: SemanticsCoverage[] } {
+  const { caseName, declared, engine, known, probes, points, tolPx, minCoverage } = opts;
+  const failures: string[] = [];
+  const coverage: SemanticsCoverage[] = [];
+  if (typeof declared !== "string" || !known.includes(declared)) {
+    failures.push(`${caseName}: wallSemantics is ${JSON.stringify(declared ?? null)} — not one of ${known.join(", ")} (see bench/corpus.ts)`);
+    return { failures, coverage };
+  }
+  if (declared !== engine) {
+    failures.push(`${caseName}: wallSemantics is "${declared}" but the engine returns "${engine}" — the SF gates would be comparing two different measurands. Re-measure the key, or grade this case by hand.`);
+    return { failures, coverage };
+  }
+  for (const p of probes) {
+    if (!p.golden || p.golden.length < 3) continue;
+    const cov = goldenVertexCoverage(p.golden, points, tolPx);
+    const on = Math.round(cov * p.golden.length);
+    coverage.push({ caseName, probeName: p.name, onVertex: on, verts: p.golden.length, cov });
+    if (cov < minCoverage)
+      failures.push(`${caseName}/${p.name}: only ${on}/${p.golden.length} golden vertices (${(cov * 100).toFixed(0)}%) sit within ${tolPx} px of a drawn path vertex — the case declares "${engine}" and this golden does not measure to one (floor ${(minCoverage * 100).toFixed(0)}%)`);
+  }
+  return { failures, coverage };
 }
 
 export interface Aggregate {
@@ -243,6 +320,14 @@ export interface ConfGateExemption {
   /** the probe still scores AT OR BELOW this — "a deduction fires here that
    *  the engine cannot yet justify withholding, and it still can't". */
   xfailAtMost?: number;
+  /** the probe still scores AT OR ABOVE this — the OTHER half of `xfailAtMost`
+   *  (audit F6/W6). An upper bound alone tolerates collapse: a
+   *  `traceConfidence` that returned 0.10 on this probe, or piled three more
+   *  spurious deductions onto it, would satisfy "still ≤ 0.87" and the
+   *  exemption would absorb the regression silently. Paired, the two bounds
+   *  say what the exemption actually claims: the score is pinned in a band,
+   *  and anything leaving that band in either direction needs re-argument. */
+  xfailAtLeast?: number;
   /** the probe still scores EXACTLY what the named other probe scores. The
    *  sharpest direction available when the finding IS the identity: one signal
    *  producing one number on a probe that is exactly right and on a probe that
@@ -299,6 +384,7 @@ export const CONF_GATE_EXEMPT: Record<string, ConfGateExemption> = {
   },
   "two-doorways/center": {
     xfailAtMost: 0.87,
+    xfailAtLeast: 0.80,
     reason:
       "Added by audit A5b. Signal set as measured: raster false, hatchFiltered false (hatchTier absent), " +
       "wedges undefined, wedgeGrowth undefined, curveFrac undefined, mppf 18, areaSF 19.8, sealedPx set " +
@@ -309,9 +395,16 @@ export const CONF_GATE_EXEMPT: Record<string, ConfGateExemption> = {
       "golden is authored under the same convention the engine guessed (a cased opening is bridged) — " +
       "the engine had no evidence for that and correctly declined to claim any. So this is a case where " +
       "the gate's floor premise (accurate ⇒ confident) does not hold, rather than a miscalibration to " +
-      "tune away. XFAIL DIRECTION: asserted to stay AT OR BELOW 0.87, i.e. below CONF_GATE.floorAbs. If " +
-      "the engine ever learns to distinguish a bridged drawn opening from an invented wall it will " +
-      "score at or above the floor, this breaks, and the exemption must be dropped.",
+      "tune away. XFAIL DIRECTION: asserted to stay in the BAND 0.80 ≤ conf ≤ 0.87 — the upper bound sits " +
+      "below CONF_GATE.floorAbs, so if the engine ever learns to distinguish a bridged drawn opening from " +
+      "an invented wall it will score at or above the floor, this breaks, and the exemption must be " +
+      "dropped. The lower bound was added by audit F6: `xfailAtMost` alone tolerates COLLAPSE, and this " +
+      "exemption excuses exactly one deduction (CONF_MINPASS_SOLE = 0.85, the whole score) — not a pile " +
+      "of them. At 0.80 the bound fires the moment a factor of ×0.94 or stronger stacks on top " +
+      "(raster-traced ×0.90, coarse-mask ×0.90, hatch-filtered(override) ×0.85, any curve-bounded or " +
+      "oversize factor); it still tolerates the two mildest (door-swing ×0.97 → 0.82, " +
+      "hatch-filtered(bounded) ×0.95 → 0.81), which is deliberate — those two would be arguable on this " +
+      "fixture, and a bound that fires on an arguable change is a bound that gets widened.",
   },
 };
 
@@ -343,12 +436,13 @@ export function confidenceGate(scores: ProbeScore[]): ConfGateResult {
     const k = key(s);
     if (k in CONF_GATE_EXEMPT) {
       exempt.push({ probe: k, confidence: s.confidence });
-      const { xfailAbove, xfailAtMost, xfailEquals, reason } = CONF_GATE_EXEMPT[k];
+      const { xfailAbove, xfailAtMost, xfailAtLeast, xfailEquals, reason } = CONF_GATE_EXEMPT[k];
       // xfail WITH A DIRECTION — see CONF_GATE_EXEMPT
       if (s.confidence == null) failures.push(`exempt ${k}: reports no confidence at all — the exemption asserts a value it can no longer check (${reason.slice(0, 60)}…)`);
       else {
         if (xfailAbove != null && s.confidence <= xfailAbove) failures.push(`exempt ${k}: XFAIL FLIPPED — confidence ${s.confidence.toFixed(2)} ≤ ${xfailAbove}. A signal now fires on the probe the exemption says has none. Re-argue the exemption or delete it; do not widen the list.`);
         if (xfailAtMost != null && s.confidence > xfailAtMost) failures.push(`exempt ${k}: XFAIL FLIPPED — confidence ${s.confidence.toFixed(2)} > ${xfailAtMost}. The deduction the exemption says the engine cannot yet withhold is no longer binding here. Drop the exemption; do not widen the list.`);
+        if (xfailAtLeast != null && s.confidence < xfailAtLeast) failures.push(`exempt ${k}: XFAIL FLIPPED DOWNWARD — confidence ${s.confidence.toFixed(2)} < ${xfailAtLeast}. The exemption excuses ONE known deduction, not a collapse: something else is now firing here too. The exemption does not cover it — find it, or re-argue the band.`);
         if (xfailEquals != null) {
           const other = confByProbe.get(xfailEquals);
           if (other == null) failures.push(`exempt ${k}: XFAIL UNCHECKABLE — it asserts equality with ${xfailEquals}, which reports no confidence (or is not in the corpus).`);
