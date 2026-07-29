@@ -37,7 +37,7 @@ import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, snapVertices, ringArea, classifyPerimeter, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { roomLabelSeeds, detectRegions, sheetBounds, detectionReport, ROOM_LABEL_RE } from "../lib/detectRooms";
 import { roomNameFromTokens } from "../lib/roomName";
@@ -3049,7 +3049,7 @@ export default function TakeoffCanvas() {
   // vector corners would corrupt the ring. Duplicate/carve checks run inside a
   // FUNCTIONAL setProposal so a click racing the first raster render can't
   // clobber state.
-  function proposeRegion(f, tp, local, negative, raster) {
+  function proposeRegion(f, mo, tp, local, negative, raster) {
     const upp = uppFor(tp.key);
     if (!upp) return;
     let ring;
@@ -3060,7 +3060,19 @@ export default function TakeoffCanvas() {
     }
     if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
-    const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    // Base/trim doesn't run across a doorway: when the flood sealed a gap or
+    // annexed a swing wedge, split the ring into wall runs (the base perimeter)
+    // and door-opening spans (excluded from perimeter, tracked for a material-
+    // transition add). Plain rooms (no seal/wedge) keep the full ring perimeter.
+    let perim_lf, doorSpans = null;
+    if (mo && (f.sealedPx || f.wedges)) {
+      const pc = classifyPerimeter(ring, mo);
+      perim_lf = +(pc.wallPerim * upp).toFixed(2);
+      const spans = pc.openings.map((o) => +(o.len * upp).toFixed(2)).filter((l) => l > 0.05);
+      if (spans.length) doorSpans = spans;
+    } else {
+      perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    }
     const conf = traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf });
     // Decide accept/dup/carve-reject INSIDE the functional updater, against
     // its own authoritative `prev` — not proposalRef, which only catches up
@@ -3112,7 +3124,7 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster, cf: conf.score, cff: conf.factors }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, ...(doorSpans ? { dsp: doorSpans, dlf: +doorSpans.reduce((a, b) => a + b, 0).toFixed(2) } : {}), rt: !!raster, cf: conf.score, cff: conf.factors }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
@@ -3156,7 +3168,7 @@ export default function TakeoffCanvas() {
         // opening (mask px per foot = mask-per-image-px / units-per-image-px)
         const mppf = mo.ws / upp;
         const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
-        if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
+        if (f.status === "ok") { proposeRegion(f, mo, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
             ? "That space isn't enclosed on the plan linework — the fill spilled. Click a more enclosed spot, or trace it with Area (A)."
@@ -3189,7 +3201,7 @@ export default function TakeoffCanvas() {
         : "Landed on dense scan ink (text or hatching). Zoom in and click an open spot, or trace it with Area (A).");
       return;
     }
-    proposeRegion(f, tp, local, negative, true);
+    proposeRegion(f, rmo, tp, local, negative, true);
   }
   function createProposal() {
     if (!proposal || !proposal.regions.length) return;
@@ -3198,7 +3210,7 @@ export default function TakeoffCanvas() {
       sheet_id: tp.key, condition_id: activeCond,
       measure_role: r.kind === "neg" ? "deduct" : "floor_area",
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
-      computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
+      computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf, ...(r.dlf ? { door_opening_lf: r.dlf } : {}) },
       // an explicit active label is the estimator's call and always wins; else
       // the drawing's own room tag (auto-named) labels the shape
       ...(activeLabel ? { label: activeLabel } : r.autoName ? { label: r.autoName } : {}),
@@ -3208,7 +3220,7 @@ export default function TakeoffCanvas() {
       // an untouched region's verts ARE the proposal, so nothing extra rides.
       // Post-Create edits are stamped by stampEdit, which freezes the same
       // field from the pre-edit ring only when Create didn't already.
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}), ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}), ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(r.dsp ? { door_openings_lf: r.dsp } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
     dispatchShape({ type: "add", shapes: made });   // Create is the creation gate — id/created_at minted by the command
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
