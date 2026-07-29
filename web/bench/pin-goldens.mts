@@ -110,6 +110,12 @@ const PINNED = [
       { name: "ward-vestibule", seed: [4045, 1230], expect: "golden" as const, tags: ["door-swing", "vestibule"], shapeClass: "room" },
       { name: "cloud-corridor", seed: [1814, 1814], expect: "golden" as const, tags: ["cloud-boundary", "corridor"], shapeClass: "corridor" },
       { name: "shaded-wing-office", seed: [659, 1551], expect: "golden" as const, tags: ["shaded-wing"], shapeClass: "room" },
+      // Seed-instability work (2026-07-28): the T1 connecting corridor's modal
+      // fragment (158 SF snapped; the hand-measured whole run is 271.8 SF —
+      // engine-pinned = regression only, NOT accuracy). Its adjacent-seed 10×
+      // disagreement is tracked by the case's `seedPairs` row, which this tool
+      // carries through a re-pin untouched (like humanSfProbes below).
+      { name: "t1-corridor", seed: [2023, 1078], expect: "golden" as const, tags: ["corridor", "seed-instability"], shapeClass: "corridor" },
       { name: "open-margin", seed: [5443, 3737], expect: "refusal" as const, tags: ["sheet-margin", "known-limit"], knownFail: true },
     ],
   },
@@ -413,7 +419,9 @@ async function main() {
     if (diff.caseTotal.adjudication) caseAdj.push({ at, scope: "case-total", from_sf: +diff.caseTotal.oldSF.toFixed(2), to_sf: +diff.caseTotal.newSF.toFixed(2), delta_pct: +((diff.caseTotal.deltaPct ?? 0) * 100).toFixed(2), reason: diff.caseTotal.adjudication });
     if (diff.overlap.adjudication) caseAdj.push({ at, scope: "pairwise-overlap", overlap_sf: +diff.overlap.sf.toFixed(2), frac_pct: +(diff.overlap.frac * 100).toFixed(3), reason: diff.overlap.adjudication });
 
-    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: WALL_SEMANTICS, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
+    // seedPairs and humanSfProbes are HAND-AUTHORED rows (seed instability +
+    // hand-measured SF truth) — a re-pin regenerates goldens, never these.
+    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: WALL_SEMANTICS, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes, ...(prior?.seedPairs ? { seedPairs: prior.seedPairs } : {}), ...(prior?.humanSfProbes ? { humanSfProbes: prior.humanSfProbes } : {}) };
     pending.push({ path, json: JSON.stringify(out, null, 1), diff });
   }
 

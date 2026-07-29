@@ -118,6 +118,58 @@ export function caseCoverage(caseName: string, rows: Array<{ golden: Point[]; ri
     humanMeasured,
   };
 }
+// ── human-SF reference rows (SF-only human truth) ───────────────────────────
+// The 2026-07-28 hand-measure campaign recorded SF ONLY (no polygons), so
+// these rows cannot go through from-takeoff.mts's polygon path. They compare
+// the production ring's SF at a pinned seed against the hand number.
+// CONVENTION CAVEAT, load-bearing: hand SF was measured WALL-TO-WALL; the
+// engine measures the snapped CENTERLINE ring (corpus wallSemantics). For a
+// corridor of width W between walls of thickness t the centerline/face area
+// ratio is ≈ (W+t)/W — 3–11% on plausible geometries, i.e. LARGER than the
+// 2.5% gate band. So a convention-unmatched row can never be a binding
+// accuracy gate; rows carry knownFail and the gate is xpass-only until a
+// convention-matched (centerline-measured) human row exists.
+export interface HumanSfRow { probe: string; handSF: number; engineSF: number | null; knownFail?: boolean }
+
+/** Gate human-SF rows: a non-knownFail row must trace and land within maxErr
+ *  of the hand number; a knownFail row that lands INSIDE the band is an xpass
+ *  (loud — re-examine against convention before celebrating). */
+export function humanSfGate(rows: HumanSfRow[], maxErr: number): { failures: string[]; rows: Array<HumanSfRow & { errFrac: number | null }> } {
+  const failures: string[] = [];
+  const out = rows.map((r) => {
+    const errFrac = r.engineSF != null && r.handSF > 0 ? Math.abs(r.engineSF - r.handSF) / r.handSF : null;
+    if (!r.knownFail && (errFrac == null || errFrac > maxErr))
+      failures.push(`human-SF ${r.probe}: ${errFrac == null ? "no trace" : `${(errFrac * 100).toFixed(1)}% off hand`} (band ±${maxErr * 100}%)`);
+    if (r.knownFail && errFrac != null && errFrac <= maxErr)
+      failures.push(`human-SF known-fail ${r.probe} now within ±${maxErr * 100}% of hand — re-examine (convention gap!) and re-pin`);
+    return { ...r, errFrac };
+  });
+  return { failures, rows: out };
+}
+
+// ── seed-pair stability (the VA seed-instability finding, encoded directly) ─
+// Two clicks in the SAME space must measure the same floor. On the VA plan the
+// T1 connecting corridor returns 158.1 SF from one seed and 1525.8 SF from a
+// seed ~8 ft away (9.65×) — docs/evidence/one-click/va-corridor-handmeasure.json,
+// region_7_connecting-corr.png. This asserts the disagreement SYMMETRICALLY
+// (max/min SF ratio), with no golden polygon involved, so it cannot launder an
+// engine region as truth and it fires on convergence to ANY common region —
+// right or wrong — forcing re-examination against the hand number.
+export interface SeedPairRow { pair: string; sfA: number | null; sfB: number | null; knownFail?: boolean; xpassRatio: number }
+
+export function seedPairGate(rows: SeedPairRow[]): { failures: string[]; rows: Array<SeedPairRow & { ratio: number | null }> } {
+  const failures: string[] = [];
+  const out = rows.map((r) => {
+    const ratio = r.sfA != null && r.sfB != null && Math.min(r.sfA, r.sfB) > 0
+      ? Math.max(r.sfA, r.sfB) / Math.min(r.sfA, r.sfB) : null;
+    if (!r.knownFail && (ratio == null || ratio > r.xpassRatio))
+      failures.push(`seed-pair ${r.pair}: ${ratio == null ? "a seed failed to trace" : `seeds disagree ${ratio.toFixed(2)}×`} (limit ${r.xpassRatio}×)`);
+    if (r.knownFail && ratio != null && ratio < r.xpassRatio)
+      failures.push(`seed-pair known-fail ${r.pair} now agrees (${ratio.toFixed(2)}× < ${r.xpassRatio}×) — verify against the hand measure, then re-pin`);
+    return { ...r, ratio };
+  });
+  return { failures, rows: out };
+}
 
 export interface Aggregate {
   goldenProbes: number; meanIoU: number; floorIoU: number;

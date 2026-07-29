@@ -1,7 +1,7 @@
 // Benchmark scorer — the IoU/aggregate math the corpus gate stands on.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { polyIoU, scoreGolden, aggregate, crossAgreement, aggregateCross, polyOverlapPx2, caseCoverage, confidenceGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore } from "../bench/score.ts";
+import { polyIoU, ringAreaAbs, scoreGolden, aggregate, crossAgreement, aggregateCross, polyOverlapPx2, caseCoverage, confidenceGate, humanSfGate, seedPairGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore } from "../bench/score.ts";
 import type { Point } from "../src/lib/oneclick.ts";
 
 const sq = (x0: number, y0: number, x1: number, y1: number): Point[] => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
@@ -275,4 +275,91 @@ test("aggregate: per-class filtering isolates a failing class from a passing one
   // known-fail-only class: no gating probes, no fabricated accuracy claim
   assert.equal(corridor.goldenProbes, 0);
   assert.equal(corridor.knownFails, 1);
+});
+
+// ── scorer mutation tests: the scorer itself under independent arithmetic ────
+// polyIoU and ringAreaAbs grade every corpus number; nothing above checks THEM
+// against math they didn't compute. Analytic references are coded inline and
+// independently (rect intersection, shoelace), so a scorer bug cannot certify
+// itself.
+
+test("mutation: polyIoU matches analytic rect IoU exactly on integer-aligned cases", () => {
+  // cell centers sit at *.5 — strictly interior to integer-aligned edges — so
+  // rasterized IoU is EXACT here; any drift is a scorer change, not noise.
+  const analytic = (a: [number, number, number, number], b: [number, number, number, number]): number => {
+    const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+    const iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+    const inter = ix * iy;
+    const union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter;
+    return union > 0 ? inter / union : 0;
+  };
+  const r = (x0: number, y0: number, x1: number, y1: number): Point[] => sq(x0, y0, x1, y1);
+  // identical / containment / half-overlap / disjoint
+  assert.equal(polyIoU(r(0, 0, 100, 100), r(0, 0, 100, 100)), 1);
+  assert.equal(polyIoU(r(0, 0, 100, 100), r(0, 0, 50, 50)), analytic([0, 0, 100, 100], [0, 0, 50, 50]));      // 0.25
+  assert.equal(polyIoU(r(0, 0, 100, 100), r(50, 0, 150, 100)), analytic([0, 0, 100, 100], [50, 0, 150, 100])); // 1/3
+  assert.equal(polyIoU(r(0, 0, 100, 100), r(200, 0, 300, 100)), 0);
+});
+
+test("mutation: ringAreaAbs agrees with an independently coded shoelace", () => {
+  const shoelace = (p: Point[]): number => {
+    let s = 0;
+    for (let i = 0; i < p.length; i++) { const q = p[(i + 1) % p.length]; s += p[i][0] * q[1] - q[0] * p[i][1]; }
+    return Math.abs(s) / 2;
+  };
+  const rect = sq(0, 0, 100, 50);
+  const ell: Point[] = [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]];   // concave L, area 12
+  assert.equal(ringAreaAbs(rect), shoelace(rect));
+  assert.equal(ringAreaAbs(rect), 5000);
+  assert.equal(ringAreaAbs(ell), shoelace(ell));
+  assert.equal(ringAreaAbs(ell), 12);
+});
+
+test("mutation: perturbing one golden vertex moves polyIoU by the analytic amount", () => {
+  // square (0,0)-(100,100) vs the quad with corner (100,100) pulled to
+  // (100+d,100+d): the quad contains the square, so IoU = 10^4 / area(quad),
+  // area(quad) = 10000 + 100d by shoelace. d=1 → 0.9901, d=5 → 0.9524.
+  const golden = sq(0, 0, 100, 100);
+  const mutated = (d: number): Point[] => [[0, 0], [100, 0], [100 + d, 100 + d], [0, 100]];
+  const analytic = (d: number): number => 10000 / (10000 + 100 * d);
+  const at1 = polyIoU(golden, mutated(1));
+  const at5 = polyIoU(golden, mutated(5));
+  // d=1 held to ±0.005: a scorer stuck at ~1.0 (union≡intersection, the
+  // canonical mutation) misses the analytic 0.9901 by 0.0099 and FAILS here.
+  assert.ok(Math.abs(at1 - analytic(1)) <= 0.005, `d=1: ${at1} vs analytic ${analytic(1)}`);
+  assert.ok(Math.abs(at5 - analytic(5)) <= 0.01, `d=5: ${at5} vs analytic ${analytic(5)}`);
+  assert.ok(polyIoU(golden, mutated(0)) > at1 && at1 > at5, "IoU must fall monotonically as the vertex moves");
+});
+
+// ── human-SF reference rows + seed-pair stability gates ─────────────────────
+
+test("humanSfGate: fires past the band, stays quiet inside it, and xpasses loudly", () => {
+  const band = 0.025;
+  // non-knownFail: 3% off fires, 2% off passes, a refused trace fires
+  assert.ok(humanSfGate([{ probe: "p/a", handSF: 100, engineSF: 103 }], band).failures.some((f) => /3\.0% off hand/.test(f)));
+  assert.deepEqual(humanSfGate([{ probe: "p/a", handSF: 100, engineSF: 102 }], band).failures, []);
+  assert.ok(humanSfGate([{ probe: "p/a", handSF: 100, engineSF: null }], band).failures.some((f) => /no trace/.test(f)));
+  // knownFail: outside the band is the documented state (silent); INSIDE it is
+  // an xpass that demands re-examination, and a missing trace stays silent
+  assert.deepEqual(humanSfGate([{ probe: "p/kf", handSF: 100, engineSF: 110, knownFail: true }], band).failures, []);
+  assert.ok(humanSfGate([{ probe: "p/kf", handSF: 100, engineSF: 101, knownFail: true }], band).failures.some((f) => /now within/.test(f)));
+  assert.deepEqual(humanSfGate([{ probe: "p/kf", handSF: 100, engineSF: null, knownFail: true }], band).failures, []);
+});
+
+test("seedPairGate: symmetric ratio, xpass on convergence to ANY common region", () => {
+  // knownFail split 9.65× (the VA T1 corridor): documented state, no failure
+  assert.deepEqual(seedPairGate([{ pair: "c/p", sfA: 158.1, sfB: 1525.8, knownFail: true, xpassRatio: 1.5 }]).failures, []);
+  // knownFail converged — whichever region won, this must fire for re-examination
+  const conv = seedPairGate([{ pair: "c/p", sfA: 1500, sfB: 1525.8, knownFail: true, xpassRatio: 1.5 }]);
+  assert.ok(conv.failures.some((f) => /now agrees/.test(f)), conv.failures.join("; "));
+  // symmetric: swapping the seeds changes nothing
+  assert.equal(seedPairGate([{ pair: "c/p", sfA: 1525.8, sfB: 158.1, knownFail: true, xpassRatio: 1.5 }]).rows[0].ratio,
+    seedPairGate([{ pair: "c/p", sfA: 158.1, sfB: 1525.8, knownFail: true, xpassRatio: 1.5 }]).rows[0].ratio);
+  // non-knownFail: agreement passes, disagreement or a refused seed fails
+  assert.deepEqual(seedPairGate([{ pair: "c/q", sfA: 100, sfB: 120, xpassRatio: 1.5 }]).failures, []);
+  assert.ok(seedPairGate([{ pair: "c/q", sfA: 100, sfB: 200, xpassRatio: 1.5 }]).failures.some((f) => /disagree/.test(f)));
+  assert.ok(seedPairGate([{ pair: "c/q", sfA: null, sfB: 200, xpassRatio: 1.5 }]).failures.some((f) => /failed to trace/.test(f)));
+  // a knownFail pair with a refused seed: still disagreeing at the verdict
+  // level — not an xpass, not a failure
+  assert.deepEqual(seedPairGate([{ pair: "c/p", sfA: null, sfB: 200, knownFail: true, xpassRatio: 1.5 }]).failures, []);
 });

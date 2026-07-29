@@ -70,9 +70,19 @@ min-passage policy measures the enclosed SEGMENT; a human measuring the whole
 run reads 3× that — a convention divergence to discuss in review, like the
 wedge note), and `corridor-dashed-boundary` (passing). The bench reports
 accuracy **per shape class × provenance** so the enclosed-room numbers can
-never speak for corridors again. This work (shapeClass, per-class metrics,
-the three corridor cases) is **item-E slice material** and travels with the
-corpus in the PR.
+never speak for corridors again. The VA plan additionally carries a
+**seed-pair stability row** (`seedPairs`: two clicks in the T1 corridor,
+158.1 vs 1525.8 SF = 9.65× — a tracked known-fail asserting the disagreement
+symmetrically, xpass < 1.5×) and two **human-SF reference rows**
+(`humanSfProbes`: CE-4 248.6 SF, CE-5 563.8 SF hand-measured; known-fail and
+**convention-unmatched** — hand is wall-to-wall, the engine ring is
+centerline, a 3–11% gap wider than the 2.5% band, so `humanSfGate` is
+xpass-only until a centerline-measured human row exists). No hand polygons
+were captured, so the polygon path (`from-takeoff.mts`) stays unfed — its
+independence guard forbids fabricating geometry. This work (shapeClass,
+per-class metrics, the three corridor cases, `seedPairGate`/`humanSfGate`,
+the VA seed-pair + human-SF rows) is **item-E slice material** and travels
+with the corpus in the PR.
 
 ## Fork extensions — NOT in the RFC, stay out of the PR
 

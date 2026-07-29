@@ -38,7 +38,7 @@ import { fileURLToPath } from "url";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, oneClickRing, snapNearest, MASK_MAX_DIM, DETERMINISM_MIN_MPPF } from "../src/lib/oneclick.ts";
 import type { FloodResult, Point, NearestFn } from "../src/lib/oneclick.ts";
 import { syntheticCorpus, WALL_SEMANTICS } from "./corpus.ts";
-import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, ringAreaAbs, caseCoverage, confidenceGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage } from "./score.ts";
+import { scoreGolden, aggregate, aggregateCross, crossAgreement, polyIoU, ringAreaAbs, caseCoverage, confidenceGate, humanSfGate, seedPairGate, CONF_GATE, CONF_GATE_EXEMPT, type ProbeScore, type CrossScore, type CrossRun, type CaseCoverage, type HumanSfRow, type SeedPairRow } from "./score.ts";
 import { traceConfidence, floodSignals } from "../src/lib/confidence.ts";
 
 const THRESHOLDS = {
@@ -61,13 +61,18 @@ const THRESHOLDS = {
 // Re-pinned 2026-07-28 (corridor cases): +2 gating corridor goldens
 // (corridor-min-pass-segment, corridor-dashed-boundary), +1 known-fail
 // (corridor-open-ends — the VA annexation failure, tracked for item A).
-const EXPECT = { goldenProbes: 23, refusalProbes: 3, knownFails: 5, cases: 2 };
+// Re-pinned again 2026-07-28 (seed-instability + human-SF rows): +1 gating
+// engine-pinned corridor golden (va-finish-plan/t1-corridor), +1 seed-pair
+// stability row, +2 human-SF reference rows (SF-only hand truth, known-fail).
+const EXPECT = { goldenProbes: 24, refusalProbes: 3, knownFails: 5, cases: 2, humanSfRows: 2, seedPairs: 1 };
 const RES_FACTORS = [1, 0.75, 0.5];  // ws multipliers; [0] must stay 1 (production baseline)
 const CROSS_CELL = 2;                // image-px sampling cell for cross-scale IoU (4× faster, ±~0.005)
 const here = dirname(fileURLToPath(import.meta.url));
 const scores: ProbeScore[] = [];
 const crossScores: CrossScore[] = [];
 const coverages: CaseCoverage[] = [];
+const humanRows: HumanSfRow[] = [];
+const pairRows: SeedPairRow[] = [];
 
 interface CaseProbe { name: string; seed: Point; expect: "golden" | "refusal"; golden?: Point[]; tags?: string[]; knownFail?: boolean; shapeClass?: string }
 
@@ -222,6 +227,26 @@ for (const file of caseFiles) {
   // and 8.5% on a narrow band). Loud, not assumed.
   if (c.wallSemantics !== WALL_SEMANTICS) caseSemanticsFailures.push(`${name}: wallSemantics is ${JSON.stringify(c.wallSemantics ?? null)} — the corpus is pinned "${WALL_SEMANTICS}" (see bench/corpus.ts)`);
   runCase(name, g.segs, g.points, vp.width, vp.height, g.meta, c.ptPerFt, c.probes, !!c.humanMeasured, c.deducts_sf || 0, true);   // ptPerFt is image px/ft at the pinned scale
+
+  // ── auxiliary SF rows (no golden polygon): human-SF reference + seed-pair
+  // stability. Both flood the PRODUCTION path (factor-1 mask, trace+snap) and
+  // are gated by the pure functions in score.ts. Fields are optional per case;
+  // the EXPECT counts below keep an absent field from vanishing silently.
+  const auxHuman = (c.humanSfProbes ?? []) as Array<{ name: string; seed: Point; hand_sf: number; knownFail?: boolean }>;
+  const auxPairs = (c.seedPairs ?? []) as Array<{ name: string; seedA: Point; seedB: Point; knownFail?: boolean; xpassRatio: number }>;
+  if (auxHuman.length || auxPairs.length) {
+    const mo = buildMask(g.segs, vp.width, vp.height, Math.min(MASK_MAX_DIM, Math.max(vp.width, vp.height, 2)), g.meta, c.ptPerFt);
+    const mppf = mo.ws * c.ptPerFt;
+    const nearest = snapNearest(g.points);
+    const sfAt = (s: Point): number | null => {
+      const f = floodRegionSealed(mo, s[0], s[1], 0.5, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+      if (f.status !== "ok") return null;
+      const ring = oneClickRing(f, { nearest });
+      return ring && ring.length >= 3 ? ringAreaAbs(ring) / (c.ptPerFt * c.ptPerFt) : null;
+    };
+    for (const h of auxHuman) humanRows.push({ probe: `${name}/${h.name}`, handSF: h.hand_sf, engineSF: sfAt(h.seed), knownFail: h.knownFail });
+    for (const p of auxPairs) pairRows.push({ pair: `${name}/${p.name}`, sfA: sfAt(p.seedA), sfB: sfAt(p.seedB), knownFail: p.knownFail, xpassRatio: p.xpassRatio });
+  }
 }
 
 // ── report ──────────────────────────────────────────────────────────────────
@@ -326,6 +351,22 @@ if (kf.length) {
     console.log(`  ${(s.caseName + " / " + s.probeName).padEnd(42)} ${verdict}`);
   }
 }
+// ── human-SF reference rows + seed-pair stability (see score.ts) ────────────
+// Hand SF is WALL-TO-WALL; the engine measures the snapped CENTERLINE ring —
+// a 3–11% convention gap on corridors, wider than the 2.5% band. So these rows
+// are knownFail and the gate is xpass-only: NOT a binding human-truth gate yet.
+const hres = humanSfGate(humanRows, THRESHOLDS.humanMaxSfErr);
+const pres = seedPairGate(pairRows);
+if (hres.rows.length) {
+  console.log(`\n── human-measured SF reference rows (SF-only hand truth; convention-UNMATCHED: hand wall-to-wall vs engine centerline — xpass-monitored, not binding) ──`);
+  for (const r of hres.rows)
+    console.log(`  ${r.probe.padEnd(42)} hand ${r.handSF.toFixed(1)} SF | engine ${r.engineSF != null ? r.engineSF.toFixed(1) + " SF" : "NO TRACE"}${r.errFrac != null ? ` (${r.engineSF! >= r.handSF ? "+" : "−"}${(r.errFrac * 100).toFixed(1)}%)` : ""}${r.knownFail ? "  [known-fail]" : ""}`);
+}
+if (pres.rows.length) {
+  console.log(`\n── seed-pair stability (two clicks in the SAME space must agree) ──`);
+  for (const r of pres.rows)
+    console.log(`  ${r.pair.padEnd(42)} ${r.sfA != null ? r.sfA.toFixed(1) : "refused"} vs ${r.sfB != null ? r.sfB.toFixed(1) : "refused"} SF${r.ratio != null ? ` — ${r.ratio.toFixed(2)}× (xpass < ${r.xpassRatio}×)` : ""}${r.knownFail ? "  [known-fail]" : ""}`);
+}
 
 console.log(`\n── cross-resolution (ws × ${RES_FACTORS.join(" / ")}) ──`);
 for (const s of crossScores) {
@@ -360,7 +401,7 @@ for (const p of cgate.exempt) {
   console.log(`      ↳ ${x.reason}`);
 }
 
-writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, split: { synthetic: synth, enginePinned: pinned, byClass }, coverages, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, wallSemantics: WALL_SEMANTICS, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? Math.min(...fidPairs) : null, gated: false } }, null, 1));
+writeFileSync(join(here, "results.json"), JSON.stringify({ scores, aggregate: agg, split: { synthetic: synth, enginePinned: pinned, byClass }, coverages, humanSf: hres.rows, seedPairs: pres.rows, crossScores, crossAggregate: xagg, confidenceGate: cgate, resFactors: RES_FACTORS, wallSemantics: WALL_SEMANTICS, maskFidelity: { probes: fidelity, meanIoU: fidMeanIoU, floorIoU: fidFloorIoU, worstSfErr: fidWorstSf, crossFloorIoU: fidPairs.length ? Math.min(...fidPairs) : null, gated: false } }, null, 1));
 
 const failures: string[] = [...caseSemanticsFailures, ...classFailures];
 for (const cv of coverages) {
@@ -375,6 +416,8 @@ if (caseFiles.length !== EXPECT.cases && !process.env.BENCH_SEALED) failures.pus
 if (agg.goldenProbes !== EXPECT.goldenProbes) failures.push(`expected ${EXPECT.goldenProbes} golden probes, found ${agg.goldenProbes} — a fixture was added or lost`);
 if (agg.refusalProbes !== EXPECT.refusalProbes) failures.push(`expected ${EXPECT.refusalProbes} refusal probes, found ${agg.refusalProbes}`);
 if (agg.knownFails !== EXPECT.knownFails) failures.push(`expected ${EXPECT.knownFails} known-fails, found ${agg.knownFails} — re-pin EXPECT deliberately`);
+if (humanRows.length !== EXPECT.humanSfRows) failures.push(`expected ${EXPECT.humanSfRows} human-SF rows, found ${humanRows.length} — a humanSfProbes field was added or lost`);
+if (pairRows.length !== EXPECT.seedPairs) failures.push(`expected ${EXPECT.seedPairs} seed-pair rows, found ${pairRows.length} — a seedPairs field was added or lost`);
 // 0.3 (audit B3): nothing checked that a known-fail still fails, so a fixed
 // limitation could silently re-break, and any regression could be neutralised
 // with one knownFail:true. A known-fail that passes is a result, not a pass.
@@ -393,6 +436,6 @@ if (agg.leakRate > THRESHOLDS.maxLeakRate) failures.push(`leak rate ${(agg.leakR
 if (agg.correctRefusalRate < THRESHOLDS.minCorrectRefusal) failures.push(`correct-refusal ${(agg.correctRefusalRate * 100).toFixed(1)}%`);
 if (xagg.disagreements > THRESHOLDS.maxCrossDisagreements) failures.push(`${xagg.disagreements} cross-resolution verdict flip(s)`);
 if (xagg.crossFloorIoU < THRESHOLDS.crossFloorIoU) failures.push(`cross-resolution pair-IoU floor ${xagg.crossFloorIoU.toFixed(3)} < ${THRESHOLDS.crossFloorIoU}`);
-failures.push(...cgate.failures);
+failures.push(...cgate.failures, ...hres.failures, ...pres.failures);
 if (failures.length) { console.error(`\nBENCH FAILED: ${failures.join("; ")}`); process.exit(1); }
 console.log("\nbench passed");

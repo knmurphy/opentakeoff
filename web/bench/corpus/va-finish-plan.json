@@ -1294,6 +1294,33 @@
    "shapeClass": "room"
   },
   {
+   "name": "t1-corridor",
+   "seed": [
+    2023,
+    1078
+   ],
+   "expect": "golden",
+   "tags": [
+    "corridor",
+    "seed-instability"
+   ],
+   "shapeClass": "corridor",
+   "golden": [
+    [1984.3, 890.6],
+    [2114.6, 887],
+    [2110.3, 1219.7],
+    [2117.8, 1219.7],
+    [2117.8, 1198.8],
+    [2129.8, 1198.8],
+    [2126.6, 1284.7],
+    [2009.8, 1284.7],
+    [2004.5, 1250.2],
+    [1984.3, 1250.6],
+    [1982.2, 1238.6],
+    [1984.3, 1232.6]
+   ]
+  },
+  {
    "name": "open-margin",
    "seed": [
     5443,
@@ -1305,6 +1332,46 @@
     "known-limit"
    ],
    "knownFail": true
+  }
+ ],
+ "seedPairs": [
+  {
+   "name": "t1-corridor-seed-stability",
+   "seedA": [
+    2023,
+    1078
+   ],
+   "seedB": [
+    1879,
+    1078
+   ],
+   "knownFail": true,
+   "xpassRatio": 1.5,
+   "note": "Same T1 connecting corridor (hand-measured 271.8 SF wall-to-wall, printed 270 SF): two clicks ~8 ft apart return 158.1 SF vs 1525.8 SF (9.65x) at pin time — the VA seed-instability finding (docs/evidence/one-click/va-corridor-handmeasure.json, region_7_connecting-corr.png). Asserted symmetrically as an SF ratio, no golden polygon: xpass fires the day the seeds agree within 1.5x, whichever region they agree ON, forcing re-examination against the hand number."
+  }
+ ],
+ "humanSfProbes": [
+  {
+   "name": "CE-4-corridor",
+   "seed": [
+    4030,
+    858
+   ],
+   "hand_sf": 248.6,
+   "knownFail": true,
+   "source": "hand_sf: docs/evidence/one-click/va-corridor-handmeasure.json (wall-to-wall, measured 2026-07-28). Engine snapped-ring at this seed measured 235.3 SF the same day (production oneClickRing, factor 1, mppf 8.93).",
+   "note": "-5.3% vs hand — a genuine undercount: centerline semantics inflates the engine number (+3-11% on corridor geometry), so the true face-to-face shortfall is deeper than the row shows."
+  },
+  {
+   "name": "CE-5-corridor",
+   "seed": [
+    4064,
+    2437
+   ],
+   "hand_sf": 563.8,
+   "knownFail": true,
+   "source": "hand_sf: docs/evidence/one-click/va-corridor-handmeasure.json (wall-to-wall, measured 2026-07-28). Engine snapped-ring at this seed measured 624.2 SF the same day (production oneClickRing, factor 1, mppf 8.93).",
+   "note": "+10.7% vs hand — magnitude sits inside the centerline-vs-wall-to-wall convention gap ((W+t)/W ~ 3-11%), so this direction alone is NOT evidence of a leak; kept as a convention-unmatched reference row."
   }
  ]
 }
