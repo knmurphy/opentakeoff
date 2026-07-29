@@ -1035,6 +1035,12 @@ export const DOOR_SEAL_MAX_FT = 5;      // widest opening sealing will bridge (3
 export const SEAL_R_MAX = 128;          // absolute radius cap (cost + the Uint8 distance transform)
 export const SEAL_VIRTUAL_MAX = 0.25;   // a sealed region's boundary must be ≥75% real linework
 export const SEAL_MAX_SHEET_FRAC = 0.30; // ...and must still satisfy the room-size cap (= LEAK_FRACTION)
+/** How far off drawn linework a boundary cell may sit and still count as REAL
+ *  rather than dilation-invented — see virtualBoundaryFrac. RASTER cells, not
+ *  feet, and audit F2 established that deliberately: the margin has to stay
+ *  small next to the DILATION radius being judged, and the radii this gate sees
+ *  scale with the sheet while a feet-true margin would not. */
+export const VIRTUAL_HUG_PX = 3;
 
 /** The escalation ladder for a sheet where one foot spans `maskPxPerFt` mask px:
  *  1, 2, 4, … doubling up to the radius that bridges a DOOR_SEAL_MAX_FT opening
@@ -1546,9 +1552,7 @@ function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: numb
 // "room-size cap + ≥75%-real-boundary" guarantee vacuous on the PRIMARY path:
 // a region the ladder would have refused was returned unguarded, with
 // sealedPx/virtualFrac unset, so the readout said nothing and traceConfidence
-// scored it a verbatim 1.00. Both gates now apply here (a rejected min-pass
-// region falls through to the raw flood and the ladder, exactly as a rejected
-// ladder rung does), and the path reports itself:
+// scored it a verbatim 1.00. The path now reports itself:
 //   • minPassPx    — the radius that ran, whenever the rule changed the answer
 //   • minPassDelta — the fraction of the VERBATIM flood's region the rule
 //                    removed: 1 − minPass.count / rawFlood.count, and 1 when
@@ -1557,6 +1561,38 @@ function ascendSeed(dt: Uint8Array, mw: number, mh: number, ws: number, ix: numb
 // Both are only set when minPassDelta > 0. The rule runs on essentially every
 // scaled click and usually changes nothing; provenance for "a rule ran and did
 // not matter" is noise, and a confidence deduction for it would be a lie.
+//
+// AUDIT F1/F2 (post-A3 review). A3 also applied both of the ladder's gates
+// here UNCONDITIONALLY, and that was a regression, because the two paths ask
+// different questions. Which one this is turns on a single fact — does the
+// VERBATIM linework already bound the clicked space?
+//
+//   • it does (minPassDelta < 1) — the rule is TRIMMING. Its region is then a
+//     SUBSET of the verbatim flood's (the dilation only ever removes open
+//     cells, ascendSeed stays in the seed's own open component, and growback
+//     re-enters only cells open on the original mask), so:
+//       – the room-size cap is arithmetically redundant: the superset already
+//         passed it;
+//       – the ≥75%-real-boundary cap is satisfied IN KIND, not by luck: every
+//         synthetic run on this path bridges a gap the rule itself just judged
+//         narrower than MIN_PASS_FT, so no virtual run is even door-width. The
+//         cap is a proxy for run LENGTH; here run length is bounded a priori.
+//     A high fraction therefore means "many sub-half-foot slots" — a dashed or
+//     picket wall — and refusing it does not buy safety, it hands back the
+//     LEAKIER superset. Measured: a 0.433 ft slotted wall inside a suite went
+//     64.4 SF → 126.6 SF (+96%) and confidence 0.99 → 1.00, because the raw
+//     flood fell out of the bottom of the gate carrying no provenance at all.
+//     So on the trimming path the gates do not run. (test/minPassGate.test.ts)
+//   • it does not (minPassDelta === 1) — the rule is CREATING boundedness: not
+//     trimming a hairline connection but BRIDGING an opening, which is the seal
+//     ladder's job under another name. Both gates run, exactly as they do for a
+//     ladder rung, and an accepted region reports gap_sealed_px + the ladder's
+//     own virtual-boundary fraction beside min_pass_px.
+//
+// Because the gates now run only when the verbatim flood is unbounded, the
+// fall-through below can no longer return a bounded raw flood that a gate
+// refused: `base` is bounded only when the min-passage flood produced no
+// bounded region at all, and then there is nothing to report.
 function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], minPassPx = 0, given?: SealScratch): FloodResult {
   // `given` is the caller's own scratch — the per-arc-cluster retries run
   // against a REUSED mask buffer, which the sealCache (keyed on mask identity)
@@ -1576,22 +1612,24 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     const f = floodRegion(dm, ax, ay, sensitivity);
     if (f.status === "ok") {
       growRegionBack(f, mo, minPassPx, f.hatchFiltered ? 1 : 3, s.dt);
-      // the ladder's own two gates, on the ladder's own terms (see below)
+      // TRIMMING or CREATING? (see the F1/F2 note above — this one fact decides
+      // whether the ladder's gates are asking a question about this region)
+      const r0 = rawFlood();
+      if (r0.status === "ok" && r0.count > 0) {
+        const d = +(1 - f.count / r0.count).toFixed(4);
+        if (d > 0) { f.minPassPx = minPassPx; f.minPassDelta = d; }
+        return f;                       // a subset of a region that already passed both gates
+      }
+      // creating: the ladder's own two gates, on the ladder's own terms
       const vf = f.count > f.mw * f.mh * SEAL_MAX_SHEET_FRAC ? 1 : virtualBoundaryFrac(f, s.dt);
       if (vf <= SEAL_VIRTUAL_MAX) {
-        const r0 = rawFlood();
-        const d = +(r0.status === "ok" && r0.count > 0 ? 1 - f.count / r0.count : 1).toFixed(4);
-        if (d > 0) {
-          f.minPassPx = minPassPx;
-          f.minPassDelta = d;
-          // d === 1: the verbatim linework bounds NOTHING here — the dilation
-          // is not trimming a hairline connection, it is BRIDGING an opening,
-          // which is the seal ladder's job under another name. Report it as
-          // one (the readout and gap_sealed_px provenance follow), with the
-          // ladder's own virtual-boundary fraction. min_pass_px rides beside
-          // it to say which radius did it and why.
-          if (d === 1) { f.sealedPx = minPassPx; f.virtualFrac = +vf.toFixed(3); }
-        }
+        f.minPassPx = minPassPx;
+        f.minPassDelta = 1;
+        // the verbatim linework bounds NOTHING here, so report the bridge as
+        // one: gap_sealed_px + the ladder's own virtual-boundary fraction, with
+        // min_pass_px beside them to say which radius did it and why.
+        f.sealedPx = minPassPx;
+        f.virtualFrac = +vf.toFixed(3);
         return f;
       }
     }
@@ -1600,7 +1638,15 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
   if (base.status === "ok") return base;
   const sc = scratch();
   for (const r of radii) {
-    if (r <= minPassPx) continue;   // a subset of the primary's dilation — already failed harder
+    // Skipped because a SMALLER dilation bridges strictly less: reaching here
+    // means the verbatim flood is unbounded, so every escape route the rung
+    // would have to close is one the min-passage radius already closed (or
+    // failed to). The one case this forgoes is a rung landing between the
+    // widest escape's half-width and minPassPx after a gate refusal — measured
+    // across every scene in test/minPassGate.test.ts and a 47.7k-click sweep of
+    // both corpus sheets, no such rung ever bounded anything (the ladder is
+    // geometric — 1, 2, 4, 8 — so it rarely has a rung to spare down there).
+    if (r <= minPassPx) continue;
     const dm = dilatedView(mo, r, sc.dt);
     const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
     const f = floodRegion(dm, ax, ay, sensitivity);
@@ -1612,8 +1658,9 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     //   • the grown region must still satisfy the room-size cap the plain
     //     flood enforces (a room is never 30% of the sheet);
     //   • the seal must be LOCAL — most of the region's boundary must hug real
-    //     linework (dt ≤ 3), with only door-width virtual runs. A starved blob
-    //     ends at descent watersheds in open space and fails this immediately.
+    //     linework (within VIRTUAL_HUG_PX), with only door-width virtual runs. A
+    //     starved blob ends at descent watersheds in open space and fails this
+    //     immediately.
     if (f.count > f.mw * f.mh * SEAL_MAX_SHEET_FRAC) continue;
     const vf = virtualBoundaryFrac(f, sc.dt);
     if (vf > SEAL_VIRTUAL_MAX) continue;
@@ -1771,9 +1818,33 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
   return out;
 }
 
-// Fraction of a region's boundary cells that do NOT hug original linework
-// (dt > 3): 0 for a fully wall-bounded room, ≈ door/perimeter for a legit
-// seal, large for a dilation-starved blob whose edges sit in open space.
+// Fraction of a region's boundary cells that do NOT hug original linework:
+// 0 for a fully wall-bounded room, ≈ door/perimeter for a legit seal, large for
+// a dilation-starved blob whose edges sit in open space.
+//
+// VIRTUAL_HUG_PX is in RASTER cells, and audit F2 tried the obvious-looking
+// alternative — a feet-true margin, `dt > round(2in x mppf)`, since every other
+// constant in this module converts through CAL_MPPF — and MEASURED it wrong:
+//   • it made the metric blind at exactly the scale this gate adjudicates. A
+//     2 in/side margin erases every bridged gap under 4 in, and the min-passage
+//     rule's entire business is gaps under MIN_PASS_FT = 6 in. On the A3/D-1
+//     fixture (a picket rectangle, 3 in gaps at 72 px/ft) it reported a boundary
+//     that is 82% invented as 0.000 synthetic, and the guard that had refused a
+//     "room" drawn as a dotted line handed it back at confidence 0.85.
+//   • the same swap with `dt > minPassPx` is worse still: no boundary cell can
+//     be further than the radius from linework after growback, so the fraction
+//     is identically 0 on this path — vacating the gate AND the confidence
+//     deduction that reads the same number.
+// The margin has to stay small next to the DILATION radius it judges, and 3
+// cells is what makes it so on a working raster.
+//
+// KNOWN UNDER-COUNT: this is the share of boundary CELLS further than
+// VIRTUAL_HUG_PX from linework, not the share of boundary LENGTH the dilation
+// invented — the cells within the margin of each jamb count as real, so a
+// 0.43 ft slot the rule closed reports ~4 cells of 10. Read it as a floor on
+// how synthetic a boundary is. The honest measure keys on whether a boundary
+// cell's barrier neighbour is DRAWN or DILATED, which recalibrates
+// SEAL_VIRTUAL_MAX and every virtualFrac the corpus reads; not done here.
 function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, dt: Uint8Array): number {
   const { region, mw, mh } = f;
   const b = boxOf(region, mw, mh);        // boundary cells are region cells
@@ -1785,7 +1856,7 @@ function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, 
       if (!region[i]) continue;
       if ((x > 0 && !region[i - 1]) || (x < mw - 1 && !region[i + 1]) || (y > 0 && !region[i - mw]) || (y < mh - 1 && !region[i + mw])) {
         boundary++;
-        if (dt[i] > 3) virtual++;
+        if (dt[i] > VIRTUAL_HUG_PX) virtual++;
       }
     }
   }
