@@ -55,7 +55,30 @@ Key commits on the engine branch, in order: `5e92a11` Phase-0 gates · `1a02b15`
 
 ---
 
-## 3. The defect queue (all confirmed by execution, none fixed yet)
+## 3. The defect queue
+
+> **Update 2026-07-29: F1, F2, F4, F5, F6 are FIXED and integrated at `b277662`** —
+> 960/960 tests, bench green with the new gates live, goldens byte-identical, one revert
+> per agent re-run by the integrator. F3 + F7(b,d,g) are with agent E (in flight).
+> Corrections the fix wave made to THIS document's claims: F1's root cause was NOT
+> `dt > 3` (both suggested repairs made things worse — the gates were simply applied
+> where they answer no question; they are now scoped to the creating path and the bare
+> fall-through is structurally unreachable); F2 did NOT reproduce on either real sheet
+> in 47,732 clicks (the ~0.2% figure came from randomized synthetic scenes; residual
+> pinned as known-limit F2b); the wall-semantics tautology's source was the two corpus
+> WRITERS (`from-takeoff.mts`, `pin-goldens.mts`), not `corpus.ts`; and 5.88 in
+> re-measures as 5.86 in.
+>
+> **New queue items from the wave:** (i) `diffRepin` lets a REFUSAL probe be deleted
+> unadjudicated and silently (`verdict:"refusal", flagged:false` — the removal manoeuvre
+> against a known-limit probe; semantics change, needs a decision); (ii) the absolute-SF
+> trigger belongs INSIDE `pin-goldens.mts` — `run.mts`'s new 1.0 SF gate catches
+> hand-edited goldens but is structurally blind to a re-pin where the engine agrees with
+> the moved golden; (iii) W1–W3 on the perf guard remain open; (iv) F2b: the creating-path
+> refusal moves with the working raster (identified fix: count a cell synthetic when its
+> barrier neighbour is dilated rather than drawn — needs its own review).
+
+### Original queue (historical record — see the update above)
 
 **F1 — BLOCKING, a regression the remediation itself introduced.** A3's new gate on the
 min-passage path falls through on refusal and returns the **raw untrimmed flood** with no
