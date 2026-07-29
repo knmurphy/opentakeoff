@@ -1,0 +1,15 @@
+{
+  "note": "Hand-measured floor area (wall-to-wall) for the VA finish plan's corridor/lobby callouts, to settle convention-vs-error against bench:callouts. Printed = architect's drawn NNN SF; engine = One-Click modal region; hand = manual measurement. See va-callouts-markup.png and region_*.png.",
+  "plan": "demo/sample-finish-plan.pdf",
+  "measured": "2026-07-28",
+  "rows": [
+    { "marker": 3, "tag": "CE-5", "space": "corridor",            "printed_sf": 557, "hand_sf": 563.8, "engine_sf": 606, "engine_vs_hand": 0.075,  "stable": false },
+    { "marker": 5, "tag": "CE-4", "space": "corridor",            "printed_sf": 250, "hand_sf": 248.6, "engine_sf": 229, "engine_vs_hand": -0.079, "stable": false },
+    { "marker": 7, "tag": "T1",   "space": "connecting corridor", "printed_sf": 270, "hand_sf": 271.8, "engine_sf": 152, "engine_vs_hand": -0.441, "stable": true  },
+    { "marker": 8, "tag": "6",    "space": "link corridor",       "printed_sf": 189, "hand_sf": 212.4, "engine_sf": 143, "engine_vs_hand": -0.327, "stable": true  },
+    { "marker": 9, "tag": "-",    "space": "elevator lobby",      "printed_sf": 640, "hand_sf": 627.9, "engine_sf": 392, "engine_vs_hand": -0.375, "stable": true  },
+    { "marker": 4, "tag": "CE-3", "space": "corridor",            "printed_sf": 706, "hand_sf": 555.6, "engine_sf": 262, "engine_vs_hand": -0.528, "stable": false },
+    { "marker": 6, "tag": "CE-2", "space": "corridor",            "printed_sf": 411, "hand_sf": 425.1, "engine_sf": 20,  "engine_vs_hand": -0.953, "stable": false }
+  ],
+  "summary": "engine vs hand: median -37.5%, mean -38%, 6 of 7 undercounting; printed tracks hand within a few % on 6 of 7 (CE-3 the lone +27% finish-zone inflation). Cause: raster flood fragments at openings or leaks through them on corridor/lobby space (RFC failure mode #2). Needs item A."
+}
