@@ -494,6 +494,61 @@ test("door wedge: a curved WALL does not annex the room behind it (cap holds)", 
   assert.ok(area < 214 * 178 * 0.7, `one side of the partition only, got ${area}`);
 });
 
+// ── fixture transparency: flooring runs UNDER fixtures ─────────────────────
+// A fixture outline (toilet/sink/vanity) is plain wall linework, so it blocks
+// the flood. Flooring runs under fixtures, so the footprint must be counted.
+// buildMask's `transparent` mask drops classified fixture segments so the flood
+// measures straight through. Island fixtures are already fine (the outer-contour
+// trace ignores their interior hole); the real bug is WALL-ATTACHED fixtures,
+// whose outline makes a concave notch that carves area AND inflates perimeter.
+test("fixture transparency: a wall-attached fixture is measured through (area + perimeter)", () => {
+  const sheet = squareSegs(2, 2, 798, 798);
+  const room = squareSegs(100, 100, 300, 300);          // 200×200 interior, 4 segs
+  // a fixture hanging off the BOTTOM wall (y=300): three sides into the room,
+  // the open side coincides with the wall line — the common toilet/vanity case
+  const fixture = [180,300, 180,260,  180,260, 220,260,  220,260, 220,300];  // 3 segs
+  const all = [...sheet, ...room, ...fixture];
+  const nSeg = all.length >> 2;
+  const fixStart = (all.length - fixture.length) >> 2;
+  const transparent = new Uint8Array(nSeg);
+  for (let k = 0; k < fixture.length >> 2; k++) transparent[fixStart + k] = 1;
+
+  // WITHOUT transparency: the fixture carves its footprint out of the room
+  const carved = floodRegion(buildMask(all, 800, 800, 3000, zeroMeta(all)), 200, 200);
+  assert.equal(carved.status, "ok");
+  if (carved.status !== "ok") return;
+  const carvedArea = ringArea(traceRegion(carved));
+  assert.ok(carvedArea < 38500, `baseline carves the footprint, got ${Math.round(carvedArea)}`);
+
+  // WITH transparency: measured through — full room area, perimeter = the walls
+  const f = floodRegion(buildMask(all, 800, 800, 3000, zeroMeta(all), 0, transparent), 200, 200);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  const ring = traceRegion(f);
+  const area = ringArea(ring);
+  assert.ok(approx(area, 198 * 198, 0.02), `fixture measured through ≈ full room ${198 * 198}, got ${Math.round(area)}`);
+  assert.ok(area > carvedArea + 1200, `transparency recovers the carved footprint (${Math.round(carvedArea)} → ${Math.round(area)})`);
+  const perim = closedMetrics(ring).perim;
+  assert.ok(approx(perim, 4 * 198, 0.03), `perimeter follows the walls (~${4 * 198}), not the fixture notch, got ${Math.round(perim)}`);
+  assert.equal(ring.length, 4, "a clean 4-corner room, no notch detour");
+});
+
+test("fixture transparency: an island fixture stays full and loses its interior hole", () => {
+  const sheet = squareSegs(2, 2, 798, 798);
+  const room = squareSegs(100, 100, 300, 300);
+  const fixture = squareSegs(150, 150, 190, 190);       // free-standing 40×40, 4 segs
+  const all = [...sheet, ...room, ...fixture];
+  const nSeg = all.length >> 2;
+  const fixStart = (all.length - fixture.length) >> 2;
+  const transparent = new Uint8Array(nSeg);
+  for (let k = 0; k < 4; k++) transparent[fixStart + k] = 1;
+  const f = floodRegion(buildMask(all, 800, 800, 3000, zeroMeta(all), 0, transparent), 200, 200);
+  assert.equal(f.status, "ok");
+  if (f.status !== "ok") return;
+  const area = ringArea(traceRegion(f));
+  assert.ok(approx(area, 198 * 198, 0.02), `island fixture measured through ≈ full room ${198 * 198}, got ${Math.round(area)}`);
+});
+
 // ── revision-cloud beziers (marked-set PDF scallops) ────────────────────────
 test("cloudBezier: closed loop of cubic segments, more segments for a longer perimeter", () => {
   const small = cloudBezier(0, 0, 100, 60);

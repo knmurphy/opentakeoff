@@ -615,8 +615,13 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
 // a cell crossed by both keeps bit 1, so hard always wins. Curve chords (door
 // swings, curved walls) additionally carry bit 4: still hard, but identifiable
 // so annexDoorWedges can recognize a swing arc on a region's boundary.
+// A `transparent` per-segment mask (optional) marks linework that is NOT a
+// floor boundary — classified fixtures/casework (flooring runs under them) or
+// annotation symbols — and is skipped entirely, so the flood measures straight
+// through the footprint (island fixtures leave no hole, wall-attached ones no
+// notch) bounded only by the real walls behind them.
 export const MASK_CURVE_BIT = 4;
-export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0): MaskObj {
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0, transparent: Uint8Array | null = null): MaskObj {
   const ws = Math.min(1, maxDim / Math.max(imgW, imgH, 1));
   const mw = Math.max(2, Math.ceil(imgW * ws)), mh = Math.max(2, Math.ceil(imgH * ws));
   const mask = new Uint8Array(mw * mh);
@@ -627,6 +632,7 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
   const soft = meta ? classifyHatchSegs(segs, meta, ws, mppf > 0 ? HATCH_MAX_PITCH_FT * mppf : HATCH_MAX_PITCH) : null;
   let softCount = 0;
   for (let i = 0, si = 0; i + 3 < segs.length; i += 4, si++) {
+    if (transparent && transparent[si]) continue;   // fixture/annotation linework — never a barrier
     let v = soft && soft[si] ? 2 : 1;
     if (v === 1 && meta && (meta[si] & SEG_CURVE)) v = 1 | MASK_CURVE_BIT;
     if (v === 2) softCount++;
