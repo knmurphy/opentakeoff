@@ -460,7 +460,12 @@ async function main() {
     if (diff.caseTotal.adjudication) caseAdj.push({ at, scope: "case-total", from_sf: +diff.caseTotal.oldSF.toFixed(2), to_sf: +diff.caseTotal.newSF.toFixed(2), delta_pct: +((diff.caseTotal.deltaPct ?? 0) * 100).toFixed(2), reason: diff.caseTotal.adjudication });
     if (diff.overlap.adjudication) caseAdj.push({ at, scope: "pairwise-overlap", overlap_sf: +diff.overlap.sf.toFixed(2), frac_pct: +(diff.overlap.frac * 100).toFixed(3), reason: diff.overlap.adjudication });
 
-    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: WALL_SEMANTICS, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
+    // F5/F6 handback: preserve the ON-DISK declaration. A case whose file already
+    // declares its measurand (a human key declaring centerline or interior-clear)
+    // must not be silently overwritten with the engine's measurand on re-pin —
+    // the field exists to carry information, and this writer was one of the two
+    // tautology sources. Engine-pinned cases with no prior get the engine's value.
+    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: prior?.wallSemantics ?? WALL_SEMANTICS, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
     pending.push({ path, json: JSON.stringify(out, null, 1), diff });
   }
 

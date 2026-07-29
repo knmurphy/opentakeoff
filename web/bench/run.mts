@@ -338,7 +338,7 @@ if (semanticsCoverage.length) {
 if (adjudications.length) {
   console.log("\n── re-pin adjudications on record (bench/pin-goldens.mts, task 0.9) ──");
   for (const { caseName, subject, a } of adjudications) {
-    const move = a.from_sf != null ? `${a.from_sf.toFixed(2)} → ${a.to_sf!.toFixed(2)} SF (${a.delta_pct}%${a.iou_old_new != null ? `, IoU ${a.iou_old_new.toFixed(3)}` : ""})` : a.overlap_sf != null ? `${a.overlap_sf} SF overlap (${a.frac_pct}%)` : "";
+    const move = a.from_sf != null && a.to_sf != null ? `${a.from_sf.toFixed(2)} → ${a.to_sf.toFixed(2)} SF (${a.delta_pct}%${a.iou_old_new != null ? `, IoU ${a.iou_old_new.toFixed(3)}` : ""})` : a.removed_sf != null ? `removed (was ${a.removed_sf.toFixed(2)} SF)` : a.overlap_sf != null ? `${a.overlap_sf} SF overlap (${a.frac_pct}%)` : "";
     console.log(`  ${(caseName + " / " + subject).padEnd(42)} ${a.at ?? ""} ${move}\n      ↳ ${a.reason}`);
   }
 }
