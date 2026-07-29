@@ -1143,22 +1143,38 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
     hatchFiltered: hatchFiltered || undefined, sealedPx, virtualFrac,
   };
   // Absorb the door LEAF: the straight leaf line stays a barrier through the
-  // retry, leaving a 1–2 px slit between the room and the annexed wedge. The
+  // retry, leaving a thin slit between the room and the annexed wedge. The
   // outer contour would dive up that slit and back, inflating perimeter_lf by
   // ~2 leaf lengths per door — a baseboard over-count. The leaf is exactly
   // the barrier pinched between r1's region and the annexed delta, so absorb
   // only that: real wall stubs (pinched between r1 and r1) keep their slit —
   // baseboard genuinely runs around those.
+  //
+  // The pinch is tested in all FOUR directions (H, V, and both diagonals): a
+  // leaf on an angled wall — or a door drawn part-open — rasterizes to a
+  // stair-stepped diagonal whose cells are never pinched H or V, so an
+  // axis-only test leaves its slit behind (perimeter still inflated). Iterate
+  // to convergence rather than a fixed pass count so leaves thicker than a
+  // couple px close fully. Absorption is monotone (each pass only adds cells,
+  // bounded by the region) and self-limiting — it stops as soon as the
+  // remaining hard cells are real walls with region on one side only, and it
+  // can never leak: a cell is absorbed only when BOTH sides are already
+  // region, so filling the sliver between them opens no new path outward.
   const reg = region, reg1 = r1.region, mask = mo.mask;
   const isDelta = (i: number) => reg[i] && !reg1[i];
-  for (let pass = 0; pass < 2; pass++) {               // Bresenham lines raster up to 2 px thick
+  let changed = true;
+  while (changed) {
+    changed = false;
     for (let y = 1; y < mh - 1; y++) {
       const row = y * mw;
       for (let x = 1; x < mw - 1; x++) {
         const i = row + x;
         if (reg[i] || !(mask[i] & 1)) continue;
-        const pinchH = reg[i - 1] && reg[i + 1], pinchV = reg[i - mw] && reg[i + mw];
-        if ((pinchH && (isDelta(i - 1) || isDelta(i + 1))) || (pinchV && (isDelta(i - mw) || isDelta(i + mw)))) { reg[i] = 1; out.count++; }
+        const pinchH  = reg[i - 1]      && reg[i + 1]      && (isDelta(i - 1)      || isDelta(i + 1));
+        const pinchV  = reg[i - mw]     && reg[i + mw]     && (isDelta(i - mw)     || isDelta(i + mw));
+        const pinchD1 = reg[i - mw - 1] && reg[i + mw + 1] && (isDelta(i - mw - 1) || isDelta(i + mw + 1));
+        const pinchD2 = reg[i - mw + 1] && reg[i + mw - 1] && (isDelta(i - mw + 1) || isDelta(i + mw - 1));
+        if (pinchH || pinchV || pinchD1 || pinchD2) { reg[i] = 1; out.count++; changed = true; }
       }
     }
   }

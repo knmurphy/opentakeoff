@@ -470,6 +470,50 @@ test("door swing: drawn leaf + swing arc bounds the room WITHOUT sealing (the co
   assert.ok(approx(perim, 2 * (214 + 178), 0.03), `perimeter ≈ the walls (${2 * (214 + 178)}), got ${perim}`);
 });
 
+test("door swing: a DIAGONAL leaf is absorbed too (angled wall / part-open door)", () => {
+  // Same room + opening as the axis-aligned door test, but the leaf is drawn
+  // at 45° (an angled wall, or a door caught part-open) and the swing arc runs
+  // from the leaf tip to the strike jamb. The leaf rasterizes to a
+  // stair-stepped diagonal — the case the old axis-only absorption missed,
+  // leaving a slit that inflated perimeter. The fix must absorb it just like
+  // the vertical leaf: wedge included, perimeter ≈ the walls, no leaf crack.
+  const room = [
+    100, 100, 316, 100,
+    316, 100, 316, 280,
+    316, 280, 262, 280,                                 // right of the opening
+    208, 280, 100, 280,                                 // left of the opening
+    100, 280, 100, 100,
+  ];
+  const R = 54;
+  const hx = 208, hy = 280;                             // hinge at the left jamb
+  const tipx = hx + R * Math.SQRT1_2, tipy = hy - R * Math.SQRT1_2;  // leaf at 45°
+  const leaf = [hx, hy, tipx, tipy];
+  const arc: number[] = [];
+  let px = tipx, py = tipy;                             // tip (45°) → strike jamb (90°) about the hinge
+  for (let k = 1; k <= 8; k++) {
+    const a = Math.PI / 4 + (k / 8) * (Math.PI / 4);
+    const qx = hx + R * Math.sin(a), qy = hy - R * Math.cos(a);
+    arc.push(px, py, qx, qy); px = qx; py = qy;
+  }
+  const all = [...squareSegs(2, 2, 998, 798), ...room, ...leaf, ...arc];
+  const meta = zeroMeta(all);
+  const arcStart = (all.length - arc.length) >> 2;
+  for (let k = 0; k < arc.length >> 2; k++) meta[arcStart + k] = SEG_CURVE;   // only the arc is curve linework
+  const mask = buildMask(all, 1000, 800, 3000, meta);
+
+  const fw = floodRegionSealed(mask, 200, 200, SENS_BALANCED, sealRadiiFor(18), doorWedgeCapPx(18));
+  assert.equal(fw.status, "ok");
+  if (fw.status !== "ok") return;
+  assert.equal(fw.wedges, 1, "exactly one swing wedge annexed");
+  const ring = traceRegion(fw);
+  const area = ringArea(ring);
+  assert.ok(approx(area, 214 * 178, 0.04), `wedge included ≈ full room ${214 * 178}, got ${Math.round(area)}`);
+  // the diagonal leaf must be absorbed: a leftover slit would send the ring up
+  // and back down the 45° leaf, inflating perimeter well past the walls
+  const perim = closedMetrics(ring).perim;
+  assert.ok(approx(perim, 2 * (214 + 178), 0.04), `perimeter ≈ the walls (${2 * (214 + 178)}), got ${Math.round(perim)}`);
+});
+
 test("door wedge: a curved WALL does not annex the room behind it (cap holds)", () => {
   // same room, but the curve is a partition arc bowing across the middle —
   // the space beyond it is a half-room, far over the door-wedge cap
