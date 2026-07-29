@@ -39,7 +39,7 @@ export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; sealedPx?: number; virtualFrac?: number; wedges?: number; wedgeGrowth?: number; doorOpenings?: number[] };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -427,6 +427,36 @@ function circleFitOk(segs: number[], chain: number[], c0: number, c1: number): b
     if (Math.abs(Math.hypot(xs[i] - mx - cx, ys[i] - my - cy) - r) > tol) return false;
   }
   return true;
+}
+
+// Kasa least-squares circle through mask-CELL centres (index = y*mw + x),
+// returning centre + radius in mask px with the mean residual, or null if the
+// cells are collinear / too few. Used by floodRegionSealed to recover a door
+// swing's hinge and leaf length from its rasterised arc cluster — the one
+// door signal that survives a coarse raster (the traced ring does not).
+function fitCircleToCells(cells: number[], mw: number): { cx: number; cy: number; r: number; res: number } | null {
+  const m = cells.length;
+  if (m < 4) return null;
+  let mx = 0, my = 0;
+  for (const i of cells) { mx += i % mw; my += (i / mw) | 0; }
+  mx /= m; my /= m;
+  let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0;
+  for (const i of cells) {
+    const x = (i % mw) - mx, y = ((i / mw) | 0) - my, z = x * x + y * y;
+    sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z;
+  }
+  const det = sxx * syy - sxy * sxy;
+  if (Math.abs(det) < 1e-9) return null;                 // collinear — no circle
+  const cx = (sxz * syy - syz * sxy) / (2 * det);
+  const cy = (syz * sxx - sxz * sxy) / (2 * det);
+  let r = 0;
+  for (const i of cells) r += Math.hypot((i % mw) - mx - cx, ((i / mw) | 0) - my - cy);
+  r /= m;
+  if (!(r > 0)) return null;
+  let res = 0;
+  for (const i of cells) res += Math.abs(Math.hypot((i % mw) - mx - cx, ((i / mw) | 0) - my - cy) - r);
+  res /= m;
+  return { cx: mx + cx, cy: my + cy, r, res };
 }
 
 // ── 2. hatch classification ────────────────────────────────────────────────
@@ -1094,6 +1124,14 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   let wedges = 0;
   let hatchFiltered = !!r1.hatchFiltered;
   let sealedPx = r1.sealedPx, virtualFrac = r1.virtualFrac;
+  // Per accepted door, the swing arc's circle fit gives the leaf length =
+  // opening width (the one door metric a coarse raster preserves — the traced
+  // ring's jamb chord does not). Recorded in IMAGE px so the caller can
+  // exclude each opening from the baseboard perimeter and track it as a floor
+  // transition. Only plausible door widths (see DOOR_SEAL_MAX_FT) with a clean
+  // fit are emitted; a poor fit annexes the wedge (area still counts) but
+  // records no opening — never a false transition.
+  const doorOpenings: number[] = [];
   for (const cl of clusters.slice(0, WEDGE_MAX_DOORS)) {
     // per-cluster allowance from the ARC'S OWN extent: a swing wedge fits
     // inside its arc's bounding box plus the seal's growback margin (the
@@ -1132,6 +1170,17 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
     if (!region) region = r1.region.slice();
     for (let i = 0; i < region.length; i++) if (r2.region[i] && !region[i]) { region[i] = 1; count++; }
     wedges++;
+    // circle-fit THIS door's arc → leaf length = opening width. mppf is the
+    // mask px per foot (always set on the annex path — wedgeCapPx is 0 without
+    // scale), so gate on a plausible drawn-door width and a tight fit.
+    const fit = fitCircleToCells(cl, mw);
+    const mppf = mo.mppf ?? 0;
+    if (fit && mppf > 0) {
+      const doorFt = fit.r / mppf;
+      if (doorFt >= 1.5 && doorFt <= DOOR_SEAL_MAX_FT + 0.5 && fit.res <= Math.max(1, 0.15 * fit.r)) {
+        doorOpenings.push(+(fit.r / mo.ws).toFixed(2));   // image px (r mask px ÷ mask-per-image-px)
+      }
+    }
     if (r2.hatchFiltered) hatchFiltered = true;
     if (r2.sealedPx && (!sealedPx || r2.sealedPx > sealedPx)) sealedPx = r2.sealedPx;
     if (r2.virtualFrac != null && (virtualFrac == null || r2.virtualFrac > virtualFrac)) virtualFrac = r2.virtualFrac;
@@ -1164,6 +1213,7 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
   }
   out.wedges = wedges;
   out.wedgeGrowth = +(out.count / r1.count).toFixed(3); // confidence signal: how much the door retries grew
+  if (doorOpenings.length) out.doorOpenings = doorOpenings;
   return out;
 }
 
@@ -1185,6 +1235,51 @@ function virtualBoundaryFrac(f: { region: Uint8Array; mw: number; mh: number }, 
     }
   }
   return boundary ? virtual / boundary : 1;
+}
+
+// Classify a traced ring's edges into WALL runs (hugging real linework) and
+// DOOR-OPENING spans. A wedge annex / gap seal bounds the room with a SYNTHETIC
+// boundary across the opening — cells far (dt > virtCells) from any hard
+// linework — which is exactly the door opening. Base/trim does not run across a
+// doorway, so that synthetic run must be excluded from the perimeter; and the
+// opening itself is worth TRACKING (its width drives a material-transition /
+// threshold line item). Returns the wall-only perimeter (image px, ×upp for ft)
+// plus each opening span. dt is reused from the seal cache when present.
+export interface PerimClass { wallPerim: number; openings: Array<{ a: Point; b: Point; len: number }>; }
+export function classifyPerimeter(ring: Point[], mo: MaskObj, virtCells = 3): PerimClass {
+  const { mask, mw, mh, ws } = mo;
+  const dt = sealCache.get(mask)?.dt ?? hardDT(mask, mw, mh);
+  const virtualAt = (x: number, y: number): boolean => {
+    const mx = Math.min(mw - 1, Math.max(0, Math.round(x * ws)));
+    const my = Math.min(mh - 1, Math.max(0, Math.round(y * ws)));
+    return dt[my * mw + mx] > virtCells;
+  };
+  // Walk the ring at mask-cell granularity and split into contiguous WALL and
+  // OPENING runs — a single RDP edge often spans both (a straight bottom wall
+  // that crosses a doorway), so per-edge majority voting would miss the opening.
+  let wallPerim = 0;
+  const openings: Array<{ a: Point; b: Point; len: number }> = [];
+  let open: { a: Point; b: Point; len: number } | null = null;
+  const flush = () => { if (open) { openings.push(open); open = null; } };
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) continue;
+    const steps = Math.max(1, Math.ceil(len * ws));
+    const seg = len / steps;
+    for (let s = 0; s < steps; s++) {
+      const p0: Point = [a[0] + dx * (s / steps), a[1] + dy * (s / steps)];
+      const p1: Point = [a[0] + dx * ((s + 1) / steps), a[1] + dy * ((s + 1) / steps)];
+      if (virtualAt((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2)) {
+        if (!open) open = { a: p0, b: p1, len: 0 };
+        open.len += seg; open.b = p1;
+      } else { flush(); wallPerim += seg; }
+    }
+  }
+  flush();
+  return { wallPerim, openings };
 }
 
 // ── 5. contour trace + simplify ────────────────────────────────────────────

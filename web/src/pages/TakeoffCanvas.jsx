@@ -37,12 +37,12 @@ import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
-import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, snapVertices, ringArea, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, traceRegion, snapVertices, ringArea, classifyPerimeter, MASK_MAX_DIM, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { roomLabelSeeds, detectRegions, sheetBounds, detectionReport, ROOM_LABEL_RE } from "../lib/detectRooms";
 import { roomNameFromTokens } from "../lib/roomName";
 import { traceConfidence } from "../lib/confidence";
-import { conditionTotals, verticalWallSf } from "../lib/totals.js";
+import { conditionTotals, verticalWallSf, transitionLf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { shapesInStageRect } from "../lib/marquee.js";
 import { sanitizeSheetLevels } from "../lib/sheetLevels.js";
@@ -3049,7 +3049,7 @@ export default function TakeoffCanvas() {
   // vector corners would corrupt the ring. Duplicate/carve checks run inside a
   // FUNCTIONAL setProposal so a click racing the first raster render can't
   // clobber state.
-  function proposeRegion(f, tp, local, negative, raster) {
+  function proposeRegion(f, mo, tp, local, negative, raster) {
     const upp = uppFor(tp.key);
     if (!upp) return;
     let ring;
@@ -3060,7 +3060,33 @@ export default function TakeoffCanvas() {
     }
     if (ring.length < 3) { setCommitMsg("Couldn't trace that space — trace it with Area (A)."); return; }
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
-    const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    // Base/trim doesn't run across a doorway: when the flood sealed a gap or
+    // annexed a swing wedge, split the ring into wall runs (the base perimeter)
+    // and door-opening spans (excluded from perimeter, tracked for a material-
+    // transition add). Plain rooms (no seal/wedge) keep the full ring perimeter.
+    let perim_lf, doorSpans = null;
+    if (mo && f.doorOpenings && f.doorOpenings.length) {
+      // Drawn door: the swing-arc circle fit gives each opening's width (image
+      // px). Base/trim skips a doorway, so exclude every opening from the
+      // perimeter and track it for a floor transition / threshold strip. (The
+      // raster ring still detours along the arc — that residual inflation isn't
+      // removable at plan scale; see oneclick's floodRegionSealed. This excludes
+      // the opening span, which is the robust, analytically-grounded part.)
+      const full = closedMetrics(ring).perim * upp;
+      const spans = f.doorOpenings.map((w) => +(w * upp).toFixed(2)).filter((l) => l > 0.3);
+      perim_lf = +Math.max(0, full - spans.reduce((a, b) => a + b, 0)).toFixed(2);
+      if (spans.length) doorSpans = spans;
+    } else if (mo && f.sealedPx) {
+      // Gap-sealed opening with no drawn door (faded scan line / cased opening):
+      // the synthetic seal boundary sits in open space (dt > 3), so the ring-walk
+      // classifier still locates it.
+      const pc = classifyPerimeter(ring, mo);
+      perim_lf = +(pc.wallPerim * upp).toFixed(2);
+      const spans = pc.openings.map((o) => +(o.len * upp).toFixed(2)).filter((l) => l > 0.05);
+      if (spans.length) doorSpans = spans;
+    } else {
+      perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    }
     const conf = traceConfidence({ raster, hatchFiltered: f.hatchFiltered, sealedPx: f.sealedPx, virtualFrac: f.virtualFrac, wedges: f.wedges, mppf: f.mppf });
     // Decide accept/dup/carve-reject INSIDE the functional updater, against
     // its own authoritative `prev` — not proposalRef, which only catches up
@@ -3112,7 +3138,7 @@ export default function TakeoffCanvas() {
         // corrected region can still report what the fill proposed; sens rides
         // only when the estimator moved the knob off Balanced (vector path
         // only — the raster mask is single-tier, sensitivity is inert there).
-        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, rt: !!raster, cf: conf.score, cff: conf.factors }] };
+        return { key: tp.key, regions: [...rs, { kind, seed: local, poly: ring, poly0: ring.map(([x, y]) => [x, y]), ...(!raster && fillSens !== SENS_BALANCED ? { sens: fillSens } : {}), area_sf, perim_lf, hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, ...(doorSpans ? { dsp: doorSpans, dlf: +doorSpans.reduce((a, b) => a + b, 0).toFixed(2) } : {}), rt: !!raster, cf: conf.score, cff: conf.factors }] };
       });
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
@@ -3156,7 +3182,7 @@ export default function TakeoffCanvas() {
         // opening (mask px per foot = mask-per-image-px / units-per-image-px)
         const mppf = mo.ws / upp;
         const f = floodRegionSealed(mo, local[0], local[1], fillSens, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
-        if (f.status === "ok") { proposeRegion(f, tp, local, negative, false); return; }
+        if (f.status === "ok") { proposeRegion(f, mo, tp, local, negative, false); return; }
         if (!rasterEligible) {
           setCommitMsg(f.status === "leak"
             ? "That space isn't enclosed on the plan linework — the fill spilled. Click a more enclosed spot, or trace it with Area (A)."
@@ -3189,7 +3215,7 @@ export default function TakeoffCanvas() {
         : "Landed on dense scan ink (text or hatching). Zoom in and click an open spot, or trace it with Area (A).");
       return;
     }
-    proposeRegion(f, tp, local, negative, true);
+    proposeRegion(f, rmo, tp, local, negative, true);
   }
   function createProposal() {
     if (!proposal || !proposal.regions.length) return;
@@ -3198,7 +3224,7 @@ export default function TakeoffCanvas() {
       sheet_id: tp.key, condition_id: activeCond,
       measure_role: r.kind === "neg" ? "deduct" : "floor_area",
       verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
-      computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf },
+      computed: { area_sf: r.area_sf, perimeter_lf: r.perim_lf, ...(r.dlf ? { door_opening_lf: r.dlf } : {}) },
       // an explicit active label is the estimator's call and always wins; else
       // the drawing's own room tag (auto-named) labels the shape
       ...(activeLabel ? { label: activeLabel } : r.autoName ? { label: r.autoName } : {}),
@@ -3208,7 +3234,7 @@ export default function TakeoffCanvas() {
       // an untouched region's verts ARE the proposal, so nothing extra rides.
       // Post-Create edits are stamped by stampEdit, which freezes the same
       // field from the pre-edit ring only when Create didn't already.
-      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}), ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
+      origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}), ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(r.dsp ? { door_openings_lf: r.dsp } : {}), ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
     dispatchShape({ type: "add", shapes: made });   // Create is the creation gate — id/created_at minted by the command
     const sf = proposal.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
@@ -4839,6 +4865,10 @@ export default function TakeoffCanvas() {
   // display-only Kreo-style derived metric: floor-area perimeters × the condition height
   const condH = Number(aCond?.height_ft) || 0; // the live-readout JSX below still reads this
   const vertTotal = verticalWallSf(visibleShapes, activeCond, aCond?.height_ft, condMult);
+  // display-only: total door-opening span this condition crosses (base skips
+  // doorways; a floor transition/threshold strip runs across each) — see
+  // classifyPerimeter + transitionLf. Drives the transition-strip readout/offer.
+  const transTotal = transitionLf(visibleShapes, activeCond, condMult);
   const num = (v, d = 1) => v.toLocaleString(undefined, { maximumFractionDigits: d });
   // unit-system display edge: internal math is always feet (lib/units.ts)
   const fa = (sf, d = 1) => `${num(areaVal(sf, units), d)} ${areaUnit(units)}`;
@@ -6530,6 +6560,7 @@ export default function TakeoffCanvas() {
           {lfTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(lenVal(lfTotal, units))} <span style={{ fontSize: 12, fontWeight: 600 }}>{lenUnit(units)}</span></div>}
           {countTotal > 0 && <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>{num(countTotal, 0)} <span style={{ fontSize: 12, fontWeight: 600 }}>EA</span></div>}
           {vertTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Display only — floor-area perimeters × this condition's height (not committed)">{fa(vertTotal)} vert (perim × H)</div>}
+          {transTotal > 0 && <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 2 }} title="Door openings this condition crosses — base/trim skips them; a floor transition / threshold strip runs across each. Display only, not committed.">{fl(transTotal)} transitions (doorways)</div>}
           {condTotal === 0 && lfTotal === 0 && countTotal === 0 && wallTotal === 0 && borderTotal === 0 && <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginTop: 2 }}>—</div>}
           <div style={{ fontSize: 10.5, opacity: 0.45, marginTop: 6 }}>{visibleShapes.length} shapes on {groupKeys.length > 1 ? `${groupKeys.length} sheets` : "sheet"} · zoom {(tf.scale * 100).toFixed(0)}%</div>
         </div>
