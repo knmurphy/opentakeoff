@@ -32,5 +32,14 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Second entry: the standalone component demo page (issue #194's readout
+    // lab). A separate document, not an app route — it must not ride the SPA
+    // bundle, and the SPA must not pull the demo harness in.
+    rollupOptions: {
+      input: {
+        main: new URL("./index.html", import.meta.url).pathname,
+        readoutDemo: new URL("./readout-demo.html", import.meta.url).pathname,
+      },
+    },
   },
 });
