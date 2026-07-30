@@ -57,6 +57,45 @@ Key commits on the engine branch, in order: `5e92a11` Phase-0 gates · `1a02b15`
 
 ## 3. The defect queue
 
+> **Update 2026-07-30: the independent POST-FIX evidence re-measure is in** — merged at
+> `62b4688` (`docs/evidence/ONE_CLICK_BEFORE_AFTER.md` Part 2, probes `a1c/a5c/f1/f8.mts`,
+> perturbation harness `gates.py`). Confirmations, measured not narrated: the F1 cliff is
+> gone (spread 0.35 SF across the pixel that used to jump 64.35→126.48; 8/8 slot widths
+> carry `min_pass_px`/`min_pass_delta`); A1 on the sub-cap sheet is exact (0 differing
+> cells, 0.00% on all rooms, four render scales); the new A2 gates catch 3/3 injected
+> perturbations that `94a5d46`'s bench passed. It also found **six contradictions of this
+> wave's claims (#3–#8 in the pack)**, three of which are new queue items:
+>
+> **F9 — provenance self-contradiction (introduced at `7650f68`, F7(g)).** The wedge
+> reclassification corrected the hover badge and the MCP receipt but `floodSignals` never
+> receives `ringWedges`: one shape's provenance now carries `ring_interiors: 1` **and** a
+> `door-swing-crossed(…)` confidence factor — the user-visible receipt contradicts itself.
+> Fix site: forward `ringWedges` into `confidence.ts` and split the factor.
+>
+> **F10 — a signal was lost (introduced at `7650f68`).** The free-standing column that
+> annexes 7.13 SF of its own interior as floor scored **0.97 BEFORE and 1.00 POST-FIX**:
+> the proportional wedge deduction rounds a 1.5% effect to 1.00. Tied to the pending
+> column-policy decision below — but whatever the policy, confidence must not *rise* on
+> the annexing case.
+>
+> **F11 — the F3 pin is opt-in and the MCP/batch surfaces cannot take it.** `buildMask`'s
+> `page` arg defaults to null (old reconstruction runs unchanged); `TakeoffCanvas.ensureMask`
+> passes it, but `detectRooms.ts` has no `page` parameter, so `mcp/src/session.ts` cannot.
+> Canvas and MCP now pin *differently* off the same RENDER_SCALE — an **unmeasured risk to
+> A6's "one engine" result**, and `a6.mts` structurally cannot see it (single-scale probe).
+> Needs a probe that renders both surfaces at different scales, then the plumbing.
+>
+> Corrections to THIS document's claims (rule 6): the update below says "vector and raster
+> grids byte-identical" — on the VA plan that is **false for mask contents** (65–4,346 of
+> 6,429,000 cells differ across scales, ≤0.09% cell / 0.03% ring on any probe; what is
+> byte-identical is the *grid*: dims 3000×2143, mppf, mask-px-per-point, at every scale).
+> F8's emphasis: the 9.27% top of the band is ~99% device-line-width nibble at an
+> unreachable render scale (5.374); at the only reachable Hi-Res step the arc-marking
+> share is ~100% and production exposure is ~2% — F8 is real but its headline belongs at
+> ~2–4%, not 9.3%. And the A1 cap-bound "gain" stated honestly: probes exactly invariant
+> went 1→4 of 8, but the **worst** probe (`ward-vestibule`, +2.03% ring) is byte-identical
+> before/after at the only reachable toggle step — the fix did not reach the worst case.
+>
 > **Update 2026-07-29 (second): F3 and F7(b,d,g) are FIXED at `7650f68`** (fast-forward,
 > so the integration verification lives here: 968/968 tests, bench byte-identical to the
 > pre-E baseline — no golden moved — tsc/lint/build clean, MCP 36/36, integrator revert
