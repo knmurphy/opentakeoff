@@ -47,6 +47,28 @@
 //             the destination sheet's scale is next set — see TakeoffCanvas'
 //             transferShapesToSheet). `restore` puts back the prior sheet_id
 //             exactly, same restore-row shape as `reassign`.
+//   ruleApply the batch-accept gate for correction-rule propagation (#88):
+//             add semantics (created_at + id mint per shape, one undo entry
+//             for the whole batch), but a DISTINCT type because the policy
+//             decision differs — the caller pre-builds each origin with
+//             method "rule_v1", rule_id and seed_shape_id (the propagated
+//             shape must trace to its seed correction), reviewed: true
+//             (the estimator saw the staged batch and clicked Apply).
+//   review    the accept gate for machine proposals already IN the shapes
+//             array (an imported MCP takeoff, a binder run): each named shape
+//             still carrying origin.reviewed === false gets reviewed: true +
+//             accepted_ts — nothing else stamps (accepting is affirmation, not
+//             an edit; post-accept edits grade through geom/stampEdit as
+//             usual). Shapes not pending are untouched. `restore` puts the
+//             prior origin back verbatim — undo of an accept is un-accepting.
+//   cutout    #137 — mints the deduct shape (add semantics: id + created_at)
+//             AND patches its PARENT's verts_norm/verts_norm_holes/computed
+//             together as ONE undo entry (a real polygon boolean subtract,
+//             not a second independent overlay). The parent patch stamps
+//             NOTHING — the reconciliation is derived from the deduct
+//             gesture, not a parent edit — and nothing counts. `restore`
+//             (undo of a draw, or an explicit delete of the reconciled
+//             deduct) unmints the deduct and puts the parent back verbatim.
 // ─────────────────────────────────────────────────────────────────────────────
 import { mintUuid, nowIso, stampEdit } from "./provenance.js";
 import { assignShapeLabel } from "./shapeLabels.js";
@@ -59,6 +81,10 @@ export const PROVENANCE_POLICY = {
   delete: "no stamp; counted per origin.method unless noCount",
   replace: "no stamp, no counted, no undo entry (whole-array non-edit)",
   resheet: "no stamp; sheet_id re-key only, computed left untouched",
+  review: "origin.reviewed → true + accepted_ts per still-pending shape; restore puts the prior origin back verbatim",
+  ruleApply: "add semantics (created_at + id mint per shape, ONE undo entry per batch); caller-built rule_v1 origin carries rule_id + seed_shape_id",
+  cutout: "#137 — mints the deduct (id + created_at) AND patches its parent's verts_norm/verts_norm_holes/computed as ONE undo entry; parent patch stamps nothing, nothing counts; restore unmints the deduct and reverts the parent verbatim",
+  rollcut: "#136 — NO stamp: a manual roll-cut override (slide/resize/reorder/reset) writes LAYOUT metadata (shape.roll_layout) over the shape, never its geometry or provenance; a row without roll_layout clears the key; `prev` (grab-time rows) builds the inverse when a live preview already wrote the final state",
 };
 
 // Undo depth — one bounded gesture history, not an archive (revisions are).
@@ -108,6 +134,22 @@ const withGeomFields = (s, snap) => {
   return out;
 };
 
+// #137 — the PARENT-shape half of a cutout: verts_norm always set (the outer
+// ring), verts_norm_holes and computed presence-aware — a parent that has
+// never carried a hole must come back from undo with no verts_norm_holes key
+// at all, matching every other presence-aware snapshot in this file.
+const cutoutSnapshot = (s) => ({
+  verts_norm: s.verts_norm.map((v) => [...v]),
+  ...("verts_norm_holes" in s ? { verts_norm_holes: s.verts_norm_holes.map((r) => r.map((v) => [...v])) } : {}),
+  ...("computed" in s ? { computed: s.computed } : {}),
+});
+const withCutout = (s, patch) => {
+  const out = { ...s, verts_norm: patch.verts_norm };
+  if ("verts_norm_holes" in patch) out.verts_norm_holes = patch.verts_norm_holes; else delete out.verts_norm_holes;
+  if ("computed" in patch) out.computed = patch.computed; else delete out.computed;
+  return out;
+};
+
 // condition_id + provenance snapshot for reassign restore rows.
 const assignSnapshot = (s) => ({
   id: s.id, condition_id: s.condition_id,
@@ -136,6 +178,11 @@ export function applyShapeCommand(shapes, cmd) {
     throw new Error(`Unknown shape command type: ${cmd && cmd.type} — add it to PROVENANCE_POLICY (and decide what it stamps) first.`);
   }
   switch (cmd.type) {
+    // ruleApply IS an add structurally (mint id/created_at, inverse = noCount
+    // delete of the batch — one undo entry); the separate type exists so the
+    // PROVENANCE_POLICY table forces the policy decision to be made (and
+    // documents it) rather than overloading `add` rows with a rule flag.
+    case "ruleApply":
     case "add": {
       // restore: true = resurrection (undo of a delete) — the shapes go back
       // VERBATIM (created_at kept, no re-mint), at their original indices when
@@ -270,6 +317,78 @@ export function applyShapeCommand(shapes, cmd) {
       // canvas clears both stacks alongside (a restored timeline starts fresh,
       // and a rescale invalidates every recorded `computed`).
       return { shapes: Array.isArray(cmd.shapes) ? cmd.shapes : [], inverse: null };
+    case "cutout": {
+      // restore (undo of a draw, or an explicit delete of the reconciled
+      // deduct — see TakeoffCanvas.deleteSelected): drop the deduct shape,
+      // put the parent back exactly as the caller says (the pre-cut snapshot,
+      // or a multi-cut rebuild — see cutout.recomposeCutouts).
+      if (cmd.restore) {
+        const removed = shapes.find((s) => s.id === cmd.deductId);
+        if (!removed) return { shapes, inverse: null };
+        let redoParentNext = null;
+        const next = shapes.filter((s) => s.id !== cmd.deductId).map((s) => {
+          if (s.id !== cmd.parentId) return s;
+          redoParentNext = cutoutSnapshot(s);
+          return withCutout(s, cmd.parentPrev);
+        });
+        if (!redoParentNext) return { shapes, inverse: null };   // parent vanished — refuse rather than orphan the patch
+        return { shapes: next, inverse: { type: "cutout", shape: removed, parentId: cmd.parentId, parentNext: redoParentNext } };
+      }
+      // forward: mint the deduct shape (add semantics), patch the parent in place.
+      const minted = cmd.shape.id ? cmd.shape : { id: `shp-${mintUuid()}`, created_at: nowIso(), ...cmd.shape };
+      let parentPrev = null;
+      const next = shapes.map((s) => {
+        if (s.id !== cmd.parentId) return s;
+        parentPrev = cutoutSnapshot(s);
+        return withCutout(s, cmd.parentNext);
+      });
+      if (!parentPrev) return { shapes, inverse: null };   // parent vanished mid-gesture — refuse rather than mint an orphaned deduct
+      next.push(minted);
+      return { shapes: next, inverse: { type: "cutout", restore: true, deductId: minted.id, parentId: cmd.parentId, parentPrev } };
+    }
+    case "rollcut": {
+      // #136 — patch shape.roll_layout across one or more shapes as ONE undo
+      // entry (a drag gesture, a whole-roll reorder, a reset). Rows are
+      // presence-aware like every restore in this file: a row carrying
+      // roll_layout sets it; a row without clears the key (back to the
+      // engine's auto layout). `prev` is the geom-command idea applied here:
+      // the caller's grab-time rows build the inverse when the live drag
+      // preview already wrote the final layout into the array — without it,
+      // the inverse reads the CURRENT shapes (the discrete-edit path).
+      const rows = cmd.rows || [];
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const prevRows = cmd.prev || shapes.filter((s) => byId.has(s.id))
+        .map((s) => ({ id: s.id, ...("roll_layout" in s ? { roll_layout: s.roll_layout } : {}) }));
+      const next = shapes.map((s) => {
+        const r = byId.get(s.id);
+        if (!r) return s;
+        if ("roll_layout" in r && r.roll_layout != null) return { ...s, roll_layout: r.roll_layout };
+        if (!("roll_layout" in s)) return s;
+        const { roll_layout: _rl, ...rest } = s;   // clear = key absent, never null
+        return rest;
+      });
+      return { shapes: next, inverse: { type: "rollcut", rows: prevRows } };
+    }
+    case "review": {
+      if (cmd.restore) {
+        // restore rows put the recorded origin back verbatim; the inverse is
+        // the same shape again — restore rows of the CURRENT origins, so
+        // redo-of-undo re-accepts (accepted_ts included) without re-stamping.
+        const byId = new Map(cmd.restore.map((r) => [r.id, r]));
+        const inverse = { type: "review", restore: shapes.filter((s) => byId.has(s.id)).map((s) => ({ id: s.id, origin: s.origin })) };
+        const next = shapes.map((s) => (byId.has(s.id) ? { ...s, origin: byId.get(s.id).origin } : s));
+        return { shapes: next, inverse };
+      }
+      const idSet = new Set(cmd.ids);
+      const ts = nowIso();
+      const restore = [];
+      const next = shapes.map((s) => {
+        if (!idSet.has(s.id) || s.origin?.reviewed !== false) return s;
+        restore.push({ id: s.id, origin: s.origin });
+        return { ...s, origin: { ...s.origin, reviewed: true, accepted_ts: ts } };
+      });
+      return { shapes: next, inverse: { type: "review", restore } };
+    }
   }
 }
 

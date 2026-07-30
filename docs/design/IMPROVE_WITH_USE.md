@@ -429,7 +429,7 @@ deleted-ring bookkeeping).
 
 ## 3. Segments-only (PDF-free) fixtures
 
-### (a) Feasibility — verified empirically, bit-for-bit
+### (a) Feasibility — verified empirically, bit-for-bit *(by a scratchpad script that was **not committed**, so the table below is not reproducible from this repo — audit finding D8)*
 
 The bench's only use of the PDF is `getDocument → getPage → getViewport →
 getOperatorList → extractVectorGeometry` (`bench/run.mts:109-118`);
@@ -478,12 +478,18 @@ inputs the pipeline is a pure function.
 }
 ```
 
-Float64 base64 (not a JSON number array) is chosen for size: VA-sized
-sheet ≈ 2.3 MB base64 vs 3.8 MB decimal, both exact. (`Float32` is NOT
-acceptable: coordinates feed `Math.round(seg × ws)` at cell boundaries —
+Float64 base64 (not a JSON number array) is chosen for size. (`Float32` is
+NOT acceptable: coordinates feed `Math.round(seg × ws)` at cell boundaries —
 `buildMask`, `oneclick.ts:633-634` — and a 1-ulp float32 perturbation can
-flip a cell.) Optionally gzip at rest (`.json.gz`, loader sniffs) if
-corpus size becomes a repo concern; spec'd, not required.
+flip a cell. That rejection stands.)
+
+> **Corrected 2026-07-28 (round 9 measurement, confirmed by audit).** The
+> figures above were wrong and the recommendation was backwards. Measured on
+> the 71,819-segment VA sheet: **3.53 MB decimal / 2.92 MB Float64-base64 /
+> 0.48 MB gzip.** Base64 saves 17%; **gzip saves 86%**. So gzip is the
+> recommendation, not an option — `.json.gz` with the loader sniffing, not
+> "spec'd, not required". A pooled-`Buffer` decode trap is noted for the
+> codec test.
 
 **Loader change** (`run.mts`, case loop at 109-118): branch on
 `c.geometry` — decode instead of `getDocument`; ~8 lines:
@@ -589,6 +595,17 @@ external-plans campaign starts in earnest.
 ---
 
 ## 4. Style fingerprint + per-project engine profile
+
+> **Annotated 2026-07-28 (round 9 measurement).** The per-project pitch cap is
+> a **real, measured knob**, not a speculative one — and its window is narrow
+> enough that this section's never-auto-apply guard rails are load-bearing.
+> `partition-bank-15in` recovers **IoU 0.197 → 0.937** at a cap of 1.0–1.1 ft,
+> while `tile-grid-room` (16" module) collapses **0.992 → 0.002** below
+> 1.333 ft and the 12" module dies below 1.0 ft. A third-of-a-foot window with
+> a vertical cliff either side. Round 8's "not fixable by caps" therefore holds
+> for a **global** cap only. `annotation-ring-room` is cap-invariant at 0.650
+> across the whole sweep — independent confirmation it needs semantics, not a
+> knob.
 
 ### (a) Feasibility — verified; most signals are already computed
 
@@ -762,6 +779,17 @@ sheets" — round-8 answer-key comment).
 ---
 
 ## 5. Recommended build order & effort summary
+
+> **Superseded 2026-07-28.** Round 9 measured the prerequisites and reordered:
+> callout cross-check harness → operator's measured plans → `detectRegions`
+> sealed parity → item-F detection metrics → item F. The audit then added a
+> Phase 0 ahead of all of it (CI gates, the re-pin protocol, and bench↔production
+> parity). See `docs/audit/ISSUE_184_REMEDIATION_PLAN.md` on
+> `claude/opentakeoff-184-audit-g37o2u`. Note §1's premise is also weaker than
+> written: the answer-key protocol has the operator measure with the normal
+> drawing tools while `extractCase` refuses machine shapes, so the measuring
+> campaign produces **no correction pairs** — §1 needs ordinary One-Click
+> estimating days that have not happened yet.
 
 | # | foundation | effort | depends on | why this order |
 |---|---|---|---|---|

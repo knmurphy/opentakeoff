@@ -275,3 +275,121 @@ test("readSheetText: positioned items in image px; region narrows to the title b
   assert.ok(tb.items.some((i) => i.str === "A-101"));
   assert.ok(!tb.text.includes("OFFICE 101"));
 });
+
+// ── detect_rooms guards (issue #184 merge regression, pinned 2026-07-30) ─────
+// The merge at 36b6626 dropped the fork's below-box-first seed ladder and ran
+// the bubble test on the POST-SNAP ring; the VA finish plan collapsed from 40
+// detections (parent, ~16 of them tag-box artifacts) to 12 rooms / 569 SF.
+// The repair is three ordered guards per ladder rung: (1) every rung honors
+// the drawing-extent gate, (2) the bubble test runs on the PRE-SNAP trace
+// (vertex snap can inflate a tag-box ring past BUBBLE_RATIO), (3) a clean
+// non-bubble flood must be OWNED by its label — center-in-ring OR the flood
+// region surrounding the label box (floodSurroundsLabelPx; tag boxes tied to
+// a wall by their leader carve the label center OUT of the outer ring).
+// Adjudicated per label against the pre-merge parent (36b6626^1) and sheet
+// crops: 27 real rooms / 3370.6 SF, 14 labels honestly withheld.
+
+const PLAN_VA = fileURLToPath(new URL("../../demo/sample-finish-plan.pdf", import.meta.url));
+const KEY_VA = "sample-finish-plan.pdf";
+
+test("detectRooms VA finish plan: regression pin — real rooms detected, tag-box artifacts withheld", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN_VA);
+  s.setScale(KEY_VA, { upp: 1 / 18 });   // 1/8" = 1'-0" at render scale 2
+  const r = await s.detectRooms(KEY_VA, { role: "floor_area", returnVerts: false });
+  const byLabel = new Map(r.rooms.map((x) => [x.label, x as { label: string; area_sf?: number; merged_labels?: string[] }]));
+
+  // The adjudicated sheet truth is 27 rooms (2026-07-30 table). Floor guards
+  // the anchor-first/post-snap regression (12) and the ownership over-fire
+  // (20); ceiling guards re-admitting the parent's ~16 sub-10-SF artifacts
+  // (40) while leaving room for future recovery of the small hatched rooms
+  // the ladder still cannot reach (138A, 142, 150, 154, 167, 169, 170).
+  assert.ok(r.detected >= 26 && r.detected <= 34, `expected 26..34 rooms, got ${r.detected}`);
+
+  // The one room with a golden pin: patient room 137, golden 167.96 SF.
+  const r137 = byLabel.get("137");
+  assert.ok(r137, "room 137 detected");
+  assert.ok(r137!.area_sf! >= 140 && r137!.area_sf! <= 190, `room 137 ≈ 168 SF, got ${r137!.area_sf}`);
+
+  // Tag-box carve-out rooms (leader line ties the drawn tag box to a wall, so
+  // the label center falls OUTSIDE the traced outer ring) — the ownership
+  // fallback is what detects these; center-in-ring alone loses all six.
+  for (const [label, sf] of [["133", 46.74], ["136", 90.13], ["145A", 38.59], ["147A", 45.89], ["151A", 34.68], ["157", 172.35]] as const) {
+    const room = byLabel.get(label);
+    assert.ok(room, `carve-out room ${label} detected`);
+    assert.ok(approx(room!.area_sf!, sf, 0.15), `room ${label} ≈ ${sf} SF, got ${room!.area_sf}`);
+  }
+
+  // Genuine label bubbles the parent misreported as sub-4-SF "rooms": their
+  // every clean flood is the drawn tag box, and they must stay withheld.
+  for (const junk of ["135", "160", "164", "168", "169"]) {
+    assert.ok(!byLabel.has(junk), `label ${junk} is a tag-box bubble, not a room`);
+  }
+  assert.ok(r.withheld.bubble >= 10, `tag-box bubbles are withheld and counted, got ${r.withheld.bubble}`);
+
+  // merged_labels honesty: 134A's storage room (the plan prints "16 SF") is
+  // NOT office 136 — the parent committed 134A as a 90.13 SF double-count of
+  // 136's region. Ownership must refuse the flood, so 134A appears neither as
+  // its own room nor laundered into another room's merged_labels.
+  assert.ok(!byLabel.has("134A"), "134A must not claim office 136's region");
+  for (const room of r.rooms) {
+    assert.ok(!(room as { merged_labels?: string[] }).merged_labels?.includes("134A"),
+      `134A must not be merged into ${room.label} — its flood is not its own space`);
+  }
+  assert.equal(r.withheld.duplicate, 0, "no two labels on this sheet honestly share one region");
+});
+
+// A minimal synthetic sheet where the seed ladder's below-box rungs step past
+// the drawing extent into paper space. Layout (PDF pts; image px = 2×):
+//   · label "201" just INSIDE sheetBounds' bottom edge (image y≈1438-1470 vs
+//     the 6% gate at y=1488.96), inside a drawn tag box;
+//   · a wide paper-space box (title strip stand-in) straddling the gate so the
+//     below rung (center + 2h ≈ image y 1518) lands inside it, OUT of bounds.
+// The trap is built to pass every OTHER guard if flooded: it is clean,
+// non-bubble, and SURROUNDS the label's tag box on 3 sides — so only the
+// per-rung bounds check keeps it out. With the check: center rung → its own
+// bubble, above rung → leaks into open space, below rungs → out of bounds;
+// nothing detected, the bubble counted.
+function edgeLabelPdf(): Buffer {
+  const W = 1224, H = 792;
+  const stream = Buffer.from([
+    "q", "3 w 0 0 0 RG",
+    "400 2 400 88 re S",                    // paper-space trap: image y 1404-1580, x 800-1600
+    "495 52 50 28 re S",                    // tag box around the label: image y 1424-1480
+    "BT /F1 22 Tf 500 57 Td (201) Tj ET",   // label baseline image y 1470 — inside bounds
+    "Q",
+  ].join("\n"), "latin1");
+  const objects = [
+    Buffer.from("<< /Type /Catalog /Pages 2 0 R >>"),
+    Buffer.from("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+    Buffer.from(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>`),
+    Buffer.concat([Buffer.from(`<< /Length ${stream.length} >>\nstream\n`), stream, Buffer.from("\nendstream")]),
+    Buffer.from("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+  ];
+  let out = Buffer.from("%PDF-1.4\n");
+  const offsets: number[] = [];
+  objects.forEach((obj, i) => {
+    offsets.push(out.length);
+    out = Buffer.concat([out, Buffer.from(`${i + 1} 0 obj\n`), obj, Buffer.from("\nendobj\n")]);
+  });
+  const xref = out.length;
+  const n = objects.length + 1;
+  out = Buffer.concat([out, Buffer.from(`xref\n0 ${n}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`)]);
+  return out;
+}
+
+test("detectRooms bounds escape: ladder rungs outside sheetBounds are never flooded", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "otk-edge-"));
+  const path = join(dir, "edge-label.pdf");
+  writeFileSync(path, edgeLabelPdf());
+  const s = new Session();
+  await s.loadPlan(path);
+  s.setScale("edge-label.pdf", { upp: 1 / 36 });
+  const r = await s.detectRooms("edge-label.pdf", { condition: "CPT-1", role: "floor_area", returnVerts: false });
+  assert.equal(r.detected, 0, `paper space must never flood into a room, got ${JSON.stringify(r.rooms)}`);
+  assert.equal(r.withheld.bubble, 1, "the label's own tag box is seen and counted, not silently dropped");
+  assert.equal(s.shapes.length, 0, "nothing commits from beyond the drawing extent");
+});

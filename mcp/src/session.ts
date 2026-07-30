@@ -5,25 +5,32 @@
 // what the canvas commits (web/src/pages/TakeoffCanvas.jsx), so an exported
 // takeoff round-trips into the app.
 import path from "node:path";
-import { openPdf, positionedText, OPS, type DocHandle, type PageHandle } from "./pdf.ts";
+import { openPdf, positionedText, textSpans, OPS, type DocHandle, type PageHandle, type TextSpan, type OcgEntry } from "./pdf.ts";
+import { classifyLayerName, layerRoleCodes, segRoles, type LayerInfo } from "../../web/src/lib/layers.ts";
+import { buildSheetGraph, resolveTag, type SheetGraph, type SheetSpans } from "../../web/src/lib/sheetgraph.ts";
 import { UserError, round1, round2 } from "./format.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import {
-  extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor,
-  traceRegion, snapVertices, ringArea,
-  MASK_MAX_DIM, type MaskObj, type VectorGeometry, type Point,
+  extractVectorGeometry, buildMask, oneClickRing, traceRegion, ringArea,
+  hatchFamilies, MASK_MAX_DIM, SENS_BALANCED, type MaskObj, type VectorGeometry, type Point, type FloodResult, type HatchFamily,
 } from "../../web/src/lib/oneclick.ts";
-import { roomLabelSeeds, detectRegions, sheetBounds } from "../../web/src/lib/detectRooms.ts";
-import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
-import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
+import { traceConfidence, floodSignals } from "../../web/src/lib/confidence.ts";
+import { roomLabelSeeds, floodAtSeed, oneClickArgs, sheetBounds, seedLadderPx, isLabelBubblePx, floodSurroundsLabelPx, type LabelBBox } from "../../web/src/lib/detectRooms.ts";
+import { buildSnapGrid, nearestSnap, closedMetrics, openLen, pointInPoly } from "../../web/src/lib/geometry.js";
+import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
+import { gridPxPerFoot, drawGrid, drawShapes, type Ctx2D, type ToCanvas } from "./view.ts";
 
 // Copied from the canvas (web/src/pages/TakeoffCanvas.jsx) so conditions and
 // snap behavior minted here are identical to the browser's. PALETTE/HATCH_IDS
 // are user data — never re-theme them.
 const SNAP_CELL = 24; // snap-grid bucket, raster px
-const SNAP_TOL = 7;   // one-click vertex-snap tolerance, image px
+// The one-click vertex-snap TOLERANCE used to live here as a local `SNAP_TOL = 7`,
+// duplicating the canvas's literal 7. It is now oneclick.SNAP_TOL_PX, applied
+// inside the shared `oneClickRing` — one number, one place (audit F7(b)).
 const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
-const HATCH_IDS = ["solid", "diag", "diag2", "cross", "diagdense", "horiz", "vert", "grid", "brick", "plank", "herring", "basket", "checker", "wave", "fleur", "speckle"];
+// (2026-07: dropped a drifted "fleur" entry that never existed in this app's
+// HATCHES, restoring "dots", and appended the signal-set ids.)
+const HATCH_IDS = ["solid", "diag", "diag2", "cross", "diagdense", "horiz", "vert", "grid", "brick", "plank", "herring", "basket", "checker", "wave", "dots", "speckle", "iso", "honeycomb", "scan", "plus", "circuit", "topo"];
 // uid mirrors web/src/lib/provenance.js mintUuid: crypto.randomUUID is a
 // global in Node 20+, with the same non-secure-context fallback the browser
 // build carries so the two sides mint identically-shaped ids.
@@ -37,6 +44,20 @@ export const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1"; // web/src/lib/store.
 
 export type MeasureRole = "floor_area" | "deduct" | "linear";
 
+/** Supporting-materials row (field-identical to the canvas's addMaterial —
+ * web/src/pages/TakeoffCanvas.jsx). Quantity is deterministic: basis ÷ per,
+ * rounded up to whole purchase units unless round:false (totals.js). basis
+ * "area" reads the condition's total SF, "linear" its LF, "count" its EA. */
+export interface MaterialRow {
+  id: string;
+  name: string;
+  per: number;
+  basis: "area" | "linear" | "count";
+  unit: string;
+  round: boolean;
+  note?: string;
+}
+
 export interface Condition {
   id: string;
   finish_tag: string;
@@ -45,7 +66,7 @@ export interface Condition {
   hatch: string;
   multiplier: number;
   waste_pct: number;
-  materials: unknown[];
+  materials: MaterialRow[];
 }
 
 /** Shape provenance (contribution.v2 vocabulary — mirrors the canvas +
@@ -62,15 +83,34 @@ export interface ShapeOrigin {
   /** one_click: the flood-fill seed, normalized to sheet dims. */
   seed_norm?: [number, number];
   hatch_filtered?: true;
-  /** Seal ladder closed a cased opening: the dilation radius used (mask px).
-   *  A boundary that is partly synthetic must say so — the canvas records the
-   *  same field (TakeoffCanvas.jsx), and a committed shape that hides it is
-   *  indistinguishable from a clean vector-bounded trace on export. */
-  gap_sealed_px?: number;
-  /** Drawn door-swing wedges annexed into the region, and how many. */
-  door_wedges?: number;
+  /** one_click: the seal ladder bridged a drafting pinhole this many px wide
+   * to close the region (engine `gapBridged` — canvas parity: the rescue rides
+   * provenance rather than passing itself off as a clean fill). */
+  gap_bridged_px?: number;
+  /** one_click (#85): the flood ran against a mask whose boundary was STATED
+   * by the sheet's PDF layers (visible boundary/structure roles present) —
+   * categorically stronger evidence than a pitch-heuristic boundary. */
+  layer_bounded?: true;
   raster_traced?: true;
   fill_sensitivity?: number;
+  /** traceConfidence's 0–1 score and the factors behind it (web/src/lib/
+   *  confidence.ts) — the same receipt the canvas stamps at Create. */
+  confidence?: number;
+  confidence_factors?: string[];
+  /** Gap-sealing / door-swing receipts, mirroring the canvas's origin. */
+  gap_sealed_px?: number;
+  door_wedges?: number;
+  /** Wedges that annexed a closed drawn RING's interior (round column, callout
+   *  bubble) rather than a door swing — a subset of `door_wedges` (audit F7(g)). */
+  ring_interiors?: number;
+  /** Minimum-passage receipts (audit F7(d)): the radius that ran and the fraction
+   *  of the verbatim flood it removed. 1 = the drawn linework bounded nothing and
+   *  the rule is the entire measurement. Both absent when the rule changed nothing. */
+  min_pass_px?: number;
+  min_pass_delta?: number;
+  /** The sheet had no scale when this was measured, so the engine ran with
+   *  its scale-blind fallbacks (see Session.engineArgs). */
+  scale_blind?: true;
   /** Machine's original trace, frozen on first human edit (provenance.js). */
   proposed_verts_norm?: [number, number][];
   edited?: boolean;
@@ -78,6 +118,11 @@ export interface ShapeOrigin {
   copied?: boolean;
   /** Per-kind tally of human corrections (provenance.js). */
   edits?: Record<string, number>;
+  /** How many times the AGENT revised its own shape (edit_shape). Deliberately
+   * separate from `edited`/`edits`, which mean "a human corrected the machine"
+   * — a machine correcting itself is a different event, and merging the two
+   * would corrupt the correction signal the capture layer grades on. */
+  agent_edits?: number;
 }
 
 export interface Shape {
@@ -88,6 +133,31 @@ export interface Shape {
   verts_norm: [number, number][];
   computed: { area_sf: number; perimeter_lf: number };
   origin?: ShapeOrigin;
+}
+
+/** An annotation — a note ABOUT the work, never a measurement of it.
+ *
+ *  Field-identical to the canvas's markup (web/src/pages/TakeoffCanvas.jsx), so
+ *  what an agent writes here loads in the app unchanged and vice versa. Coords
+ *  are NORMALIZED 0..1 of the sheet, matching shapes' verts_norm — the tools
+ *  take image px and convert at the boundary, which is the same contract every
+ *  other tool honours.
+ *
+ *  condition_id is what makes an annotation part of a scope rather than a
+ *  floating note: it takes that condition's colour on canvas and in the marked
+ *  set, and travels with it into the report (#112). "" means unattached, which
+ *  is a legitimate state — a note about the sheet, not about a finish. */
+export interface Markup {
+  id: string;
+  sheet_id: string;
+  type: "cloud" | "text" | "callout" | "highlight";
+  text: string;
+  condition_id: string;
+  rfi_id: string;
+  at?: [number, number];
+  target?: [number, number];
+  rect?: [[number, number], [number, number]];
+  created_at?: string;
 }
 
 interface SheetState {
@@ -101,6 +171,9 @@ interface SheetState {
   detected: DetectedScale | null;
   /** real feet per image px at RENDER_SCALE; null until set_scale */
   upp: number | null;
+  /** how the scale was set — report provenance (export_report scale_source),
+   * canvas vocabulary: "standard" | "upp" | "calibrated" | "detected" */
+  scaleSource?: string;
   text: { str: string; x: number; y: number; h: number }[];
   page: PageHandle;
   // lazy per-sheet caches (built once, reused by identity)
@@ -108,17 +181,57 @@ interface SheetState {
   snap?: ReturnType<typeof buildSnapGrid>;
   /** undefined = not built yet; null = sheet has zero vector segments (a scan) */
   mask?: MaskObj | null;
-  /** image px per foot the cached mask was built at (0 = scale unknown then);
-   *  a scale change invalidates the mask, since mppf is baked into it */
-  maskPxPerFt?: number;
+  /** the `upp` the cached mask was built at. The mask carries the sheet scale
+   *  (mppf), so set_scale after a mask was built INVALIDATES it — otherwise the
+   *  first tool call on a sheet would pin a scale-blind raster for the session
+   *  and every later measurement would silently use px fallbacks. */
+  maskUpp?: number | null;
   /** rendered-page PNG at IMAGE_MAX_EDGE, built on first resource read */
   png?: Uint8Array;
+  /** hatch-family instances (image px), built with geo on first sheet_context */
+  hatch?: HatchFamily[];
+  /** text as bbox spans (image px), built on first sheet_context */
+  spans?: TextSpan[];
+  /** the sheet's Optional Content layers (#85), classified — built with geo;
+   * [] = no layers survived export (the silent, invisible fallback) */
+  layers?: LayerInfo[];
 }
+
+/** sheet_context decimation defaults (issue #29) — declared and stable, never
+ * adaptive: an agent that receives a silently-truncated geometry set measures
+ * confidently and is wrong, so every reply carries the counts. */
+export const CONTEXT_MIN_LEN_PX = 2.0;   // one PDF point at render scale 2.0 — below any pen width
+export const CONTEXT_MAX_SEGMENTS = 4000; // cap, applied longest-first (walls survive, hatch strokes go)
+export const CONTEXT_MAX_SEGMENTS_CEIL = 20000;
+
+/** Does the segment intersect the axis-aligned rect? Liang–Barsky boolean —
+ * endpoints untouched, this is a KEEP test, never a clip-and-rewrite. */
+function segIntersectsRect(x1: number, y1: number, x2: number, y2: number, r: { x0: number; y0: number; x1: number; y1: number }): boolean {
+  if (Math.max(x1, x2) < r.x0 || Math.min(x1, x2) > r.x1 || Math.max(y1, y2) < r.y0 || Math.min(y1, y2) > r.y1) return false;
+  const dx = x2 - x1, dy = y2 - y1;
+  let t0 = 0, t1 = 1;
+  for (const [p, q] of [[-dx, x1 - r.x0], [dx, r.x1 - x1], [-dy, y1 - r.y0], [dy, r.y1 - y1]] as [number, number][]) {
+    if (p === 0) { if (q < 0) return false; continue; }
+    const t = q / p;
+    if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+    else { if (t < t0) return false; if (t < t1) t1 = t; }
+  }
+  return true;
+}
+
+const rectsOverlap = (a: [number, number, number, number], r: { x0: number; y0: number; x1: number; y1: number }): boolean =>
+  a[0] <= r.x1 && a[2] >= r.x0 && a[1] <= r.y1 && a[3] >= r.y0;
 
 /** Resource images cap their long edge here: the largest edge the mainstream
  * vision models take without downscaling — these renders exist to be looked at
  * by agents, so this is the native resolution of that audience. */
 export const IMAGE_MAX_EDGE = 1568;
+
+/** view_sheet's long-edge budget: small enough to stream comfortably, large
+ * enough that a tight crop resolves dimension strings. */
+export const VIEW_MIN_PX = 200;
+export const VIEW_DEFAULT_PX = 1400;
+export const VIEW_MAX_PX = 2000;
 
 export interface SheetSummary {
   sheet: string;
@@ -130,6 +243,32 @@ export interface SheetSummary {
   sheet_number?: string;
   detected_scale?: string;
 }
+
+/** Bounded gesture history, not an archive — mirrors the canvas's UNDO_CAP. */
+export const UNDO_CAP = 100;
+
+/** The agent-scoped command journal. Every mutation this server performs
+ * records one entry carrying enough state to invert it exactly: a commit
+ * removes by id, an edit restores the pre-edit shape verbatim, a delete
+ * re-inserts at the recorded index. Undo is a true inverse, never an
+ * approximation, so an agent that overshot can step back instead of
+ * re-deriving a whole sheet.
+ *
+ * Scope, stated precisely: this is the MCP session's OWN history. It is not
+ * the browser canvas's undo stack, nothing is shared between them, and
+ * load_plan clears it along with the shapes its entries refer to.
+ *
+ * One entry per TOOL CALL, not per shape — undoing a detect_rooms sweep that
+ * committed 18 rooms takes back the sweep, which is the gesture the agent
+ * actually made. */
+export type JournalPayload =
+  | { op: "commit"; tool: string; ids: string[] }
+  | { op: "edit"; tool: string; before: Shape }
+  | { op: "delete"; tool: string; removed: { shape: Shape; index: number }[] }
+  | { op: "materials"; tool: string; condition_id: string; before: MaterialRow[] }
+  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number } };
+
+export type JournalEntry = JournalPayload & { seq: number };
 
 const sheetSummary = (s: SheetState): SheetSummary => ({
   sheet: s.key,
@@ -147,7 +286,28 @@ export class Session {
   private doc: DocHandle | null = null;
   private sheets = new Map<string, SheetState>();
   conditions: Condition[] = [];
+  markups: Markup[] = [];
   shapes: Shape[] = [];
+
+  /** Newest-last. Capped at UNDO_CAP; the oldest entry falls off the front. */
+  private journal: JournalEntry[] = [];
+  private seq = 0;
+  /** Ids minted by commit() since the last flush — one tool call may commit
+   * many shapes (detect_rooms), and they journal as a single reversible step. */
+  private pendingCommits: string[] = [];
+
+  private record(entry: JournalPayload): void {
+    this.journal.push({ ...entry, seq: ++this.seq });
+    if (this.journal.length > UNDO_CAP) this.journal.shift();
+  }
+
+  /** Journal whatever commit() minted during this tool call, as one entry.
+   * A call that committed nothing records nothing — undo steps over reads. */
+  private flushCommits(tool: string): void {
+    if (!this.pendingCommits.length) return;
+    this.record({ op: "commit", tool, ids: this.pendingCommits });
+    this.pendingCommits = [];
+  }
 
   /** load_plan replaces the session's document: the old doc is destroyed and
    * ALL state — scales, caches, conditions, shapes — is cleared. */
@@ -157,7 +317,13 @@ export class Session {
     this.sheets.clear();
     this.conditions = [];
     this.shapes = [];
+    this.markups = [];
     this.file = null;
+    // the journal's entries reference shapes that no longer exist — undoing
+    // across a document swap would be a lie, so the history goes with them
+    this.journal = [];
+    this.pendingCommits = [];
+    this.graph = null;   // the sheet graph (#87) indexes the OLD document
 
     const doc = await openPdf(filePath);
     this.doc = doc;
@@ -238,43 +404,287 @@ export class Session {
     return s.png;
   }
 
+  /** view_sheet: render a sheet (or an image-px crop of it) to PNG, with an
+   * optional committed-shapes overlay and calibrated measuring grid. The grid
+   * draws under the overlay, both in canvas space after the page rasterizes. */
+  async viewSheet(name: string, opts: { region?: { x0: number; y0: number; x1: number; y1: number }; px?: number; overlay?: boolean; grid?: string }) {
+    const s = this.sheet(name);
+    const px = Math.max(VIEW_MIN_PX, Math.min(VIEW_MAX_PX, Math.round(opts.px ?? VIEW_DEFAULT_PX)));
+    const clampX = (v: number) => Math.max(0, Math.min(v, s.widthPx));
+    const clampY = (v: number) => Math.max(0, Math.min(v, s.heightPx));
+    const r = opts.region
+      ? { x0: clampX(opts.region.x0), y0: clampY(opts.region.y0), x1: clampX(opts.region.x1), y1: clampY(opts.region.y1) }
+      : { x0: 0, y0: 0, x1: s.widthPx, y1: s.heightPx };
+    if (!(r.x1 - r.x0 >= 1 && r.y1 - r.y0 >= 1)) {
+      throw new UserError(`Empty view region — need x1 > x0 and y1 > y0 in image px inside the sheet (${s.widthPx} × ${s.heightPx}).`);
+    }
+    const ppf = gridPxPerFoot(opts.grid, s.upp);
+    const sheetShapes = this.shapes.filter((x) => x.sheet_id === s.key);
+    const { png, width, height, zoom } = await s.page.renderRegionPng(r, px, (ctx, toCanvas) => {
+      if (ppf) drawGrid(ctx as Ctx2D, toCanvas as ToCanvas, r, ppf);
+      if (opts.overlay) drawShapes(ctx as Ctx2D, toCanvas as ToCanvas, sheetShapes, s.widthPx, s.heightPx, px);
+    });
+    return {
+      png,
+      meta: {
+        sheet: s.key,
+        page: s.pageNum,
+        sheet_px: [s.widthPx, s.heightPx],
+        region: [round1(r.x0), round1(r.y0), round1(r.x1), round1(r.y1)],
+        img_px: [width, height],
+        zoom: +zoom.toFixed(4),
+        overlay: !!opts.overlay,
+        ...(opts.overlay ? { shapes_drawn: sheetShapes.length } : {}),
+        grid_px_per_foot: ppf ? round2(ppf) : 0,
+      },
+    };
+  }
+
+  /** sheet_context (issue #29): the classified vectors, the positioned text,
+   * and the hatch-family instances of ONE region, in ONE frame — image px,
+   * the space every other tool already speaks. There is deliberately no
+   * transform in this method: everything below is a containment test against
+   * a rect, so frame agreement with view_sheet is a contract on the echoed
+   * region, not on a second renderer.
+   *
+   * Decimation is declared and ordered (issue #29 design comment): clip to
+   * region → drop segments shorter than min_len_px → cap at max_segments
+   * LONGEST-FIRST (walls are long, hatch strokes are short — truncation
+   * degrades toward structure). Whole segments drop with their meta intact;
+   * nothing is simplified or merged, because these are CLASSIFIED segments
+   * and a merge would silently rewrite the classification. The counts ride
+   * on every reply, truncated or not. */
+  async sheetContext(name: string, opts: { region?: { x0: number; y0: number; x1: number; y1: number }; min_len_px?: number; max_segments?: number }) {
+    const s = this.sheet(name);
+    const clampX = (v: number) => Math.max(0, Math.min(v, s.widthPx));
+    const clampY = (v: number) => Math.max(0, Math.min(v, s.heightPx));
+    const r = opts.region
+      ? { x0: clampX(opts.region.x0), y0: clampY(opts.region.y0), x1: clampX(opts.region.x1), y1: clampY(opts.region.y1) }
+      : { x0: 0, y0: 0, x1: s.widthPx, y1: s.heightPx };
+    if (!(r.x1 - r.x0 >= 1 && r.y1 - r.y0 >= 1)) {
+      throw new UserError(`Empty context region — need x1 > x0 and y1 > y0 in image px inside the sheet (${s.widthPx} × ${s.heightPx}).`);
+    }
+    const minLen = opts.min_len_px ?? CONTEXT_MIN_LEN_PX;
+    const cap = opts.max_segments ?? CONTEXT_MAX_SEGMENTS;
+
+    const geo = await this.ensureGeometry(s);
+    const hasVectors = geo.segs.length > 0;
+    if (!s.hatch) s.hatch = hasVectors ? hatchFamilies(geo.segs, geo.meta) : [];
+    if (!s.spans) s.spans = textSpans(s.page);
+
+    // family membership index → id, for the per-segment annotation
+    const famBySeg = new Map<number, string>();
+    for (const f of s.hatch) for (const i of f.memberIdx) famBySeg.set(i, f.id);
+
+    // 1. clip to region (keep test, endpoints untouched)
+    const inRegion: { i: number; len: number }[] = [];
+    const nSeg = geo.segs.length >> 2;
+    for (let i = 0; i < nSeg; i++) {
+      const x1 = geo.segs[i * 4], y1 = geo.segs[i * 4 + 1], x2 = geo.segs[i * 4 + 2], y2 = geo.segs[i * 4 + 3];
+      if (segIntersectsRect(x1, y1, x2, y2, r)) inRegion.push({ i, len: Math.hypot(x2 - x1, y2 - y1) });
+    }
+    // 2. drop invisible ink
+    const visible = inRegion.filter((e) => e.len >= minLen);
+    const droppedShort = inRegion.length - visible.length;
+    // 3. cap, longest-first
+    let kept = visible;
+    let droppedCap = 0;
+    if (visible.length > cap) {
+      kept = visible.slice().sort((a, b) => b.len - a.len).slice(0, cap);
+      droppedCap = visible.length - cap;
+    }
+
+    const segments: number[][] = [], metaOut: number[] = [], family: (string | null)[] = [];
+    for (const { i } of kept) {
+      segments.push([
+        round1(geo.segs[i * 4]), round1(geo.segs[i * 4 + 1]),
+        round1(geo.segs[i * 4 + 2]), round1(geo.segs[i * 4 + 3]),
+      ]);
+      metaOut.push(geo.meta[i]);
+      family.push(famBySeg.get(i) ?? null);
+    }
+
+    const spans = s.spans.filter((sp) => sp.x0 <= r.x1 && sp.x1 >= r.x0 && sp.y0 <= r.y1 && sp.y1 >= r.y0);
+    const keptIdx = new Set(kept.map((k) => k.i));
+    const families = s.hatch
+      .filter((f) => rectsOverlap(f.bbox, r))
+      .map(({ memberIdx, ...f }) => ({
+        ...f,
+        segments_in_region: memberIdx.reduce((acc, i) => acc + (keptIdx.has(i) ? 1 : 0), 0),
+      }));
+
+    return {
+      sheet: s.key,
+      page: s.pageNum,
+      sheet_px: [s.widthPx, s.heightPx],
+      region: [round1(r.x0), round1(r.y0), round1(r.x1), round1(r.y1)],
+      has_vector_linework: hasVectors,
+      vectors: {
+        segments, meta: metaOut, family,
+        kept: kept.length,
+        total_in_region: inRegion.length,
+        truncated: droppedShort + droppedCap > 0,
+        dropped: { short: droppedShort, cap: droppedCap },
+        ...(droppedCap > 0 ? { note: `Region exceeds max_segments — the ${droppedCap} SHORTEST segments were dropped, so structure (walls) survives and fill (hatch) goes first. Narrow the region or raise max_segments for the full set.` } : {}),
+      },
+      text: { spans, count: spans.length },
+      hatch: { families, count: families.length },
+    };
+  }
+
   private async ensureGeometry(s: SheetState): Promise<VectorGeometry> {
     if (!s.geo) {
       const opList = await s.page.operatorList();
       s.geo = extractVectorGeometry(opList, s.page.viewport.transform, OPS);
       s.snap = buildSnapGrid(s.geo.points, SNAP_CELL);
+      // classify this sheet's Optional Content layers (#85): the doc declares
+      // id → (name, default visibility); the geometry attributes segments; the
+      // pure normalizer states each layer's ROLE. Only layers that actually
+      // own segments on this sheet are reported — an empty table is the
+      // unlayered case and every consumer falls through to the heuristics.
+      const layerIds = s.geo.layerIds || [];
+      if (layerIds.length && this.doc) {
+        const byId = new Map((await this.doc.layers()).map((g) => [g.id, g]));
+        const counts = new Map<number, number>();
+        const lo = s.geo.layerOf;
+        if (lo) for (let i = 0; i < lo.length; i++) if (lo[i] >= 0) counts.set(lo[i], (counts.get(lo[i]) || 0) + 1);
+        s.layers = layerIds.map((id, k) => {
+          const g = byId.get(id);
+          const name = g?.name || "";
+          const { role, confidence } = classifyLayerName(name);
+          return { id, name, role, confidence, visible: g ? g.visible : true, seg_count: counts.get(k) || 0 };
+        });
+      } else {
+        s.layers = [];
+      }
     }
     return s.geo;
   }
 
+  /** Per-layer role codes for buildMask (#85), with optional include/exclude
+   * OVERRIDES (by layer name or id, case-insensitive): include forces hard
+   * boundary, exclude drops the layer outright — the agent's judgment beats
+   * the table's. Unknown names error with the sheet's actual layer list
+   * (resolve-or-error, never a silent no-op). */
+  private rolesFor(s: SheetState, geo: VectorGeometry, layersOpt?: { include?: string[]; exclude?: string[] }): Uint8Array | null {
+    const infos = s.layers || [];
+    if (!infos.length || !geo.layerIds?.length) {
+      if (layersOpt && (layersOpt.include?.length || layersOpt.exclude?.length)) {
+        throw new UserError(`${s.key} has no PDF layers (no Optional Content survived export) — layers.include/exclude can't apply here.`);
+      }
+      return null;
+    }
+    const infoById = new Map(infos.map((l) => [l.id, { role: l.role, visible: l.visible }]));
+    if (layersOpt) {
+      const resolve = (ref: string): LayerInfo => {
+        const needle = ref.trim().toLowerCase();
+        const hit = infos.find((l) => l.id.toLowerCase() === needle || l.name.toLowerCase() === needle);
+        if (!hit) throw new UserError(`No layer ${JSON.stringify(ref)} on ${s.key}. Layers: ${infos.map((l) => l.name || l.id).join(" | ")}`);
+        return hit;
+      };
+      for (const ref of layersOpt.include || []) { const l = resolve(ref); infoById.set(l.id, { role: "boundary", visible: true }); }
+      for (const ref of layersOpt.exclude || []) { const l = resolve(ref); infoById.set(l.id, { role: l.role, visible: false }); }
+    }
+    return segRoles(geo.layerOf, layerRoleCodes(geo.layerIds, infoById));
+  }
+
   /** v1 masks come from the sheet's vector linework only. Raster seam: a scanned
    * sheet would render via a node canvas into a future rastermask module that
-   * returns this same MaskObj shape. */
-  /** The working raster, built once per sheet AND per scale. The scale matters
-   *  because the engine's thresholds are feet-true (`MaskObj.mppf`): the hatch
-   *  pitch cap, the tiny/thin guards and the seed nudge all read it, and the
-   *  seal radii / door-wedge cap / minimum-passage radius are derived from it
-   *  at every flood site. A mask built before `set_scale` carries no mppf, so
-   *  it must be rebuilt when the scale arrives — the same eviction the canvas
-   *  does on recalibration. */
+   * returns this same MaskObj shape.
+   *
+   * A6 (audit): the SHEET SCALE rides into the mask, exactly as the canvas does
+   * it (TakeoffCanvas.jsx ensureMask). Without it MaskObj.mppf was 0 and every
+   * feet-true guard in the engine — the hatch pitch cap, the tiny/thickness
+   * floors, the seed nudge — silently fell back to raw pixel constants, so the
+   * same seed measured differently here than on the canvas. This server always
+   * works at RENDER_SCALE (pdf.ts pins the viewport there), so the baseline
+   * px/ft equals this render's px/ft and buildMask's render-independence factor
+   * k is exactly 1 — passing both is documentation, not arithmetic.
+   *
+   * Layer roles (#85) ride in as the stated short-circuit; an unlayered sheet
+   * builds the identical pre-#85 mask. */
   async ensureMask(name: string): Promise<MaskObj | null> {
     const s = this.sheet(name);
-    const pxPerFt = s.upp && s.upp > 0 ? 1 / s.upp : 0;
-    if (s.mask === undefined || s.maskPxPerFt !== pxPerFt) {
+    if (s.mask === undefined || s.maskUpp !== s.upp) {
       const geo = await this.ensureGeometry(s);
-      s.mask = geo.segs.length ? buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta, pxPerFt) : null;
-      s.maskPxPerFt = pxPerFt;
+      const pxPerFt = s.upp != null && s.upp > 0 ? 1 / s.upp : 0;
+      s.mask = geo.segs.length
+        ? buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta, pxPerFt, pxPerFt, null, this.rolesFor(s, geo))
+        : null;
+      s.maskUpp = s.upp;
     }
     return s.mask;
   }
 
-  /** The flood the canvas runs: sealed openings, per-arc door wedges and the
-   *  minimum-passage rule, all parameterized by the sheet scale. Every helper
-   *  degrades safely when the scale is unknown (default ladder, no wedge
-   *  retry, no min-passage dilation), so an unscaled preview still works. */
-  private sealedFlood(mask: MaskObj, x: number, y: number) {
-    const mppf = mask.mppf ?? 0;
-    return floodRegionSealed(mask, x, y, undefined, sealRadiiFor(mppf), doorWedgeCapPx(mppf), minPassRadiusFor(mppf));
+  /** The engine arguments for a flood on `mask` — derived by the SHARED
+   *  oneClickArgs (web/src/lib/detectRooms.ts), which is pinned against the
+   *  canvas's own inline call in web/test/engineParity.test.ts. `mask.mppf`
+   *  comes from buildMask above and IS the canvas's `mo.ws / upp`.
+   *
+   *  NO SCALE, NO PRETEND SCALE. When the sheet has no scale set, mppf is 0 and
+   *  every rule falls back to what oneclick.ts documents for the scale-unknown
+   *  case: the hairline SEAL_RADII floor (drafting gaps only, never a doorway),
+   *  no door-swing wedge retry, and the minimum-passage rule OFF. That is a
+   *  DIFFERENT measurement from the scaled one, so `scaleBlind` is surfaced in
+   *  every reply and provenance receipt it produces rather than left silent. */
+  private engineArgs(mask: MaskObj) {
+    return oneClickArgs(mask.mppf || 0);
+  }
+
+  /** The confidence + engine receipts shared by one_click and detect_rooms —
+   *  the same fields the canvas puts on a proposal's origin. */
+  private receipts(f: Extract<FloodResult, { status: "ok" }>, scaleBlind: boolean, areaSF?: number) {
+    // Route through the shared adapter, not a hand-listed field set. This site
+    // was the fifth such list and silently went stale the moment hatchTier,
+    // wedgeGrowth, curveFrac, min-passage and areaSF landed — MCP would have
+    // reported HIGHER confidence than the canvas for the same click, which is
+    // A6 (engine parity) reopening through the confidence surface.
+    const conf = traceConfidence(floodSignals(f, { mppf: f.mppf, areaSF }));
+    return {
+      confidence: conf.score,
+      ...(conf.factors.length ? { confidence_factors: conf.factors } : {}),
+      ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
+      ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+      // AUDIT F7(d): the minimum-passage receipts, which the canvas has minted
+      // since A3 (TakeoffCanvas.jsx, `min_pass_px` / `min_pass_delta` on the
+      // proposal's origin and on the agent one-click reply) and this list did
+      // not — A6's failure class again, a hand-listed field set going stale
+      // under a new engine signal. Without them an MCP caller cannot tell a
+      // verbatim 40 SF closet from a 40 SF closet the rule TRIMMED 26% off, or
+      // from one the rule is the sole reason exists at all: `confidence` moves
+      // but nothing says why in a machine-readable field.
+      //
+      // The condition is `minPassDelta` truthy, matching the canvas exactly, and
+      // it is the engine that decides when that is set — not this site. Since the
+      // F1/F2 fix (474c243) the TRIMMING path sets both whenever the rule removed
+      // anything (`d > 0`) and returns without running the ladder's gates, while
+      // the CREATING path (`minPassDelta === 1`, the verbatim linework bounds
+      // nothing) sets them alongside gap_sealed_px + virtualFrac. A rule that ran
+      // and changed nothing still sets neither: provenance for that is noise.
+      ...(f.minPassDelta ? { min_pass_px: f.minPassPx, min_pass_delta: f.minPassDelta } : {}),
+      ...(f.wedges ? { door_wedges: f.wedges } : {}),
+      // F7(g): a wedge that annexed the interior of a closed drawn RING (a round
+      // column, a callout bubble) is not a door swing. Same measurement — this
+      // only stops `door_wedges` from being the whole story about what happened.
+      ...(f.ringWedges ? { ring_interiors: f.ringWedges } : {}),
+      // The seal ladder bridged a drafting pinhole this many px wide to close
+      // the region — the rescue rides provenance, never passes as a clean fill.
+      ...(f.gapBridged ? { gap_bridged_px: f.gapBridged } : {}),
+      ...(scaleBlind ? { scale_blind: true as const } : {}),
+    };
+  }
+
+  /** The mask honoring per-call layer overrides — a fresh build when overrides
+   * are given (never cached: the default mask stays authoritative), the cached
+   * default otherwise. Same buildMask contract as ensureMask above: the sheet
+   * scale rides in (k = 1 at this server's fixed RENDER_SCALE), roles last. */
+  async maskWithLayers(name: string, layersOpt?: { include?: string[]; exclude?: string[] }): Promise<MaskObj | null> {
+    if (!layersOpt || (!layersOpt.include?.length && !layersOpt.exclude?.length)) return this.ensureMask(name);
+    const s = this.sheet(name);
+    const geo = await this.ensureGeometry(s);
+    if (!geo.segs.length) return null;
+    const pxPerFt = s.upp != null && s.upp > 0 ? 1 / s.upp : 0;
+    return buildMask(geo.segs, s.widthPx, s.heightPx, MASK_MAX_DIM, geo.meta, pxPerFt, pxPerFt, null, this.rolesFor(s, geo, layersOpt));
   }
 
   async sheetInfo(name: string) {
@@ -287,6 +697,9 @@ export class Session {
       scale_set: s.upp != null,
       ...(s.upp != null ? { upp: s.upp } : {}),
       shape_count: this.shapes.filter((x) => x.sheet_id === s.key).length,
+      // the sheet's PDF layer table (#85) — always emitted; [] = no Optional
+      // Content survived export and every engine path runs the heuristics
+      layers: (s.layers || []).map((l) => ({ id: l.id, name: l.name, role: l.role, confidence: l.confidence, visible: l.visible, seg_count: l.seg_count })),
     };
   }
 
@@ -325,6 +738,10 @@ export class Session {
       throw new UserError("Provide exactly one of: label, upp, calibrate, use_detected.");
     }
     s.upp = upp;
+    // the tool reply keeps this session's source vocabulary; the stored value
+    // uses the canvas's report vocabulary so export_report's scale_source
+    // reads the same as an app-side report.v1
+    s.scaleSource = source === "label" ? "standard" : source === "calibrate" ? "calibrated" : source;
     return { sheet: s.key, upp, ...(label ? { label } : {}), source };
   }
 
@@ -360,28 +777,38 @@ export class Session {
       ...(origin ? { origin } : {}),
     };
     this.shapes.push(shape);
+    this.pendingCommits.push(shape.id);
     return shape;
   }
 
-  async oneClick(name: string, x: number, y: number, opts: { condition?: string; role: "floor_area" | "deduct"; returnVerts: boolean }) {
+  async oneClick(name: string, x: number, y: number, opts: { condition?: string; role: "floor_area" | "deduct"; returnVerts: boolean; sensitivity?: number; layers?: { include?: string[]; exclude?: string[] } }) {
     const s = this.sheet(name);
-    const mask = await this.ensureMask(name);
+    const mask = await this.maskWithLayers(name, opts.layers);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    const f = this.sealedFlood(mask, x, y);
+    // A6 (audit): the SEALED flood, through the shared floodAtSeed — the same
+    // entry point detect_rooms uses and the canvas's engine with the canvas's
+    // scale-derived arguments. This used to be the raw floodRegion: no gap
+    // sealing, no minimum-passage rule, no door wedges, so an MCP one_click and
+    // a canvas One-Click on the same seed disagreed while both stamped
+    // origin.method "one_click_v1".
+    const eng = this.engineArgs(mask);
+    const sens = opts.sensitivity ?? SENS_BALANCED;
+    const f = floodAtSeed(mask, x, y, sens, eng.mppf);
     if (f.status === "leak") throw new UserError("That space isn't enclosed on the plan linework — the fill spilled through a gap or opening.");
     if (f.status !== "ok") throw new UserError("Landed in dense linework (hatching or text).");
-    const ring = snapVertices(traceRegion(f), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
+    // F7(b): THE shared ring (oneclick.oneClickRing) — the canvas's three sites
+    // and the bench go through the same helper, so an MCP one_click and a canvas
+    // One-Click on one seed cannot compose the trace differently. The snap
+    // tolerance is the helper's SNAP_TOL_PX; nothing here restates it.
+    const ring = oneClickRing(f, { nearest: (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null) });
     if (ring.length < 3) throw new UserError("Couldn't trace that space into a polygon.");
     const areaPx2 = ringArea(ring);
     const perimPx = closedMetrics(ring).perim;
+    const rec = this.receipts(f, eng.scaleBlind, s.upp ? areaPx2 * s.upp * s.upp : undefined);
     const common = {
       status: "ok" as const,
       nverts: ring.length,
-      ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
-      // the sealed flood's own account of what it had to do to close the room
-      // — same provenance vocabulary the canvas records on origin.*
-      ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
-      ...(f.wedges ? { door_wedges: f.wedges } : {}),
+      ...rec,
       ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
     };
     if (s.upp == null) {
@@ -390,7 +817,7 @@ export class Session {
         ...common,
         area_px2: round1(areaPx2),
         perimeter_px: round1(perimPx),
-        warning: `No scale set for ${s.key} — quantities unavailable. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.`,
+        warning: `No scale set for ${s.key} — quantities unavailable, and the fill ran SCALE-BLIND (gap sealing limited to hairline drafting gaps, door-swing inclusion and the minimum-passage rule off), so this outline can differ from the scaled one. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""} and re-run.`,
       };
     }
     const upp = s.upp;
@@ -405,11 +832,16 @@ export class Session {
         actor: "agent",
         seed_norm: [x / s.widthPx, y / s.heightPx],
         reviewed: false,
-        ...(f.hatchFiltered ? { hatch_filtered: true as const } : {}),
-        ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
-        ...(f.wedges ? { door_wedges: f.wedges } : {}),
+        // only a NON-DEFAULT sensitivity is a fact about how the shape was
+        // made (upstream MCP + the canvas stamp it the same way)
+        ...(sens !== SENS_BALANCED ? { fill_sensitivity: sens } : {}),
+        ...rec,
+        // #85 — a trace bounded by DECLARED boundary layers is categorically
+        // stronger evidence than one bounded by a pitch heuristic
+        ...((s.layers || []).some((l) => l.visible && (l.role === "boundary" || l.role === "structure")) ? { layer_bounded: true as const } : {}),
       }).id;
     }
+    this.flushCommits("one_click");
     return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
   }
 
@@ -418,61 +850,184 @@ export class Session {
    *  exactly like oneClick — just N of them from one call instead of N
    *  reasoning-heavy round-trips. Same contract as oneClick: no scale → a
    *  px-only preview per room; no condition → nothing commits (a review
-   *  pass, not a proposal-acceptance gate — this server has none). A region
-   *  that traces to a degenerate ring (<3 verts) is dropped from the batch
-   *  rather than failing the whole call — one bad label must not sink every
-   *  other clean detection on the sheet. */
-  async detectRooms(name: string, opts: { condition?: string; role: "floor_area" | "deduct"; returnVerts: boolean }) {
+   *  pass, not a proposal-acceptance gate — this server has none).
+   *
+   *  Withholding — nothing is committed until it survives all three, and the
+   *  batch NEVER silently drops work: every withheld seed is counted and
+   *  reasoned in `withheld`, because a room the tool knows it skipped is a
+   *  question the caller can ask, while a room it skipped silently is a hole
+   *  in a bid.
+   *    1. degenerate — traced to fewer than 3 vertices.
+   *    2. duplicate — two labels flooding one region (a room tagged twice, or
+   *       a legend number landing in the same space) trace to an identical
+   *       ring. Committing both double-counts the area with no signal, which
+   *       is the worst failure mode an estimating tool has. One region commits
+   *       once; the collapsed labels ride along on `merged_labels`.
+   *    3. bubble — plans draw room numbers inside little boxes, and a seed at
+   *       the label floods the label's own BUBBLE: fully enclosed, traces
+   *       clean at label size, and is not a room (found live: 25 of 26). Each
+   *       label runs a SEED LADDER (anchor first, then label-height offsets)
+   *       and bubble rings are rejected scale-free (ring bbox ≈ label bbox) —
+   *       so the guard holds even before any scale is set. A label whose
+   *       every clean flood was its bubble counts here.
+   *    4. implausible — enclosed, clean, non-bubble, and still smaller than
+   *       `minAreaSf` (default 5 SF — smaller than any real finished space; a
+   *       broom closet is ~10 SF): a door swing or wall cavity. Only applied
+   *       once a scale exists, since without one there is no real area to
+   *       judge and nothing commits anyway. */
+  async detectRooms(name: string, opts: { condition?: string; role: "floor_area" | "deduct"; returnVerts: boolean; minAreaSf?: number; sensitivity?: number; layers?: { include?: string[]; exclude?: string[] } }) {
     const s = this.sheet(name);
-    const mask = await this.ensureMask(name);
+    const mask = await this.maskWithLayers(name, opts.layers);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    // Matching the room-number pattern isn't enough: a sheet's printed areas
-    // ("557 SF"), dimensions, drawing numbers and title-block text all carry
-    // 2-3 digit numerals, and the paper-space ones flood the margin — on the
-    // VA test plan that produced the largest "room" on the sheet, 847 SF of
-    // title block. The spatial gate needs the drawing extent, which only we
-    // know, so it is passed rather than assumed.
-    const seeds = roomLabelSeeds(s.text, { bounds: sheetBounds(s.widthPx, s.heightPx) });
-    const regions = detectRegions(mask, seeds);
-    const rooms = regions
-      .map((r) => {
-        const ring = snapVertices(traceRegion(r.flood), (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null), SNAP_TOL);
-        if (ring.length < 3) return null; // couldn't trace into a polygon — drop, don't sink the batch
-        const areaPx2 = ringArea(ring);
-        const perimPx = closedMetrics(ring).perim;
+    const minAreaSf = opts.minAreaSf ?? 5;
+    if (!s.spans) s.spans = textSpans(s.page);
+    // Labels with BBOXES — the seed ladder and the bubble guard need the
+    // label's box, not just its anchor. Each span still runs the SHARED
+    // roomLabelSeeds filters (the textual rejections AND the drawing-extent
+    // gate): matching the room-number pattern isn't enough — a sheet's printed
+    // areas ("557 SF"), dimensions, drawing numbers and title-block text all
+    // carry 2-3 digit numerals, and on the VA test plan the paper-space ones
+    // produced the largest "room" on the sheet, 847 SF of title block (issue
+    // #184 round 9). Placement is "anchor" because the ladder below does its
+    // own probing from the bbox.
+    const bounds = sheetBounds(s.widthPx, s.heightPx);
+    const labels: { str: string; bbox: LabelBBox }[] = [];
+    for (const sp of s.spans) {
+      const hit = roomLabelSeeds(
+        [{ str: sp.str, x: sp.x0, y: sp.y1, h: sp.y1 - sp.y0 }],
+        { bounds, placement: "anchor" },
+      )[0];
+      if (hit) labels.push({ str: hit.str, bbox: sp });
+    }
+
+    // A6 (audit): every probe runs the sealed engine through the shared
+    // floodAtSeed — the mask carries the sheet scale, so it derives the same
+    // seal radii / wedge cap / min-passage radius the canvas uses. Nothing
+    // here re-gates the result — the batch gate is still flood STATUS alone.
+    const eng = this.engineArgs(mask);
+    const sens = opts.sensitivity ?? SENS_BALANCED;
+
+    // Trace every label first (ladder + bubble guard per label). Nothing
+    // commits in this pass — withholding has to be decided across the whole
+    // batch (dedupe needs to see every ring).
+    const withheld = { degenerate: 0, duplicate: 0, bubble: 0, implausible: 0 };
+    type CleanFlood = Extract<FloodResult, { status: "ok" }>;
+    type Cand = { label: string; ring: Point[]; areaPx2: number; perimPx: number; seed: [number, number]; flood: CleanFlood; merged: string[] };
+    const byRing = new Map<string, Cand>();
+    const order: Cand[] = [];
+    for (const lb of labels) {
+      let ring: Point[] | null = null, flood: CleanFlood | null = null, seed: [number, number] | null = null;
+      let sawBubble = false, sawDegenerate = false;
+      const labelCx = (lb.bbox.x0 + lb.bbox.x1) / 2, labelCy = (lb.bbox.y0 + lb.bbox.y1) / 2;
+      // "below-box" leads the ladder — the fork's issue #184 item F placement
+      // (a rectangle drawn AROUND the room tag floods box-interior from the
+      // center seed; the below-box rung reaches the room first), with the
+      // center as a later fallback for tags whose room lies above/around.
+      const dbg = process.env.DETECT_DEBUG ? (m: string) => console.error(`[dbg] ${lb.str}: ${m}`) : null;
+      for (const probe of seedLadderPx(lb.bbox, "below-box")) {
+        // Every RUNG honors the drawing-extent gate, not just the label anchor:
+        // a rung stepped below a near-edge label can land in the title block
+        // and flood paper space into a confident "room".
+        if (probe[0] < bounds.x0 || probe[0] > bounds.x1 || probe[1] < bounds.y0 || probe[1] > bounds.y1) { dbg?.(`probe ${probe} out of bounds`); continue; }
+        const f = floodAtSeed(mask, probe[0], probe[1], sens, eng.mppf);
+        if (f.status !== "ok") { dbg?.(`probe ${probe} status ${f.status}`); continue; }
+        // Bubble-test the PRE-SNAP trace: oneClickRing's vertex snap can pull
+        // a tag-box ring onto nearby wall endpoints and inflate its bbox just
+        // past the 2.5× ratio, smuggling the box through the guard.
+        const raw = traceRegion(f) as [number, number][];
+        if (raw.length < 3) { sawDegenerate = true; dbg?.(`probe ${probe} degenerate raw`); continue; }
+        if (isLabelBubblePx(raw, lb.bbox)) { sawBubble = true; dbg?.(`probe ${probe} bubble (raw bbox vs label ${JSON.stringify(lb.bbox)}, area~${round2(ringArea(raw) * (s.upp || 0) ** 2)}sf)`); continue; }
+        // A rung can step across a shared wall into the NEIGHBORING room. A
+        // flood that is not this label's own space — committing it under this
+        // label (or ring-key-deduping it into the neighbor's own detection as
+        // a false `merged_labels`) silently unmeasures a real room. Ownership
+        // is EITHER test: the label center inside the traced ring (tag box
+        // floating free of the walls, or no box at all), OR the flood's region
+        // surrounding the label's box (floodSurroundsLabelPx — the tag box
+        // carve-out case: a box tied to a wall by its leader line notches the
+        // outer ring inward around the box, so the center falls outside the
+        // polygon even though the flood IS the room; 7 real rooms on the VA
+        // finish plan, 35-172 SF, fail the center test that way while every
+        // wrong-space flood measured scores at most 2 of its 4 sides).
+        if (!pointInPoly(labelCx, labelCy, raw) && !floodSurroundsLabelPx(f, lb.bbox)) { dbg?.(`probe ${probe} flood (area~${round2(ringArea(raw) * (s.upp || 0) ** 2)}sf) is not this label's space`); continue; }
+        // F7(b): the shared ring, as in oneClick above
+        const r = oneClickRing(f, { nearest: (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null) });
+        if (r.length < 3) { sawDegenerate = true; continue; }
+        ring = r; flood = f; seed = [probe[0], probe[1]];
+        break;
+      }
+      if (!ring || !flood || !seed) {
+        if (sawBubble) withheld.bubble++;            // only its own bubble ever flooded clean
+        else if (sawDegenerate) withheld.degenerate++;
+        // a label with no clean flood at any probe simply isn't counted as a
+        // seed that traced — same as the historical single-seed gate
+        continue;
+      }
+      const key = ring.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(";");
+      const seen = byRing.get(key);
+      if (seen) { seen.merged.push(lb.str); withheld.duplicate++; continue; }
+      const cand: Cand = {
+        label: lb.str, ring, areaPx2: ringArea(ring), perimPx: closedMetrics(ring).perim,
+        seed, flood, merged: [],
+      };
+      byRing.set(key, cand);
+      order.push(cand);
+    }
+
+    const upp = s.upp;
+    const rooms = order
+      .map((c) => {
+        // the same shared receipts oneClick mints — confidence through
+        // floodSignals/traceConfidence, never a hand-listed field set
+        const rec = this.receipts(c.flood, eng.scaleBlind, upp ? c.areaPx2 * upp * upp : undefined);
         const common = {
-          label: r.str,
-          nverts: ring.length,
-          ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
-          ...(r.flood.sealedPx ? { gap_sealed_px: r.flood.sealedPx } : {}),
-          ...(r.flood.wedges ? { door_wedges: r.flood.wedges } : {}),
-          ...(opts.returnVerts ? { verts: ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
+          label: c.label,
+          nverts: c.ring.length,
+          ...(c.merged.length ? { merged_labels: c.merged } : {}),
+          ...rec,
+          ...(opts.returnVerts ? { verts: c.ring.map(([vx, vy]) => [round1(vx), round1(vy)]) } : {}),
         };
-        if (s.upp == null) {
-          return { ...common, area_px2: round1(areaPx2), perimeter_px: round1(perimPx) };
+        if (upp == null) {
+          return { ...common, area_px2: round1(c.areaPx2), perimeter_px: round1(c.perimPx) };
         }
-        const upp = s.upp;
-        const area_sf = round2(areaPx2 * upp * upp);
-        const perimeter_lf = round2(perimPx * upp);
+        const area_sf = round2(c.areaPx2 * upp * upp);
+        if (area_sf < minAreaSf) { withheld.implausible++; return null; }
+        const perimeter_lf = round2(c.perimPx * upp);
         let shape_id: string | undefined;
         if (opts.condition) {
-          shape_id = this.commit(s, opts.condition, opts.role, ring, { area_sf, perimeter_lf }, {
+          shape_id = this.commit(s, opts.condition, opts.role, c.ring, { area_sf, perimeter_lf }, {
             method: "one_click_v1",
             actor: "agent",
-            seed_norm: [r.seed[0] / s.widthPx, r.seed[1] / s.heightPx],
+            seed_norm: [c.seed[0] / s.widthPx, c.seed[1] / s.heightPx],
             reviewed: false,
-            ...(r.flood.hatchFiltered ? { hatch_filtered: true as const } : {}),
-            ...(r.flood.sealedPx ? { gap_sealed_px: r.flood.sealedPx } : {}),
-            ...(r.flood.wedges ? { door_wedges: r.flood.wedges } : {}),
+            // only a NON-DEFAULT sensitivity is a fact about how the shape was
+            // made (upstream MCP + the canvas stamp it the same way)
+            ...(sens !== SENS_BALANCED ? { fill_sensitivity: sens } : {}),
+            ...rec,
+            // #85 — same receipt one_click mints: a trace bounded by DECLARED
+            // boundary layers is categorically stronger evidence than one
+            // bounded by a pitch heuristic
+            ...((s.layers || []).some((l) => l.visible && (l.role === "boundary" || l.role === "structure")) ? { layer_bounded: true as const } : {}),
           }).id;
         }
         return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
+
+    this.flushCommits("detect_rooms"); // the whole sweep is one reversible step
+    const withheldTotal = withheld.degenerate + withheld.duplicate + withheld.bubble + withheld.implausible;
     return {
       detected: rooms.length,
       rooms,
-      ...(s.upp == null ? { warning: `No scale set for ${s.key} — quantities unavailable. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.` } : {}),
+      withheld: {
+        total: withheldTotal,
+        ...withheld,
+        ...(upp != null ? { min_area_sf: minAreaSf } : {}),
+      },
+      ...(withheldTotal
+        ? { note: `${withheldTotal} seed(s) withheld — ${withheld.duplicate} duplicate region(s), ${withheld.bubble} label-bubble(s), ${withheld.implausible} under ${minAreaSf} SF, ${withheld.degenerate} untraceable.` }
+        : {}),
+      ...(s.upp == null ? { warning: `No scale set for ${s.key} — quantities unavailable, and every fill ran SCALE-BLIND (gap sealing limited to hairline drafting gaps, door-swing inclusion and the minimum-passage rule off), so these outlines can differ from the scaled ones. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""} and re-run.` } : {}),
     };
   }
 
@@ -486,6 +1041,7 @@ export class Session {
     // agent-supplied coordinates are a hand trace by a machine hand: manual
     // method, agent actor — and never reviewed (no human affirmed anything).
     if (opts.condition) shape_id = this.commit(s, opts.condition, opts.role, verts, { area_sf, perimeter_lf }, { method: "manual", actor: "agent" }).id;
+    this.flushCommits("measure_polygon");
     return { area_sf, perimeter_lf, nverts: verts.length, ...(shape_id ? { shape_id } : {}) };
   }
 
@@ -496,6 +1052,7 @@ export class Session {
     let shape_id: string | undefined;
     // area_sf stays 0 — the canvas only mints border SF when the condition has a thickness
     if (opts.condition) shape_id = this.commit(s, opts.condition, "linear", pts, { area_sf: 0, perimeter_lf: length_lf }, { method: "manual", actor: "agent" }).id;
+    this.flushCommits("measure_line");
     return { length_lf, npts: pts.length, ...(shape_id ? { shape_id } : {}) };
   }
 
@@ -509,8 +1066,306 @@ export class Session {
   deleteShape(id: string) {
     const i = this.shapes.findIndex((x) => x.id === id);
     if (i < 0) throw new UserError(`No shape with id ${JSON.stringify(id)}.`);
-    this.shapes.splice(i, 1);
+    const [shape] = this.shapes.splice(i, 1);
+    this.record({ op: "delete", tool: "delete_shape", removed: [{ shape, index: i }] });
     return { deleted: id, shape_count: this.shapes.length };
+  }
+
+  /** Revise a committed shape in place: new geometry, a different condition, a
+   * different role, or any combination. This is the verb that turns the agent
+   * from an appender into an editor — it can propose a ring, look at the
+   * overlay, see it overshot into the corridor, and move the two offending
+   * vertices, instead of deleting and re-deriving the whole room.
+   *
+   * The review gate is absolute: a shape a human affirmed (origin.reviewed ===
+   * true) is ink, and no agent verb touches ink. This server never sets that
+   * flag itself, so the guard is inert here today — it is the contract that
+   * makes this surface portable to a host that DOES have a review gate, and it
+   * belongs in the code rather than in a host's good intentions.
+   *
+   * Provenance: agent self-revision bumps origin.agent_edits and touches
+   * NOTHING in the human-correction vocabulary (edited / edits /
+   * proposed_verts_norm — see web/src/lib/provenance.js). Those fields grade a
+   * human's correction of a machine proposal; an agent fixing its own work is
+   * not that, and conflating the two would poison the exact signal the capture
+   * layer exists to collect. Freezing proposed_verts_norm stays correct on the
+   * human's first edit, because the geometry a reviewer saw IS the agent's
+   * final revision, not its first draft. */
+  editShape(id: string, patch: { verts?: Point[]; condition?: string; role?: MeasureRole }) {
+    const i = this.shapes.findIndex((x) => x.id === id);
+    if (i < 0) throw new UserError(`No shape with id ${JSON.stringify(id)}.`);
+    const cur = this.shapes[i];
+    if (cur.origin?.reviewed === true) {
+      throw new UserError(`Shape ${JSON.stringify(id)} was affirmed by a human — reviewed work is ink, not pencil, and cannot be edited by an agent.`);
+    }
+    if (patch.verts === undefined && patch.condition === undefined && patch.role === undefined) {
+      throw new UserError("Nothing to change — pass at least one of verts, condition, role.");
+    }
+    const s = this.sheet(cur.sheet_id);
+    if (s.upp == null) throw new UserError(this.scaleGate(s));
+    const upp = s.upp;
+    const role = patch.role ?? cur.measure_role;
+
+    // Geometry: either the supplied verts or the shape's own, back in image px.
+    const vertsPx: Point[] = patch.verts
+      ?? cur.verts_norm.map(([x, y]) => [x * s.widthPx, y * s.heightPx] as Point);
+    const minPts = role === "linear" ? 2 : 3;
+    if (vertsPx.length < minPts) {
+      throw new UserError(`A ${role === "linear" ? "linear shape needs at least 2 points" : "closed shape needs at least 3 vertices"} — got ${vertsPx.length}.`);
+    }
+
+    // Quantities are always recomputed from the resulting geometry AND role, so
+    // a role flip alone re-measures correctly (open length vs closed area).
+    const computed = role === "linear"
+      ? { area_sf: 0, perimeter_lf: round2(openLen(vertsPx) * upp) }
+      : (() => {
+          const met = closedMetrics(vertsPx);
+          return { area_sf: round2(met.area * upp * upp), perimeter_lf: round2(met.perim * upp) };
+        })();
+
+    const before: Shape = structuredClone(cur);
+    const condition_id = patch.condition !== undefined ? this.conditionFor(patch.condition).id : cur.condition_id;
+    this.shapes[i] = {
+      ...cur,
+      condition_id,
+      measure_role: role,
+      verts_norm: vertsPx.map(([x, y]) => [x / s.widthPx, y / s.heightPx]),
+      computed,
+      ...(cur.origin ? { origin: { ...cur.origin, agent_edits: (cur.origin.agent_edits ?? 0) + 1 } } : {}),
+    };
+    this.record({ op: "edit", tool: "edit_shape", before });
+
+    const changed = [
+      ...(patch.verts !== undefined ? ["verts"] : []),
+      ...(patch.condition !== undefined ? ["condition"] : []),
+      ...(patch.role !== undefined ? ["role"] : []),
+    ];
+    return {
+      shape_id: id,
+      changed,
+      measure_role: role,
+      nverts: vertsPx.length,
+      ...computed,
+      agent_edits: this.shapes[i].origin?.agent_edits ?? 0,
+    };
+  }
+
+  /** Add/remove/patch supporting-materials rows on a condition, in one call.
+   * Unlike editShape there is no review gate to check — materials rows carry
+   * no origin/reviewed field, because they are quantity CONFIG (a coverage
+   * rate), not geometry a human traced. Validated all-or-nothing before
+   * anything is written: a bad id anywhere in remove/patch throws and nothing
+   * changes, same discipline as the shapes tools. Reversible with undo_last —
+   * one journal entry snapshots the condition's whole materials array before
+   * the call, restored verbatim on undo (same pattern as editShape's `before`
+   * capture, simpler here because there is no per-row provenance to preserve). */
+  editMaterials(tag: string, opts: {
+    add?: { name: string; per?: number; basis?: MaterialRow["basis"]; unit?: string; round?: boolean; note?: string }[];
+    remove?: string[];
+    patch?: { id: string; fields: Partial<Omit<MaterialRow, "id">> }[];
+  }) {
+    const add = opts.add ?? [], remove = opts.remove ?? [], patch = opts.patch ?? [];
+    if (!add.length && !remove.length && !patch.length) {
+      throw new UserError("Nothing to change — pass at least one of add, remove, patch.");
+    }
+    for (let i = 0; i < add.length; i++) {
+      if (!add[i].name.trim()) throw new UserError(`add[${i}]: name required.`);
+    }
+    // Validate remove/patch against whatever condition already exists, WITHOUT
+    // minting one — conditionFor() below creates on first touch (same as every
+    // other condition-bearing tool), and a validation failure must leave no
+    // trace: an unknown tag + a bad row id should error, not mint an empty
+    // condition as a side effect of the error.
+    const existingMaterials = this.conditions.find((x) => x.finish_tag === tag)?.materials ?? [];
+    const byId = new Map(existingMaterials.map((m) => [m.id, m]));
+    for (const id of remove) {
+      if (!byId.has(id)) throw new UserError(`remove: no material row ${JSON.stringify(id)} on condition ${JSON.stringify(tag)}.`);
+    }
+    for (let i = 0; i < patch.length; i++) {
+      if (!byId.has(patch[i].id)) throw new UserError(`patch[${i}]: no material row ${JSON.stringify(patch[i].id)} on condition ${JSON.stringify(tag)}.`);
+      if (!Object.keys(patch[i].fields).length) throw new UserError(`patch[${i}]: fields must be non-empty.`);
+    }
+
+    const c = this.conditionFor(tag);
+    const before = structuredClone(c.materials);
+    const added: string[] = [];
+    for (const a of add) {
+      const row: MaterialRow = {
+        id: uid("mat"), name: a.name.trim(), per: Math.max(0, a.per ?? 0),
+        basis: a.basis ?? "area", unit: a.unit ?? "", round: a.round ?? true,
+        ...(a.note ? { note: a.note } : {}),
+      };
+      c.materials.push(row);
+      added.push(row.id);
+    }
+    const removed = new Set(remove);
+    if (removed.size) c.materials = c.materials.filter((m) => !removed.has(m.id));
+    const patched: string[] = [];
+    for (const p of patch) {
+      const m = c.materials.find((x) => x.id === p.id)!;
+      Object.assign(m, p.fields);
+      patched.push(p.id);
+    }
+    this.record({ op: "materials", tool: "edit_materials", condition_id: c.id, before });
+
+    return {
+      condition: tag, condition_id: c.id,
+      changed: { added, removed: [...removed], patched },
+      materials: c.materials,
+    };
+  }
+
+  /** Set a condition's quantity knobs — waste % and multiplier. Both are
+   * emitted by takeoff_summary (`waste_pct`, the `*_net` order quantities) and
+   * carried by every export, but nothing in the tool surface could set them,
+   * so an agent's takeoff always shipped net === gross (#131). Same class as
+   * editMaterials — quantity config, not traced geometry, so no review gate —
+   * but resolve-or-error rather than mint-on-first-touch: these knobs only
+   * mean anything on a condition that exists, and a typo'd tag must error,
+   * not create an empty condition as a side effect. One journal entry
+   * snapshots both knobs; undo restores them verbatim. */
+  editCondition(tag: string, opts: { waste_pct?: number; multiplier?: number }) {
+    if (opts.waste_pct === undefined && opts.multiplier === undefined) {
+      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier.");
+    }
+    const c = this.conditions.find((x) => x.finish_tag === tag);
+    if (!c) {
+      const known = this.conditions.map((x) => x.finish_tag);
+      throw new UserError(`No condition ${JSON.stringify(tag)}.${known.length ? ` Known tags: ${known.join(", ")}.` : " Nothing has minted a condition yet — commit a measurement or add materials first."}`);
+    }
+    const before = { waste_pct: c.waste_pct, multiplier: c.multiplier };
+    if (opts.waste_pct !== undefined) c.waste_pct = opts.waste_pct;
+    if (opts.multiplier !== undefined) c.multiplier = opts.multiplier;
+    this.record({ op: "condition", tool: "edit_condition", condition_id: c.id, before });
+    return { condition: tag, condition_id: c.id, waste_pct: c.waste_pct, multiplier: c.multiplier };
+  }
+
+  /** Step back over this session's own last n mutations, newest first. Each
+   * entry's inverse is exact (see JournalEntry), so this restores state rather
+   * than approximating it. Reads are not journaled, so undo never has to step
+   * over a look — n counts gestures that changed something. */
+  undoLast(n: number) {
+    const undone: { seq: number; op: JournalEntry["op"]; tool: string; shapes: number }[] = [];
+    for (let k = 0; k < n; k++) {
+      const e = this.journal.pop();
+      if (!e) break;
+      if (e.op === "commit") {
+        const dead = new Set(e.ids);
+        this.shapes = this.shapes.filter((x) => !dead.has(x.id));
+        undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: e.ids.length });
+      } else if (e.op === "edit") {
+        const i = this.shapes.findIndex((x) => x.id === e.before.id);
+        // the shape may have been deleted after the edit; undoing the edit of a
+        // shape that is gone is a no-op on geometry, not an error
+        if (i >= 0) this.shapes[i] = e.before;
+        undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: i >= 0 ? 1 : 0 });
+      } else if (e.op === "materials") {
+        const c = this.conditions.find((x) => x.id === e.condition_id);
+        // the condition itself is never deleted (no delete_condition tool), so
+        // this only misses if a fresh session's journal outlived a load_plan —
+        // which load_plan already clears the journal for.
+        if (c) c.materials = e.before;
+        undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: 0 });
+      } else if (e.op === "condition") {
+        const c = this.conditions.find((x) => x.id === e.condition_id);
+        if (c) { c.waste_pct = e.before.waste_pct; c.multiplier = e.before.multiplier; }
+        undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: 0 });
+      } else {
+        for (const { shape, index } of e.removed) {
+          this.shapes.splice(Math.min(index, this.shapes.length), 0, shape);
+        }
+        undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: e.removed.length });
+      }
+    }
+    return {
+      undone: undone.length,
+      steps: undone,
+      shape_count: this.shapes.length,
+      remaining: this.journal.length,
+      ...(undone.length < n ? { note: `Only ${undone.length} step(s) were available to undo.` } : {}),
+    };
+  }
+
+  /** Place an annotation. A note ABOUT the work — it never measures anything
+   *  and never touches a quantity, which is why there is no review gate here:
+   *  the pencil-not-ink rule exists to stop an agent inventing GEOMETRY, and a
+   *  cloud saying "verify substrate" is not geometry.
+   *
+   *  `condition` attaches it to a scope by finish tag, minting the condition on
+   *  first touch exactly like one_click/measure_polygon — so an agent can note
+   *  something about CPT-1 before anything is traced for CPT-1. Omit it for a
+   *  note about the sheet rather than about a finish. */
+  annotate(a: { sheet: string; type: Markup["type"]; text: string; at?: Point; target?: Point; rect?: [Point, Point]; condition?: string }): Record<string, unknown> {
+    const s = this.sheet(a.sheet);
+    const n = ([x, y]: Point): [number, number] => [x / s.widthPx, y / s.heightPx];
+    if ((a.type === "cloud" || a.type === "highlight") && !a.rect) throw new UserError(`a ${a.type} needs rect: [[x0,y0],[x1,y1]] in image px`);
+    if ((a.type === "text" || a.type === "callout") && !a.at) throw new UserError(`a ${a.type} needs at: [x,y] in image px`);
+    if (a.type === "callout" && !a.target) throw new UserError("a callout needs target: [x,y] — the point the leader line aims at");
+    const cond = a.condition ? this.conditionFor(a.condition) : null;
+    const m: Markup = {
+      id: uid("mk"),
+      sheet_id: s.key,
+      type: a.type,
+      text: a.text || "",
+      condition_id: cond?.id ?? "",
+      rfi_id: "",
+      created_at: new Date().toISOString(),
+      ...(a.at ? { at: n(a.at) } : {}),
+      ...(a.target ? { target: n(a.target) } : {}),
+      ...(a.rect ? { rect: [n(a.rect[0]), n(a.rect[1])] as [[number, number], [number, number]] } : {}),
+    };
+    this.markups.push(m);
+    return {
+      id: m.id, sheet: s.key, type: m.type, text: m.text,
+      condition: cond?.finish_tag ?? "", condition_id: m.condition_id,
+      note: cond
+        ? `Attached to ${cond.finish_tag} — it wears that condition's colour on the canvas and in the marked set.`
+        : "Unattached — a note about the sheet. Pass condition to tie it to a scope.",
+    };
+  }
+
+  /** Read annotations, optionally narrowed to a sheet and/or a condition.
+   *  Resolves condition_id to its finish tag so a caller can act on the reply
+   *  without joining against the conditions array. */
+  listAnnotations(f: { sheet?: string; condition?: string } = {}): Record<string, unknown> {
+    const tagById = new Map(this.conditions.map((c) => [c.id, c.finish_tag]));
+    let rows = this.markups;
+    if (f.sheet) { const s = this.sheet(f.sheet); rows = rows.filter((m) => m.sheet_id === s.key); }
+    if (f.condition) {
+      const c = this.conditions.find((x) => x.finish_tag === f.condition);
+      if (!c) throw new UserError(`no condition "${f.condition}" — tags: ${this.conditions.map((x) => x.finish_tag).join(", ") || "(none)"}`);
+      rows = rows.filter((m) => m.condition_id === c.id);
+    }
+    const s0 = this.sheets;
+    const px = (m: Markup, p?: [number, number]): [number, number] | undefined => {
+      const sh = s0.get(m.sheet_id); if (!p || !sh) return undefined;
+      return [round1(p[0] * sh.widthPx), round1(p[1] * sh.heightPx)];
+    };
+    return {
+      annotations: rows.map((m) => ({
+        id: m.id, sheet: m.sheet_id, type: m.type, text: m.text,
+        condition: tagById.get(m.condition_id) ?? "", condition_id: m.condition_id,
+        ...(m.at ? { at: px(m, m.at) } : {}),
+        ...(m.target ? { target: px(m, m.target) } : {}),
+        ...(m.rect ? { rect: [px(m, m.rect[0]), px(m, m.rect[1])] } : {}),
+      })),
+      count: rows.length,
+      unattached: rows.filter((m) => !m.condition_id).length,
+    };
+  }
+
+  /** Attach an existing annotation to a condition, or detach it with "". The
+   *  canvas's Attach/Detach, reachable by an agent. */
+  linkAnnotation(id: string, condition: string): Record<string, unknown> {
+    const m = this.markups.find((x) => x.id === id);
+    if (!m) throw new UserError(`no annotation "${id}" — call list_annotations for real ids`);
+    if (!condition) {
+      m.condition_id = "";
+      return { id: m.id, condition: "", note: "Detached — now a note about the sheet." };
+    }
+    const c = this.conditionFor(condition);
+    m.condition_id = c.id;
+    return { id: m.id, condition: c.finish_tag, condition_id: c.id, note: `Attached to ${c.finish_tag}.` };
   }
 
   /** The exact browser save payload (TakeoffCanvas.jsx autosave + the schema key
@@ -524,11 +1379,113 @@ export class Session {
       sheets: [...this.sheets.values()].filter((s) => s.upp != null).map((s) => ({ sheet_id: s.key, units_per_px: s.upp })),
       conditions: this.conditions,
       shapes: this.shapes,
-      markups: [],
+      markups: this.markups,
       sheet_group: [],
       last_group: [],
       sheet_tabs: [],
       sheet_levels: {},
+    };
+  }
+
+  /** The computed Report document — "opentakeoff.report.v1", the SAME schema
+   * and math as the canvas Report's JSON export (web reportJson, totals.js):
+   * per-condition quantities with waste and multiplier applied, the computed
+   * materials buy list, per-sheet BASE subtotals, scale provenance. This is
+   * the contract a pricing consumer reads (#130) — export_takeoff carries
+   * materials as CONFIG rows and takeoff_summary strips them; only this
+   * document carries the computed order quantities. */
+  exportReport(projectName = "") {
+    if (!this.doc) throw new UserError("No plan loaded — call load_plan first.");
+    const rows = (conditionTotals(this.conditions, this.shapes) as Record<string, unknown>[]).filter((r) => (r.shape_count as number) > 0);
+    return reportJson({
+      projectName,
+      rows,
+      bySheet: sheetTotals(this.conditions, this.shapes),
+      scaleInfo: [...this.sheets.values()].filter((s) => s.upp != null).map((s) => ({ sheet_id: s.key, scale_source: s.scaleSource ?? "unknown" })),
+      markups: this.markups,
+      rfis: [],
+    });
+  }
+
+  // ── the sheet graph (#87) ─────────────────────────────────────────────────
+  // Built lazily from every sheet's text spans, cached per document (loadPlan
+  // clears it). The engine is pure (web/src/lib/sheetgraph.ts); this is the
+  // span plumbing plus the wire shapes.
+  private graph: SheetGraph | null = null;
+
+  private async ensureGraph(): Promise<SheetGraph> {
+    if (!this.doc) throw new UserError("No plan loaded — call load_plan first.");
+    if (!this.graph) {
+      const inputs: SheetSpans[] = [];
+      for (const s of this.sheets.values()) {
+        if (!s.spans) s.spans = textSpans(s.page);
+        inputs.push({
+          key: s.key,
+          sheet_number: s.sheetNumber,
+          spans: s.spans.map((t) => ({ str: t.str, x: t.x0, y: t.y0, w: t.x1 - t.x0, h: t.y1 - t.y0 })),
+        });
+      }
+      this.graph = buildSheetGraph(inputs);
+    }
+    return this.graph;
+  }
+
+  private static wireBox(b: [number, number, number, number]) {
+    return { x0: round1(b[0]), y0: round1(b[1]), x1: round1(b[2]), y1: round1(b[3]) };
+  }
+  private static wireEvidence(e: { sheet: string; text: string; bbox: [number, number, number, number] }) {
+    return { sheet: e.sheet, text: e.text, bbox: Session.wireBox(e.bbox) };
+  }
+
+  async sheetGraph() {
+    const g = await this.ensureGraph();
+    return {
+      available: g.available,
+      sheets: g.sheets.map((s) => ({
+        sheet: s.key, role: s.role, confidence: s.confidence,
+        ...(s.evidence ? { evidence: Session.wireEvidence(s.evidence) } : {}),
+        schedules: s.schedules.map((t) => ({ kind: t.kind, title: t.title, rows: t.rows, region: Session.wireBox(t.region) })),
+      })),
+      rooms: g.rooms.map((r) => ({ tag: r.tag, name: r.name, sheet: r.sheet, bbox: Session.wireBox(r.bbox) })),
+      callouts: g.callouts.map((c) => ({ detail: c.detail, target_sheet: c.target_sheet, sheet: c.sheet, bbox: Session.wireBox(c.bbox) })),
+      counts: { rooms: g.rooms.length, schedules: g.tables.length, callouts: g.callouts.length },
+    };
+  }
+
+  async resolveRoomTag(tag: string) {
+    if (!tag || !tag.trim()) throw new UserError("Pass a room tag, e.g. resolve_tag { tag: \"134\" }.");
+    const g = await this.ensureGraph();
+    if (!g.available) throw new UserError("This set has no text layer (a scan) — the sheet graph is unavailable, not empty.");
+    const res = resolveTag(g, tag);
+    const room = res.room ? { tag: res.room.tag, name: res.room.name, sheet: res.room.sheet, bbox: Session.wireBox(res.room.bbox) } : null;
+    if (res.status === "unresolved") return { status: "unresolved" as const, tag: res.tag, room, reason: res.reason };
+    return {
+      status: "resolved" as const,
+      tag: res.tag,
+      room,
+      finishes: res.finishes.map((f) => ({
+        surface: f.surface, code: f.code, source: Session.wireEvidence(f.source),
+        ...(f.definition ? { definition: { cells: f.definition.cells, source: Session.wireEvidence(f.definition.source) } } : {}),
+      })),
+      sources: res.sources.map(Session.wireEvidence),
+    };
+  }
+
+  async findSchedule(kind: string) {
+    const g = await this.ensureGraph();
+    if (!g.available) throw new UserError("This set has no text layer (a scan) — the sheet graph is unavailable.");
+    const k = (kind || "").toLowerCase();
+    const want = /room/.test(k) ? "room-finish" : /finish|material|product|code|mark/.test(k) ? "finish" : k;
+    const hits = g.tables.filter((t) => t.kind === want);
+    if (!hits.length) {
+      const found = g.tables.map((t) => `${t.kind} on ${t.sheet}`).join(" | ");
+      throw new UserError(`No ${JSON.stringify(kind)} schedule found in the set. Found: ${found || "no schedules at all"}.`);
+    }
+    return {
+      matches: hits.map((t) => ({
+        sheet: t.sheet, kind: t.kind, title: t.title?.text || "", rows: t.rows.length,
+        headers: t.headers, region: Session.wireBox(t.region),
+      })),
     };
   }
 
@@ -542,5 +1499,31 @@ export class Session {
     // widening the contract, and the strict conformance check enforces that.
     const items = hit.map(({ str, x, y }) => ({ str, x, y }));
     return { sheet: s.key, items, text: items.map((t) => t.str).join(" ") };
+  }
+
+  /** LOCATE a known string — the complement to readSheetText (which returns
+   * what a region SAYS; this finds WHERE a string you already know sits).
+   * Case-insensitive substring match per pdf.js text run, so a room label
+   * split across runs ("OFFICE" then "134" as separate items) needs its own
+   * find_text call per fragment, or read_sheet_text over a region to see the
+   * whole thing at once — this tool doesn't merge runs into lines. Reuses the
+   * bbox spans sheet_context lazily builds (same cache, same textSpans()
+   * call), so calling both on one sheet costs the extraction once. */
+  findText(name: string, q: string, opts: { region?: { x0: number; y0: number; x1: number; y1: number }; limit?: number } = {}) {
+    const query = q.trim();
+    if (!query) throw new UserError("q must be a non-empty string.");
+    const s = this.sheet(name);
+    if (!s.spans) s.spans = textSpans(s.page);
+    const r = opts.region;
+    const needle = query.toLowerCase();
+    const limit = opts.limit ?? 200;
+    const all = s.spans.filter((sp) => sp.str.toLowerCase().includes(needle)
+      && (!r || (sp.x0 <= r.x1 && sp.x1 >= r.x0 && sp.y0 <= r.y1 && sp.y1 >= r.y0)));
+    const hits = all.slice(0, limit).map((sp) => ({
+      str: sp.str,
+      bbox: [sp.x0, sp.y0, sp.x1, sp.y1] as [number, number, number, number],
+      center: [round1((sp.x0 + sp.x1) / 2), round1((sp.y0 + sp.y1) / 2)] as [number, number],
+    }));
+    return { sheet: s.key, q: query, count: all.length, truncated: all.length > hits.length, hits };
   }
 }

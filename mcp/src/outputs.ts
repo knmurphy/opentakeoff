@@ -37,6 +37,14 @@ export const sheetInfoOutput = {
   scale_set: z.boolean(),
   upp: z.number().optional().describe("Real feet per image px at render scale 2.0 — present once the scale is set"),
   shape_count: z.number().int().describe("Committed shapes on this sheet"),
+  layers: z.array(z.object({
+    id: z.string().describe("Optional Content Group id — pass to one_click/detect_rooms layers.include/exclude"),
+    name: z.string().describe("The CAD layer name as exported (e.g. A-WALL-FULL)"),
+    role: z.enum(["boundary", "finish-pattern", "annotation", "structure", "demolition", "unknown"]).describe("What this layer's linework IS to a takeoff (lib/layers.ts) — boundary/structure plot hard, pattern/annotation/demolition are excluded, unknown falls back to the hatch heuristics"),
+    confidence: z.number().describe("0..1 — how sure the name classifier is"),
+    visible: z.boolean().describe("Default-config visibility — a hidden layer's ink is excluded outright (or you trace demolition)"),
+    seg_count: z.number().int().describe("Segments this layer owns on this sheet"),
+  })).describe("The sheet's PDF layer table (#85) — [] when no Optional Content survived export (every engine path then runs the heuristics unchanged)"),
 };
 
 export const setScaleOutput = {
@@ -53,8 +61,7 @@ export const oneClickOutput = {
   status: z.literal("ok"),
   nverts: z.number().int().describe("Vertex count of the traced polygon"),
   hatch_filtered: z.literal(true).optional().describe("Present when hatch/pattern linework was classified out of the boundary"),
-  gap_sealed_px: z.number().optional().describe("Present when the seal ladder closed a cased opening to bound the room — the dilation radius used (mask px)"),
-  door_wedges: z.number().int().optional().describe("Present when drawn door-swing wedges were included — how many arcs were opened"),
+  gap_bridged_px: z.number().optional().describe("Present when the seal ladder bridged a drafting pinhole this many px wide to close the region — the rescue rides provenance (origin.gap_bridged_px) rather than passing as a clean fill"),
   verts: z.array(point).optional().describe("Traced polygon vertices (image px), when return_verts was set"),
   area_sf: z.number().optional().describe("Scaled mode: traced area in SF"),
   perimeter_lf: z.number().optional().describe("Scaled mode: traced perimeter in LF"),
@@ -62,6 +69,14 @@ export const oneClickOutput = {
   area_px2: z.number().optional().describe("Preview mode (no scale): raw area in px²"),
   perimeter_px: z.number().optional().describe("Preview mode (no scale): raw perimeter in px"),
   warning: z.string().optional().describe("Preview mode (no scale): why quantities are unavailable and what to do"),
+  confidence: z.number().optional().describe("traceConfidence 0-1: how much of this boundary is the plan's own linework vs inferred. 1.0 means every signal the engine can see came back clean, NOT that the measurement is right — a trace that stops at an annotation ring scores 1.0 and is 35% short"),
+  confidence_factors: z.array(z.string()).optional().describe("Named deductions behind `confidence`, e.g. \"sealed-opening(12% synthetic boundary)\""),
+  gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
+  min_pass_px: z.number().optional().describe("Minimum-passage dilation radius (mask px) that ran, present only when the rule changed the answer — a passage narrower than 6 in was treated as not connecting"),
+  min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed (0-1). 1 means the drawn linework bounded nothing and the rule IS the measurement — read `gap_sealed_px`/`confidence_factors` beside it"),
+  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  ring_interiors: z.number().int().optional().describe("How many of `door_wedges` annexed the interior of a closed drawn ring (round column, callout bubble) rather than a door swing — same measurement, but not a door"),
+  scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 };
 
 /** One batch-detected room — same per-room shape as oneClickOutput's scaled/
@@ -71,16 +86,24 @@ export const oneClickOutput = {
 const detectedRoom = z.object({
   label: z.string().describe("The room-number text the seed was read from (e.g. \"104\", \"139A\")"),
   nverts: z.number().int().describe("Vertex count of the traced polygon"),
+  merged_labels: z.array(z.string()).optional().describe("Other labels that flooded to this same region — the area is counted once, under `label`"),
   hatch_filtered: z.literal(true).optional().describe("Present when hatch/pattern linework was classified out of the boundary"),
-  gap_sealed_px: z.number().optional().describe("Present when the seal ladder closed a cased opening to bound the room — the dilation radius used (mask px)"),
-  door_wedges: z.number().int().optional().describe("Present when drawn door-swing wedges were included — how many arcs were opened"),
+  gap_bridged_px: z.number().optional().describe("Present when the seal ladder bridged a drafting pinhole this many px wide to close the region"),
   verts: z.array(point).optional().describe("Traced polygon vertices (image px), when return_verts was set"),
   area_sf: z.number().optional().describe("Scaled mode: traced area in SF"),
   perimeter_lf: z.number().optional().describe("Scaled mode: traced perimeter in LF"),
   shape_id: z.string().optional().describe("Scaled mode: id of the committed shape, when condition was passed"),
   area_px2: z.number().optional().describe("Preview mode (no scale): raw area in px²"),
   perimeter_px: z.number().optional().describe("Preview mode (no scale): raw perimeter in px"),
-});
+  confidence: z.number().optional().describe("traceConfidence 0-1: how much of this boundary is the plan's own linework vs inferred. 1.0 means every signal the engine can see came back clean, NOT that the measurement is right — a trace that stops at an annotation ring scores 1.0 and is 35% short"),
+  confidence_factors: z.array(z.string()).optional().describe("Named deductions behind `confidence`, e.g. \"sealed-opening(12% synthetic boundary)\""),
+  gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
+  min_pass_px: z.number().optional().describe("Minimum-passage dilation radius (mask px) that ran, present only when the rule changed the answer — a passage narrower than 6 in was treated as not connecting"),
+  min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed (0-1). 1 means the drawn linework bounded nothing and the rule IS the measurement — read `gap_sealed_px`/`confidence_factors` beside it"),
+  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  ring_interiors: z.number().int().optional().describe("How many of `door_wedges` annexed the interior of a closed drawn ring (round column, callout bubble) rather than a door swing — same measurement, but not a door"),
+  scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
+}).strict();  // published schema is additionalProperties:false; strict makes runtime + conformance match it (per-room entries carry the receipts spread, so undeclared keys would land HERE first)
 
 /** detect_rooms: one flood per room-number label found on the sheet's text
  * layer, kept only when it traces cleanly (a leak/tiny/boundary flood is
@@ -90,6 +113,15 @@ const detectedRoom = z.object({
 export const detectRoomsOutput = {
   detected: z.number().int().describe("Count of cleanly-detected rooms — may be fewer than the labels found on the sheet"),
   rooms: z.array(detectedRoom),
+  withheld: z.object({
+    total: z.number().int().describe("Seeds found on the sheet but not reported as rooms"),
+    degenerate: z.number().int().describe("Traced to fewer than 3 vertices"),
+    duplicate: z.number().int().describe("Flooded to a region another label already claimed — counted once, never twice"),
+    bubble: z.number().int().describe("Labels whose every clean flood was their own label BUBBLE (ring bbox ≈ label bbox — plans box their room numbers). Scale-free, so it guards unscaled previews too"),
+    implausible: z.number().int().describe("Enclosed, clean, non-bubble, but smaller than min_area_sf — a door swing or wall cavity rather than a room"),
+    min_area_sf: z.number().optional().describe("The plausibility floor applied (scaled mode only)"),
+  }).describe("What detection skipped and why — a withheld room is a question the caller can ask; a silently dropped one is a hole in a bid"),
+  note: z.string().optional().describe("Human-readable summary of what was withheld, when anything was"),
   warning: z.string().optional().describe("Preview mode (no scale): why quantities are unavailable and what to do"),
 };
 
@@ -177,8 +209,238 @@ export const deleteShapeOutput = {
   shape_count: z.number().int().describe("Committed shapes remaining"),
 };
 
+/** edit_shape: the revised shape's re-measured quantities. Quantities are
+ * always recomputed from the resulting geometry and role, so a role flip alone
+ * re-measures (closed area vs open length). */
+export const editShapeOutput = {
+  shape_id: z.string(),
+  changed: z.array(z.enum(["verts", "condition", "role"])).describe("Which fields this call actually changed"),
+  measure_role: z.enum(["floor_area", "deduct", "linear"]),
+  nverts: z.number().int(),
+  area_sf: z.number().describe("0 for linear shapes"),
+  perimeter_lf: z.number().describe("Length for linear shapes, perimeter for closed ones"),
+  agent_edits: z.number().int().describe("How many times the agent has revised this shape — separate from the human-correction tally"),
+};
+
+/** undo_last: what was actually stepped back. `undone` may be fewer than
+ * requested when the journal ran out; the note says so rather than pretending. */
+export const undoLastOutput = {
+  undone: z.number().int().describe("Steps actually reversed"),
+  steps: z.array(z.object({
+    seq: z.number().int(),
+    op: z.enum(["commit", "edit", "delete", "materials", "condition"]),
+    tool: z.string().describe("The tool call this step came from"),
+    shapes: z.number().int().describe("Shapes affected by reversing this step — 0 for a materials step (it restores a condition's supporting-materials rows, not shapes) and for a condition step (it restores the waste/multiplier pair)"),
+  })).describe("Newest first"),
+  shape_count: z.number().int().describe("Committed shapes after the undo"),
+  remaining: z.number().int().describe("Steps still available to undo"),
+  note: z.string().optional(),
+};
+
+/** findText — the complement to readSheetTextOutput: WHERE a known string
+ * sits, not what a region says. */
+export const findTextOutput = {
+  sheet: z.string(),
+  q: z.string(),
+  count: z.number().int().describe("Total matches before the limit cap"),
+  truncated: z.boolean().describe("true = count exceeds hits.length; narrow the region or raise limit"),
+  hits: z.array(z.object({
+    str: z.string().describe("The matched pdf.js text run, verbatim (may be shorter than the full label — runs aren't merged into lines)"),
+    bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]).describe("[x0, y0, x1, y1] image px"),
+    center: z.tuple([z.number(), z.number()]).describe("Bbox center, image px — feed straight into one_click's seed"),
+  })),
+};
+
+/** editMaterials — session.ts's MaterialRow, verbatim. */
+const materialRow = z.object({
+  id: z.string(),
+  name: z.string(),
+  per: z.number().describe("Coverage rate: basis ÷ per = order quantity"),
+  basis: z.enum(["area", "linear", "count"]).describe("Which of the condition's totals this row's quantity is computed against"),
+  unit: z.string(),
+  round: z.boolean().describe("true = round up to whole purchase units (the default — you buy whole bags/buckets)"),
+  note: z.string().optional(),
+});
+
+export const editMaterialsOutput = {
+  condition: z.string().describe("The finish tag passed in"),
+  condition_id: z.string(),
+  changed: z.object({
+    added: z.array(z.string()).describe("Ids of newly added rows"),
+    removed: z.array(z.string()).describe("Ids removed"),
+    patched: z.array(z.string()).describe("Ids whose fields changed"),
+  }),
+  materials: z.array(materialRow).describe("The condition's full materials array after this write"),
+};
+
+/** One computed materials line inside a report condition row — the buy list.
+ * conditionTotals (web/src/lib/totals.js) computes qty = basis_qty ÷ per,
+ * rounded UP to whole purchase units unless round is false. */
+const reportMaterialLine = z.object({
+  name: z.string(),
+  unit: z.string().describe("Purchase unit, e.g. 'gal', 'bag'"),
+  per: z.number().describe("Coverage rate — basis units per purchase unit"),
+  basis: z.enum(["area", "linear", "count"]),
+  round: z.boolean(),
+  basis_qty: z.number().describe("The condition total this row divides (SF, LF, or EA — multiplier applied, waste not)"),
+  qty: z.number().describe("Computed order quantity"),
+}).passthrough();
+
+/** export_report: the canvas Report's own JSON document (totals.js reportJson,
+ * schema "opentakeoff.report.v1", additive-only). The authority on the shape
+ * is the web export — this mirror pins what a pricing consumer relies on and
+ * passes the additive tail through. */
+export const exportReportOutput = {
+  schema: z.literal("opentakeoff.report.v1"),
+  project_name: z.string().nullable(),
+  generated_with: z.string(),
+  sheets: z.array(z.object({ sheet_id: z.string(), sheet: z.string(), scale_source: z.string() }).passthrough()).describe("Scale provenance per sheet — how each scale was set"),
+  conditions: z.array(summaryRow.extend({ materials: z.array(reportMaterialLine) }).passthrough()).describe("conditionTotals rows: gross + *_net quantities AND the computed materials buy list"),
+  by_sheet: z.array(z.object({ sheet_id: z.string(), sheet: z.string(), rows: z.array(z.record(z.unknown())) }).passthrough()).describe("BASE per-sheet subtotals — multiplier NOT applied, no waste, no materials"),
+  totals: z.object({
+    total_sf: z.number(), total_sf_net: z.number(),
+    lf: z.number(), lf_net: z.number(),
+    ea: z.number(), sy_net: z.number(),
+  }).passthrough(),
+  materials: z.array(z.object({ name: z.string(), unit: z.string(), qty: z.number() }).passthrough()).describe("Project-wide buy list — condition rows summed by (name, unit)"),
+  markups: z.array(z.record(z.unknown())),
+  rfis: z.array(z.record(z.unknown())),
+  condition_columns: z.array(z.record(z.unknown())),
+  shape_labels: z.array(z.string()),
+  by_label: z.array(z.record(z.unknown())),
+  units: z.string(),
+  display_units: z.string(),
+  roll_goods: z.array(z.record(z.unknown())).describe("Roll-goods order rows (#136) — order_lf / rolls / order_qty per roll-goods condition, ×N applied; empty when no condition carries a roll_setup (always the case for a headless session today)"),
+};
+
+export const editConditionOutput = {
+  condition: z.string().describe("The finish tag passed in"),
+  condition_id: z.string(),
+  waste_pct: z.number().describe("The condition's waste % after this write"),
+  multiplier: z.number().describe("The condition's quantity multiplier after this write"),
+};
+
 export const readSheetTextOutput = {
   sheet: z.string(),
   items: z.array(z.object({ str: z.string(), x: z.number(), y: z.number() })).describe("Positioned text items (image px)"),
   text: z.string().describe("The items joined with spaces"),
+};
+
+// ── the sheet graph (#87) ───────────────────────────────────────────────────
+const wireBox = z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() });
+const wireEvidence = z.object({ sheet: z.string(), text: z.string(), bbox: wireBox })
+  .describe("An evidence pointer — the sheet, the literal text, and where it sits (image px). Every edge in the graph carries one; pass the bbox to view_sheet to LOOK at the source.");
+const graphRoom = z.object({ tag: z.string(), name: z.string().describe("The name span stacked over the tag ('' when none)"), sheet: z.string(), bbox: wireBox });
+
+export const sheetGraphOutput = {
+  available: z.boolean().describe("false = the set has no text layer (a scan) — the graph degrades to unavailable, never half-populates"),
+  sheets: z.array(z.object({
+    sheet: z.string(),
+    role: z.enum(["plan", "schedule", "legend", "detail", "elevation", "demolition", "unknown"]),
+    confidence: z.number().describe("0..1; mixed title signals halve it, a bare sheet-number convention stays under 0.5"),
+    evidence: wireEvidence.optional(),
+    schedules: z.array(z.object({ kind: z.string(), title: z.string(), rows: z.number().int(), region: wireBox })),
+  })),
+  rooms: z.array(graphRoom).describe("Room tags read off plan-role sheets — schedule sheets contribute rows, never phantom rooms"),
+  callouts: z.array(z.object({ detail: z.string(), target_sheet: z.string(), sheet: z.string(), bbox: wireBox })).describe("Detail callouts (3/A-601) — edges to their target sheets"),
+  counts: z.object({ rooms: z.number().int(), schedules: z.number().int(), callouts: z.number().int() }),
+};
+
+export const resolveTagOutput = {
+  status: z.enum(["resolved", "unresolved"]),
+  tag: z.string(),
+  room: graphRoom.nullable().describe("The plan tag, when the room appears on a plan sheet — cited even when resolution fails"),
+  finishes: z.array(z.object({
+    surface: z.string().describe("The schedule column: FLOOR / BASE / WALL / …"),
+    code: z.string(),
+    source: wireEvidence,
+    definition: z.object({ cells: z.record(z.string()), source: wireEvidence }).optional()
+      .describe("The finish/material-schedule row this code chains to, when one exists"),
+  })).optional(),
+  sources: z.array(wireEvidence).optional().describe("The chain: plan tag → schedule row"),
+  reason: z.string().optional().describe("unresolved only — WHY (no schedule row / ambiguous / no schedule found). A room that appears on the plan with no row comes back here, never as a silent omission"),
+};
+
+export const findScheduleOutput = {
+  matches: z.array(z.object({
+    sheet: z.string(), kind: z.string(), title: z.string(), rows: z.number().int(),
+    headers: z.array(z.string()), region: wireBox.describe("Pass to view_sheet to look at the table"),
+  })),
+};
+
+/** sheet_context (issue #29): vectors + text + hatch families of one region,
+ * in one frame. Structured-only by design — the raster stays view_sheet's
+ * job, and frame agreement is a contract on the echoed region rect rather
+ * than on a second renderer. */
+const hatchFamilyRow = z.object({
+  id: z.string().describe("Content hash of the quantized (angle, pitch, pen-width) signature — the SAME id for the same pattern spec anywhere on the sheet, so legend↔plan matching is id === id. Identifies a pattern, not a material; the legend maps pattern → material."),
+  angle_deg: z.number().describe("Raw mean angle [0, 180) — rides beside the id for tolerance matching at bucket boundaries"),
+  pitch_px: z.number().describe("Raw median row pitch, image px"),
+  pen_w_px: z.number().int().describe("Modal device pen width of the members"),
+  rows: z.number().int(),
+  segments: z.number().int().describe("Member segments in the whole instance"),
+  segments_in_region: z.number().int().describe("…of which this many were returned in vectors (post-decimation)"),
+  bbox: z.array(z.number()).length(4).describe("The instance's tight bbox [x0, y0, x1, y1], image px"),
+});
+
+export const sheetContextOutput = {
+  sheet: z.string(),
+  page: z.number().int(),
+  sheet_px: z.array(z.number()).length(2),
+  region: z.array(z.number()).length(4).describe("The region actually resolved, post-clamp — pass this same rect to view_sheet and the render is in the same frame by construction"),
+  has_vector_linework: z.boolean().describe("false = a scan: vectors and hatch are empty because there are none, not because the region is blank"),
+  vectors: z.object({
+    segments: z.array(z.array(z.number()).length(4)).describe("[x0, y0, x1, y1] per segment, image px, endpoints exactly as drawn — clipped by KEEPING whole intersecting segments, never by rewriting them"),
+    meta: z.array(z.number().int()).describe("One byte per segment, aligned with segments: bit 1 = curve chord, bit 2 = clip-only, bit 4 = filled-not-stroked; high nibble = device pen width"),
+    family: z.array(z.string().nullable()).describe("Aligned with segments: the hatch-family id this segment belongs to, or null for structural linework"),
+    kept: z.number().int(),
+    total_in_region: z.number().int().describe("Segments intersecting the region before any decimation — kept + dropped always reconciles to this"),
+    truncated: z.boolean(),
+    dropped: z.object({
+      short: z.number().int().describe("Below min_len_px (invisible ink)"),
+      cap: z.number().int().describe("Over max_segments — the SHORTEST went first, so walls survive"),
+    }),
+    note: z.string().optional(),
+  }),
+  text: z.object({
+    spans: z.array(z.object({ str: z.string(), x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() })).describe("Text with bboxes, image px, same frame as the vectors"),
+    count: z.number().int(),
+  }),
+  hatch: z.object({ families: z.array(hatchFamilyRow), count: z.number().int() }),
+};
+
+// ── annotations (#114) — notes ABOUT the work, never measurements of it ──────
+const annotationRow = z.object({
+  id: z.string(),
+  sheet: z.string(),
+  type: z.string(),
+  text: z.string(),
+  condition: z.string().describe("Resolved finish tag, or '' when unattached — saves joining against conditions[]"),
+  condition_id: z.string(),
+  at: z.tuple([z.number(), z.number()]).optional(),
+  target: z.tuple([z.number(), z.number()]).optional(),
+  rect: z.array(z.tuple([z.number(), z.number()]).optional()).optional(),
+});
+
+export const annotateOutput = {
+  id: z.string(),
+  sheet: z.string(),
+  type: z.string(),
+  text: z.string(),
+  condition: z.string(),
+  condition_id: z.string(),
+  note: z.string(),
+};
+
+export const listAnnotationsOutput = {
+  annotations: z.array(annotationRow),
+  count: z.number().int(),
+  unattached: z.number().int().describe("How many carry no condition — candidates for link_annotation"),
+};
+
+export const linkAnnotationOutput = {
+  id: z.string(),
+  condition: z.string(),
+  condition_id: z.string().optional(),
+  note: z.string(),
 };

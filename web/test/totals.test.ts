@@ -127,11 +127,14 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   assert.equal(j.schema, "opentakeoff.report.v1");
   // condition_columns appended after markups (additive-only v1, 2026-07-07);
   // shape_labels + by_label appended after it (#112, additive-only, always
-  // emitted); units + display_units appended last (metric display port —
-  // quantities stay RAW feet, the export says which system the user was reading)
+  // emitted); units + display_units appended after that (metric display port —
+  // quantities stay RAW feet, the export says which system the user was
+  // reading); roll_goods appended last (#136, always emitted, empty without
+  // roll-goods conditions)
   assert.deepEqual(Object.keys(j),
-    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns", "shape_labels", "by_label", "units", "display_units"]);
+    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns", "shape_labels", "by_label", "units", "display_units", "roll_goods"]);
   assert.equal(j.display_units, "imperial");
+  assert.deepEqual(j.roll_goods, []);   // #136 — always emitted; empty when nothing carries a roll_setup
   // rfis[] appends after markups (additive v1); linked_markups/linked_sheets derived
   assert.deepEqual(Object.keys(j.rfis[0]),
     ["id", "number", "subject", "question", "status", "to", "priority", "cost_impact", "schedule_impact",
@@ -145,9 +148,14 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   assert.equal(j.sheets[0].scale_source, "calibrated");
   assert.equal(j.sheets[0].sheet, "Sheet sh1");
   // id + rfi_id appended after the original four (additive-only v1 schema)
-  assert.deepEqual(Object.keys(j.markups[0]), ["type", "sheet_id", "sheet", "text", "id", "rfi_id"]);
+  // condition_id + condition APPEND after rfi_id (additive-only v1). `condition`
+  // is the RESOLVED finish_tag so a reader sees which scope an annotation is
+  // about without joining two arrays; condition_id stays authoritative.
+  assert.deepEqual(Object.keys(j.markups[0]), ["type", "sheet_id", "sheet", "text", "id", "rfi_id", "condition_id", "condition"]);
   assert.equal(j.markups[0].id, null);              // legacy markup: null id, empty rfi
   assert.equal(j.markups[0].rfi_id, "");
+  assert.equal(j.markups[0].condition_id, "");      // legacy markup: unattached
+  assert.equal(j.markups[0].condition, "");
   assert.equal(j.markups[1].id, "mk-2");            // an id-bearing cloud with empty text
   assert.equal(j.markups[1].rfi_id, "rfi-1");       // links to the RFI record by its id
   assert.equal(j.markups[1].text, "");
@@ -159,6 +167,12 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
     ["id", "finish_tag", "color", "fill", "hatch", "multiplier", "waste_pct", "shape_count",
      "floor_sf", "wall_sf", "border_sf", "lf", "ea", "total_sf",
      "floor_sf_net", "wall_sf_net", "border_sf_net", "lf_net", "total_sf_net", "sy_net", "materials", "columns"]);
+});
+
+test("reportJson: roll_goods rides through verbatim; a non-array coerces to [] (#136)", () => {
+  const rows = [{ condition_id: "ct", finish_tag: "CPT-1", material: "carpet", roll_width_ft: 12, roll_length_ft: 0, direction: "ns", cuts: 3, order_lf: 46.5, rolls: 1, order_qty: 62, order_unit: "sy", oversize: false }];
+  assert.deepEqual(reportJson({ rollGoods: rows }).roll_goods, rows);
+  assert.deepEqual(reportJson({ rollGoods: "corrupt" as any }).roll_goods, []);
 });
 
 test("reportJson: by_sheet rows serialize round2-ed — incl. ea — with key order intact", () => {
@@ -251,4 +265,44 @@ test("verticalWallSf: floor perimeters × height × multiplier; 0 without a heig
   assert.equal(verticalWallSf(shapes, "c", 9, 2), 1260);  // (40+30) × 9 × 2
   assert.equal(verticalWallSf(shapes, "c", 0, 2), 0);
   assert.equal(verticalWallSf(shapes, "c", undefined, 2), 0);
+});
+
+test("reportJson: a condition-linked markup resolves to its finish_tag; a dangling id degrades", () => {
+  const conds = [{ id: "ct", finish_tag: "CT-1", color: "#123456", waste_pct: 0 }];
+  const shapes = [{ condition_id: "ct", sheet_id: "sh1", measure_role: "floor_area", computed: { area_sf: 100, perimeter_lf: 40 } }];
+  const j = reportJson({
+    projectName: "Job 42",
+    rows: conditionTotals(conds, shapes),
+    bySheet: sheetTotals(conds, shapes),
+    markups: [
+      { type: "cloud", sheet_id: "sh1", text: "verify substrate", id: "mk-1", condition_id: "ct" },
+      { type: "text", sheet_id: "sh1", text: "general note", id: "mk-2" },                       // unattached
+      { type: "cloud", sheet_id: "sh1", text: "orphan", id: "mk-3", condition_id: "gone" },      // condition deleted
+    ],
+    sheetLabel: (id: string) => `Sheet ${id}`,
+  });
+  // linked: the id is authoritative AND the tag is resolved for the reader
+  assert.equal(j.markups[0].condition_id, "ct");
+  assert.equal(j.markups[0].condition, "CT-1");
+  // unattached stays empty on both — an annotation about the sheet, not a scope
+  assert.equal(j.markups[1].condition_id, "");
+  assert.equal(j.markups[1].condition, "");
+  // a dangling id keeps the id (so the link is diagnosable) but resolves to ""
+  // rather than inventing a tag — the export must not claim a scope that is gone
+  assert.equal(j.markups[2].condition_id, "gone");
+  assert.equal(j.markups[2].condition, "");
+});
+
+// #137 — a RECONCILED deduct (cuts_shape_id set) was boolean-subtracted into
+// its parent at commit time: the parent's own area_sf already nets the hole
+// out, so the summer must NOT subtract the deduct's area again. A legacy
+// independent deduct (no cuts_shape_id) still subtracts.
+test("conditionTotals: reconciled deduct never double-subtracts; legacy deduct still does", () => {
+  const conds = [{ id: "c1", finish_tag: "CPT-1" }];
+  const rows = conditionTotals(conds as any, [
+    { id: "p", condition_id: "c1", measure_role: "floor_area", verts_norm: [], computed: { area_sf: 90 } },   // 100 gross − 10 hole, already netted
+    { id: "d1", condition_id: "c1", measure_role: "deduct", cuts_shape_id: "p", verts_norm: [], computed: { area_sf: 10 } },
+    { id: "d2", condition_id: "c1", measure_role: "deduct", verts_norm: [], computed: { area_sf: 5 } },
+  ] as any);
+  assert.equal(rows[0].floor_sf, 85, "90 − 5 (legacy only); a double-deduct would read 75");
 });

@@ -73,15 +73,41 @@ open item).
 
 ## Entanglement audit (keep it this way)
 
-- `oneclick.ts` imports nothing fork-specific ✓
-- `confidence.ts` stands alone ✓
-- `bench/` imports only `oneclick` / `confidence` / `geometry` / `score` / `callouts` (bench-local) ✓
+> **Corrected 2026-07-28 by audit (finding D14).** This section was five asserted
+> bullets with no check behind them. One was factually wrong, one had a
+> counterexample, and the list omitted a module the slice cannot compile without.
+
+- `oneclick.ts` imports nothing fork-specific ✓ — **verified: it has zero import
+  statements at all.** Cherry-pick-safe.
+- ~~`confidence.ts` stands alone~~ ✗ — **false as written.** `confidence.ts:22`
+  imports `DETERMINISM_MIN_MPPF` from `./oneclick`. Harmless (both are slice), but
+  the bullet was inaccurate.
+- `bench/` imports only `oneclick` / `confidence` / `geometry` / `score` /
+  `callouts` (bench-local) ✓ — **and `geometry.js` is the problem: it appears
+  nowhere in the slice table above.** `bench/score.ts:8` needs `pointInPoly` from
+  it. Applying the slice exactly as classified may not compile unless upstream
+  exports the same symbol from the same path. **Resolved 2026-07-30: verified
+  against a fetch of `Kentucky-ai/opentakeoff` main — `web/src/lib/geometry.js:197`
+  exports `pointInPoly` at the same path.**
 - `detectRooms.ts` imports only `oneclick`; the engine never imports it ✓
 - `roomName.ts` imports only `geometry`; the engine never imports it ✓
-- The ONLY place slice and extensions meet is `TakeoffCanvas.jsx` call sites ✓
+- ~~The ONLY place slice and extensions meet is `TakeoffCanvas.jsx` call sites~~ —
+  **counterexample:** `src/lib/geometry.js` is imported by both `bench/score.ts:8`
+  (slice) and `roomName.ts:11` (declared fork extension). Benign, but it is a second
+  meeting point.
+
+**Unclassified work on this branch.** The table above predates `7605315` and
+`21e57a0` and classifies neither: `bench/from-takeoff.mts`, the `humanMeasured`
+gate tier in `bench/run.mts`, the sealed-case protocol, `web/test/fromTakeoff.test.ts`,
+the user-facing "Export takeoff data (JSON)" menu item in `ReportPanel.jsx` (a fork
+extension), and `docs/design/IMPROVE_WITH_USE.md`. A doc claiming to classify "every
+piece" is incomplete for its own branch.
 
 New slice code must not import extension modules (an engine file importing
-`roomName.ts` would weld the PR shut). Run this check before assembling.
+`roomName.ts` would weld the PR shut). **There is no automated check** — the line
+below previously said "run this check before assembling" while no such check existed.
+Either write one (a grep over slice files' import statements would do) or drop the
+claim.
 
 ## Assembly plan (when we pull the trigger)
 

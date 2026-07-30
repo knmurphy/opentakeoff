@@ -29,11 +29,14 @@ import { Icon } from "../brand/icons.jsx";
 import { attrValue, columnLabel } from "../lib/conditionColumns.js";
 import { SPEC_FIELDS } from "../lib/reportColumns.js";
 import { num } from "../lib/num.js";
-import { areaVal, areaUnit, lenVal, lenUnit } from "../lib/units";
+import { areaVal, areaUnit, lenVal, lenUnit, heightUnit, heightInputToFeet, heightStep, thickUnit, thickInputToInches, thickStep, dimInputStr } from "../lib/units";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
 import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutDerivedFields, showsGroutCalc, showsGroutDeriveAffordance } from "../lib/coverage.js";
 import { draftCommitValue, blurCommitValue, blurCommitNonNegative } from "../lib/draftInput.js";
+import { ROLL_FLOORING_TYPES } from "../lib/rollgoods.js";
+import { hasRollSetup, mintRollSetup } from "../lib/rollTakeoff.js";
+import { ftIn } from "../lib/units";
 
 export const PANEL_MIN_W = 240;
 export const PANEL_MAX_W = 560;
@@ -87,6 +90,38 @@ function GroutParamInput({ name, value, title, min = 0, max, width = 52, overrid
         setDraft(null);
       }}
       style={{ ...ip, width, ...(override ? { border: "1px solid var(--c-warning)" } : {}) }} />
+  );
+}
+
+// Draft-buffered input for a condition's dimension params — wall height
+// (stored `height_ft`) and material thickness (stored `thickness_in`). Both
+// are internal-feet-contract fields, so this component owns the whole display
+// edge: it SHOWS the value in the active unit system and commits back in the
+// stored one (issue #115 — a metric user typing a 2.4 m wall used to get a
+// 2.4 FOOT wall, silently, beside a readout that said m²).
+//
+// Draft-buffered for the same reason GroutParamInput is, plus one specific to
+// converting: without it the field fights the typist, because every keystroke
+// round-trips through a rounded conversion — typing "2.4" would redisplay as
+// "2.438" mid-word. The raw text stays local while editing; the converted
+// value still commits per keystroke, so thickness keeps re-flowing linear runs
+// live the way it always has. Clearing commits "" (the param's null), which is
+// distinct from an intentional 0.
+function DimParamInput({ name, internal, units, kind, width, onCommit }) {
+  const [draft, setDraft] = useState(null);   // raw text mid-edit; null = mirror the committed value
+  const toInternal = (n) => (kind === "height" ? heightInputToFeet(n, units) : thickInputToInches(n, units));
+  const commit = (text) => {
+    if (text === "") return onCommit("");
+    const n = parseFloat(text);
+    if (Number.isFinite(n) && n >= 0) onCommit(toInternal(n));
+  };
+  return (
+    <input name={name} type="number" min="0" step={kind === "height" ? heightStep(units) : thickStep(units)}
+      placeholder={kind === "height" ? heightUnit(units) : thickUnit(units)}
+      value={draft ?? dimInputStr(internal, units, kind)}
+      onChange={(e) => { setDraft(e.target.value); commit(e.target.value); }}
+      onBlur={() => { if (draft != null) commit(draft); setDraft(null); }}
+      style={{ width, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
   );
 }
 
@@ -284,7 +319,7 @@ function AddValueInput({ onAdd }) {
 // the docked panel AND the restored top-bar band render the SAME editor (one
 // source of truth, like the app's single activateCondition path). Owns only its
 // hatch-popover open state; everything else flows through the passed handlers.
-export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondParam, onAssignAttr, conditionColumns = [], layout = "stack" }) {
+export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondParam, onAssignAttr, conditionColumns = [], layout = "stack", units = "imperial", rollInfo = null }) {
   const [hatchOpen, setHatchOpen] = useState(false);
   const activeColor = c.color || "#c96442";
   // Two layouts, one editor. "stack" (docked panel, narrow) stacks the groups
@@ -348,17 +383,15 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
             {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
           </select>
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Height (ft) — the default for NEW wall traces (SF = LF × H) and the vertical-SF display on floor areas. Walls keep the height they were drawn at — select a wall to change just that one.">
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }} title={`Height (${heightUnit(units)}) — the default for NEW wall traces (SF = LF × H) and the vertical-SF display on floor areas. Walls keep the height they were drawn at — select a wall to change just that one.`}>
           <Icon name="height" size={13} /><span style={{ color: "var(--ink-muted)" }}>H</span>
-          <input name="condition-height-ft" type="number" min="0" step="0.25" value={c.height_ft ?? ""} placeholder="ft"
-            onChange={(e) => onSetCondParam("height_ft", e.target.value)}
-            style={{ width: 54, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+          <DimParamInput name="condition-height-ft" internal={c.height_ft} units={units} kind="height" width={54}
+            onCommit={(v) => onSetCondParam("height_ft", v)} />
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="Thickness (in) — a Linear run with thickness also computes border/feature-strip SF = LF × T/12. Changing it re-flows existing linear runs.">
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }} title={`Thickness (${thickUnit(units)}) — a Linear run with thickness also computes border/feature-strip SF = LF × T/12. Changing it re-flows existing linear runs.`}>
           <Icon name="thickness" size={13} /><span style={{ color: "var(--ink-muted)" }}>T</span>
-          <input name="condition-thickness-in" type="number" min="0" step="0.25" value={c.thickness_in ?? ""} placeholder="in"
-            onChange={(e) => onSetCondParam("thickness_in", e.target.value)}
-            style={{ width: 50, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+          <DimParamInput name="condition-thickness-in" internal={c.thickness_in} units={units} kind="thickness" width={50}
+            onCommit={(v) => onSetCondParam("thickness_in", v)} />
         </span>
       </div>
       {conditionColumns.length > 0 && isRow && rule()}
@@ -375,6 +408,97 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
           spec.color — NOT the condition's line `color`. Guard that spec is a plain
           object first: a corrupted payload (spec an array/string) would otherwise
           render and let an edit spread it into a garbage shape ({0:"f",1:"o",…}). */}
+      {/* Roll goods (#136) — OPT-IN per condition: conditions are trade-agnostic
+          (no flooring-type field exists), so a roll_setup object PRESENT on the
+          condition is what makes it roll goods. Docked ("stack") layout only,
+          like spec. The engine (lib/rollgoods.js) figures seams/cuts/order
+          footage from the condition's floor areas; the readout below comes back
+          from the canvas via rollInfo. All lengths stored in feet (the lib/units
+          contract); seam/wall allowances are inch-native like the engine. */}
+      {!isRow && !hasRollSetup(c) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingTop: 6, marginTop: 1, borderTop: "1px solid var(--ink-faint)" }}>
+          <select name="condition-roll-optin" value=""
+            title="Make this condition a roll-goods material — its floor areas get figured into roll cuts (seams, order footage, a cut diagram)"
+            onChange={(e) => { if (e.target.value) onUpdateCond({ roll_setup: mintRollSetup(e.target.value) }); }}
+            style={{ padding: "3px 6px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", fontSize: 11.5, cursor: "pointer" }}>
+            <option value="">+ roll goods…</option>
+            <option value="carpet">Broadloom carpet</option>
+            <option value="sheet_vinyl">Sheet vinyl</option>
+            <option value="rubber">Sheet rubber</option>
+          </select>
+        </div>
+      )}
+      {!isRow && hasRollSetup(c) && (() => {
+        const rs = c.roll_setup;
+        const patch = (p) => onUpdateCond({ roll_setup: { ...rs, ...p } });
+        const wFt = Math.floor(Number(rs.roll_width_ft) || 0);
+        const wIn = Math.round(((Number(rs.roll_width_ft) || 0) - wFt) * 12);
+        const setW = (ft, inch) => patch({ roll_width_ft: Math.max(0.5, (Number(ft) || 0) + (Number(inch) || 0) / 12) });
+        const numIp = { width: 46, padding: "3px 5px", borderRadius: 0, border: "1px solid var(--ink-faint)", fontSize: 12 };
+        const sel = { padding: "2px 4px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", fontSize: 11.5 };
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, paddingTop: 6, marginTop: 1, borderTop: "1px solid var(--ink-faint)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "var(--ink-muted)", fontSize: 10, letterSpacing: 0.4, textTransform: "uppercase" }}
+                title="Roll-goods setup — the engine figures seams, cuts, and order footage from this condition's floor areas">Roll goods</span>
+              <select name="condition-roll-material" value={rs.material || "carpet"} onChange={(e) => patch({ material: e.target.value })} style={sel}
+                title="Material class — sets the cut overlay's material-true color">
+                {ROLL_FLOORING_TYPES.map((ft) => <option key={ft} value={ft}>{ft === "carpet" ? "carpet" : ft === "sheet_vinyl" ? "sheet vinyl" : "rubber"}</option>)}
+              </select>
+              <button onClick={() => onUpdateCond({ roll_setup: undefined })} title="Remove the roll-goods setup (cuts and order footage stop being figured; manual cut edits on shapes are kept but inert)"
+                style={{ marginLeft: "auto", padding: "1px 6px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--c-danger)", cursor: "pointer", fontSize: 11 }}>✕</button>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+              <span style={{ color: "var(--ink-muted)" }}>Roll</span>
+              {rs.material === "carpet" ? (
+                <select name="condition-roll-width" value={String(rs.roll_width_ft)} onChange={(e) => patch({ roll_width_ft: parseFloat(e.target.value) || 12 })} style={sel}
+                  title="Roll width — broadloom comes 12′ or 15′">
+                  <option value="12">12′</option>
+                  <option value="15">15′</option>
+                </select>
+              ) : (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }} title="Roll width — resilient sheet widths vary by product (6′, 6′6″, 12′…)">
+                  <input name="condition-roll-width-ft" type="number" min="0" step="1" value={wFt} onChange={(e) => setW(e.target.value, wIn)} style={numIp} /><span style={{ color: "var(--ink-muted)" }}>′</span>
+                  <input name="condition-roll-width-in" type="number" min="0" max="11" step="1" value={wIn} onChange={(e) => setW(wFt, e.target.value)} style={numIp} /><span style={{ color: "var(--ink-muted)" }}>″</span>
+                </span>
+              )}
+              <span style={{ color: "var(--ink-muted)" }} title="Max usable length of one physical roll — 0 = continuous (cut off one roll). When set, cuts pack across rolls and the diagram marks the roll breaks.">max</span>
+              <input name="condition-roll-length" type="number" min="0" step="5" value={rs.roll_length_ft || 0}
+                onChange={(e) => patch({ roll_length_ft: Math.max(0, parseFloat(e.target.value) || 0) })} style={numIp} />
+              <span style={{ color: "var(--ink-muted)" }}>′</span>
+              <select name="condition-roll-direction" value={rs.direction || "auto"} onChange={(e) => patch({ direction: e.target.value })} style={sel}
+                title="Run direction — auto picks whichever needs less footage; force it when the pattern or the light dictates">
+                <option value="auto">auto</option>
+                <option value="ns">N–S</option>
+                <option value="ew">E–W</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+              <span style={{ color: "var(--ink-muted)" }} title="Seam allowance — extra width where two cuts meet, per seamed edge">Seam</span>
+              <input name="condition-roll-seam" type="number" min="0" step="0.5" value={rs.seam_allowance_in ?? 2}
+                onChange={(e) => patch({ seam_allowance_in: Math.max(0, parseFloat(e.target.value) || 0) })} style={numIp} />
+              <span style={{ color: "var(--ink-muted)" }}>″ · wall</span>
+              <input name="condition-roll-wall" type="number" min="0" step="0.5" value={rs.wall_overage_in ?? 3}
+                onChange={(e) => patch({ wall_overage_in: Math.max(0, parseFloat(e.target.value) || 0) })} style={numIp} />
+              <span style={{ color: "var(--ink-muted)" }}>″ · sells by</span>
+              <select name="condition-roll-unit" value={rs.price_unit || "sf"} onChange={(e) => patch({ price_unit: e.target.value })} style={sel}
+                title="The unit this material sells in — a unit, never a dollar (the takeoff stays quantities-only)">
+                <option value="sy">SY</option>
+                <option value="sf">SF</option>
+                <option value="lf">LF</option>
+              </select>
+            </div>
+            {rollInfo && (
+              <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink)" }}
+                title="The figured order — how far down the roll the cuts reach (side-by-side cuts share length), rounded up to the inch. The Roll panel has the cut diagram.">
+                Figured: order {ftIn(rollInfo.orderFt)} · {rollInfo.qty} {rollInfo.unit.toUpperCase()}
+                {rollInfo.config.rollLengthFt > 0 ? ` · ${rollInfo.rollCount} roll${rollInfo.rollCount === 1 ? "" : "s"}` : ""}
+                {rollInfo.oversize && <span style={{ color: "var(--c-danger)" }}> · a cut exceeds one roll</span>}
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {!isRow && c.spec && typeof c.spec === "object" && !Array.isArray(c.spec) && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 6, marginTop: 1, borderTop: "1px solid var(--ink-faint)" }}>
           <span style={{ color: "var(--ink-muted)", fontSize: 10, letterSpacing: 0.4, textTransform: "uppercase" }}
@@ -395,7 +519,7 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
 
 function TakeoffsPanel({
   open, width, multiSheet, units = "imperial",
-  conditions, activeCond, visRowById, conditionColumns, shapeLabels = [], templates, palette = [],
+  conditions, activeCond, visRowById, projRowById = new Map(), conditionColumns, shapeLabels = [], templates, palette = [], rollByCond = null,
   matLib, matLibById, linkedCountById,
   panelPrefs, onPanelPrefs, reassigning, epoch, clearSelectionRef,
   onActivate, onSetActive, onLocate,
@@ -556,6 +680,14 @@ function TakeoffsPanel({
     const mult = c.multiplier || 1;
     const sf = row?.floor_sf || 0, lf = row?.lf || 0, ea = row?.ea || 0, wsf = row?.wall_sf || 0;
     const shapeCount = row?.shape_count || 0;
+    // whole-project Σ suffix (#137): shown ONLY when the project holds more
+    // than the open sheets, so the common everything-on-this-sheet case stays
+    // one number. A condition entirely on closed sheets reads "Σ 412 SF"
+    // instead of a dead "—".
+    const qtys = (o) => [o.sf ? fa(o.sf) : "", o.wsf ? `${fa(o.wsf)} wall` : "", o.lf ? fl(o.lf) : "", o.ea ? `${num(o.ea, 0)} EA` : ""].filter(Boolean).join(" · ");
+    const pr = projRowById.get(c.id);
+    const prQ = pr ? { sf: pr.floor_sf || 0, wsf: pr.wall_sf || 0, lf: pr.lf || 0, ea: pr.ea || 0 } : null;
+    const projDiff = prQ && (Math.abs(prQ.sf - sf) > 0.005 || Math.abs(prQ.wsf - wsf) > 0.005 || Math.abs(prQ.lf - lf) > 0.005 || Math.abs(prQ.ea - ea) > 0.005);
     const on = c.id === activeCond;
     const matOn = on && panelMatOpen;
     const checked = checkedConds.has(c.id);
@@ -583,7 +715,12 @@ function TakeoffsPanel({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
             <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
-              {sf ? fa(sf) : ""}{wsf ? `${sf ? " · " : ""}${fa(wsf)} wall` : ""}{lf ? `${sf || wsf ? " · " : ""}${fl(lf)}` : ""}{ea ? `${sf || wsf || lf ? " · " : ""}${num(ea, 0)} EA` : ""}{!sf && !wsf && !lf && !ea ? "—" : ""}
+              {qtys({ sf, wsf, lf, ea })}{!sf && !wsf && !lf && !ea && !projDiff ? "—" : ""}
+              {projDiff ? (
+                <span title="Σ = whole project, every sheet. The leading numbers count the open sheets only." style={{ color: "var(--ink-faint)" }}>
+                  {(sf || wsf || lf || ea) ? " · " : ""}Σ {qtys(prQ) || "0"}
+                </span>
+              ) : null}
             </div>
           </div>
           <span style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)", flexShrink: 0 }}>{shapeCount}▦</span>
@@ -606,7 +743,7 @@ function TakeoffsPanel({
             used to live in its own toolbar row above the canvas. Extracted to
             ConditionAppearanceEditor so the docked panel AND the top-bar band
             render the same editor from one source of truth. */}
-        {on && <ConditionAppearanceEditor cond={c} onUpdateCond={onUpdateCond} onSetCondParam={onSetCondParam} onAssignAttr={onAssignAttr} conditionColumns={conditionColumns} />}
+        {on && <ConditionAppearanceEditor cond={c} onUpdateCond={onUpdateCond} onSetCondParam={onSetCondParam} onAssignAttr={onAssignAttr} conditionColumns={conditionColumns} units={units} rollInfo={rollByCond?.get(c.id) || null} />}
         {matOn && (
           <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
             <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Supporting Materials — order qty = measured ÷ coverage, rounded up.</div>
@@ -739,7 +876,7 @@ function TakeoffsPanel({
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontWeight: 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.finish_tag}</div>
                   <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 10.5, color: "var(--ink-muted)" }}>
-                    {t.waste_pct || 0}% waste{t.height_ft != null ? ` · H ${t.height_ft}′` : ""}{t.thickness_in != null ? ` · T ${t.thickness_in}″` : ""}{t.materials?.length ? ` · ${t.materials.length} material${t.materials.length === 1 ? "" : "s"}` : ""}
+                    {t.waste_pct || 0}% waste{t.height_ft != null ? ` · H ${dimInputStr(t.height_ft, units, "height")}${units === "metric" ? " m" : "′"}` : ""}{t.thickness_in != null ? ` · T ${dimInputStr(t.thickness_in, units, "thickness")}${units === "metric" ? " mm" : "″"}` : ""}{t.materials?.length ? ` · ${t.materials.length} material${t.materials.length === 1 ? "" : "s"}` : ""}
                   </div>
                 </div>
                 <button onClick={() => { onApplyTemplate(t); setPanelTab("takeoffs"); }} title="Add a condition from this template to the takeoff"

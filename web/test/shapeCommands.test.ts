@@ -57,11 +57,69 @@ function roundTrip(shapes: any[], cmd: any) {
 // ── policy completeness ──────────────────────────────────────────────────────
 
 test("every applied command type has a PROVENANCE_POLICY row; unknown types throw", () => {
-  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "resheet"]) {
+  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "resheet", "cutout"]) {
     assert.ok(t in PROVENANCE_POLICY, `policy row missing for ${t}`);
   }
   assert.throws(() => applyShapeCommand([], { type: "resize" } as any), /PROVENANCE_POLICY/);
   assert.throws(() => applyShapeCommand([], null as any), /PROVENANCE_POLICY/);
+});
+
+// ── cutout (#137 — mint the deduct + patch its parent as ONE command) ────────
+
+test("cutout: mints the deduct, patches the parent, ONE symmetric undo entry", () => {
+  const parent = {
+    id: "shp-parent", created_at: "2026-01-01T00:00:00Z", sheet_id: "a.pdf#1",
+    condition_id: "cnd-1", measure_role: "floor_area",
+    verts_norm: [[0, 0], [1, 0], [1, 1], [0, 1]] as number[][],
+    computed: { area_sf: 100, perimeter_lf: 40 },
+    origin: { method: "manual" },
+  };
+  const before = [clone(parent)];
+  const cmd = {
+    type: "cutout",
+    parentId: "shp-parent",
+    parentNext: {
+      verts_norm: [[0, 0], [1, 0], [1, 1], [0, 1]],
+      verts_norm_holes: [[[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]]],
+      computed: { area_sf: 96, perimeter_lf: 48 },
+    },
+    shape: {
+      sheet_id: "a.pdf#1", condition_id: "cnd-1", measure_role: "deduct",
+      verts_norm: [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]],
+      computed: { area_sf: 4, perimeter_lf: 8 },
+      cuts_shape_id: "shp-parent",
+      origin: { method: "cutout_v1", cuts_shape_id: "shp-parent", parent_prev: { verts_norm: parent.verts_norm, computed: parent.computed } },
+    },
+  };
+  const res = applyShapeCommand(before, cmd as any);
+  assert.equal(res.shapes.length, 2, "ONE new shape lands — no orphan second overlay");
+  const patched = res.shapes.find((s: any) => s.id === "shp-parent");
+  assert.equal(patched.verts_norm_holes.length, 1, "parent gained the real hole ring");
+  assert.equal(patched.computed.area_sf, 96, "parent's own computed nets the hole out");
+  const minted = res.shapes.find((s: any) => s.measure_role === "deduct");
+  assert.ok(minted.id.startsWith("shp-") && minted.created_at, "deduct minted with id + created_at");
+  assert.equal(minted.cuts_shape_id, "shp-parent", "linked back to its parent");
+  assert.equal(res.counted, undefined, "nothing counts");
+  // undo: drop the deduct, parent back verbatim — hole KEY absent, not []
+  const undone = applyShapeCommand(res.shapes, res.inverse);
+  assert.equal(undone.shapes.length, 1);
+  assert.ok(!("verts_norm_holes" in undone.shapes[0]), "undo restores holeless = key absent");
+  assert.deepEqual(undone.shapes, before, "undo restores deep-equal");
+  // redo-of-undo re-applies verbatim (same deduct id, same parent patch)
+  const redone = applyShapeCommand(undone.shapes, undone.inverse);
+  assert.deepEqual(redone.shapes, res.shapes, "redo restores the cut state verbatim");
+});
+
+test("cutout: parent missing → refuses (inverse null, nothing minted); restore of a gone deduct refuses too", () => {
+  const res = applyShapeCommand([], {
+    type: "cutout", parentId: "shp-gone",
+    parentNext: { verts_norm: [[0, 0], [1, 0], [1, 1]], computed: { area_sf: 1, perimeter_lf: 4 } },
+    shape: { sheet_id: "a.pdf#1", condition_id: "c", measure_role: "deduct", verts_norm: [[0, 0], [1, 0], [1, 1]] },
+  } as any);
+  assert.equal(res.shapes.length, 0, "nothing minted");
+  assert.equal(res.inverse, null);
+  const res2 = applyShapeCommand([], { type: "cutout", restore: true, deductId: "shp-gone", parentId: "p", parentPrev: { verts_norm: [] } } as any);
+  assert.equal(res2.inverse, null);
 });
 
 // ── add ──────────────────────────────────────────────────────────────────────
@@ -323,4 +381,105 @@ test("vertsEqual: exact structural comparison — the zero-motion / snapped-back
   assert.ok(!vertsEqual([[0.1, 0.2]], [[0.1, 0.2], [0.3, 0.4]]));   // vertex count differs (insert/delete)
   assert.ok(!vertsEqual([[0.1, 0.2]], [[0.1, 0.20000001]]));
   assert.ok(!vertsEqual(undefined as any, [[0, 0]]));
+});
+
+// ── review (the accept gate for shapes already in the data) ──────────────────
+
+test("review: accepts only still-pending shapes (reviewed → true + accepted_ts, nothing else); undo un-accepts verbatim; redo re-accepts verbatim", () => {
+  const pending = machineShape("shp-p1");
+  pending.origin = { method: "one_click_v1", actor: "agent", seed_norm: [0.4, 0.3], reviewed: false };
+  const accepted = machineShape("shp-a1");   // reviewed: true — must ride through untouched
+  const manual = manualShape("shp-m1");      // no reviewed key — not a proposal, must ride through
+  const input = [pending, accepted, manual];
+
+  const r1 = applyShapeCommand(input, { type: "review", ids: ["shp-p1", "shp-a1", "shp-m1"] });
+  const out: any = r1.shapes.find((s: any) => s.id === "shp-p1");
+  assert.equal(out.origin.reviewed, true);
+  assert.match(out.origin.accepted_ts, ISO);
+  assert.equal(out.origin.actor, "agent");                        // the rest of the origin rides through
+  assert.deepEqual(out.origin.seed_norm, [0.4, 0.3]);
+  assert.equal(out.updated_at, undefined, "accepting is affirmation, not an edit — no updated_at");
+  assert.equal(r1.shapes[1], accepted, "already-accepted shape untouched (same reference)");
+  assert.equal(r1.shapes[2], manual, "manual shape untouched (same reference)");
+
+  const undone = applyShapeCommand(r1.shapes, r1.inverse);        // un-accept: the exact input again
+  assert.deepEqual(undone.shapes, input);
+  const redone = applyShapeCommand(undone.shapes, undone.inverse); // redo restores the accepted state verbatim, accepted_ts included
+  assert.deepEqual(redone.shapes, r1.shapes);
+});
+
+test("review: an empty or all-non-pending id set is a no-op with an empty restore", () => {
+  const shapes = [machineShape("shp-a1"), manualShape("shp-m1")];
+  const r = applyShapeCommand(shapes, { type: "review", ids: ["shp-a1", "shp-m1", "shp-ghost"] });
+  assert.deepEqual(r.shapes, shapes);
+  assert.deepEqual(r.inverse, { type: "review", restore: [] });
+});
+
+// ── ruleApply (#88) ──────────────────────────────────────────────────────────
+
+test("ruleApply: add semantics — mints ids/created_at, one noCount-delete inverse for the batch", () => {
+  const base = [manualShape()];
+  const drafts = [1, 2].map((i) => ({
+    sheet_id: "a.pdf#1", condition_id: "cnd-1", measure_role: "deduct",
+    verts_norm: [[0.1 * i, 0.1], [0.2 * i, 0.1], [0.2 * i, 0.2]],
+    computed: { area_sf: 12.5 },
+    origin: {
+      method: "rule_v1", actor: "rule", reviewed: true,
+      rule_id: "rule-1", seed_shape_id: "shp-seed",
+      proposed_ts: "2026-07-25T00:00:00.000Z", accepted_ts: "2026-07-25T00:00:01.000Z",
+    },
+  }));
+  const fwd = roundTrip(base, { type: "ruleApply", shapes: drafts.map(clone) });
+  assert.equal(fwd.shapes.length, 3);
+  const added = fwd.shapes.slice(1);
+  for (const s of added) {
+    assert.match(s.id, /^shp-/);
+    assert.match(s.created_at, ISO);
+    assert.equal(s.origin.method, "rule_v1");
+    assert.equal(s.origin.rule_id, "rule-1");                      // every propagated shape traces to its rule
+    assert.equal(s.origin.seed_shape_id, "shp-seed");              // …and to the correction that seeded it
+    assert.equal(s.origin.reviewed, true);
+  }
+  // ONE inverse deletes the whole batch, and never feeds the deletion counters
+  assert.deepEqual(fwd.inverse, { type: "delete", ids: added.map((s) => s.id), noCount: true });
+});
+
+// ── rollcut (#136) — roll-layout metadata patches, presence-aware, no stamp ──
+
+test("rollcut: sets / clears roll_layout with an exact inverse; prev overrides the inverse source", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]] },
+    { id: "b", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]], roll_layout: { laneCount: 2, lanes: { 0: { seq: 1 } } } },
+  ];
+  const rl = { laneCount: 2, lanes: { 1: { runMin: 0, runMax: 12 } } };
+  // set on a — inverse row carries NO roll_layout key (clear on undo)
+  const r1 = applyShapeCommand(shapes, { type: "rollcut", rows: [{ id: "a", roll_layout: rl }] });
+  assert.deepEqual(r1.shapes[0].roll_layout, rl);
+  assert.equal(r1.shapes[0].updated_at, undefined, "no stamp — layout metadata is not a shape edit");
+  assert.deepEqual(r1.inverse, { type: "rollcut", rows: [{ id: "a" }] });
+  const undone = applyShapeCommand(r1.shapes, r1.inverse);
+  assert.deepEqual(undone.shapes, shapes, "undo restores the input verbatim, key absence included");
+  // clear on b — inverse carries the prior layout
+  const r2 = applyShapeCommand(shapes, { type: "rollcut", rows: [{ id: "b" }] });
+  assert.equal("roll_layout" in r2.shapes[1], false);
+  assert.deepEqual(r2.inverse.rows, [{ id: "b", roll_layout: shapes[1].roll_layout }]);
+  // prev (the grab-time row) builds the inverse when a live preview already
+  // wrote the final state — the geom-command idea
+  const previewed = applyShapeCommand(shapes, { type: "rollcut", rows: [{ id: "a", roll_layout: rl }] }).shapes;
+  const r3 = applyShapeCommand(previewed, { type: "rollcut", rows: [{ id: "a", roll_layout: rl }], prev: [{ id: "a" }] });
+  assert.deepEqual(applyShapeCommand(r3.shapes, r3.inverse).shapes, shapes, "inverse from prev undoes past the preview");
+});
+
+test("rollcut: multi-row (a reorder) is ONE command with one exact inverse", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]], roll_layout: { laneCount: 1, lanes: { 0: { runMin: 1, runMax: 9 } } } },
+    { id: "b", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]] },
+  ];
+  const cmd = { type: "rollcut", rows: [
+    { id: "a", roll_layout: { laneCount: 1, lanes: { 0: { runMin: 1, runMax: 9, seq: 0 } } } },
+    { id: "b", roll_layout: { laneCount: 1, lanes: { 0: { seq: 1 } } } },
+  ] };
+  const r = applyShapeCommand(shapes, cmd);
+  assert.deepEqual(r.shapes[0].roll_layout.lanes[0], { runMin: 1, runMax: 9, seq: 0 });
+  assert.deepEqual(applyShapeCommand(r.shapes, r.inverse).shapes, shapes);
 });

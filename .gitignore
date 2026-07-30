@@ -52,3 +52,9 @@ web/e2e/out/
 web/bench/results.json
 web/bench/callout-results.json
 web/bench/batch-results.json
+# Smithery-only MCPB build output (see scripts/build-smithery-mcpb.mjs), never committed
+mcp/dist-smithery/
+
+# Voice model artifacts (~45 MB) — staged by web/scripts/fetch-voice-model.mjs
+# into public/ for same-origin serving; never committed (RFC #59)
+web/public/models/
