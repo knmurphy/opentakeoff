@@ -309,7 +309,7 @@ Every shape One-Click creates records how it was made: the method, the seed poin
 
 ## 7. Selecting & editing shapes
 
-Arm **Select** (`V`) and click a shape. Selection is one shape at a time on the canvas, and the same edit grammar as One-Click proposals applies:
+Arm **Select** (`V`) and click a shape. Shapes stack by kind — filled Areas at the bottom, Cut Outs just above the fill they punch, Linear and Surface runs above that, Count pins on top — and clicking picks whatever reads as on-top at that spot. So a big Area drawn over a Counter, Line, or Surface never blocks it: the covered element stays clickable through the fill, and the Area itself still selects anywhere in its open fill. Selection is one shape at a time on the canvas, and the same edit grammar as One-Click proposals applies:
 
 - **Drag a corner** to move that vertex (it snaps to true drawing endpoints). **Click a corner first** to select it — `⌫` then deletes just that vertex. A closed shape keeps at least 3 points, a run keeps 2; at the floor, the message tells you *"⌫ again deletes the whole shape."*
 - **Drag an edge grip** (mid-edge) to move the whole line — both endpoints together.
@@ -545,7 +545,7 @@ What's sent, and only when you run an AI feature: the sheet region in question a
 
 ### MCP — for agent users
 
-The same engine speaks [MCP](https://modelcontextprotocol.io), one command away: `npx -y opentakeoff-mcp` (or the one-click `opentakeoff-mcp.mcpb` bundle for Claude Desktop). An MCP client gets eleven tools — `load_plan`, `sheet_info`, `set_scale`, `one_click`, `detect_rooms`, `measure_polygon`, `measure_line`, `takeoff_summary`, `export_takeoff`, `delete_shape`, `read_sheet_text` — plus browsable sheet resources, over the very same measuring engine, with the same scale gate and the same provenance receipts; `detect_rooms` batches `one_click` across every room-number label on a sheet in one call; `export_takeoff` emits the app's own save payload. Setup, the coordinate contract, and a full example transcript: [MCP.md](MCP.md) and [`mcp/README.md`](../mcp/README.md).
+The same engine speaks [MCP](https://modelcontextprotocol.io), one command away: `npx -y opentakeoff-mcp` (or the one-click `opentakeoff-mcp.mcpb` bundle for Claude Desktop). An MCP client gets twelve tools — `load_plan`, `sheet_info`, `set_scale`, `one_click`, `detect_rooms`, `measure_polygon`, `measure_line`, `takeoff_summary`, `export_takeoff`, `delete_shape`, `read_sheet_text`, `view_sheet` — plus browsable sheet resources, over the very same measuring engine, with the same scale gate and the same provenance receipts; `detect_rooms` batches `one_click` across every room-number label on a sheet in one call; `view_sheet` renders a sheet or a tight crop with a calibrated 1-ft/5-ft measuring grid and a committed-shapes overlay, so an agent measures off grid cells and verifies its own work by looking; `export_takeoff` emits the app's own save payload. Setup, the coordinate contract, and a full example transcript: [MCP.md](MCP.md) and [`mcp/README.md`](../mcp/README.md).
 
 ---
 
@@ -571,6 +571,7 @@ Every shortcut in the app, verified against the code. Letter keys are suppressed
 | `V` | Select |
 | `P` | Pan |
 | `G` | Sheet gallery |
+| Hold `M` | Push-to-talk dictation — release runs the command, `Esc` discards (see [§17](#17-voice--the-command-box)) |
 
 ### Conditions
 
@@ -642,6 +643,48 @@ Every shortcut in the app, verified against the code. Letter keys are suppressed
 **Endpoint errors in the agent log.** *"Couldn't reach the endpoint — check the URL, and that it allows browser requests (CORS)"* means exactly that; local runtimes generally allow localhost. A run that stalls two minutes reports the timeout plainly — check the model is loaded.
 
 **Browser support.** OpenTakeoff needs a current browser with IndexedDB and localStorage — recent Chromium-family, Firefox, and Safari releases all qualify. Private/incognito windows may cap or evict storage: fine for a look around, wrong for real work.
+
+---
+
+## 17. Voice & the Command box
+
+Your hands are busy — one on the mouse tracing, one on the tool keys.
+The Command box and push-to-talk dictation set takeoff metadata without
+stealing them away.
+
+**The Command box** (toolbar, next to the label picker) runs a small,
+deterministic command language through the exact actions the buttons run:
+
+| Type (or say) | What happens |
+|---|---|
+| `carpet one` / `CPT-1` / `c p t 1` | Activates CPT-1 — creates it first if it doesn't exist (Div-9 patterns: CPT/LVT/VCT/CT/RB/TR + number) |
+| `carpet one waste 7` | Activates/creates CPT-1 **and** sets its waste to 7% |
+| `waste 12` (also `waste twelve`, `waste 7.5`, `waste ten percent`) | Sets the active condition's waste |
+| `label Phase 2` / `clear label` | Arms a shape label for subsequent traces (learning it if new) / disarms |
+| `note verify sheet vinyl with GC` | Drops a text markup on the focused sheet and opens the Markups dock |
+| `carpet one, this room` (pointer resting on a room) | Arms CPT-1 and one-click-traces the room under your cursor — committed as your work, undo covers it |
+
+Anything ambiguous is refused with a red explanation, never guessed —
+"carpet one seven" could be CPT-1 + waste 7 or a mis-heard CPT-17, so it
+asks you to say it again.
+
+**When it isn't a command.** If what you said (or typed) isn't in the grammar
+at all and you've configured the bring-your-own agent (§14), the red
+rejection adds an offer: press `⏎` — or say **"ask the agent"** — to hand
+that exact text to the agent as a task. It runs on *your* endpoint with
+*your* key, its proposals land as dashed outlines for your review, and
+nothing is ever sent without that explicit confirm (`Esc` or 20 seconds
+dismisses the offer). Near-miss commands — a garbled number, extra words —
+never get the offer; they just ask you to say it again.
+
+**Push-to-talk.** Hold **M** (or hold the **Voice** toolbar button), speak,
+release to run — the transcript flashes in a chip so you can see what was
+heard, then the outcome lands in the message bar. `Esc` mid-hold discards.
+Speech is recognized **on your device** in the browser (a ~44 MB model,
+downloaded once from the site itself and cached) — audio never leaves your
+machine, in keeping with the no-upload pledge. If a deployment doesn't ship
+the model, the feature says so plainly; details in
+[`docs/VOICE.md`](./VOICE.md).
 
 ---
 

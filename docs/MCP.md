@@ -32,11 +32,33 @@ which is the MCP wire. `node --import tsx` is the whole invocation.
 
 ## What the agent gets
 
-Eleven tools: `load_plan`, `sheet_info`, `set_scale`, `one_click`, `detect_rooms`,
-`measure_polygon`, `measure_line`, `takeoff_summary`, `export_takeoff`,
-`delete_shape`, `read_sheet_text`. The full reference — including the
-coordinate contract (image px at render scale 2.0, origin top-left) and the
-scale-gate rules — is in [`mcp/README.md`](../mcp/README.md).
+Twenty-two tools, in the order an agent tends to reach for them:
+
+- **Open and orient** — `load_plan`, `sheet_info`, `set_scale`, `sheet_context`
+- **Measure** — `one_click`, `detect_rooms`, `measure_polygon`, `measure_line`
+- **Revise** — `edit_shape`, `edit_materials`, `edit_condition` (waste % and
+  ×N multiplier — the knobs that turn measured quantities into order
+  quantities; without them a takeoff always ships net === gross), `delete_shape`,
+  `undo_last`
+- **Read the sheet** — `read_sheet_text`, `find_text`, `view_sheet` (render a
+  sheet or crop to PNG with an optional calibrated measuring grid and
+  committed-shapes overlay — the agent's eyes and its self-check)
+- **Annotate** — `annotate`, `list_annotations`, `link_annotation` (notes
+  *about* the work, never measurements of it; attaching one to a finish tag is
+  what makes it part of that scope rather than a floating remark — it then
+  wears the condition's colour on the canvas and in the marked set)
+- **Report** — `takeoff_summary` (quantities only — materials stripped),
+  `export_takeoff` (the raw `opentakeoff.takeoff_canvas.v1` canvas payload —
+  materials as config rows, importable by the app), `export_report` (the
+  computed `opentakeoff.report.v1` Report document — waste-adjusted nets, the
+  materials buy list as order quantities, per-sheet subtotals, scale
+  provenance; the contract for pricing consumers)
+
+The full reference — including the coordinate contract (image px at render
+scale 2.0, origin top-left) and the scale-gate rules — is in
+[`mcp/README.md`](../mcp/README.md), which is the list to trust: this page is
+prose and `mcp/src/tools.ts` is the source of truth for what actually
+registers.
 
 Two rules carry over from the app unchanged:
 

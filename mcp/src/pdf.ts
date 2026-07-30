@@ -15,7 +15,7 @@ const PDFJS_ROOT = path.dirname(requireHere.resolve("pdfjs-dist/package.json"));
 export const OPS = pdfjs.OPS as unknown as OpsTable;
 
 export interface ViewportLike { width: number; height: number; transform: number[] }
-interface TextItemLike { str?: string; transform: number[]; height?: number }
+interface TextItemLike { str?: string; transform: number[]; width?: number; height?: number }
 export interface TextContentLike { items: TextItemLike[] }
 
 export interface PageHandle {
@@ -31,7 +31,23 @@ export interface PageHandle {
    * Needs @napi-rs/canvas (pdfjs-dist's own optional dependency); throws a
    * plain Error naming it when the platform has no prebuilt binary. */
   renderPng(scale: number): Promise<Uint8Array>;
+  /** Rasterize a crop of the page (an image-px rect) to PNG with the crop's
+   * long edge at longEdge px, letting the caller draw on top (measuring grid,
+   * shape overlay) in canvas space before encoding. Same @napi-rs/canvas
+   * requirement as renderPng. */
+  renderRegionPng(
+    region: { x0: number; y0: number; x1: number; y1: number },
+    longEdge: number,
+    draw?: (ctx: object, toCanvas: (x: number, y: number) => [number, number]) => void,
+  ): Promise<{ png: Uint8Array; width: number; height: number; zoom: number }>;
 }
+
+/** The document's NodeCanvasFactory — present on the proxy at runtime, absent
+ * from pdfjs-dist's public types. */
+type CanvasFactory = {
+  create(w: number, h: number): { canvas: { toBuffer(mime: "image/png"): Buffer }; context: object };
+  destroy(target: object): void;
+};
 
 /** pdf.js's modern build renders against DOM canvas globals that bare Node
  * lacks; @napi-rs/canvas provides them. Loaded lazily so a platform without
@@ -52,9 +68,16 @@ async function ensureCanvasGlobals(): Promise<void> {
   g.ImageData ??= napi.ImageData;
 }
 
+/** One Optional Content Group as the document declares it — id (pdf.js objId,
+ * what the operator list attributes segments to), the CAD layer name, and the
+ * DEFAULT-config visibility (#85). */
+export interface OcgEntry { id: string; name: string; visible: boolean; }
+
 export interface DocHandle {
   numPages: number;
   page(n: number): Promise<PageHandle>;
+  /** The document's Optional Content Groups (empty = no layers survived export). */
+  layers(): Promise<OcgEntry[]>;
   destroy(): Promise<void>;
 }
 
@@ -87,9 +110,7 @@ export async function openPdf(filePath: string): Promise<DocHandle> {
         async renderPng(scale: number): Promise<Uint8Array> {
           await ensureCanvasGlobals();
           const rvp = page.getViewport({ scale });
-          // canvasFactory is the document's NodeCanvasFactory — present on the
-          // proxy at runtime, absent from pdfjs-dist's public types
-          const factory = (doc as unknown as { canvasFactory: { create(w: number, h: number): { canvas: { toBuffer(mime: "image/png"): Buffer }; context: object }; destroy(target: object): void } }).canvasFactory;
+          const factory = (doc as unknown as { canvasFactory: CanvasFactory }).canvasFactory;
           const target = factory.create(Math.ceil(rvp.width), Math.ceil(rvp.height));
           try {
             await page.render({ canvasContext: target.context as never, viewport: rvp }).promise;
@@ -98,7 +119,37 @@ export async function openPdf(filePath: string): Promise<DocHandle> {
             factory.destroy(target);
           }
         },
+        async renderRegionPng(region, longEdge, draw) {
+          await ensureCanvasGlobals();
+          const w = region.x1 - region.x0;
+          const h = region.y1 - region.y0;
+          const zoom = longEdge / Math.max(w, h);
+          const width = Math.max(1, Math.round(w * zoom));
+          const height = Math.max(1, Math.round(h * zoom));
+          // scale is px-per-pt (image px are pt × RENDER_SCALE); the offset
+          // shifts the crop's top-left to the canvas origin, in output px
+          const rvp = page.getViewport({
+            scale: RENDER_SCALE * zoom,
+            offsetX: -region.x0 * zoom,
+            offsetY: -region.y0 * zoom,
+          });
+          const factory = (doc as unknown as { canvasFactory: CanvasFactory }).canvasFactory;
+          const target = factory.create(width, height);
+          try {
+            await page.render({ canvasContext: target.context as never, viewport: rvp }).promise;
+            draw?.(target.context, (x, y) => [(x - region.x0) * zoom, (y - region.y0) * zoom]);
+            return { png: new Uint8Array(target.canvas.toBuffer("image/png")), width, height, zoom };
+          } finally {
+            factory.destroy(target);
+          }
+        },
       };
+    },
+    async layers(): Promise<OcgEntry[]> {
+      const cfg = await doc.getOptionalContentConfig();
+      const groups = cfg ? (cfg.getGroups() as Record<string, { name?: string | null; visible?: boolean }> | null) : null;
+      if (!groups) return [];
+      return Object.entries(groups).map(([id, g]) => ({ id, name: String(g?.name ?? ""), visible: g?.visible !== false }));
     },
     destroy: () => doc.destroy().then(() => undefined),
   };
@@ -116,6 +167,31 @@ export function positionedText(ph: PageHandle): { str: string; x: number; y: num
     if (!str.trim()) continue;
     const t = pdfjs.Util.transform(ph.viewport.transform, it.transform);
     out.push({ str, x: +t[4].toFixed(1), y: +t[5].toFixed(1), h: +Math.hypot(t[2], t[3]).toFixed(1) });
+  }
+  return out;
+}
+
+export interface TextSpan { str: string; x0: number; y0: number; x1: number; y1: number }
+
+/** Positioned page text as BBOX SPANS in image px (issue #29's sheet_context
+ * needs boxes, not points, to answer "which text is inside this region").
+ * Same composed transform as positionedText: t[4], t[5] is the baseline's
+ * bottom-left in device space. item.width/height are user-space units; this
+ * server's viewports are unrotated at RENDER_SCALE (openPdf), so device
+ * extent is a straight scale — glyphs rise from the baseline, y is down, so
+ * the box spans [y − h, y]. */
+export function textSpans(ph: PageHandle): TextSpan[] {
+  const out: TextSpan[] = [];
+  for (const it of ph.textContent.items || []) {
+    const str = it.str || "";
+    if (!str.trim()) continue;
+    const t = pdfjs.Util.transform(ph.viewport.transform, it.transform);
+    const x = t[4], y = t[5];
+    const w = (it.width || 0) * RENDER_SCALE;
+    // pdf.js gives height on most items; the composed transform's column
+    // norm is the font's device height when it doesn't
+    const h = (it.height || 0) * RENDER_SCALE || Math.hypot(t[2], t[3]);
+    out.push({ str, x0: +x.toFixed(1), y0: +(y - h).toFixed(1), x1: +(x + w).toFixed(1), y1: +y.toFixed(1) });
   }
   return out;
 }

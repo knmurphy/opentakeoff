@@ -277,7 +277,11 @@ function gappedRoomSegs(gapFrom: number, gapTo: number): number[] {
 
 test("seal: a doorway gap leaks the plain flood but seals — smallest radius wins", () => {
   const mask = buildMask(gappedRoomSegs(55, 58), 300, 300);   // 2 open cells
-  assert.equal(floodRegion(mask, 60, 60).status, "leak", "plain flood escapes the doorway");
+  // Since upstream's gap bridging, the PLAIN flood also recovers this pinhole —
+  // as a bridged rescue that says so (gapBridged), never as a clean fill.
+  const plain = floodRegion(mask, 60, 60);
+  assert.equal(plain.status, "ok", "the plain flood bridges the pinhole");
+  assert.equal(plain.status === "ok" && plain.gapBridged, 1, "…and carries the bridge provenance");
   const f = floodRegionSealed(mask, 60, 60);
   assert.equal(f.status, "ok");
   if (f.status !== "ok") return;

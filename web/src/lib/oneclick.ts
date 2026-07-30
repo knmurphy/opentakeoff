@@ -35,15 +35,21 @@ export interface OpList { fnArray: number[]; argsArray: any[]; }  // per-op args
 /** pdf.js's OPS code table (op name → numeric code); passed in so this module never imports pdfjs. */
 export type OpsTable = Record<string, number>;
 /** meta: one byte per segment — SEG_* bits + device line width in the high nibble.
- *  imageArea: total placed image area in device px² (scan/photo underlay detection). */
-export interface VectorGeometry { points: Point[]; segs: number[]; meta: Uint8Array; imageArea: number; }
+ *  imageArea: total placed image area in device px² (scan/photo underlay detection).
+ *  layerOf/layerIds (#85): per-segment index into layerIds (−1 = outside any
+ *  Optional Content Group); layerIds carries pdf.js OCG ids in first-seen
+ *  order. The id→name/visibility mapping is the CALLER's (pdf.js API side) —
+ *  this module never resolves it, which is what keeps it pure. Optional so
+ *  hand-built geometry (rastermask, tests) needs no ceremony; extraction
+ *  always emits both (empty table on an unlayered sheet). */
+export interface VectorGeometry { points: Point[]; segs: number[]; meta: Uint8Array; imageArea: number; layerOf?: Int32Array; layerIds?: string[]; }
 export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number; softCount: number; mppf?: number; }  // mppf: mask px per foot (0/absent = scale unknown)
 export interface RegionResult { region: Uint8Array; mw: number; mh: number; ws: number; count?: number; }
 export type FloodResult =
   | { status: "boundary" }
   | { status: "leak" }
   | { status: "tiny"; count: number }
-  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; hatchTier?: HatchTier; sealedPx?: number; virtualFrac?: number; wedges?: number; ringWedges?: number; wedgeGrowth?: number; curveFrac?: number; minPassPx?: number; minPassDelta?: number };
+  | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; hatchTier?: HatchTier; sealedPx?: number; virtualFrac?: number; wedges?: number; ringWedges?: number; wedgeGrowth?: number; curveFrac?: number; minPassPx?: number; minPassDelta?: number; gapBridged?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
 export type NearestFn = (x: number, y: number, maxDist: number) => Point | null | undefined;
 
@@ -76,6 +82,7 @@ export function baselineImgDims(pageW: number, pageH: number, baseScale: number)
 export interface MaskPage { pageW: number; pageH: number; renderScale: number; baseScale: number }
 const LEAK_FRACTION = 0.30;         // fill > 30% of the sheet ⇒ not an enclosed space (ws-invariant: a fraction)
 const CURVE_STEPS = 8;              // chords per bezier (door swings stay closed)
+export const GAP_BRIDGE_MAX = 2;    // mask px — leak recovery seals drafting pinholes (≤ ~2r px), never doorways
 
 // ── resolution-independent thresholds (RFC failure mode #3) ─────────────────
 // A verdict must not depend on the working raster's resolution, so every
@@ -241,6 +248,22 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
   let m = transform.slice();
   let lw = 1;                          // graphics-state line width (user space)
   const stack: Array<[number[], number]> = [];
+  // Marked-content / Optional Content (#85): a purely SEQUENTIAL stack — not
+  // graphics state, so save/restore never touches it, and a Form XObject with
+  // /OC arrives as its own begin/end pair around the form's ops (the worker
+  // emits them), so the linear walk covers page content and forms alike.
+  // Every begin pushes (−1 for non-OC marked content — it still nests); every
+  // end pops; a segment is attributed to the NEAREST enclosing OC layer.
+  const layerIds: string[] = [];
+  const layerIdxById = new Map<string, number>();
+  const layerOfArr: number[] = [];
+  const mcStack: number[] = [];
+  let curLayer = -1;
+  const layerIdxFor = (id: string): number => {
+    let k = layerIdxById.get(id);
+    if (k === undefined) { k = layerIds.length; layerIds.push(id); layerIdxById.set(id, k); }
+    return k;
+  };
   const mul = (a: number[], b: number[]): number[] => [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]];
   const tx = (x: number, y: number): Point => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
   const fns = opList.fnArray, A = opList.argsArray;
@@ -265,6 +288,28 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
     else if (fn === OPS.setGState) { for (const pr of args[0] || []) if (pr && pr[0] === "LW") lw = pr[1]; }
     else if (fn === OPS.paintFormXObjectBegin) { stack.push([m.slice(), lw]); if (args && args[0]) m = mul(m, args[0]); }
     else if (fn === OPS.paintFormXObjectEnd) { const p = stack.pop(); if (p) { m = p[0]; lw = p[1]; } }
+    else if (fn === OPS.beginMarkedContent) { mcStack.push(-1); }
+    else if (fn === OPS.beginMarkedContentProps) {
+      // worker emits ["OC", data] where data is {type:"OCG", id}, an OCMD
+      // ({ids, policy} / {expression}) or null. Attribute to a SINGLE stated
+      // group only — a multi-group OCMD or an expression is a visibility rule,
+      // not an authorship claim, and misattributing it would poison the roles.
+      const data = args && args[0] === "OC" ? args[1] : null;
+      let li = -1;
+      if (data && typeof data === "object") {
+        if (typeof data.id === "string" && data.id) li = layerIdxFor(data.id);
+        else if (Array.isArray(data.ids) && data.ids.length === 1 && typeof data.ids[0] === "string" && data.ids[0]) li = layerIdxFor(data.ids[0]);
+      }
+      mcStack.push(li);
+      if (li >= 0) curLayer = li;
+    }
+    else if (fn === OPS.endMarkedContent) {
+      if (mcStack.length) {
+        mcStack.pop();
+        curLayer = -1;
+        for (let k = mcStack.length - 1; k >= 0; k--) if (mcStack[k] >= 0) { curLayer = mcStack[k]; break; }
+      }
+    }
     else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintImageMaskXObject) {
       // the singular paint ops are each preceded by their OWN `transform` op
       // (already folded into `m` above), mapping the image's unit square onto
@@ -314,8 +359,9 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
       const flags = paintFlags(i) | (devW << 4);
       const ops = args[0], co = args[1];
       let c = 0, cur: Point | null = null, start: Point | null = null;
+      const pathLayer = curLayer;   // one path = one marked-content scope (#85)
       const visit = (p: Point) => { points.push(p); };
-      const lineTo = (p: Point) => { if (cur) { segs.push(cur[0], cur[1], p[0], p[1]); metaArr.push(flags); } cur = p; visit(p); };
+      const lineTo = (p: Point) => { if (cur) { segs.push(cur[0], cur[1], p[0], p[1]); metaArr.push(flags); layerOfArr.push(pathLayer); } cur = p; visit(p); };
       for (const op of ops) {
         if (op === OPS.moveTo) { cur = tx(co[c], co[c + 1]); start = cur; visit(cur); c += 2; }
         else if (op === OPS.lineTo) { lineTo(tx(co[c], co[c + 1])); c += 2; }
@@ -333,16 +379,16 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
               u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
               u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
             ];
-            if (cur) { segs.push(cur[0], cur[1], q[0], q[1]); metaArr.push(flags | SEG_CURVE); }
+            if (cur) { segs.push(cur[0], cur[1], q[0], q[1]); metaArr.push(flags | SEG_CURVE); layerOfArr.push(pathLayer); }
             cur = q;
           }
           visit(p3);
         }
-        else if (op === OPS.closePath) { if (cur && start) { segs.push(cur[0], cur[1], start[0], start[1]); metaArr.push(flags); cur = start; } }
+        else if (op === OPS.closePath) { if (cur && start) { segs.push(cur[0], cur[1], start[0], start[1]); metaArr.push(flags); layerOfArr.push(pathLayer); cur = start; } }
         else if (op === OPS.rectangle) {
           const x = co[c], y = co[c + 1], w = co[c + 2], h = co[c + 3]; c += 4;
           const q: Point[] = [tx(x, y), tx(x + w, y), tx(x + w, y + h), tx(x, y + h)];
-          for (let k = 0; k < 4; k++) { const a = q[k], b = q[(k + 1) % 4]; segs.push(a[0], a[1], b[0], b[1]); metaArr.push(flags); visit(a); }
+          for (let k = 0; k < 4; k++) { const a = q[k], b = q[(k + 1) % 4]; segs.push(a[0], a[1], b[0], b[1]); metaArr.push(flags); layerOfArr.push(pathLayer); visit(a); }
           cur = q[0]; start = q[0];
         }
       }
@@ -350,7 +396,7 @@ export function extractVectorGeometry(opList: OpList, transform: number[], OPS: 
   }
   const meta = Uint8Array.from(metaArr);
   markPolylineArcs(segs, meta);
-  return { points, segs, meta, imageArea };
+  return { points, segs, meta, imageArea, layerOf: Int32Array.from(layerOfArr), layerIds };
 }
 
 // ── 1b. polyline arc detection ─────────────────────────────────────────────
@@ -759,6 +805,212 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
   return soft;
 }
 
+// ── 2b. hatch families — the context view of the sheet's patterns (issue #29) ──
+// The MASK asks "is this stroke a wall?" and the lattice classifier above
+// answers per stroke. The CONTEXT tools (sheet_context, legend↔plan matching)
+// ask a different question — "what pattern families exist on this sheet, and
+// where?" — and that is the row/run sweep below: same-angle rows, regularly
+// pitched, stacking tangentially, reported as instances with an (angle, pitch,
+// pen-width) signature. The two views are deliberately separate: replacing the
+// classifier's evidence rule (item C) must not silently re-identify families
+// that MCP callers have already matched by id.
+export const HATCH_MIN_RUN = 10;       // rows — fewer evenly-spaced parallels is plausibly walls
+export const HATCH_PITCH_TOL = 0.35;   // regularity band around the median pitch
+export const HATCH_MIN_REGULAR = 0.7;  // fraction of gaps that must sit inside the band
+export const HATCH_OVERLAP_FRAC = 0.5; // successive rows must overlap tangentially this much
+export const ROW_EPS = 1.5;            // mask px — collinear/dashed pieces merge into one row
+export const WIDE_PROTECT_RATIO = 2;   // heavier-pen member of a hairline family stays hard (wall overprint)
+export const SPAN_PROTECT_RATIO = 3;   // a row spanning ≫ the run's median row is a wall riding the rhythm, not hatch
+interface HatchCand { i: number; ang: number; x1: number; y1: number; x2: number; y2: number; w: number; }
+interface HatchRow { d: number; t0: number; t1: number; segs: HatchCand[]; }
+
+/** One periodic family found by the sweep — the (angle, pitch, pen-width)
+ * signature plus its membership, in the caller's coordinate unit (ws-scaled).
+ * `softIdx` is the subset the sweep's own wall guards would soften (extremal
+ * rows, span-protected rows, heavy-pen overprints) — kept for diagnostics;
+ * the MASK's soft/hard verdict comes from the lattice classifier above. */
+export interface HatchRunInfo {
+  /** Mean member angle, folded to [0, 180) — direction-free. */
+  angleDeg: number;
+  /** Median row-to-row gap (the pattern's pitch), in the caller's unit. */
+  pitch: number;
+  /** Modal device pen width of the members (meta high nibble). */
+  modalW: number;
+  rowCount: number;
+  /** Tight bbox over member segments [x0, y0, x1, y1], caller's unit. */
+  bbox: [number, number, number, number];
+  /** Every segment index belonging to the run's rows. */
+  memberIdx: number[];
+  /** The subset the sweep's wall guards allow — see the interface comment. */
+  softIdx: number[];
+}
+
+/** The family sweep: collect stroked non-curve candidates, cluster by angle
+ * (folding the 0°/180° seam), merge collinear pieces into rows, and keep
+ * maximal regularly-pitched tangentially-stacking runs. Returns the runs plus
+ * the clip-only indices (invisible ink, independent of any family). */
+function sweepHatchRuns(segs: number[], meta: Uint8Array, ws: number): { clipSoft: number[]; runs: HatchRunInfo[] } {
+  const n = segs.length >> 2;
+  const clipSoft: number[] = [];
+  const runs: HatchRunInfo[] = [];
+  if (!meta || !n) return { clipSoft, runs };
+  const cand: HatchCand[] = [];
+  for (let i = 0; i < n; i++) {
+    const mt = meta[i];
+    if (mt & SEG_CURVE) continue;
+    if (mt & SEG_CLIP) { clipSoft.push(i); continue; }
+    // Filled-not-stroked outlines bound SOLID ink (wall poché); hatch itself
+    // is stroked linework, so exempting fills costs nothing.
+    if (mt & SEG_FILLONLY) continue;
+    const x1 = segs[i * 4] * ws, y1 = segs[i * 4 + 1] * ws, x2 = segs[i * 4 + 2] * ws, y2 = segs[i * 4 + 3] * ws;
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.75) continue;                    // sub-cell specks can't form rows
+    let ang = Math.atan2(dy, dx) * 180 / Math.PI; // fold to [0,180): direction-free
+    if (ang < 0) ang += 180; if (ang >= 180) ang -= 180;
+    cand.push({ i, ang, x1, y1, x2, y2, w: meta[i] >> 4 });
+  }
+  if (cand.length < HATCH_MIN_RUN) return { clipSoft, runs };
+  cand.sort((a, b) => a.ang - b.ang);
+  // sweep into angle clusters; a near-0° cluster merges with a near-180° one
+  const clusters: HatchCand[][] = [];
+  let cl: HatchCand[] = [cand[0]];
+  for (let k = 1; k < cand.length; k++) {
+    if (cand[k].ang - cand[k - 1].ang <= HATCH_ANGLE_TOL) cl.push(cand[k]);
+    else { clusters.push(cl); cl = [cand[k]]; }
+  }
+  clusters.push(cl);
+  if (clusters.length > 1) {
+    const first = clusters[0], last = clusters[clusters.length - 1];
+    if (first[0].ang < HATCH_ANGLE_TOL && last[last.length - 1].ang > 180 - HATCH_ANGLE_TOL) {
+      for (const s of last) s.ang -= 180;        // fold across the seam for the mean
+      clusters[0] = last.concat(first);
+      clusters.pop();
+    }
+  }
+  const median = (arr: number[]): number => { const a = arr.slice().sort((x, y) => x - y); return a[a.length >> 1]; };
+  for (const members of clusters) {
+    if (members.length < HATCH_MIN_RUN) continue;
+    let sum = 0; for (const s of members) sum += s.ang;
+    const th = (sum / members.length) * Math.PI / 180;
+    const dxu = Math.cos(th), dyu = Math.sin(th);      // along the family
+    const nxu = -dyu, nyu = dxu;                        // across it
+    const rowsIn = members.map((s) => ({
+      s,
+      d: ((s.x1 + s.x2) / 2) * nxu + ((s.y1 + s.y2) / 2) * nyu,
+      t0: Math.min(s.x1 * dxu + s.y1 * dyu, s.x2 * dxu + s.y2 * dyu),
+      t1: Math.max(s.x1 * dxu + s.y1 * dyu, s.x2 * dxu + s.y2 * dyu),
+    })).sort((a, b) => a.d - b.d);
+    // collinear/dashed pieces at the same offset merge into one ROW
+    const rows: HatchRow[] = [];
+    let row: HatchRow = { d: rowsIn[0].d, t0: rowsIn[0].t0, t1: rowsIn[0].t1, segs: [rowsIn[0].s] };
+    for (let k = 1; k < rowsIn.length; k++) {
+      const r = rowsIn[k];
+      if (r.d - row.d <= ROW_EPS) { row.t0 = Math.min(row.t0, r.t0); row.t1 = Math.max(row.t1, r.t1); row.segs.push(r.s); }
+      else { rows.push(row); row = { d: r.d, t0: r.t0, t1: r.t1, segs: [r.s] }; }
+    }
+    rows.push(row);
+    // maximal RUNS of rows: pitched within cap AND stacking tangentially
+    let runStart = 0;
+    const flushRun = (a: number, b: number) => {        // rows[a..b] inclusive
+      const count = b - a + 1;
+      if (count < HATCH_MIN_RUN) return;
+      const gaps: number[] = [];
+      for (let k = a + 1; k <= b; k++) gaps.push(rows[k].d - rows[k - 1].d);
+      const med = median(gaps);
+      if (!med) return;
+      let reg = 0; for (const g of gaps) if (Math.abs(g - med) <= med * HATCH_PITCH_TOL) reg++;
+      if (reg / gaps.length < HATCH_MIN_REGULAR) return;
+      const widths: number[] = [];
+      for (let k = a; k <= b; k++) for (const s of rows[k].segs) widths.push(s.w);
+      const modalW = Math.max(1, median(widths));
+      // hatch rows span a room; a wall at the family's angle spans the wing.
+      // A row much longer than the run's median is a wall riding the pattern's
+      // rhythm — softening it would let the escalated fill breach the room.
+      const spans: number[] = [];
+      for (let k = a; k <= b; k++) spans.push(rows[k].t1 - rows[k].t0);
+      const medSpan = Math.max(1, median(spans));
+      const memberIdx: number[] = [];
+      const softIdx: number[] = [];
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+      let angSum = 0, angN = 0;
+      for (let k = a; k <= b; k++) {
+        const guarded = rows[k].t1 - rows[k].t0 > SPAN_PROTECT_RATIO * medSpan;
+        for (const s of rows[k].segs) {
+          memberIdx.push(s.i);
+          angSum += s.ang; angN++;
+          bx0 = Math.min(bx0, s.x1, s.x2); by0 = Math.min(by0, s.y1, s.y2);
+          bx1 = Math.max(bx1, s.x1, s.x2); by1 = Math.max(by1, s.y1, s.y2);
+          // the sweep's wall guards: extremal rows stay hard, span-protected
+          // rows stay hard, heavy-pen overprints stay hard
+          if (k > a && k < b && !guarded && s.w < WIDE_PROTECT_RATIO * modalW) softIdx.push(s.i);
+        }
+      }
+      const meanAng = ((angSum / Math.max(1, angN)) % 180 + 180) % 180;
+      runs.push({ angleDeg: meanAng, pitch: med, modalW, rowCount: count,
+                  bbox: [bx0, by0, bx1, by1], memberIdx, softIdx });
+    };
+    for (let k = 1; k < rows.length; k++) {
+      const gap = rows[k].d - rows[k - 1].d;
+      const ov = Math.min(rows[k].t1, rows[k - 1].t1) - Math.max(rows[k].t0, rows[k - 1].t0);
+      const need = HATCH_OVERLAP_FRAC * Math.min(rows[k].t1 - rows[k].t0, rows[k - 1].t1 - rows[k - 1].t0);
+      if (gap > HATCH_MAX_PITCH || ov < need) { flushRun(runStart, k - 1); runStart = k; }
+    }
+    flushRun(runStart, rows.length - 1);
+  }
+  return { clipSoft, runs };
+}
+
+// Signature quantization for the stable family id (issue #29): coarse enough
+// to absorb CAD jitter (≪ the classifier's own tolerances), fine enough that
+// distinct pattern specs never collide. The RAW signature values ride along
+// beside the id so a caller can run its own tolerance match when an instance
+// sits on a bucket boundary.
+export const HATCH_ID_ANGLE_Q = 0.5;  // degrees
+export const HATCH_ID_PITCH_Q = 0.1;  // px
+
+/** One hatch-family INSTANCE: a periodic region of the sheet, carrying the
+ * content-derived id that makes instances comparable. Two regions drawn with
+ * the same pattern spec — a legend swatch and the plan region it labels — get
+ * the SAME id, which is the whole point: matching them is `id === id`. The id
+ * identifies a pattern, not a material; the legend maps pattern → material. */
+export interface HatchFamily {
+  /** Content hash of the quantized signature: `h-a{angle}p{pitch}w{penW}`.
+   * Derived from geometry alone — stable across calls, crops, and sessions. */
+  id: string;
+  angle_deg: number;
+  pitch_px: number;
+  pen_w_px: number;
+  rows: number;
+  segments: number;
+  /** Tight bbox over the instance's members, image px [x0, y0, x1, y1]. */
+  bbox: [number, number, number, number];
+  /** Member segment indices into the sheet's segs/meta arrays. */
+  memberIdx: number[];
+}
+
+/** The context view of the sweep (issue #29): every periodic family on the
+ * sheet as an instance record with its (angle, pitch, pen-width) signature —
+ * in IMAGE PX (ws = 1), the frame every tool speaks. Pure and deterministic;
+ * same input, same ids. */
+export function hatchFamilies(segs: number[], meta: Uint8Array): HatchFamily[] {
+  const { runs } = sweepHatchRuns(segs, meta, 1);
+  const q = (v: number, step: number): number => Math.round(v / step) * step;
+  return runs.map((r) => {
+    const a = q(r.angleDeg, HATCH_ID_ANGLE_Q), p = q(r.pitch, HATCH_ID_PITCH_Q);
+    return {
+      id: `h-a${a.toFixed(1)}p${p.toFixed(1)}w${r.modalW}`,
+      angle_deg: +r.angleDeg.toFixed(2),
+      pitch_px: +r.pitch.toFixed(2),
+      pen_w_px: r.modalW,
+      rows: r.rowCount,
+      segments: r.memberIdx.length,
+      bbox: r.bbox.map((v) => +v.toFixed(1)) as [number, number, number, number],
+      memberIdx: r.memberIdx,
+    };
+  });
+}
+
 // ── 3. boundary mask ───────────────────────────────────────────────────────
 // Segments (image px) → Uint8Array raster at ws = maskDim/imageDim. Single-px
 // Bresenham; coincident endpoints round to the same cell so chained walls stay
@@ -767,8 +1019,27 @@ export function classifyHatchSegs(segs: number[], meta: Uint8Array, ws: number, 
 // a cell crossed by both keeps bit 1, so hard always wins. Curve chords (door
 // swings, curved walls) additionally carry bit 4: still hard, but identifiable
 // so annexDoorWedges can recognize a swing arc on a region's boundary.
+//
+// roles (#85, optional, LAST parameter): one code per segment from a sheet
+// whose layers STATE what the ink is (lib/layers.ts) — a short-circuit over
+// the heuristics, never a replacement:
+//   boundary / structure → hard (bit 1), no classifyHatchSegs vote;
+//   finish-pattern / annotation / demolition / hidden → not plotted at all —
+//     the file says this ink is not a wall (a hidden layer is excluded
+//     whatever its name, or a demolished wall traces as a real one);
+//   unknown (0) → exactly today's path.
+// Null roles (unlayered sheet, or nothing classified) is bit-identical to the
+// pre-#85 mask — the fallback must be invisible, and a regression test holds
+// it there. The second overload accepts upstream #85's positional shape
+// (roles sixth, no scale pinning) so layered callers without a scale need no
+// placeholder zeros; the canonical order keeps roles last.
 export const MASK_CURVE_BIT = 4;
-export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt = 0, basePxPerFt = 0, page: MaskPage | null = null): MaskObj {
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim?: number, meta?: Uint8Array | null, pxPerFt?: number, basePxPerFt?: number, page?: MaskPage | null, roles?: Uint8Array | null): MaskObj;
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim?: number, meta?: Uint8Array | null, roles?: Uint8Array | null): MaskObj;
+export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = MASK_MAX_DIM, meta: Uint8Array | null = null, pxPerFt: number | Uint8Array | null = 0, basePxPerFt = 0, page: MaskPage | null = null, roles: Uint8Array | null = null): MaskObj {
+  // the compat overload: a Uint8Array (or explicit null) in the pxPerFt slot
+  // is a roles table, scale unknown
+  if (pxPerFt instanceof Uint8Array || pxPerFt === null) { if (!roles) roles = pxPerFt; pxPerFt = 0; }
   // A1 (audit): the working raster must be a property of the SHEET, not of the
   // render scale. It used to be `ws = min(1, maxDim/imgmax)` — a CAP, not a pin —
   // so on any sheet rendering under the cap the mask resolution just followed the
@@ -834,7 +1105,12 @@ export function buildMask(segs: number[], imgW: number, imgH: number, maxDim = M
   const noDoor = meta ? flagNonDoorArcs(segs, meta) : null;
   let softCount = 0;
   for (let i = 0, si = 0; i + 3 < segs.length; i += 4, si++) {
-    let v = soft && soft[si] ? 2 : 1;
+    const role = roles ? roles[si] : 0;
+    if (role === 2 || role === 3 || role === 5 || role === 6) continue;  // pattern/annotation/demolition/hidden — stated non-boundary ink
+    // stated boundary/structure: hard, no heuristic vote. The curve bit is not
+    // a vote — it records geometry (door-swing recognition), so it still rides
+    // on stated-hard curve chords exactly as on heuristic-hard ones.
+    let v = role === 1 || role === 4 ? 1 : soft && soft[si] ? 2 : 1;
     if (v === 1 && meta && (meta[si] & SEG_CURVE)) v = 1 | MASK_CURVE_BIT;
     if ((v & MASK_CURVE_BIT) && noDoor && noDoor[si]) v |= MASK_NODOOR_BIT;
     if (v === 2) softCount++;
@@ -1007,6 +1283,52 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
   return { status: "ok", region, count, mw, mh, ws, mppf: mppf || undefined, hardHits, softHits };
 }
 
+// ── gap bridging (leak recovery) ───────────────────────────────────────────
+// A room whose walls don't quite meet — a hairline drafting gap where two
+// wall runs stop short of each other, or a jamb drawn a pixel shy of the
+// wall — floods straight through the pinhole and dies as a "leak": the
+// engine calls a plainly enclosed space not-a-room and the user is left
+// tracing it by hand. Sealing is a hard-bit (wall) box dilation: radius r
+// closes gaps up to ~2r px in MASK space, and with GAP_BRIDGE_MAX = 2 only
+// pinholes ≤ ~4-5 px ever seal. A real doorway is tens of mask px wide at
+// any plausible drawing scale, so it keeps leaking at every radius and an
+// open floor plan is never fenced into a fake room. The traced ring sits
+// ≤ r px inside the true wall line; snapVertices pulls the corners back onto
+// true endpoints, and the rescue rides provenance (`gapBridged` →
+// origin.gap_bridged_px) rather than passing itself off as a clean fill.
+
+/** Box-dilate the HARD (wall) bit by Chebyshev radius r — separable
+ *  two-pass, O(n·r). Soft (hatch) bits copy through untouched: hatch is
+ *  transparent at the walls-only barrier, so it never causes a leak, and
+ *  growing it would only skew the escalation tiers' soft/hard hit counts. */
+export function dilateHard(maskObj: MaskObj, r: number): MaskObj {
+  const { mask, mw, mh, ws, softCount, mppf } = maskObj;
+  const horiz = new Uint8Array(mask);
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      if (mask[row + x] & 1) {
+        const x1 = Math.min(mw - 1, x + r);
+        for (let i = Math.max(0, x - r); i <= x1; i++) horiz[row + i] |= 1;
+      }
+    }
+  }
+  const out = new Uint8Array(horiz);
+  for (let y = 0; y < mh; y++) {
+    const row = y * mw;
+    for (let x = 0; x < mw; x++) {
+      if (horiz[row + x] & 1) {
+        const y1 = Math.min(mh - 1, y + r);
+        for (let j = Math.max(0, y - r); j <= y1; j++) out[j * mw + x] |= 1;
+      }
+    }
+  }
+  // mppf rides through (upstream dropped it, but it predates mppf): the
+  // bridged re-flood must judge tiny/thin at the same feet-true thresholds
+  // as the fill it is rescuing.
+  return { mask: out, mw, mh, ws, softCount, mppf };
+}
+
 // The escalating fill. Pass 1 is the strict mask (walls + hatch — exactly the
 // original behavior; masks with no soft cells never go further). When the strict
 // pass is bounded by hatch, re-flood with hatch transparent (pass 2). Three tiers
@@ -1028,6 +1350,29 @@ function floodPass(maskObj: MaskObj, ix: number, iy: number, barrier: number): F
 // `sensitivity` (0..1) dials the moderate tier's escalateFrac/growthMax via
 // escalationParams; the default is the calibrated Balanced preset.
 export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivity: number = SENS_BALANCED): FloodResult {
+  const r = floodRegionLadder(maskObj, ix, iy, sensitivity);
+  if (r.status !== "leak") return r;
+  // Leak recovery (see the gap-bridging block above): seal hairline wall gaps
+  // and rerun the whole ladder. The first radius that yields a clean fill
+  // wins; a real opening keeps leaking at every radius, so the original leak
+  // stands and bridging can never do worse than the un-bridged result. Only a
+  // LEAK is recovered — a tiny/boundary verdict is truthful and must not be
+  // dilated away.
+  for (let br = 1; br <= GAP_BRIDGE_MAX; br++) {
+    const rb = floodRegionLadder(dilateHard(maskObj, br), ix, iy, sensitivity);
+    if (rb.status === "ok") { rb.gapBridged = br; return rb; }
+  }
+  return r;
+}
+
+// The hatch-escalation ladder alone — floodRegion minus the bridging rungs.
+// floodRegionSealed's seal machinery calls THIS, deliberately: its own dilated
+// rungs (growback, virtual-boundary gates, sealedPx provenance) subsume
+// pinhole recovery with a strictly better boundary, and a dilated VIEW
+// re-entering the bridging loop would box-dilate the view's BASE mask — the
+// wrong geometry at the wrong cost. Bridging joins the sealed ladder exactly
+// once, as its last rung (see floodRegionSealedInner).
+function floodRegionLadder(maskObj: MaskObj, ix: number, iy: number, sensitivity: number): FloodResult {
   const r1 = floodPass(maskObj, ix, iy, 3);
   if (!maskObj.softCount) return r1;
   if (r1.status === "leak") return r1;
@@ -1663,12 +2008,12 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     return s;
   };
   let raw: FloodResult | null = null;
-  const rawFlood = (): FloodResult => (raw ??= floodRegion(mo, ix, iy, sensitivity));
+  const rawFlood = (): FloodResult => (raw ??= floodRegionLadder(mo, ix, iy, sensitivity));
   if (minPassPx > 0) {
     const s = scratch();
     const dm = dilatedView(mo, minPassPx, s.dt);
     const [ax, ay] = ascendSeed(s.dt, mo.mw, mo.mh, mo.ws, ix, iy, minPassPx);
-    const f = floodRegion(dm, ax, ay, sensitivity);
+    const f = floodRegionLadder(dm, ax, ay, sensitivity);
     if (f.status === "ok") {
       growRegionBack(f, mo, minPassPx, f.hatchFiltered ? 1 : 3, s.dt);
       // TRIMMING or CREATING? (see the F1/F2 note above — this one fact decides
@@ -1708,7 +2053,7 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     if (r <= minPassPx) continue;
     const dm = dilatedView(mo, r, sc.dt);
     const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
-    const f = floodRegion(dm, ax, ay, sensitivity);
+    const f = floodRegionLadder(dm, ax, ay, sensitivity);
     if (f.status !== "ok") continue;
     growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3, sc.dt);
     // Two sanity gates keep sealing honest — without them, dilating hard enough
@@ -1746,6 +2091,22 @@ export function floodRegionSealed(mo: MaskObj, ix: number, iy: number, sensitivi
 
 function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity: number, radii: number[], wedgeCapPx: number, minPassPx: number): FloodResult {
   const r1 = sealAttempt(mo, ix, iy, sensitivity, radii, minPassPx);
+  if (r1.status === "leak") {
+    // Gap bridging, the ladder's LAST leak-recovery rung (see floodRegion).
+    // Ordering is deliberate: the seal rungs above already close pinholes with
+    // growback and the virtual-boundary gates, so anything they recover keeps
+    // the strictly better boundary and its sealedPx provenance — bridging only
+    // sees the leaks the whole ladder refused (e.g. a diagonal pinhole the
+    // diamond dilation can't quite pinch). Box-dilated, no growback, no gates
+    // — its guard is the radius cap, and the rescue rides `gapBridged` rather
+    // than passing itself off as a clean fill. No wedge retries on a bridged
+    // base: the region sits ≤ 2 px inside the true walls, so boundary-arc
+    // adjacency is meaningless there.
+    for (let br = 1; br <= GAP_BRIDGE_MAX; br++) {
+      const rb = floodRegionLadder(dilateHard(mo, br), ix, iy, sensitivity);
+      if (rb.status === "ok") { rb.gapBridged = br; return rb; }
+    }
+  }
   if (!wedgeCapPx || r1.status !== "ok") return r1;
   const clusters = boundaryCurveClusters(mo, r1.region);
   if (!clusters.length) return r1;

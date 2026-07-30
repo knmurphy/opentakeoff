@@ -1,7 +1,8 @@
 # OpenTakeoff MCP server
 
 Listed in the [official MCP registry](https://registry.modelcontextprotocol.io) as
-`io.github.Kentucky-ai/opentakeoff` and on [Glama](https://glama.ai/mcp/servers/Kentucky-ai/opentakeoff).
+`io.github.Kentucky-ai/opentakeoff`, on [Glama](https://glama.ai/mcp/servers/Kentucky-ai/opentakeoff),
+and on [Smithery](https://smithery.ai/servers/Kentucky-ai/opentakeoff).
 
 ## Run it in 60 seconds (npx)
 
@@ -27,9 +28,9 @@ No Node, no npm: download **`opentakeoff-mcp.mcpb`** from the
 double-click it — Claude Desktop installs the server with its dependencies
 bundled. Built by `npm run mcpb` and attached automatically to every `mcp-v*`
 release. The bundle is platform-neutral on purpose: it excludes the optional
-native canvas, so every tool and the text/metadata resources work everywhere,
-and the sheet-image resource says exactly what's missing where rendering isn't
-available.
+native canvas, so every JSON tool and the text/metadata resources work
+everywhere; the sheet-image resource and the `view_sheet` tool say exactly
+what's missing where rendering isn't available.
 
 
 The takeoff engine — One-Click Area, the scale model, conditions, totals — on
@@ -108,19 +109,50 @@ includes document text, shape vertices, or result payload content.
 | `sheet_info` | One sheet's dims, vector segment count, scale status, detected suggestion, committed shape count. |
 | `set_scale` | Set a sheet's scale — exactly one of `label`, `upp`, `calibrate {p1, p2, feet}`, `use_detected`. |
 | `one_click` | One-Click Area at (x, y): flood fill bounded by the plan linework, traced, vertices snapped. Pass `condition` to commit; `role: "deduct"` subtracts. |
-| `detect_rooms` | Batch One-Click: reads every room-number label off the sheet's text layer and floods each — one call instead of `read_sheet_text` + reasoning + N `one_click` calls. Only cleanly-traced rooms come back; a leaked/dense-linework label is silently withheld. Pass `condition` to commit every detected room. |
+| `detect_rooms` | Batch One-Click: reads every room-number label off the sheet's text layer and floods each — one call instead of `read_sheet_text` + reasoning + N `one_click` calls. Only cleanly-traced rooms come back; everything skipped is counted and reasoned in `withheld` (degenerate / duplicate / implausible), never dropped silently. Pass `condition` to commit every detected room. |
 | `measure_polygon` | Area + perimeter of a polygon you supply (min 3 verts). Requires scale. |
 | `measure_line` | Length of an open polyline (min 2 points). Requires scale. |
 | `takeoff_summary` | Per-condition totals + grand totals, computed by the Report's rules. |
 | `export_takeoff` | The full `opentakeoff.takeoff_canvas.v1` payload — exactly what the app autosaves. Inline, and to disk with `path`. |
 | `delete_shape` | Remove a committed shape by id. |
+| `edit_shape` | **Revise** a committed shape instead of redoing it: new `verts`, a different `condition`, a different `role`, or any combination — quantities recomputed from the result. Refuses shapes a human affirmed. |
+| `edit_materials` | Add/remove/patch supporting-materials rows on a condition — the coverage-rate lines (adhesive at N sf/gal, grout at N lf/bag, …) that turn a measured quantity into an order quantity, matching the canvas's Supporting Materials panel. `condition` mints on first touch, like `one_click`/`measure_polygon`. No review gate (materials rows are quantity config, not traced geometry) — edits directly, reversible with `undo_last`. |
+| `edit_condition` | Set a condition's **waste %** and **×N multiplier** — the knobs that turn measured quantities into order quantities (`takeoff_summary`'s `*_net`); without them an agent takeoff always ships net === gross. Resolves an **existing** finish tag or errors — a typo must not mint an empty condition. No review gate; one `undo_last` step restores both knobs verbatim. |
+| `export_report` | The **computed Report document** — `opentakeoff.report.v1`, the same JSON the canvas Report exports: gross + waste-adjusted quantities, the computed materials **buy list** per condition plus the project-wide roll-up, per-sheet base subtotals, and scale provenance. The contract for pricing consumers — `export_takeoff` carries materials as config rows, `takeoff_summary` strips them. Inline, and to disk with `path`. |
+| `undo_last` | Step back over your own last `n` mutations, newest first. Exact inverses: a commit is removed, an edit restored verbatim, a delete re-inserted where it was, a materials edit's whole array restored, a condition edit's waste/multiplier pair restored. A whole `detect_rooms` sweep is **one** step. |
 | `read_sheet_text` | Positioned page text (image px), optionally restricted to a region — title blocks, room labels, finish schedules. |
+| `find_text` | **Locate** a known string — the complement to `read_sheet_text` (which returns what a region *says*; this finds *where* a string sits). Case-insensitive substring match per pdf.js text run; each hit's center feeds straight into `one_click`'s seed. |
+| `sheet_context` | The region's STRUCTURE in one frame: classified vector segments (endpoints as drawn, meta byte per segment), text spans with bboxes, and hatch-family instances with content-derived ids — same pattern spec ⇒ same id anywhere on the sheet, so plan↔legend matching is `id === id`. Decimation is declared and counted on every reply: `kept + dropped === total_in_region`, cap applies longest-first so walls survive. |
+| `view_sheet` | The agent's eyes: render the sheet (or an image-px crop) to PNG. `overlay` burns committed shapes in (solid = human-affirmed, dashed = unreviewed) to verify geometry landed; `grid` burns in a calibrated 1-ft/5-ft measuring grid with foot labels (`"auto"` from the set scale, or the drawing scale like `"1/4"`) so dimensions are counted off cells, not guessed. |
 
-Every tool declares an **`outputSchema`**, and every reply carries the payload
-as **`structuredContent`** — typed, machine-validated on every call — alongside
-the same compact JSON in a single text item for clients that predate structured
-output. Failures come back as `isError: true` with `{"error": "..."}` — never a
-dropped connection.
+### The agent revises its own work
+
+`edit_shape` and `undo_last` exist because an agent that can only *append* has
+one recovery move: delete and re-derive. The loop they enable instead —
+**commit → `view_sheet overlay:true` → see the ring overshot into the corridor
+→ move those two vertices → look again** — is the loop a human estimator
+already runs, and it is the difference between an agent that drafts and one
+that works.
+
+Two rules hold the surface honest:
+
+- **Ink is not pencil.** A shape carrying `origin.reviewed === true` is work a
+  human affirmed, and no agent verb touches it. This server has no review gate
+  of its own, so the guard is inert here — it is the contract that makes the
+  surface safe to port to a host that *does* have one.
+- **Self-revision is not correction.** `edit_shape` bumps `origin.agent_edits`
+  and touches nothing in the human-correction vocabulary (`edited`, `edits`,
+  `proposed_verts_norm`). Those fields mean *a human corrected the machine*;
+  merging a machine's own fix into them would corrupt the one signal that
+  measures whether the machine is getting better.
+
+Every JSON tool declares an **`outputSchema`**, and every reply carries the
+payload as **`structuredContent`** — typed, machine-validated on every call —
+alongside the same compact JSON in a single text item for clients that predate
+structured output. `view_sheet` is the one image tool: its reply is a PNG
+content item plus a JSON meta text item (image replies aren't structured
+output, so it declares no schema by design). Failures come back as
+`isError: true` with `{"error": "..."}` — never a dropped connection.
 
 ## Resources — browse before you measure
 
@@ -138,9 +170,10 @@ set becomes browsable natively (`resources/list` re-announces itself via
 Page numbers — not file-derived sheet keys — address resources, so URIs stay
 clean regardless of the PDF's name; the human-facing key (`plan.pdf#2`) and
 title-block number (`A-101`) ride along as the resource name and title.
-Rendering uses `@napi-rs/canvas` (pdf.js's own optional dependency): on a
-platform without a prebuilt binary every non-raster capability still works and
-the image read explains exactly what's missing.
+Rendering uses `@napi-rs/canvas`, declared as this package's own optional
+dependency so a plain `npx opentakeoff-mcp` installs the prebuilt binary and
+arrives with eyes; on a platform without a prebuilt binary every non-raster
+capability still works and the image read explains exactly what's missing.
 
 The intended agent loop: read `takeoff://sheets` → look at
 `takeoff://sheet/{page}/image` → pick click targets → measure with the tools.
@@ -209,19 +242,50 @@ npm test        # session + tool-layer + e2e, against demo/sample-plan.pdf
 ## Releasing (maintainers)
 
 MCP releases live in the **`mcp-v*`** tag namespace — bare `v*` tags belong to
-the app (v0.2.0, v0.3.0 are app releases). The npm artifact publishes manually
-(hardware-key 2FA) **before** the tag is pushed; the workflow refuses to run
-ahead of it.
+the app (v0.2.0, v0.3.0 are app releases). Releases publish via **npm trusted
+publishing**: the tag push fires `.github/workflows/publish-mcp.yml`, which
+runs straight through — no approval click — and publishes the npm artifact
+over OIDC with a **provenance attestation** (no npm token exists anywhere —
+the npm package designates that exact repo + workflow as its trusted
+publisher), followed by the MCP registry entry, the GitHub release, and the
+MCPB bundle. The `release` environment's required-reviewer gate existed
+briefly and was deliberately removed (2026-07-22) — the tag push is the one
+human decision, and it's already admin-gated, so a second click added
+friction without adding safety.
 
 ```bash
 # 1. bump the version — all three fields together:
 #    package.json .version, server.json .version, server.json .packages[0].version
-# 2. from mcp/, publish with the hardware key:
-npm publish
-# 3. tag and push — this fires .github/workflows/publish-mcp.yml:
+# 2. tag and push — this fires the whole release, fully unattended:
 git tag mcp-v<version> && git push origin mcp-v<version>
 ```
 
-The workflow checks version consistency, requires the npm artifact to exist,
-publishes to the official MCP registry via GitHub OIDC, verifies the listing,
-and creates the GitHub release (titled `opentakeoff-mcp <version>`).
+⚠️ Because there's no approval step, an accidental or mistyped `mcp-v*` tag
+publishes to npm immediately, and npm unpublish is heavily restricted —
+double-check the version before tagging.
+
+The workflow checks version consistency, runs the full publish gate
+(`prepublishOnly` = typecheck + tests + build), publishes to npm and the
+official MCP registry, verifies the registry listing, and creates the GitHub
+release (titled `opentakeoff-mcp <version>`). A re-run skips the npm publish
+if that version already shipped, so a transient failure downstream is safe to
+retry.
+
+### Refreshing the Smithery listing
+
+Smithery isn't part of the automated release above — it needs a **separate,
+manual** publish after any tool signature change, because of a genuine spec
+conflict between two validators: the official MCPB validator (what
+`npm run mcpb` gates on) rejects a `tools[].inputSchema` key outright, while
+Smithery's registry rejects a bundle *without* real `inputSchema` per tool
+(smithery-ai/cli#770, #797, #787 — no manifest satisfies both). The canonical
+`dist-mcpb/opentakeoff-mcp.mcpb` stays spec-compliant for Claude Desktop / the
+official registry / Glama; `scripts/build-smithery-mcpb.mjs` builds a
+Smithery-only bundle instead, with live-introspected tools + inputSchema baked
+in, packed with a plain zip (bypassing `mcpb validate`, which would reject it):
+
+```bash
+npm run build
+node scripts/build-smithery-mcpb.mjs
+smithery mcp publish dist-smithery/opentakeoff-mcp.mcpb -n Kentucky-ai/opentakeoff
+```

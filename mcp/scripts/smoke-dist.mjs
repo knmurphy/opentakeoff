@@ -93,17 +93,31 @@ send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
 const listed = await responseFor(2);
 const names = listed.tools.map((tool) => tool.name).sort();
 assert.deepEqual(names, [
+  "annotate",
   "delete_shape",
   "detect_rooms",
+  "edit_condition",
+  "edit_materials",
+  "edit_shape",
+  "export_report",
   "export_takeoff",
+  "find_schedule",
+  "find_text",
+  "link_annotation",
+  "list_annotations",
   "load_plan",
   "measure_line",
   "measure_polygon",
   "one_click",
   "read_sheet_text",
+  "resolve_tag",
   "set_scale",
+  "sheet_context",
+  "sheet_graph",
   "sheet_info",
   "takeoff_summary",
+  "undo_last",
+  "view_sheet",
 ]);
 
 child.stdin.end();
