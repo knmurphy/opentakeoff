@@ -1,36 +1,42 @@
-// CursorPuck — the One-Click cursor puck, built to the evidence-reviewed
-// design foundations (docs: puck design foundations, 2026-07-30). Being
-// refined on /puck-demo.html before any canvas wiring.
+// CursorPuck + CommitTray — the One-Click cursor puck, built to the
+// evidence-reviewed design foundations (docs/design/PUCK_DESIGN_FOUNDATIONS.md).
+// Being refined on /puck-demo.html before any canvas wiring.
 //
-// The ontology it implements, and the constraints each part carries:
-//   Hover readout  — PASSIVE, AMBIENT (T1): displays area/name/confidence at
-//                    the cursor; interacting with it can mutate nothing. Kept
-//                    minimal — anti-ambient evidence exists for heavier UI.
-//   Offer chips    — ACTION SURFACE, ACT-GATED (T2): appear only as a side
-//                    effect of a commit click, never on hover/prediction.
-//                    Required properties adopted as constraints: anchored to
-//                    the act, auto-dismiss on move-on, first-class off switch
-//                    (the host owns the switch; this component just renders
-//                    what it's given).
-//   Base-run tag   — LATCHED MODE state (T4): Raskin's "if unavoidable →
-//                    maximally visible" clause. When the latch is on, the tag
-//                    renders on the puck at the locus of attention, ALWAYS —
-//                    not only in a toolbar. The quasimode skip (held key)
-//                    state renders here too, for the same reason.
-//   Refine chip    — T3's window: edit-right-after-accept, scoped to the last
-//                    commit, dies at the next one. Not "refine anytime".
-//   Softening      — T6: velocity/dwell may soften or reveal PRESENTATION
-//                    only (opacity here); it never selects, commits, or takes
-//                    an offer. No surface appears from inference alone.
-//   Presentation   — short chips list (T5). No radial.
+// TWO surfaces, not one — and they anchor differently:
 //
-// Props are host-computed state; the puck renders and routes acts, nothing
-// more. The demo page is the current host; TakeoffCanvas is the eventual one.
-import React from "react";
+//   CursorPuck  — the PASSIVE, AMBIENT readout (T1): area/name/confidence
+//                 riding the cursor, pointer-events off, mutates nothing.
+//                 It follows the cursor because it is glanceable state, never
+//                 a click target.
+//   CommitTray  — the ACT-GATED action surface (T2): appears only as a side
+//                 effect of a commit click, and is anchored TO THE ACT — the
+//                 commit point — not to the live cursor. That anchoring is
+//                 load-bearing twice over: it's property (a) of every
+//                 confirmed precedent (the Mini Toolbar appears at the
+//                 selection; Blender's HUD docks after the operator), and a
+//                 tray that rode the cursor was literally unreachable — it
+//                 fled the pointer that tried to click it (first lab session's
+//                 finding). Auto-dismisses on move-on; host owns the off
+//                 switch. Short chips, no radial (T5).
+//
+// The tray also carries Tier A's "control to correct" (§1.5): the room name
+// auto-applies at high confidence, so the correction — an editable label —
+// must live on the act-gated surface, one mouse-move from the click.
+import React, { useState } from "react";
 import { num } from "../lib/num.js";
 import { areaVal, areaUnit } from "../lib/units";
 
 const MONO = "var(--f-mono)";
+
+const chipStyle = (accent) => ({
+  padding: "4px 9px", cursor: "pointer", whiteSpace: "nowrap",
+  fontFamily: MONO, fontSize: 9.5, fontWeight: 600, letterSpacing: "0.04em",
+  border: `1px solid ${accent ? "var(--cobalt)" : "var(--ink-faint)"}`,
+  background: accent ? "var(--tint-select)" : "var(--paper-bright)",
+  color: accent ? "var(--cobalt)" : "var(--ink)",
+});
+
+// ── the follower: passive readout + latched-mode state ───────────────────────
 
 export default function CursorPuck({
   units = "imperial",
@@ -38,14 +44,10 @@ export default function CursorPuck({
   softened = false,          // T6: presentation-only fade while the cursor is moving fast
   hover,                     // null | { label, area_sf, confidence, committed } — the passive readout
   baseRun,                   // { latched, skipHeld, skipArmed } — latched-mode state, always shown when latched
-  offers = [],               // [{ id, label, onTake }] — act-gated; [] except right after a commit
-  onRefine,                  // fn | null — the T3 window is open (last commit refinable)
-  onDismiss,                 // fn — esc / explicit dismiss of the offer tray
 }) {
   const latched = baseRun?.latched;
   const skip = baseRun?.skipHeld || baseRun?.skipArmed;
-  const hasActions = offers.length > 0 || !!onRefine;
-  if (!hover && !latched && !hasActions) return null;
+  if (!hover && !latched) return null;
 
   const conf = hover?.confidence;
   const pct = conf ? Math.round(conf.score * 100) : null;
@@ -55,9 +57,7 @@ export default function CursorPuck({
       position: "absolute", left: x + 18, top: y + 20, zIndex: 9,
       opacity: softened ? 0.45 : 1, transition: "opacity .15s var(--ease)",
       display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4,
-      // the passive part must never eat the canvas's events; the chips row
-      // re-enables pointer events on itself only
-      pointerEvents: "none",
+      pointerEvents: "none",   // a passive surface can never eat the canvas's events
     }}>
       {/* latched-mode state — Raskin visibility clause: on the puck, always */}
       {latched && (
@@ -97,41 +97,64 @@ export default function CursorPuck({
           )}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* act-gated offer tray — exists only in the wake of a commit click.
-          Chips, not radial (T5). One act to take, zero to ignore. */}
-      {hasActions && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 260, pointerEvents: "auto" }}>
-          {offers.map((o) => (
-            <button key={o.id} onClick={o.onTake}
-              style={{
-                padding: "4px 9px", border: "1px solid var(--cobalt)", background: "var(--tint-select)",
-                color: "var(--cobalt)", fontFamily: MONO, fontSize: 9.5, fontWeight: 600,
-                letterSpacing: "0.04em", cursor: "pointer", whiteSpace: "nowrap",
-              }}>
-              + {o.label}
-            </button>
-          ))}
-          {onRefine && (
-            <button onClick={onRefine}
-              style={{
-                padding: "4px 9px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)",
-                color: "var(--ink)", fontFamily: MONO, fontSize: 9.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
-              }}>
-              ↺ refine · r
-            </button>
-          )}
-          {onDismiss && (
-            <button onClick={onDismiss}
-              style={{
-                padding: "4px 7px", border: "none", background: "none", color: "var(--ink-muted)",
-                fontFamily: MONO, fontSize: 9.5, cursor: "pointer",
-              }}>
-              esc
-            </button>
-          )}
-        </div>
-      )}
+// ── the act-anchored tray: name correction + offers + refine ─────────────────
+
+export function CommitTray({
+  x, y,                      // the COMMIT POINT, host-container px — the tray does not move
+  label = "",                // the committed label (auto-applied name, or empty)
+  autoApplied = false,       // true → label came from the plan's own tag
+  onLabel,                   // (value) => void — Tier A's control to correct
+  offers = [],               // [{ id, label, onTake }] — pre-computed, one act to take
+  onRefine,                  // fn | null — the T3 window is open
+  onDismiss,                 // fn — esc / explicit dismiss
+}) {
+  const [draft, setDraft] = useState(label);
+  const [touched, setTouched] = useState(false);
+
+  return (
+    <div style={{
+      position: "absolute", left: x + 12, top: y + 16, zIndex: 8,
+      display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4,
+    }}>
+      {/* the name — auto-applied (Tier A), corrected here; typing wins */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 6, padding: "5px 8px",
+        background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", boxShadow: "var(--shadow-1)",
+      }}>
+        <span className="pip-sm" style={{ width: 4, height: 4, flexShrink: 0 }} />
+        <input
+          // untouched, the field mirrors the committed label (so a taken name
+          // chip shows up here); the first keystroke switches to the draft
+          value={touched ? draft : label}
+          placeholder="name this room"
+          onChange={(e) => { setDraft(e.target.value); setTouched(true); onLabel?.(e.target.value); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") e.target.blur(); }}
+          style={{
+            width: 148, padding: "2px 4px", border: "none", background: "transparent",
+            color: "var(--ink)", fontSize: 11, fontWeight: 600, fontFamily: "var(--f-body)", outline: "none",
+          }} />
+        {autoApplied && !touched && (
+          <span style={{ fontFamily: MONO, fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)", flexShrink: 0 }}>from plan</span>
+        )}
+      </div>
+
+      {/* the offers — chips, one act each, zero to ignore */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 280 }}>
+        {offers.map((o) => (
+          <button key={o.id} onClick={o.onTake} style={chipStyle(true)}>+ {o.label}</button>
+        ))}
+        {onRefine && <button onClick={onRefine} style={chipStyle(false)}>↺ refine · r</button>}
+        {onDismiss && (
+          <button onClick={onDismiss}
+            style={{ padding: "4px 7px", border: "none", background: "none", color: "var(--ink-muted)", fontFamily: MONO, fontSize: 9.5, cursor: "pointer" }}>
+            esc
+          </button>
+        )}
+      </div>
     </div>
   );
 }

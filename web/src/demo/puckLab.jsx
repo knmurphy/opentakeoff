@@ -21,7 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "../styles/tokens.css";
 import "../styles/app.css";
-import CursorPuck from "../components/CursorPuck.jsx";
+import CursorPuck, { CommitTray } from "../components/CursorPuck.jsx";
 import MeasureReadout from "../components/MeasureReadout.jsx";
 import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 import { num } from "../lib/num.js";
@@ -164,7 +164,7 @@ export default function App({ embedded = false }) {
   const [baseLatched, setBaseLatched] = useState(false);
   const [skipHeld, setSkipHeld] = useState(false);      // quasimode: held ⇧
   const [skipArmed, setSkipArmed] = useState(false);    // toggle fallback: s
-  const [offers, setOffers] = useState(null);           // { roomId, list: [{id, kind, lf?, name?}] }
+  const [tray, setTray] = useState(null);               // { roomId, x, y, list: [{id, kind, lf?, name?}] } — anchored to the commit point
   const [lastCommit, setLastCommit] = useState(null);   // T3 window target
   const [refineOpen, setRefineOpen] = useState(false);
   const [log, setLog] = useState([]);
@@ -176,55 +176,70 @@ export default function App({ embedded = false }) {
 
   // ── acts ──────────────────────────────────────────────────────────────────
 
-  function commit(room) {
+  function commit(room, e) {
     if (committed[room.id]) { say(`${room.name}: already measured — r refines the last commit`); return; }
     const skip = skipHeld || skipArmed;
     const named = !!room.name && room.conf.score >= CONF_NAME_GATE;   // Tier A confidence gate
     const mintBase = baseLatched && !skip;                            // latched mode: user opted in run-wide
     setCommitted((prev) => ({
       ...prev,
-      [room.id]: { area: room.area, area0: room.area, label: named ? room.name : "", baseLf: mintBase ? room.baseLf : 0, transitionLf: 0, sens: 0.5 },
+      [room.id]: { area: room.area, area0: room.area, label: named ? room.name : "", autoNamed: named, baseLf: mintBase ? room.baseLf : 0, transitionLf: 0, sens: 0.5 },
     }));
     setSkipArmed(false);                                              // the toggle fallback is one-shot
     const list = [];
-    if (offersOn) {                                                   // T2: off switch silences the tray wholesale
-      if (!mintBase && room.baseLf) list.push({ id: "base", kind: "base", lf: room.baseLf });
-      for (const t of room.transitions) list.push({ id: t.id, kind: "transition", lf: t.lf, name: t.label });
-      if (!named && room.name) list.push({ id: "name", kind: "name", name: room.name });  // Tier A, demoted
+    if (!mintBase && room.baseLf) list.push({ id: "base", kind: "base", lf: room.baseLf });
+    for (const t of room.transitions) list.push({ id: t.id, kind: "transition", lf: t.lf, name: t.label });
+    if (!named && room.name) list.push({ id: "name", kind: "name", name: room.name });  // Tier A, demoted
+    // The tray anchors to the ACT — the commit point — so the estimator can
+    // mouse over to it (a cursor-riding tray fled the pointer; lab finding).
+    // T2: the off switch silences the whole act-gated surface.
+    if (offersOn) {
+      const rect = stageRef.current.getBoundingClientRect();
+      setTray({ roomId: room.id, x: e.clientX - rect.left, y: e.clientY - rect.top, list });
     }
-    setOffers(list.length ? { roomId: room.id, list } : null);
     setLastCommit(room.id);                                           // opens the T3 window…
     setRefineOpen(false);                                             // …and closes the previous one
     say(`commit ${room.name} — ${num(room.area)} SF${named ? ` · named from plan` : ""}${mintBase ? ` · base ${num(room.baseLf)} LF (run)` : skip && baseLatched ? " · base skipped" : ""}`);
   }
 
   function takeOffer(o) {
-    const room = roomById(offers.roomId);
+    const room = roomById(tray.roomId);
     setCommitted((prev) => {
-      const c = { ...prev[offers.roomId] };
+      const c = { ...prev[tray.roomId] };
       if (o.kind === "base") c.baseLf = o.lf;
       if (o.kind === "transition") c.transitionLf += o.lf;
-      if (o.kind === "name") c.label = o.name;
-      return { ...prev, [offers.roomId]: c };
+      if (o.kind === "name") { c.label = o.name; c.autoNamed = true; }
+      return { ...prev, [tray.roomId]: c };
     });
-    setOffers((prev) => {
-      const rest = prev.list.filter((x) => x.id !== o.id);
-      return rest.length ? { ...prev, list: rest } : null;
-    });
+    setTray((prev) => ({ ...prev, list: prev.list.filter((x) => x.id !== o.id) }));
     say(`take ${o.kind === "name" ? `name “${o.name}”` : `${o.name || "wall base"} ${num(o.lf)} LF`} → ${room.name}`);
   }
 
+  // Tier A's control to correct — typing in the tray's name field wins over
+  // the auto-applied tag, exactly the origin.auto_named rule.
+  function setLabel(value) {
+    setCommitted((prev) => ({
+      ...prev,
+      [tray.roomId]: { ...prev[tray.roomId], label: value, autoNamed: false },
+    }));
+    setTray((prev) => ({ ...prev, list: prev.list.filter((x) => x.kind !== "name") }));
+  }
+
   // move-on auto-dismiss (T2b): entering a DIFFERENT room drops the tray.
-  // The refine WINDOW stays open until the next commit — r reopens it (T3).
+  // Mousing from the committed room onto the tray itself never counts as
+  // move-on (the tray sits at the commit point, over its own room). The
+  // refine WINDOW stays open until the next commit — r reopens it (T3).
   useEffect(() => {
-    if (offers && hoverId && hoverId !== offers.roomId) setOffers(null);
-  }, [hoverId, offers]);
+    if (tray && hoverId && hoverId !== tray.roomId) setTray(null);
+  }, [hoverId, tray]);
 
   // ── keys: b latch · ⇧ quasimode · s toggle fallback · r reopen · esc ──────
   const snap = useRef({});
   snap.current = { lastCommit, refineOpen };
   useEffect(() => {
     const down = (e) => {
+      // typing in the tray's name field must not trip the b/s/r hotkeys
+      if (e.target?.tagName === "INPUT") return;
       if (e.key === "Shift") setSkipHeld(true);
       else if (e.key === "b" || e.key === "B") {
         setBaseLatched((v) => { const on = !v; setLog((p) => [(on ? "base run latched — b ends it" : "base run ended"), ...p].slice(0, 10)); return on; });
@@ -233,7 +248,7 @@ export default function App({ embedded = false }) {
       } else if (e.key === "r" || e.key === "R") {
         if (snap.current.lastCommit) setRefineOpen(true);
       } else if (e.key === "Escape") {
-        setOffers(null); setRefineOpen(false);
+        setTray(null); setRefineOpen(false);
       }
     };
     const up = (e) => { if (e.key === "Shift") setSkipHeld(false); };
@@ -271,13 +286,14 @@ export default function App({ embedded = false }) {
     committed: !!hoverCommitted,
   } : null;
 
-  const puckOffers = (offers?.list || []).map((o) => ({
+  const trayOffers = (tray?.list || []).map((o) => ({
     id: o.id,
     label: o.kind === "base" ? `wall base ${num(lenVal(o.lf, units))} ${lenUnit(units)}`
       : o.kind === "transition" ? `${o.name} ${num(lenVal(o.lf, units))} ${lenUnit(units)}`
       : `name “${o.name}”`,
     onTake: () => takeOffer(o),
   }));
+  const trayEntry = tray ? committed[tray.roomId] : null;
 
   const totals = useMemo(() => {
     const cs = Object.values(committed);
@@ -328,7 +344,7 @@ export default function App({ embedded = false }) {
           options={[["light", "Light"], ["dark", "Dark"]]} />
 
         <button className="btn-ghost" style={{ width: "100%", justifyContent: "center", padding: "7px 10px", fontSize: 10, marginBottom: 12 }}
-          onClick={() => { setCommitted({}); setOffers(null); setLastCommit(null); setRefineOpen(false); say("reset — sheet cleared"); }}>
+          onClick={() => { setCommitted({}); setTray(null); setLastCommit(null); setRefineOpen(false); say("reset — sheet cleared"); }}>
           reset the sheet
         </button>
 
@@ -349,10 +365,16 @@ export default function App({ embedded = false }) {
 
         <CursorPuck units={units} x={cursor.x} y={cursor.y} softened={softened}
           hover={puckHover}
-          baseRun={{ latched: baseLatched, skipHeld, skipArmed }}
-          offers={puckOffers}
-          onRefine={lastCommit && !refineOpen ? () => setRefineOpen(true) : null}
-          onDismiss={offers ? () => setOffers(null) : null} />
+          baseRun={{ latched: baseLatched, skipHeld, skipArmed }} />
+
+        {/* the act-anchored tray — pinned at the commit point, reachable */}
+        {tray && trayEntry && (
+          <CommitTray key={tray.roomId} x={tray.x} y={tray.y}
+            label={trayEntry.label} autoApplied={trayEntry.autoNamed}
+            onLabel={setLabel} offers={trayOffers}
+            onRefine={!refineOpen ? () => setRefineOpen(true) : null}
+            onDismiss={() => setTray(null)} />
+        )}
 
         {/* condition totals — the quiet corner ledger, not the interaction */}
         <div style={{ position: "absolute", right: 22, top: 22 }}>
