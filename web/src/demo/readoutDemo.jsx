@@ -286,9 +286,10 @@ function App() {
         <div style={{ fontFamily: "var(--f-display)", fontSize: 17, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 2 }}>
           open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span>
         </div>
-        <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--ink-muted)", marginBottom: 14 }}>
+        <div style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--ink-muted)", marginBottom: 6 }}>
           readout lab · issue #194
         </div>
+        <a href="/puck-demo.html" style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, color: "var(--cobalt)", display: "block", marginBottom: 14 }}>→ puck lab</a>
 
         {groups.map((g) => (
           <div key={g} style={{ marginBottom: 10 }}>

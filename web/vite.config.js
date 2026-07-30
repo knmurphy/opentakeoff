@@ -39,6 +39,7 @@ export default defineConfig({
       input: {
         main: new URL("./index.html", import.meta.url).pathname,
         readoutDemo: new URL("./readout-demo.html", import.meta.url).pathname,
+        puckDemo: new URL("./puck-demo.html", import.meta.url).pathname,
       },
     },
   },
