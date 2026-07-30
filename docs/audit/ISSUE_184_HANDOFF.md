@@ -57,6 +57,23 @@ Key commits on the engine branch, in order: `5e92a11` Phase-0 gates · `1a02b15`
 
 ## 3. The defect queue
 
+> **Update 2026-07-30 (second): the engine branch is synced with BOTH parents.**
+> Merge 1 `e129d8e` (fork main: its parallel #184 stream had independently fixed A6
+> more weakly — our shared `floodAtSeed` won; our F7(b) guard caught and fixed two
+> parity defects in its new canvas detect-rooms feature). Merge 2 `36b6626`
+> (upstream `Kentucky-ai/opentakeoff` main, the 0.9.7 wave): upstream's THREE engine
+> features — gap bridging, OCG layer roles, hatch families #29 — were PORTED onto the
+> audited engine, not merged around it; `buildMask` is now
+> `(segs, imgW, imgH, maxDim, meta, pxPerFt, basePxPerFt, page, roles)`. Corpus
+> goldens stayed byte-identical through both merges. Verified: web 1357/0 (3 voice
+> skips awaiting the staged model), bench green, MCP 61/61, tsc/lint/build clean.
+> New queue items from the sync: (v) remove the `buildMask` compat overload (roles
+> positionally 6th) by re-slotting `layerExtract.test.ts`'s calls; (vi) upstream's
+> published `detectRegions` still floods raw — their A6 — a contribution-slice
+> candidate; (vii) decide whether CI stages the voice model or keeps the 3 skips;
+> (viii) F11 is UNCHANGED by the sync — upstream's `detectRooms.ts` has no `page`
+> param either, and the MCP surface still cannot take the pin.
+>
 > **Update 2026-07-30: the independent POST-FIX evidence re-measure is in** — merged at
 > `62b4688` (`docs/evidence/ONE_CLICK_BEFORE_AFTER.md` Part 2, probes `a1c/a5c/f1/f8.mts`,
 > perturbation harness `gates.py`). Confirmations, measured not narrated: the F1 cliff is
