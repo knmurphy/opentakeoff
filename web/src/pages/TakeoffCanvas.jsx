@@ -3794,7 +3794,9 @@ export default function TakeoffCanvas() {
           const it = {
             id: `dt-${mintUuid()}`, str: reg.str, seed: reg.seed, poly: ring,
             area_sf, perim_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
-            hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, cf: conf.score, cff: conf.factors,
+            hf: !!f.hatchFiltered, sl: f.sealedPx || 0, gap: f.gapBridged || 0,
+            mp: f.minPassDelta ? (f.minPassPx || 0) : 0, mpd: f.minPassDelta || 0,
+            wg: f.wedges || 0, rw: f.ringWedges || 0, cf: conf.score, cff: conf.factors,
             ...(fillSens !== SENS_BALANCED ? { sens: fillSens } : {}),
           };
           it.autoName = await roomNameAt(key, ring);   // the drawing's own tag names the shape, same as a click (cached text layer, no re-extract)
@@ -3858,7 +3860,8 @@ export default function TakeoffCanvas() {
           // "helpfully" whitelist it.
           method: "one_click_v1", detected: true, seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true,
           confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}),
-          ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}),
+          ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.gap ? { gap_bridged_px: r.gap } : {}),
+          ...(r.mp ? { min_pass_px: r.mp, min_pass_delta: r.mpd } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(r.rw ? { ring_interiors: r.rw } : {}),
           ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}),
         },
       };
@@ -3956,7 +3959,7 @@ export default function TakeoffCanvas() {
       : oneClickRing(f, { nearest: (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null) });
     if (ring.length < 3) { ocLiveHide(); st.last = { key: tp.key, fail: local }; return; }
     const liveArea = +(ringArea(ring) * upp * upp).toFixed(2);
-    st.last = { key: tp.key, kind, ring, area_sf: liveArea, sealed: f.sealedPx || 0, wedges: f.wedges || 0, ringWedges: f.ringWedges || 0, minPass: f.minPassDelta ? (f.minPassPx || 0) : 0, cf: traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: liveArea })).score, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
+    st.last = { key: tp.key, kind, ring, area_sf: liveArea, sealed: f.sealedPx || 0, gap: f.gapBridged || 0, wedges: f.wedges || 0, ringWedges: f.ringWedges || 0, minPass: f.minPassDelta ? (f.minPassPx || 0) : 0, cf: traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: liveArea })).score, reg: f.region, mw: f.mw, mh: f.mh, ws: f.ws };
     ocLiveDraw(tp, st.last, p);
     if (kind === "pos") {
       const cur = st.last;
@@ -3977,7 +3980,7 @@ export default function TakeoffCanvas() {
     el.setAttribute("stroke-dasharray", `${3.5 / s} ${3.5 / s}`);   // finer dash than the committed proposal — reads as "candidate"
     el.style.display = "block";
     if (tx) {
-      tx.textContent = `${fa(res.area_sf)}${res.name ? ` · ${res.name}` : ""}${res.wedges ? (res.ringWedges >= res.wedges ? " · incl. ring interior" : res.ringWedges ? " · incl. door swing + ring interior" : " · incl. door swing") : res.sealed ? (res.minPass ? " · bridged a sub-½ft gap" : " · sealed a small opening") : res.minPass ? " · sub-½ft passage not counted" : ""}${res.cf != null && res.cf < 1 ? ` · ${Math.round(res.cf * 100)}%` : ""}${res.area_sf < FIXTURE_HINT_SF ? " · fixture-sized?" : ""}`;
+      tx.textContent = `${fa(res.area_sf)}${res.name ? ` · ${res.name}` : ""}${res.wedges ? (res.ringWedges >= res.wedges ? " · incl. ring interior" : res.ringWedges ? " · incl. door swing + ring interior" : " · incl. door swing") : res.sealed ? (res.minPass ? " · bridged a sub-½ft gap" : " · sealed a small opening") : res.minPass ? " · sub-½ft passage not counted" : ""}${res.gap ? " · bridged a hairline gap" : ""}${res.cf != null && res.cf < 1 ? ` · ${Math.round(res.cf * 100)}%` : ""}${res.area_sf < FIXTURE_HINT_SF ? " · fixture-sized?" : ""}`;
       tx.setAttribute("x", p[0] + 14 / s); tx.setAttribute("y", p[1] - 10 / s);
       tx.setAttribute("font-size", 12.5 / s);
       tx.setAttribute("fill", neg ? "#b03a26" : "#1f3fc7");
@@ -4861,14 +4864,17 @@ export default function TakeoffCanvas() {
       ? oneClickRing(f, { raster: true, rasterEps: RASTER_RDP_EPS })
       : oneClickRing(f, { nearest: (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null) });
     if (ring.length < 3) return { error: "Couldn't trace that space into a polygon." };
+    const conf = traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: +(ringArea(ring) * upp * upp).toFixed(2) }));
     return {
       verts_norm: ring.map(([x, y]) => [+(x / p.img.w).toFixed(5), +(y / p.img.h).toFixed(5)]),
       area_sf: +(ringArea(ring) * upp * upp).toFixed(2),
       perimeter_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
       seed_norm: [+xn.toFixed(5), +yn.toFixed(5)],
-      confidence: traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: +(ringArea(ring) * upp * upp).toFixed(2) })).score,
+      confidence: conf.score,
+      ...(conf.factors.length ? { confidence_factors: conf.factors } : {}),
       ...(f.hatchFiltered ? { hatch_filtered: true } : {}),
       ...(f.sealedPx ? { gap_sealed_px: f.sealedPx } : {}),
+      ...(f.gapBridged ? { gap_bridged_px: f.gapBridged } : {}),   // a bridged pinhole must not read as a clean fill
       ...(f.minPassDelta ? { min_pass_px: f.minPassPx, min_pass_delta: f.minPassDelta } : {}),
       ...(f.wedges ? { door_wedges: f.wedges } : {}),
       ...(f.ringWedges ? { ring_interiors: f.ringWedges } : {}),   // F7(g): not door swings — closed rings' interiors

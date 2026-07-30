@@ -47,7 +47,13 @@ export interface MaskObj { mask: Uint8Array; mw: number; mh: number; ws: number;
 export interface RegionResult { region: Uint8Array; mw: number; mh: number; ws: number; count?: number; }
 export type FloodResult =
   | { status: "boundary" }
-  | { status: "leak" }
+  // leakedDilationPx (internal to the seal→bridge handoff): the largest
+  // Manhattan dilation radius at which the seal ladder's flood STILL leaked
+  // with the click cell itself clear of the dilated walls AND not soft
+  // (dt > r, no hatch bit — no seed ascent, no nudge in ANY of the masks
+  // involved). Evidence that gap bridging at box radius ≤ r/2 is futile;
+  // see floodRegionSealedInner.
+  | { status: "leak"; leakedDilationPx?: number }
   | { status: "tiny"; count: number }
   | { status: "ok"; region: Uint8Array; count: number; mw: number; mh: number; ws: number; mppf?: number; hardHits?: number; softHits?: number; hatchFiltered?: boolean; hatchTier?: HatchTier; sealedPx?: number; virtualFrac?: number; wedges?: number; ringWedges?: number; wedgeGrowth?: number; curveFrac?: number; minPassPx?: number; minPassDelta?: number; gapBridged?: number };
 /** Caller's snap-grid lookup: nearest true endpoint to (x,y) within maxDist, or null. */
@@ -1329,6 +1335,23 @@ export function dilateHard(maskObj: MaskObj, r: number): MaskObj {
   return { mask: out, mw, mh, ws, softCount, mppf };
 }
 
+// dilateHard materializes two full-raster copies per call, and the bridge
+// rungs run once per LEAK — on the hover-preview path that is once per
+// cursor step over open paper. The dilated hard bit is a pure function of
+// (mask identity, r), and a sheet's mask object is cached upstream (the same
+// assumption sealCache leans on), so the bridged rasters are memoized per
+// mask; repeat hovers reuse them instead of re-churning ~2 rasters per rung.
+// The wrapper MaskObj is rebuilt from the caller's `mo` each time so the
+// riding fields (ws, softCount, mppf) always match the caller's view.
+const bridgeCache = new WeakMap<Uint8Array, (Uint8Array | undefined)[]>();
+function bridgedMask(mo: MaskObj, r: number): MaskObj {
+  let per = bridgeCache.get(mo.mask);
+  if (!per) { per = []; bridgeCache.set(mo.mask, per); }
+  let m = per[r];
+  if (!m) { m = dilateHard(mo, r).mask; per[r] = m; }
+  return { mask: m, mw: mo.mw, mh: mo.mh, ws: mo.ws, softCount: mo.softCount, mppf: mo.mppf };
+}
+
 // The escalating fill. Pass 1 is the strict mask (walls + hatch — exactly the
 // original behavior; masks with no soft cells never go further). When the strict
 // pass is bounded by hatch, re-flood with hatch transparent (pass 2). Three tiers
@@ -1359,7 +1382,7 @@ export function floodRegion(maskObj: MaskObj, ix: number, iy: number, sensitivit
   // LEAK is recovered — a tiny/boundary verdict is truthful and must not be
   // dilated away.
   for (let br = 1; br <= GAP_BRIDGE_MAX; br++) {
-    const rb = floodRegionLadder(dilateHard(maskObj, br), ix, iy, sensitivity);
+    const rb = floodRegionLadder(bridgedMask(maskObj, br), ix, iy, sensitivity);
     if (rb.status === "ok") { rb.gapBridged = br; return rb; }
   }
   return r;
@@ -2009,11 +2032,31 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
   };
   let raw: FloodResult | null = null;
   const rawFlood = (): FloodResult => (raw ??= floodRegionLadder(mo, ix, iy, sensitivity));
+  // Bridge-futility evidence for floodRegionSealedInner (see leakedDilationPx
+  // on the FloodResult type): the largest Manhattan radius whose dilated flood
+  // leaked FROM THE CLICK CELL ITSELF. Two conditions make the seed provably
+  // identical to the bridge's seed, so "leaked with MORE walls" transfers:
+  //   • dt > r — the click sits clear of the dilated walls, so ascendSeed
+  //     returned it unmoved and it is not a hard barrier;
+  //   • the click cell is NOT SOFT — the strict pass's barrier is walls+hatch,
+  //     and a soft seed makes floodPass NUDGE to the nearest open cell of
+  //     whichever mask it is flooding. The nudge is per-mask, so the evidence
+  //     flood's seed and the bridged flood's seed could land on opposite sides
+  //     of the very hatch line the click sits on — different components, and
+  //     the futility transfer would be unsound. Non-soft, neither flood ever
+  //     nudges (Chebyshev(click) ≥ ⌊dt/2⌋+1 > br keeps it open in the bridged
+  //     mask too) and the bridged pass-1 leak is forced by wall-set inclusion.
+  let leakedR = 0;
+  const cx = Math.max(0, Math.min(mo.mw - 1, Math.round(ix * mo.ws)));
+  const cy = Math.max(0, Math.min(mo.mh - 1, Math.round(iy * mo.ws)));
+  const cSoft = (mo.mask[cy * mo.mw + cx] & 2) !== 0;
+  const cdt = (s: SealScratch): number => (cSoft ? 0 : s.dt[cy * mo.mw + cx]);
   if (minPassPx > 0) {
     const s = scratch();
     const dm = dilatedView(mo, minPassPx, s.dt);
     const [ax, ay] = ascendSeed(s.dt, mo.mw, mo.mh, mo.ws, ix, iy, minPassPx);
     const f = floodRegionLadder(dm, ax, ay, sensitivity);
+    if (f.status === "leak" && minPassPx > leakedR && cdt(s) > minPassPx) leakedR = minPassPx;
     if (f.status === "ok") {
       growRegionBack(f, mo, minPassPx, f.hatchFiltered ? 1 : 3, s.dt);
       // TRIMMING or CREATING? (see the F1/F2 note above — this one fact decides
@@ -2054,7 +2097,10 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     const dm = dilatedView(mo, r, sc.dt);
     const [ax, ay] = ascendSeed(sc.dt, mo.mw, mo.mh, mo.ws, ix, iy, r);
     const f = floodRegionLadder(dm, ax, ay, sensitivity);
-    if (f.status !== "ok") continue;
+    if (f.status !== "ok") {
+      if (f.status === "leak" && r > leakedR && cdt(sc) > r) leakedR = r;
+      continue;
+    }
     growRegionBack(f, mo, r, f.hatchFiltered ? 1 : 3, sc.dt);
     // Two sanity gates keep sealing honest — without them, dilating hard enough
     // eventually STARVES any big open space (a lobby, the sheet itself) under
@@ -2072,6 +2118,7 @@ function sealAttempt(mo: MaskObj, ix: number, iy: number, sensitivity: number, r
     f.virtualFrac = +vf.toFixed(3);   // confidence signal: how much boundary is synthetic
     return f;
   }
+  if (base.status === "leak" && leakedR > 0) base.leakedDilationPx = leakedR;
   return base;
 }
 
@@ -2102,8 +2149,24 @@ function floodRegionSealedInner(mo: MaskObj, ix: number, iy: number, sensitivity
     // than passing itself off as a clean fill. No wedge retries on a bridged
     // base: the region sits ≤ 2 px inside the true walls, so boundary-arc
     // adjacency is meaningless there.
+    //
+    // FUTILITY SKIP (hover-cost regression, audit A8's budget): the bridge is
+    // a box (Chebyshev) dilation, and a Chebyshev ball of radius br sits
+    // inside the Manhattan ball of radius 2·br — the exact shape the seal
+    // ladder's rungs already dilated by. So when a rung at Manhattan radius
+    // ≥ 2·br LEAKED, seeded at the very click cell (leakedDilationPx — seed
+    // provably unmoved), the bridged mask has a SUBSET of that rung's walls
+    // and the same seed: its flood reaches a superset of a leaking fill and
+    // can only leak again. Skipping it returns the identical verdict without
+    // paying dilateHard (two full-raster copies) plus a leak-capped fill per
+    // rung — the cost that made every hover over open paper ~20× a frame.
+    // A hover with no enclosure at all leaks every rung, so it always carries
+    // the evidence and the bridge costs nothing; a genuine pinhole seals a
+    // rung instead (no leak evidence), so rescue-worthy leaks still bridge.
+    const futileBelowPx = (r1.leakedDilationPx ?? 0) >> 1;
     for (let br = 1; br <= GAP_BRIDGE_MAX; br++) {
-      const rb = floodRegionLadder(dilateHard(mo, br), ix, iy, sensitivity);
+      if (br <= futileBelowPx) continue;
+      const rb = floodRegionLadder(bridgedMask(mo, br), ix, iy, sensitivity);
       if (rb.status === "ok") { rb.gapBridged = br; return rb; }
     }
   }

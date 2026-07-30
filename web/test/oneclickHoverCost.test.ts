@@ -164,10 +164,11 @@ test("multi-door hover costs a handful of raster sweeps, not dozens", () => {
   assert.ok(units <= 8, `six-door hover cost ${units.toFixed(1)} raster units (${warm.toFixed(0)} ms / ${unit.toFixed(0)} ms), budget 8`);
 });
 
-test("multi-door hover allocates a handful of rasters, not dozens", () => {
-  const { mo, seed } = doorScene(6);
-  hover(mo, seed);                                     // caches + JIT warm
-  const raster = mo.mw * mo.mh;
+// Full-raster churn of one call, in RASTERS — the same deterministic probe as
+// the churn test below, factored out because the leak-path guards lean on it:
+// dilateHard allocates exactly TWO full rasters per call, so "did the bridge
+// rungs dilate" is an allocation count, immune to timing flake.
+function churnRasters(raster: number, fn: () => void): number {
   const Real = globalThis.Uint8Array;
   let churn = 0;
   class Counted extends Real {
@@ -177,8 +178,76 @@ test("multi-door hover allocates a handful of rasters, not dozens", () => {
     }
   }
   (globalThis as { Uint8Array: unknown }).Uint8Array = Counted;
-  try { hover(mo, seed); } finally { (globalThis as { Uint8Array: unknown }).Uint8Array = Real; }
-  const rasters = churn / raster;
+  try { fn(); } finally { (globalThis as { Uint8Array: unknown }).Uint8Array = Real; }
+  return churn / raster;
+}
+
+test("multi-door hover allocates a handful of rasters, not dozens", () => {
+  const { mo, seed } = doorScene(6);
+  hover(mo, seed);                                     // caches + JIT warm
+  const raster = mo.mw * mo.mh;
+  const rasters = churnRasters(raster, () => hover(mo, seed));
   // pre-A8: 65 rasters (585 MB). post-A8: 9 rasters (81 MB). Deterministic.
-  assert.ok(rasters <= 20, `six-door hover churned ${rasters.toFixed(1)} rasters (${(churn / 1e6).toFixed(0)} MB), budget 20`);
+  assert.ok(rasters <= 20, `six-door hover churned ${rasters.toFixed(1)} rasters (${(rasters * raster / 1e6).toFixed(0)} MB), budget 20`);
+});
+
+// ── the LEAK path, pinned (the #184-merge hover regression) ────────────────
+// floodRegionSealed re-probes on every cursor step over un-enclosed paper —
+// the single most common hover on a real sheet — and for one merge the
+// bridging rung ran dilateHard (TWO full-raster copies per call, twice per
+// leak) on every such step: 3.3 ms / 0 rasters became 71.9 ms / 4 rasters
+// per hover on this fixture, ~4.5× the 16 ms frame budget. The suite was
+// blind to it because every guard above pins the OK path. Two mechanisms fix
+// it, and each gets its own deterministic churn pin:
+//   • futility skip — a seal rung at Manhattan radius r that LEAKED with the
+//     click cell clear of the dilated walls (and not soft) proves box
+//     bridging at radius ≤ r/2 can only leak too (leakedDilationPx), so an
+//     open-paper leak never dilates at all — even the FIRST hover of a fresh
+//     mask;
+//   • bridgeCache — when bridging must run (no futility evidence, e.g. the
+//     cursor sits within a rung radius of linework), the dilated rasters are
+//     memoized per (mask, radius), so only the first such hover pays them.
+
+test("open-paper hover-leak: warm cost is a fraction of a raster sweep", () => {
+  const { mo } = doorScene(0);
+  hover(mo, [300, 300]);               // pays the mask's one-time distance transform
+  const unit = rasterUnitMs(mo);
+  let warm = Infinity;
+  for (let k = 0; k < 8; k++) {
+    const t = performance.now();
+    const f = hover(mo, [300 + 30 * k, 300]);          // moving seeds, like a real hover
+    assert.equal(f.status, "leak");
+    warm = Math.min(warm, performance.now() - t);
+  }
+  const units = warm / unit;
+  // pre-#184-merge: 0.02 units (2.5 ms / 130 ms). Regressed: 0.55 units.
+  assert.ok(units <= 0.25, `open-paper hover-leak cost ${units.toFixed(2)} raster units (${warm.toFixed(1)} ms / ${unit.toFixed(0)} ms), budget 0.25`);
+});
+
+test("open-paper hover-leak never dilates: futility evidence skips the bridge rungs", () => {
+  const { mo } = doorScene(0);         // FRESH mask: every per-mask cache empty
+  const raster = mo.mw * mo.mh;
+  // Cold — the very first hover: the seal ladder's own distance transform
+  // (one raster) plus at most a region-pool miss. The two bridge rungs would
+  // add four more; leakedDilationPx says they cannot succeed, so they never run.
+  const cold = churnRasters(raster, () => assert.equal(hover(mo, [300, 300]).status, "leak"));
+  assert.ok(cold <= 3, `cold open-paper hover-leak churned ${cold.toFixed(1)} rasters, budget 3 (bridge rungs dilated?)`);
+  // Warm — every later cursor step: nothing full-raster at all.
+  const warm = churnRasters(raster, () => assert.equal(hover(mo, [420, 420]).status, "leak"));
+  assert.equal(warm, 0, `warm open-paper hover-leak churned ${warm.toFixed(1)} rasters, expected 0`);
+});
+
+test("near-linework hover-leak: bridge rasters are paid once, then cached", () => {
+  const { mo } = doorScene(0);
+  const raster = mo.mw * mo.mh;
+  // 3 px outside the room's left wall: too close for futility evidence (the
+  // click cell clears no rung's dilation radius), so the bridge rungs RUN —
+  // and still leak, since the outside of one room is not an enclosure. The
+  // cold hover must pay dilateHard's rasters (proving this fixture exercises
+  // the bridge at all); the warm hover must find them in bridgeCache.
+  const seed: [number, number] = [1500 - SIDE / 2 - 3, 1500];
+  const cold = churnRasters(raster, () => assert.equal(hover(mo, seed).status, "leak"));
+  assert.ok(cold >= 4, `cold near-wall hover-leak churned ${cold.toFixed(1)} rasters, expected >= 4 (bridge rungs no longer run — fixture is dead)`);
+  const warm = churnRasters(raster, () => assert.equal(hover(mo, seed).status, "leak"));
+  assert.equal(warm, 0, `warm near-wall hover-leak churned ${warm.toFixed(1)} rasters, expected 0 (bridgeCache miss)`);
 });

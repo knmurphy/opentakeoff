@@ -11,12 +11,12 @@ import { buildSheetGraph, resolveTag, type SheetGraph, type SheetSpans } from ".
 import { UserError, round1, round2 } from "./format.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import {
-  extractVectorGeometry, buildMask, oneClickRing, ringArea,
+  extractVectorGeometry, buildMask, oneClickRing, traceRegion, ringArea,
   hatchFamilies, MASK_MAX_DIM, SENS_BALANCED, type MaskObj, type VectorGeometry, type Point, type FloodResult, type HatchFamily,
 } from "../../web/src/lib/oneclick.ts";
 import { traceConfidence, floodSignals } from "../../web/src/lib/confidence.ts";
-import { roomLabelSeeds, floodAtSeed, oneClickArgs, sheetBounds, seedLadderPx, isLabelBubblePx, type LabelBBox } from "../../web/src/lib/detectRooms.ts";
-import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
+import { roomLabelSeeds, floodAtSeed, oneClickArgs, sheetBounds, seedLadderPx, isLabelBubblePx, floodSurroundsLabelPx, type LabelBBox } from "../../web/src/lib/detectRooms.ts";
+import { buildSnapGrid, nearestSnap, closedMetrics, openLen, pointInPoly } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { gridPxPerFoot, drawGrid, drawShapes, type Ctx2D, type ToCanvas } from "./view.ts";
 
@@ -832,7 +832,9 @@ export class Session {
         actor: "agent",
         seed_norm: [x / s.widthPx, y / s.heightPx],
         reviewed: false,
-        fill_sensitivity: sens,
+        // only a NON-DEFAULT sensitivity is a fact about how the shape was
+        // made (upstream MCP + the canvas stamp it the same way)
+        ...(sens !== SENS_BALANCED ? { fill_sensitivity: sens } : {}),
         ...rec,
         // #85 — a trace bounded by DECLARED boundary layers is categorically
         // stronger evidence than one bounded by a pitch heuristic
@@ -916,13 +918,41 @@ export class Session {
     for (const lb of labels) {
       let ring: Point[] | null = null, flood: CleanFlood | null = null, seed: [number, number] | null = null;
       let sawBubble = false, sawDegenerate = false;
-      for (const probe of seedLadderPx(lb.bbox)) {
+      const labelCx = (lb.bbox.x0 + lb.bbox.x1) / 2, labelCy = (lb.bbox.y0 + lb.bbox.y1) / 2;
+      // "below-box" leads the ladder — the fork's issue #184 item F placement
+      // (a rectangle drawn AROUND the room tag floods box-interior from the
+      // center seed; the below-box rung reaches the room first), with the
+      // center as a later fallback for tags whose room lies above/around.
+      const dbg = process.env.DETECT_DEBUG ? (m: string) => console.error(`[dbg] ${lb.str}: ${m}`) : null;
+      for (const probe of seedLadderPx(lb.bbox, "below-box")) {
+        // Every RUNG honors the drawing-extent gate, not just the label anchor:
+        // a rung stepped below a near-edge label can land in the title block
+        // and flood paper space into a confident "room".
+        if (probe[0] < bounds.x0 || probe[0] > bounds.x1 || probe[1] < bounds.y0 || probe[1] > bounds.y1) { dbg?.(`probe ${probe} out of bounds`); continue; }
         const f = floodAtSeed(mask, probe[0], probe[1], sens, eng.mppf);
-        if (f.status !== "ok") continue;
+        if (f.status !== "ok") { dbg?.(`probe ${probe} status ${f.status}`); continue; }
+        // Bubble-test the PRE-SNAP trace: oneClickRing's vertex snap can pull
+        // a tag-box ring onto nearby wall endpoints and inflate its bbox just
+        // past the 2.5× ratio, smuggling the box through the guard.
+        const raw = traceRegion(f) as [number, number][];
+        if (raw.length < 3) { sawDegenerate = true; dbg?.(`probe ${probe} degenerate raw`); continue; }
+        if (isLabelBubblePx(raw, lb.bbox)) { sawBubble = true; dbg?.(`probe ${probe} bubble (raw bbox vs label ${JSON.stringify(lb.bbox)}, area~${round2(ringArea(raw) * (s.upp || 0) ** 2)}sf)`); continue; }
+        // A rung can step across a shared wall into the NEIGHBORING room. A
+        // flood that is not this label's own space — committing it under this
+        // label (or ring-key-deduping it into the neighbor's own detection as
+        // a false `merged_labels`) silently unmeasures a real room. Ownership
+        // is EITHER test: the label center inside the traced ring (tag box
+        // floating free of the walls, or no box at all), OR the flood's region
+        // surrounding the label's box (floodSurroundsLabelPx — the tag box
+        // carve-out case: a box tied to a wall by its leader line notches the
+        // outer ring inward around the box, so the center falls outside the
+        // polygon even though the flood IS the room; 7 real rooms on the VA
+        // finish plan, 35-172 SF, fail the center test that way while every
+        // wrong-space flood measured scores at most 2 of its 4 sides).
+        if (!pointInPoly(labelCx, labelCy, raw) && !floodSurroundsLabelPx(f, lb.bbox)) { dbg?.(`probe ${probe} flood (area~${round2(ringArea(raw) * (s.upp || 0) ** 2)}sf) is not this label's space`); continue; }
         // F7(b): the shared ring, as in oneClick above
         const r = oneClickRing(f, { nearest: (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null) });
         if (r.length < 3) { sawDegenerate = true; continue; }
-        if (isLabelBubblePx(r as [number, number][], lb.bbox)) { sawBubble = true; continue; }
         ring = r; flood = f; seed = [probe[0], probe[1]];
         break;
       }
@@ -970,8 +1000,14 @@ export class Session {
             actor: "agent",
             seed_norm: [c.seed[0] / s.widthPx, c.seed[1] / s.heightPx],
             reviewed: false,
-            fill_sensitivity: sens,
+            // only a NON-DEFAULT sensitivity is a fact about how the shape was
+            // made (upstream MCP + the canvas stamp it the same way)
+            ...(sens !== SENS_BALANCED ? { fill_sensitivity: sens } : {}),
             ...rec,
+            // #85 — same receipt one_click mints: a trace bounded by DECLARED
+            // boundary layers is categorically stronger evidence than one
+            // bounded by a pitch heuristic
+            ...((s.layers || []).some((l) => l.visible && (l.role === "boundary" || l.role === "structure")) ? { layer_bounded: true as const } : {}),
           }).id;
         }
         return { ...common, area_sf, perimeter_lf, ...(shape_id ? { shape_id } : {}) };

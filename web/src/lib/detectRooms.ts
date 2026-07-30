@@ -218,11 +218,89 @@ export const BUBBLE_RATIO = 2.5;
 
 export interface LabelBBox { x0: number; y0: number; x1: number; y1: number }
 
-/** Probe seeds for one label, best-first, in the caller's px space. */
-export function seedLadderPx(b: LabelBBox): [number, number][] {
+/** Probe seeds for one label, best-first, in the caller's px space.
+ *
+ *  `first` picks which rung leads:
+ *
+ *  "anchor" (the default, unchanged) starts at the label's own center —
+ *  bubble-less plans stay one-flood fast, and the bubble guard is what
+ *  rejects the tag-box flood when there IS a box.
+ *
+ *  "below-box" starts at the below-the-box rung (center + 2h — the same drop
+ *  as roomLabelSeeds' below-box placement, y1 + LABEL_GAP·h) and demotes the
+ *  center to a fallback. This is the fork's issue #184 item F measurement
+ *  carried into the ladder: on the very common "rectangle drawn around the
+ *  room tag" convention the center rung floods the box interior (37 of 41
+ *  tags on the VA finish plan), and when that box is LARGE relative to the
+ *  text — a name+number tag — its ring can clear the bubble ratio and be
+ *  accepted as a tiny "room". Leading with the below-box rung reaches the
+ *  room first, so the guard never has to adjudicate the box at all. */
+export function seedLadderPx(b: LabelBBox, first: "anchor" | "below-box" = "anchor"): [number, number][] {
   const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
   const h = Math.max(b.y1 - b.y0, 1);
-  return [[cx, cy], [cx, cy + 2 * h], [cx, cy - 2 * h], [cx, cy + 3.5 * h]];
+  const center: [number, number] = [cx, cy], below: [number, number] = [cx, cy + 2 * h];
+  const rest: [number, number][] = [[cx, cy - 2 * h], [cx, cy + 3.5 * h]];
+  return first === "below-box" ? [below, center, ...rest] : [center, below, ...rest];
+}
+
+// ── flood ownership (the tag-box carve-out, measured 2026-07-30) ────────────
+// A clean, non-bubble flood at some rung is not automatically THIS label's
+// room: a rung can step across a shared wall and flood the NEIGHBORING space,
+// and committing that under this label silently unmeasures a real room. The
+// obvious ownership test — point-in-polygon of the label center against the
+// traced ring — is WRONG on the very sheets the below-box ladder exists for:
+// when the drawn tag box is connected to a wall by its leader line, the flood
+// cannot cross box or leader, so the traced OUTER ring notches inward around
+// the box and the label center falls outside the polygon even though the
+// flood IS the label's room. Measured on the VA finish plan: 7 real rooms
+// (125, 133, 136, 145A, 147A, 151A, 157 — 80/47/90/39/46/35/172 SF) fail the
+// point-in-polygon test that way, while every reachable room whose tag box
+// floats free of the walls passes it.
+//
+// The robust question is asked of the flood's own REGION BITMAP instead: does
+// the flooded area SURROUND the label's box? Probe just outside each side of
+// the box (clearing the drawn tag box, which overhangs the text ~1×h
+// horizontally and ~0.2×h vertically — hence the offsets below) and count
+// sides that land in flooded cells:
+//   · the label's own room wraps its tag box — 3 or 4 sides hit (4 usually;
+//     3 when the box abuts a wall or its leader blocks one side: 133, 136,
+//     145A measured exactly 3);
+//   · a neighboring space reached by an over-stepped rung touches the box
+//     from ONE side only — every wrong-space flood measured on the sheet
+//     (neighbor rooms, corridor slivers, below-tag pockets: 142's 155 SF
+//     open area, 134A's 86 SF office-136 flood, 170/150/154/159's pockets,
+//     138A's 31 SF fragment, 167's 6 SF fragment) scored 0–2 sides.
+// Three sample distances per side and three positions along each side keep a
+// single wall stroke, hatch line, or plumbing fixture from eating the probe.
+
+/** Sides of the label box (of 4) that must land in flooded cells for the
+ *  flood to own the label. Measured gap on the VA plan: real rooms score 3-4,
+ *  wrong-space floods 0-2 (see the block comment above). */
+export const SURROUND_MIN_SIDES = 3;
+
+/** Does this flood's region surround the label's bbox? `f` is the "ok" flood
+ *  (region bitmap in mask cells; image px = cell / ws). Pure and scale-free —
+ *  all offsets are multiples of the label's own text height. */
+export function floodSurroundsLabelPx(
+  f: { region: Uint8Array; mw: number; mh: number; ws: number },
+  b: LabelBBox,
+): boolean {
+  const inRegion = (x: number, y: number): boolean => {
+    const mx = Math.round(x * f.ws), my = Math.round(y * f.ws);
+    return mx >= 0 && my >= 0 && mx < f.mw && my < f.mh && !!f.region[my * f.mw + mx];
+  };
+  const h = Math.max(b.y1 - b.y0, 1);
+  const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, w = b.x1 - b.x0;
+  const alongX = [cx - 0.35 * w, cx, cx + 0.35 * w];
+  const alongY = [cy - 0.3 * h, cy, cy + 0.3 * h];
+  const vd = [0.6, 1.1, 1.6].map((k) => k * h);   // past the box's ~0.2h vertical overhang
+  const hd = [1.3, 1.8, 2.3].map((k) => k * h);   // past the box's ~1.0h horizontal overhang
+  let sides = 0;
+  if (alongX.some((x) => vd.some((d) => inRegion(x, b.y0 - d)))) sides++;   // above
+  if (alongX.some((x) => vd.some((d) => inRegion(x, b.y1 + d)))) sides++;   // below
+  if (alongY.some((y) => hd.some((d) => inRegion(b.x0 - d, y)))) sides++;   // left
+  if (alongY.some((y) => hd.some((d) => inRegion(b.x1 + d, y)))) sides++;   // right
+  return sides >= SURROUND_MIN_SIDES;
 }
 
 /** Is this traced ring just the label's own bubble? Same px space as the ring. */
