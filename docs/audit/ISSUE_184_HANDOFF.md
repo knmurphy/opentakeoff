@@ -57,6 +57,19 @@ Key commits on the engine branch, in order: `5e92a11` Phase-0 gates · `1a02b15`
 
 ## 3. The defect queue
 
+> **Update 2026-07-30 (third): post-sync review ran (4 adversarial lenses over
+> `62b4688..36b6626`) and its three confirmed regressions are FIXED at `dcad18a`**
+> (detect_rooms seeding — merged behavior matched neither parent, 12 rooms vs the
+> adjudicated 27; hover-leak bridging cost 69.6→2.49 ms; canvas receipt gaps). All
+> new guards revert-checked; goldens byte-identical throughout. Review items
+> queued, not fixed: gapBridged invisible to confidence; px-denominated
+> GAP_BRIDGE_MAX at coarse mppf; 5 of 25 MCP tools never schema-validated;
+> mcp test list hand-enumerated; "28" title-block false room (pre-existing, both
+> parents); withheld ledger lacks a "disowned" bucket. ORIENTATION (operator,
+> 2026-07-30): upstream Kentucky-ai is the lead; this fork was an experiment;
+> future work starts upstream — findings here are contribution material, not
+> permanent divergence.
+>
 > **Update 2026-07-30 (second): the engine branch is synced with BOTH parents.**
 > Merge 1 `e129d8e` (fork main: its parallel #184 stream had independently fixed A6
 > more weakly — our shared `floodAtSeed` won; our F7(b) guard caught and fixed two
