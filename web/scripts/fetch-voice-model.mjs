@@ -20,13 +20,16 @@ import { fileURLToPath } from "node:url";
 const MODEL_ID = "onnx-community/whisper-tiny.en";
 const MODEL_REV = "main"; // bump deliberately; cache keys + PR notes reference it
 const FILES = [
-  "config.json",
   "generation_config.json",
   "preprocessor_config.json",
   "tokenizer.json",
   "tokenizer_config.json",
   "onnx/encoder_model_quantized.onnx",
   "onnx/decoder_model_merged_uint8.onnx",
+  // LAST on purpose: config.json is the app's "model installed" probe
+  // (voiceRecognizerClient PROBE_FILE), so a mid-run failure must leave it
+  // absent — incomplete staging then reads as "uninstalled", never "broken".
+  "config.json",
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));

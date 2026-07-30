@@ -63,14 +63,20 @@ export function createVoiceRecognizerClient(onStatus: (s: VoiceModelStatus) => v
   }
 
   /** 16 kHz mono Float32 → transcript. Rejects on worker error. The buffer is
-   *  TRANSFERRED (zero-copy) — the caller must not reuse it. */
+   *  TRANSFERRED (zero-copy) — the caller must not reuse it. One decode at a
+   *  time: each call overwrites worker.onmessage, so a second call while one
+   *  is in flight would orphan the first promise forever — refuse it instead
+   *  (push-to-talk makes concurrency accidental, never intended). */
+  let decodeInFlight = false;
   function transcribe(pcm: Float32Array): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!worker || !ready) return reject(new Error("recognizer not ready"));
+      if (decodeInFlight) return reject(new Error("a decode is already in flight"));
+      decodeInFlight = true;
       worker.onmessage = (e: MessageEvent<{ type: string; text?: string; message?: string }>) => {
         const m = e.data;
-        if (m.type === "result") resolve(m.text ?? "");
-        else if (m.type === "error") reject(new Error(m.message ?? "decode failed"));
+        if (m.type === "result") { decodeInFlight = false; resolve(m.text ?? ""); }
+        else if (m.type === "error") { decodeInFlight = false; reject(new Error(m.message ?? "decode failed")); }
       };
       worker.postMessage({ type: "transcribe", pcm }, [pcm.buffer]);
     });
