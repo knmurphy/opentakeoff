@@ -17,7 +17,7 @@ import { flushSync } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { store, isStaleTabError, STALE_TAB_MESSAGE, projectIdFromUrl } from "../lib/store.js";
+import { store, isStaleTabError, STALE_TAB_MESSAGE, projectIdFromUrl, metaGet, metaPut } from "../lib/store.js";
 import { seedStampLibrary, instantiateStamp, markupToStampElement } from "../lib/stamps.js";
 import { extractSvgPrimitives, svgToStamp } from "../lib/svgImport.js";
 import { transformPath, svgPlacedBox } from "../lib/svgpath.js";
@@ -30,6 +30,7 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
+import { buildSheetIndex, dropFileFromIndex, serializePlanIndex, sanitizePlanIndex } from "../lib/planIndex";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
@@ -38,6 +39,7 @@ import { normalizeTag } from "../lib/scheduleEdit";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, oneClickRing, ringArea, MASK_MAX_DIM, MIN_PASS_FT, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
 import { buildRasterMask, rasterMaskScale, scanNativeScale, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
+import { roomLabelSeeds, detectRegions, sheetBounds, detectionReport, ROOM_LABEL_RE } from "../lib/detectRooms";
 import { roomNameFromTokens } from "../lib/roomName";
 import { traceConfidence, floodSignals } from "../lib/confidence";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
@@ -95,9 +97,31 @@ import { applyShapeCommand, geomSnapshot, vertsEqual, recordCommand } from "../l
 import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
 
+// Feed one sheet's text layer into the plan-set search index. Module-scope and
+// map-in/map-out so it adds nothing to any hook's dependency list — this is
+// called from inside the render effect, which already holds the textContent and
+// viewport for sheet numbers and scale notes. Rebuilding an existing entry is
+// pointless work but never wrong, so the guard is a cheap early-out, not a
+// correctness gate. Best-effort throughout: a sheet that throws just stays
+// unsearchable (the caller's .catch swallows it), exactly like a missing
+// title-block label.
+function indexSheetText(map, key, textContent, viewport) {
+  if (!key || map.has(key)) return;
+  const items = extractRegionText(textContent, viewport, { x0: 0, y0: 0, x1: viewport.width, y1: viewport.height });
+  // recorded even when empty (a scan): a valid empty index can never produce a
+  // hit, and skipping it leaves the sheet forever "unindexed" — see the matching
+  // note in PlanNavigator's indexSheet.
+  map.set(key, buildSheetIndex(key, items, "text", Date.now(), { w: viewport.width, h: viewport.height }));
+}
+
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
 const CARPET_ROLL_FT = 12;
+
+// Zoom a search jump lands at when the view is more zoomed-out than this. Picked
+// so a sheet's typical 19px cap height (measured on demo/sample-finish-plan.pdf
+// at RENDER_SCALE) lands around 14 screen px — readable without hunting for it.
+const SEARCH_FLY_SCALE = 0.75;
 
 // Click-select against a curved line's DRAWN path: flatten the control points and
 // hand hitShape a stand-in shape (lib/geometry.js stays byte-identical with Spline's).
@@ -311,6 +335,22 @@ export default function TakeoffCanvas() {
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
+  // ── Detect rooms — the sheet-wide One-Click pass, under review ─────────────
+  // `detect` is NOT a proposal in the One-Click sense: it never becomes a
+  // takeoff on ⏎, and it is not editable. It is a REVIEW SET — one entry per
+  // room the sheet's own room-number tags could seed — that the estimator
+  // accepts or rejects item by item, or accepts/discards wholesale. Nothing in
+  // it touches `shapes` until an explicit accept, and discarding it leaves the
+  // takeoff byte-identical. Shape:
+  //   { key, running, done, total, tally, report,
+  //     items: [{ id, str, seed, poly (panel-LOCAL px), area_sf, perim_lf,
+  //               hf, sl, wg, cf, cff, autoName }] }
+  // It deliberately SURVIVES a tool switch (like agentProposals) — reviewing a
+  // sheet of proposals means panning and zooming around them — and dies with
+  // the sheet render, hydrate, and restore, like every other review state.
+  const [detect, setDetect] = useState(null);
+  const detectRunRef = useRef(null);   // in-flight pass {cancel} — claimed synchronously (the double-click latch), flipped by Cancel and every teardown
+  const detectRef = useRef(null);      // live mirror for the Esc handler, whose effect deliberately doesn't re-subscribe on `detect` (the proposalRef precedent)
   // ── in-canvas takeoff agent state ──────────────────────────────────────────
   // agentProposals are NOT shapes: committed truth stays committed. Each entry
   // {id, sheet_id, condition_id, measure_role, verts_norm, evidence, seed_norm?,
@@ -415,6 +455,14 @@ export default function TakeoffCanvas() {
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
   const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
   const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
+  // Same idea for a bare POINT (a search hit). Deliberately a separate ref and
+  // effect rather than widening pendingFlyRef: the markup path is upstream code
+  // this fork re-merges constantly, and leaving it byte-identical is worth a few
+  // duplicated lines (#166).
+  const pendingPointFlyRef = useRef(null);
+  const persistIndexTimerRef = useRef(0);
+  const [flyEpoch, setFlyEpoch] = useState(0);   // re-arms the point fly-to when panel state alone wouldn't
+  const persistIndexRef = useRef(() => {});   // late-bound: the render effect runs above persistIndex's definition
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
@@ -469,6 +517,7 @@ export default function TakeoffCanvas() {
   const detailWatchdogRef = useRef(0);       // recovers a render stuck by a backgrounded/throttled tab (see DETAIL_STALL_MS)
   const renderTasksRef = useRef(new Map());  // sheetKey → pdf.js RenderTask
   const pdfDocsRef = useRef(new Map());      // file name → pdf.js loading task (doc cache)
+  const [sheetsEpoch, setSheetsEpoch] = useState(0);   // bumped when a file's BYTES change — forces a re-render the sheet key alone can't signal
   const renderSeqRef = useRef(0);            // monotonic token — stale render chains bail out
   const scanBusyRef = useRef(false);         // a paid schedule OCR read is in flight — blocks re-fire from a rapid re-draw
   const panRef = useRef(null);
@@ -525,6 +574,12 @@ export default function TakeoffCanvas() {
   // arrow here would re-count an open menu on every canvas render
   const onMenuDepth = useCallback((o) => { menuDepthRef.current = Math.max(0, menuDepthRef.current + (o ? 1 : -1)); }, []);
   const thumbCacheRef = useRef(new Map()); // sheetKey → thumbnail dataURL — survives gallery close
+  // sheetKey → SheetIndex for plan-set search. Filled by the text passes that
+  // ALREADY run for sheet numbers and scale notes (below, and PlanNavigator's
+  // thumbnail pump), so a vector plan set costs no extra PDF work — see
+  // docs/CLIENT_SIDE_OCR_RESEARCH.md §1. A ref, like thumbCacheRef: it survives
+  // gallery close and must never re-render the canvas.
+  const planIndexRef = useRef(new Map());
   const legacyPinnedRef = useRef(null);    // old `pinned` page numbers awaiting their one-shot tab migration
   const tabInitRef = useRef(false);        // snap to the first restored tab exactly once
   const statusRef = useRef("loading");     // mirror for the gallery's thumbnail worker
@@ -629,12 +684,24 @@ export default function TakeoffCanvas() {
     setSheetGroup([]);
   }
   // gallery open: every key becomes a tab; side-by-side also groups (2–4)
-  function openSheets(keys, sideBySide) {
+  // `focus` (optional) is a normalized [0..1, 0..1] point on keys[0] to centre on
+  // once that sheet's bitmap exists — how a search hit lands ON its match rather
+  // than merely on the right sheet. Same two-phase shape as the markup fly-to:
+  // openSheets only fires state setters, and panel dims load async.
+  function openSheets(keys, sideBySide, focus) {
     if (!keys.length) return;
     setOpenTabs((t) => { const merged = [...t]; for (const k of keys) if (!merged.includes(k)) merged.push(k); return merged; });
     if (sideBySide && keys.length >= 2) { setSheetGroup(keys.slice(0, MAX_GROUP)); setFocusKey(keys[0]); }
     else goToSheet(keys[0]);
     setView("canvas");
+    // Bump an epoch alongside the ref. Without it the phase-2 effect below can
+    // miss entirely: opening a hit on the sheet that is ALREADY active changes
+    // no panel state, so [panelImgs, groupSig, status] never fire. Centring
+    // inline here instead would be worse — when the target is a different sheet,
+    // the re-render calls fitToView afterwards and would clobber it. Deferring
+    // always, and re-arming the effect explicitly, handles both.
+    pendingPointFlyRef.current = focus ? { sheet_id: keys[0], at: focus } : null;
+    if (focus) setFlyEpoch((e) => e + 1);
   }
   function closeTab(key) {
     const i = openTabs.indexOf(key);
@@ -773,20 +840,49 @@ export default function TakeoffCanvas() {
     }
     if (name === active) { setActive(list[0].name); setPage(1); setSheetGroup([]); }
   }, [active]);
+  // Evict ONE file from the doc cache. Required whenever that file's bytes change
+  // or go away, because the cache is keyed on NAME and otherwise lives until the
+  // project view unmounts: re-adding a reissued A101.pdf would keep serving the
+  // SUPERSEDED document to every reader — the canvas, the thumbnails, and the
+  // search index, which would then faithfully re-index text that is no longer on
+  // the sheet (defeating dropFileFromIndex entirely). Destroy is best-effort and
+  // async, matching the unmount teardown below.
+  const evictDoc = useCallback((file) => {
+    const t = pdfDocsRef.current.get(file);
+    if (!t) return;
+    pdfDocsRef.current.delete(file);
+    t.then((task) => { try { task.destroy(); } catch { /* already gone */ } }).catch(() => {});
+  }, []);
+  // Forget EVERYTHING cached about one file — call whenever its bytes change or
+  // it leaves the working set. The three things that outlive a replacement are
+  // the pdf.js document (keyed on name), the search index, and the gallery
+  // thumbnails; the render effect's own per-key caches are wholesale-cleared on
+  // every run, so they only need the run to actually happen — which is what the
+  // epoch bump forces. Without it a same-name reissue kept rendering the OLD
+  // drawing: the sheet key never changes, so `groupSig` never changes, so the
+  // render effect had no reason to re-run.
+  const forgetFile = useCallback((file) => {
+    evictDoc(file);
+    dropFileFromIndex(planIndexRef.current, file);
+    for (const k of [...thumbCacheRef.current.keys()]) if (parseSheetKey(k).file === file) thumbCacheRef.current.delete(k);
+    setSheetsEpoch((e) => e + 1);
+  }, [evictDoc]);
   // Close a PDF: drop it from the working set (cloud: manifest only, file stays
   // in Drive; local: deletes the stored bytes), refresh, then reconcile the view.
   // Shapes on the closed sheets persist in annotations and restore on re-add.
   const closePdf = useCallback(async (name) => {
     await store.removePdf(name);
+    forgetFile(name);
     reconcileAfterRemoval(name, await refreshSheets());
-  }, [refreshSheets, reconcileAfterRemoval]);
+  }, [refreshSheets, reconcileAfterRemoval, forgetFile]);
   // Remove-from-project (cloud only): the DESTRUCTIVE variant — delete the Drive
   // file, then drop it from the working set.
   const removeFromProject = useCallback(async (name) => {
     if (typeof store.removeFromProject !== "function") return;
     await store.removeFromProject(name);
+    forgetFile(name);
     reconcileAfterRemoval(name, await refreshSheets());
-  }, [refreshSheets, reconcileAfterRemoval]);
+  }, [refreshSheets, reconcileAfterRemoval, forgetFile]);
   // open dropped/picked files of any kind: PDFs, images, and .zip plan sets all
   // get turned into PDF sheets (in-browser) by ingestFiles, then stashed locally
   async function handleFiles(fileList) {
@@ -802,7 +898,10 @@ export default function TakeoffCanvas() {
         : "No supported files found. Drop a PDF, an image, or a .zip plan set.");
       return;
     }
-    for (const f of pdfs) { try { await store.addPdf(f); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
+    // addPdf keys IndexedDB on the NAME, so re-adding a reissued sheet replaces
+    // the bytes under the same sheet key — its index entry must go with them or
+    // search keeps answering with the superseded sheet's text.
+    for (const f of pdfs) { try { await store.addPdf(f); forgetFile(f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
     await refreshSheets();
     const names = pdfs.map((f) => f.name);
     const tail = skipped.length ? ` · ${skipped.length} skipped` : "";
@@ -862,6 +961,11 @@ export default function TakeoffCanvas() {
     // conditions/sheets — a loaded/restored timeline starts with none pending
     // (nothing is lost: rejected geometry records nothing by design).
     setAgentProposals([]);
+    // same class as the agent's staged proposals: a detected-room review set is
+    // aimed at the PRE-load sheet/conditions, and cancelling the pass that may
+    // still be filling it is part of dropping it (nothing is lost — a rejected
+    // or dropped proposal records nothing by design).
+    discardDetect(false);
     setProjectName(a.project_name || "");
     // string fields only — a corrupted record must not put an object where
     // the report masthead renders a React child
@@ -1093,6 +1197,7 @@ export default function TakeoffCanvas() {
   useEffect(() => { viewRef.current = view; }, [view]);
   useEffect(() => { toolRef.current = tool; }, [tool]);
   useEffect(() => { proposalRef.current = proposal; }, [proposal]);
+  useEffect(() => { detectRef.current = detect; }, [detect]);
 
   // one pdf.js document per file, cached for the life of the project view —
   // the canvas render AND the gallery thumbnails share this cache
@@ -1133,7 +1238,7 @@ export default function TakeoffCanvas() {
     if (!active) return;
     const seq = ++renderSeqRef.current;
     const stale = () => seq !== renderSeqRef.current;
-    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null); selectShape(null); setProposal(null); resetZone();
+    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null); selectShape(null); setProposal(null); discardDetect(false); resetZone();
     for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } }
     renderTasksRef.current.clear();
     snapGridsRef.current.clear();
@@ -1240,6 +1345,12 @@ export default function TakeoffCanvas() {
         if (stale()) return;
         const lbl = extractSheetNumber(tc, lead.viewport);
         if (lbl) setPageLabels((m) => (m[lead.pageNum] === lbl ? m : { ...m, [lead.pageNum]: lbl }));
+        // NOT lead.viewport: that is the PANEL's scale (min(RENDER_SCALE, auto),
+        // or the auto budget on a hi-res sheet), so anchors would land in panel px
+        // while the per-page pass below records RENDER_SCALE px — the same file's
+        // page 1 in different units than its pages 2+. The index's coordinate
+        // contract is image px at RENDER_SCALE; mint a viewport that honours it.
+        indexSheetText(planIndexRef.current, lead.key, tc, lead.pageObj.getViewport({ scale: RENDER_SCALE }));
       }).catch(() => {});
       if (labeledFileRef.current !== active) {
         labeledFileRef.current = active;
@@ -1256,14 +1367,14 @@ export default function TakeoffCanvas() {
               const vp2 = p2.getViewport({ scale: RENDER_SCALE });
               const lbl = extractSheetNumber(tc, vp2);
               if (lbl) { found[n] = lbl; if (Object.keys(found).length % 8 === 0) setPageLabels((m) => ({ ...found, ...m })); }
+              const key = n > 1 ? `${active}#${n}` : active;
               const det = detectScale(tc, vp2);
-              if (det) {
-                const key = n > 1 ? `${active}#${n}` : active;
-                setDetectedScales((d) => (d[key]?.label === det.label ? d : { ...d, [key]: det }));
-              }
+              if (det) setDetectedScales((d) => (d[key]?.label === det.label ? d : { ...d, [key]: det }));
+              indexSheetText(planIndexRef.current, key, tc, vp2);
             } catch { /* skip */ }
           }
           if (!stale() && Object.keys(found).length) setPageLabels((m) => ({ ...found, ...m }));
+          if (!stale()) persistIndexRef.current();   // the whole file is indexed by here
         })();
       }
     })().catch((e) => { if (stale() || e?.name === "RenderingCancelledException") return; setErr(String(e.message || e)); setStatus("error"); });
@@ -1274,7 +1385,7 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     return () => { renderSeqRef.current++; for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupSig, hiResKeys.join(" ")]);
+  }, [groupSig, hiResKeys.join(" "), sheetsEpoch]);
 
   // ── detail view: re-render the visible region at the current zoom ───────────
   // The base panel bitmap is the fast first paint and the zoomed-out view. Once
@@ -1418,6 +1529,65 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelImgs, groupSig, status]);
 
+  // ── search index persistence (docs/CLIENT_SIDE_OCR_RESEARCH.md §6) ────────
+  // Namespaced per project: two projects can each hold an "A101.pdf", and a
+  // shared key would serve one project's text for the other's sheet. Rehydration
+  // also drops any entry outside the CURRENT plan set, so even a key collision
+  // could not resurrect a foreign sheet.
+  const indexStoreKey = `planindex:${projectIdFromUrl() || "local"}`;
+  const indexLoadedRef = useRef(false);
+  useEffect(() => {
+    if (indexLoadedRef.current || !sheets.length) return;
+    indexLoadedRef.current = true;
+    (async () => {
+      try {
+        const restored = sanitizePlanIndex(await metaGet(indexStoreKey), sheets.map((sh) => sh.name));
+        // never clobber entries the live passes already built this session
+        for (const [k, v] of restored) if (!planIndexRef.current.has(k)) planIndexRef.current.set(k, v);
+      } catch { /* a bad record just means everything re-indexes */ }
+    })();
+  }, [sheets, indexStoreKey]);
+
+  // Persist on a debounce. Best-effort by design: this is a rebuildable cache,
+  // never a source of truth, so a failed write must stay silent — losing it costs
+  // one re-index, and surfacing a storage error for a search cache would be noise
+  // on top of the real annotations save.
+  const persistIndex = useCallback(() => {
+    clearTimeout(persistIndexTimerRef.current);
+    persistIndexTimerRef.current = setTimeout(() => {
+      metaPut(indexStoreKey, serializePlanIndex(planIndexRef.current)).catch(() => {});
+    }, 1500);
+  }, [indexStoreKey]);
+  useEffect(() => { persistIndexRef.current = persistIndex; }, [persistIndex]);
+  useEffect(() => () => clearTimeout(persistIndexTimerRef.current), []);
+
+  // point fly-to phase 2 — the search-hit twin of the markup effect above. Centres
+  // once the target panel has a real bitmap, then clears the ref unconditionally
+  // so a hit on an unanchored term (or a sheet that failed to render) can never
+  // fire later against an unrelated sheet.
+  useEffect(() => {
+    const f = pendingPointFlyRef.current;
+    if (!f) return;
+    if (status === "error") { pendingPointFlyRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(f.sheet_id)) return;
+    const sp = panels.find((p) => p.key === f.sheet_id);
+    if (!sp || !sp.img.w) return;
+    const el = containerRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      // Zoom IN to a readable level if we're below it, but never zoom OUT: at a
+      // fit-to-view ~16% the whole sheet is already on screen, so centring alone
+      // would move the page without showing the estimator anything new. A user
+      // already zoomed in past the threshold keeps their zoom — this is a jump,
+      // not a zoom reset.
+      const scale = clamp(Math.max(tfRef.current.scale, SEARCH_FLY_SCALE));
+      const sx = f.at[0] * sp.img.w + sp.xOffset, sy = f.at[1] * sp.img.h;
+      setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    }
+    pendingPointFlyRef.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status, flyEpoch]);
+
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
@@ -1444,7 +1614,7 @@ export default function TakeoffCanvas() {
   // re-fire the autosave effect and the restored payload persists (and pushes,
   // on the sync path) like any other edit.
   const restoreSavedPayload = (payload) => {
-    setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null);
+    setPoly([]); setCalib([]); setPendingLen(""); selectShape(null); setProposal(null); discardDetect(false);
     setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null);
     resetZone();
     hydrate(payload || {});
@@ -1523,7 +1693,7 @@ export default function TakeoffCanvas() {
   // a scheduled save, an active drag, the open text editor, an in-flight OCR scan,
   // an agent run and its staged proposals — hydrate() wipes agentProposals and the
   // conditions a mid-run agent minted, so both defer exactly like One-Click review).
-  busyStateRef.current = { poly, calib, check, proposal, scaleGuide, prevScale, agentRunning, agentProposals };
+  busyStateRef.current = { poly, calib, check, proposal, scaleGuide, prevScale, agentRunning, agentProposals, detecting: !!detect?.running, detectProposals: detect?.items };
   const computeBusy = () => isCanvasBusy({
     ...busyStateRef.current,
     saveState: saveStateRef.current,
@@ -1601,8 +1771,9 @@ export default function TakeoffCanvas() {
     // catches an interaction ref (drag/editor/scan) clearing with no state change.
     // agentRunning/agentProposals: the run finishing or the last proposal being
     // accepted/rejected is a busy→idle edge that must drain a held remote.
+    // `detect` is in the same class (pass finishing, set emptied or discarded).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poly, calib, check, proposal, scaleGuide, prevScale, saveState, idleTick, agentRunning, agentProposals]);
+  }, [poly, calib, check, proposal, scaleGuide, prevScale, saveState, idleTick, agentRunning, agentProposals, detect]);
 
   function fitToView(w, h) {
     const el = containerRef.current;
@@ -1793,7 +1964,13 @@ export default function TakeoffCanvas() {
         // tool's points, on-screen or hidden
         else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
         else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { if (tool === "multiselect" && (multiSel.size || multiDownRef.current)) { multiDownRef.current = null; if (marqueeRectRef.current) marqueeRectRef.current.style.display = "none"; clearMulti(); } else if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
+      } else if (e.key === "Escape") { if (tool === "multiselect" && (multiSel.size || multiDownRef.current)) { multiDownRef.current = null; if (marqueeRectRef.current) marqueeRectRef.current.style.display = "none"; clearMulti(); } else if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); }
+        // a Detect-rooms pass / review set is the outermost thing Esc can drop:
+        // cancel + discard leaves the takeoff untouched, which is the whole
+        // point of a review set. It wins over the generic clear so one Esc
+        // can't half-dismiss it.
+        else if (detectRef.current) { discardDetect(detectRef.current.running ? "Stopped detecting rooms — nothing was added to the takeoff." : undefined); }
+        else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
       // ⌘Z: the drawing context wins — mid-trace it still pops the last placed
       // point (with or without ⇧, matching the old behavior byte-for-byte);
       // only with no trace in progress does the command stack engage
@@ -3158,6 +3335,194 @@ export default function TakeoffCanvas() {
     for (const [x, y] of ring) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
     return roomNameFromTokens(extractRegionText(tc, vp, { x0, y0, x1, y1 }), ring);
   }
+
+  // ── Detect rooms — One-Click the whole sheet, from the sheet's own tags ────
+  // The estimator's half of what the MCP server's detect_rooms has done for a
+  // while: read the room-number labels off the text layer, seed the SAME
+  // sealed flood at each, and offer the results for review. It is the sheet-
+  // wide analogue of a One-Click click, so it lives beside Create in the
+  // ACTION cluster and inherits One-Click's gates verbatim — scale set,
+  // condition picked, vector linework present, current fill sensitivity.
+  //
+  // What it is NOT is a "measure this sheet" button. Tag seeding has a hard
+  // ceiling (see detectionReport): a room with no room number is invisible to
+  // it, and on a real finish plan that is most of them. Every readout below
+  // states what was tried, what came back, and what was never reachable.
+  //
+  // Cost: one flood per tag, ~40 on a large sheet and seconds of work. The
+  // loop yields a frame before every flood, so the canvas keeps painting and
+  // panning, proposals appear as they are found, and Cancel is live throughout
+  // (a run that can't be stopped is a frozen canvas with extra steps).
+  // Two ways to stop a pass, and the difference matters on the way out:
+  //   cancel  — the human wants what it found so far, with a report that says
+  //             the rest were never tried. The loop unwinds INTO the report.
+  //   discard — the set is going away (Esc, sheet change, hydrate, restore).
+  //             The loop must not resurrect it by publishing its report after
+  //             setDetect(null) has already run.
+  const cancelDetect = () => { if (detectRunRef.current) detectRunRef.current.cancel = true; };
+  const discardDetect = (msg) => {
+    if (detectRunRef.current) { detectRunRef.current.cancel = true; detectRunRef.current.discarded = true; }
+    setDetect(null);
+    if (msg !== false) setCommitMsg(msg || "Discarded the detected rooms — nothing was added to the takeoff.");
+  };
+  async function runDetectRooms() {
+    // The busy latch is the RUN OBJECT itself, claimed synchronously here —
+    // `detect.running` only becomes visible a render later, and a double-click
+    // on the button lands before that. try/finally releases it on every path.
+    if (detectRunRef.current) return;
+    const run = { cancel: false };
+    detectRunRef.current = run;
+    try {
+      await detectPass(run);
+    } finally {
+      if (detectRunRef.current === run) detectRunRef.current = null;
+    }
+  }
+  async function detectPass(run) {
+    const tp = focusPanel;
+    if (!tp?.img?.w) { setCommitMsg("Still rendering this sheet — try again in a second."); return; }
+    const key = tp.key;
+    if (!uppFor(key)) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
+    if (!activeCond) { setCommitMsg("Pick or add a condition first."); return; }
+    const mo = ensureMask(key);
+    if (!mo) { setCommitMsg("Detect rooms reads the sheet's linework and text layer — this sheet has neither (a scan). One-Click each room instead."); return; }
+    // The text layer is already cached for auto-naming; this reuses that
+    // promise rather than re-extracting, and extractRegionText resolves each
+    // item into image px WITH its device-space glyph height (hypot(t[2],t[3])).
+    // That `h` is load-bearing: without it roomLabelSeeds keeps the seed on the
+    // baseline anchor, which on the very common "rectangle drawn around the
+    // room number" convention floods the INSIDE of that box — ~3.5 SF instead
+    // of the room, on 37 of 41 tags on the VA finish plan (issue #184 item F).
+    const pr = ensureTextContent(key);
+    const seq = renderSeqRef.current;
+    setCommitMsg("Reading this sheet's room tags…");
+    const tc = pr ? await pr : null;
+    if (seq !== renderSeqRef.current) { setCommitMsg(""); return; }   // sheet group changed under the await
+    if (!tc) { setCommitMsg("This sheet has no text layer, so there are no room tags to seed from. One-Click each room instead."); return; }
+    const pageObj = pageObjsRef.current.get(key);
+    if (!pageObj) { setCommitMsg(""); return; }
+    const rs = renderScalesRef.current.get(key) || RENDER_SCALE;
+    const vp = pageObj.getViewport({ scale: rs });
+    const items = extractRegionText(tc, vp, { x0: 0, y0: 0, x1: tp.img.w, y1: tp.img.h });
+    // patternHits is what a naive "any 2-3 digit numeral is a room" reader
+    // would have seeded; seeds is what survives the text + extent filters. The
+    // gap is reported, not hidden — it is most of the junk on a real sheet.
+    const patternHits = items.filter((it) => (it.str || "").trim().split(/\s+/).some((t) => ROOM_LABEL_RE.test(t))).length;
+    const seeds = roomLabelSeeds(items, { bounds: sheetBounds(tp.img.w, tp.img.h) });
+    const found = [];
+    let regions = 0;
+    const grid = snapGridsRef.current.get(key);
+    const base = { key, running: true, total: seeds.length };
+    setDetect({ ...base, done: 0, tally: null, report: null, items: [] });
+    let painted = 0;   // ms of the last progress render — the file's throttle idiom, one render per ~150 ms, not one per flood
+    let tried = 0;     // seeds actually FLOODED — diverges from seeds.length the moment a pass is cancelled
+    for (let i = 0; i < seeds.length; i++) {
+      if (run.cancel || seq !== renderSeqRef.current) break;
+      await new Promise((r) => requestAnimationFrame(r));   // yield the frame BEFORE the flood, so the first one doesn't stall the click that started it
+      if (run.cancel || seq !== renderSeqRef.current) break;
+      // one seed at a time through the SHIPPED batch path — identical
+      // arithmetic to detectRegions(mask, allSeeds), just interruptible
+      const [reg] = detectRegions(mo, [seeds[i]], fillSens);
+      tried++;
+      if (reg) {
+        regions++;
+        // F7(b): the shared ring — same helper as every click site, so the snap
+        // tolerance and RDP eps live in one place (benchProductionRing pins this)
+        const ring = oneClickRing(reg.flood, { nearest: (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null) });
+        if (ring.length >= 3) {
+          const upp = uppFor(key) || 0;
+          const f = reg.flood;
+          const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
+          // A2/A6: through the shared floodSignals adapter, never a hand-listed
+          // field set — a batch proposal's confidence must match a click's
+          const conf = traceConfidence(floodSignals(f, { mppf: f.mppf, areaSF: area_sf }));
+          const it = {
+            id: `dt-${mintUuid()}`, str: reg.str, seed: reg.seed, poly: ring,
+            area_sf, perim_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
+            hf: !!f.hatchFiltered, sl: f.sealedPx || 0, wg: f.wedges || 0, cf: conf.score, cff: conf.factors,
+            ...(fillSens !== SENS_BALANCED ? { sens: fillSens } : {}),
+          };
+          it.autoName = await roomNameAt(key, ring);   // the drawing's own tag names the shape, same as a click (cached text layer, no re-extract)
+          found.push(it);
+        }
+      }
+      const now = Date.now();
+      if (!run.discarded && (now - painted > 150 || i === seeds.length - 1)) { painted = now; setDetect({ ...base, done: i + 1, tally: null, report: null, items: [...found] }); }
+    }
+    if (run.discarded || seq !== renderSeqRef.current) return;   // the set was dropped (Esc / hydrate / sheet change) — publishing a report now would resurrect it
+    const tally = {
+      textItems: items.length, patternHits, seeds: seeds.length, tried, regions,
+      proposals: found.length, tiny: found.filter((r) => r.area_sf < FIXTURE_HINT_SF).length,
+      ...(run.cancel ? { cancelled: true } : {}),
+    };
+    const report = detectionReport(tally, FIXTURE_HINT_SF);
+    // The empty/partial result is a FIRST-CLASS state, not a dismissal: the
+    // review set stays open with its report so "nothing found here" is on
+    // screen with the reason, instead of a toast that ages out in six seconds
+    // and leaves an unmarked sheet looking finished.
+    // `done` is what was TRIED, not the seed count: on a cancelled pass the two
+    // differ, and reporting the total would draw a full progress bar over a
+    // pass that stopped early (Copilot review, PR #190).
+    setDetect({ key, running: false, done: tried, total: seeds.length, tally, report, items: found });
+    setCommitMsg(report.message);
+  }
+  // Accept = the ONLY thing that writes a takeoff. One dispatchShape `add` for
+  // the whole batch (one undo entry, the acceptAgentProposals precedent), with
+  // the same provenance receipt a One-Click Create mints — method one_click_v1
+  // (the vocabulary the MCP's detect_rooms already commits under), the seed,
+  // the confidence, and the flood's own account of what it had to do. Quantities
+  // are RECOMPUTED here against the live scale: a review pass can outlast a
+  // recalibration. `reviewed: true` rides ONLY here — a proposal on screen has
+  // affirmed nothing.
+  function acceptDetected(ids) {
+    const d = detect;                       // a discrete event always sees the current render's state (the createProposal precedent)
+    if (!d || d.running) return;
+    const want = new Set(ids);
+    const take = d.items.filter((r) => want.has(r.id));
+    if (!take.length) return;
+    const tp = panelByKey(d.key);
+    const upp = uppFor(d.key);
+    if (!tp || !tp.img.w || !upp || !activeCond) { setCommitMsg("Open that sheet (with its scale set) and pick a condition to accept."); return; }
+    const made = take.map((r) => {
+      const m = ocMetrics(r.poly, d.key);
+      return {
+        sheet_id: d.key, condition_id: activeCond, measure_role: "floor_area",
+        verts_norm: r.poly.map(([x, y]) => [x / tp.img.w, y / tp.img.h]),
+        computed: { area_sf: m.area_sf, perimeter_lf: m.perim_lf },
+        ...(activeLabel ? { label: activeLabel } : r.autoName ? { label: r.autoName } : {}),
+        origin: {
+          // method stays one_click_v1 — the geometry really did come from the
+          // same flood — but a batch-detected shape and a hand-clicked one are
+          // NOT equally reliable, and provenance must not flatter the work:
+          // this one was proposed unprompted from a room tag, by a pass that on
+          // a real sheet is ~a quarter artifacts, and only then affirmed.
+          // DELIBERATELY NOT in contribute.js's ORIGIN_FIELDS: that whitelist
+          // governs what leaves the machine, and widening it is a separate
+          // decision with a docs/CONTRIBUTION_SPEC.md obligation attached. This
+          // rides the local payload and the user's own export only. Do not
+          // "helpfully" whitelist it.
+          method: "one_click_v1", detected: true, seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true,
+          confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}),
+          ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.wg ? { door_wedges: r.wg } : {}),
+          ...(!activeLabel && r.autoName ? { auto_named: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}),
+        },
+      };
+    });
+    dispatchShape({ type: "add", shapes: made });
+    const left = d.items.filter((r) => !want.has(r.id));
+    setDetect((p) => (p && p.key === d.key ? { ...p, items: left, accepted: (p.accepted || 0) + made.length } : p));
+    const sf = made.reduce((n, m) => n + m.computed.area_sf, 0);
+    // The review set stays OPEN even at zero left, so the ceiling stays on
+    // screen: "you accepted everything this could find" is not "this sheet is
+    // measured", and the message says so rather than congratulating anyone.
+    setCommitMsg(`Accepted ${made.length} detected room${made.length === 1 ? "" : "s"} — ${fa(sf)} ${condById[activeCond]?.finish_tag || ""}. `
+      + (left.length ? `${left.length} still to review.` : "Rooms with no room-number tag were never proposed — One-Click those."));
+  }
+  const acceptAllDetected = () => acceptDetected((detect?.items || []).map((r) => r.id));
+  // Reject = drop it from the review set, LOCAL ONLY. Nothing is recorded —
+  // same cut-line as the agent's reject (dismissed geometry never rides any
+  // wire), and no cheaper or dearer than accepting it.
+  const rejectDetected = (id) => setDetect((p) => (p ? { ...p, items: p.items.filter((r) => r.id !== id) } : p));
 
   // ── One-Click hover preview — the fill runs UNDER the cursor, pre-click ────
   // The candidate region (same sealed flood + trace + snap the click commits)
@@ -4990,6 +5355,12 @@ export default function TakeoffCanvas() {
   // Aggressive; the slider still tunes 0–100% freely, snapping to a notch when
   // released near one. Detents come from oneclick's canonical presets so UI
   // and flood math can't drift if a preset is ever retuned.
+  // The detection readout owns the live-readout box whenever a pass is running
+  // or its review set is open — EXCEPT while a hand-built One-Click selection
+  // is pending, because that one has a commit gate (⏎ Create) that needs its
+  // own numbers on screen. The detection report comes back the moment that
+  // selection resolves; it is never silently dropped.
+  const detectShown = !!detect && (detect.running || !(tool === "oneclick" && proposal?.regions.length));
   const fillRow = (() => {
     const NOTCHES = [SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE];
     const label = fillSens === SENS_STRICT ? "Strict" : fillSens === SENS_BALANCED ? "Balanced" : fillSens === SENS_AGGRESSIVE ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
@@ -5256,6 +5627,35 @@ export default function TakeoffCanvas() {
             )}
             {proposal?.regions.length > 0 && (
               <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
+            )}
+            {/* Detect rooms — the sheet-wide One-Click pass. It sits in the
+                ACTION slot beside Create because it IS a One-Click action (same
+                scale/condition gates, same fill sensitivity, same flood, same
+                Create-style review gate), just aimed at every room tag on the
+                sheet instead of the one under the cursor. It yields to a live
+                One-Click selection so the reserved slot width never fights
+                Create for space (issue #61's rule). The run/review controls
+                stay put under any tool: reviewing means panning and zooming. */}
+            {tool === "oneclick" && !proposal?.regions.length && !detect && (
+              <button data-dt="run" onClick={runDetectRooms}
+                title="Detect rooms (this sheet) — flood every room that carries a room-number tag and offer them for review. Nothing is created until you accept. Rooms with no room number are NOT found."
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid var(--cobalt)", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="target" size={14} />Detect rooms</button>
+            )}
+            {detect?.running && (<>
+              <span style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, color: "var(--ink-muted)" }}>{detect.done}/{detect.total} tags…</span>
+              <button data-dt="cancel" onClick={cancelDetect} title="Stop the pass — what it has already found stays for review; nothing is created."
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>Cancel</button>
+            </>)}
+            {/* Accept-all and Reject-all are the SAME size and weight: throwing
+                the set away must cost exactly what taking it does. */}
+            {detect && !detect.running && detect.items.length > 0 && (
+              <button data-dt="accept-all" onClick={acceptAllDetected} title={`Create all ${detect.items.length} detected room${detect.items.length === 1 ? "" : "s"} as takeoffs — one undo step. Rooms with no room-number tag are not in this set.`}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Accept all ({detect.items.length})</button>
+            )}
+            {detect && !detect.running && (
+              <button data-dt="discard" onClick={() => discardDetect()} title={detect.items.length ? "Reject every remaining proposal and close the review — the takeoff is untouched." : "Close the detection report."}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: `1px solid ${detect.items.length ? "var(--c-danger)" : "var(--ink-faint)"}`, background: "transparent", color: detect.items.length ? "var(--c-danger)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+                {detect.items.length ? <><Icon name="close" size={14} />Reject all ({detect.items.length})</> : "Dismiss"}</button>
             )}
           </span>
         )}
@@ -5610,7 +6010,11 @@ export default function TakeoffCanvas() {
               <defs>
                 {conditions.map((c) => <HatchPattern key={patId(c)} id={patId(c)} type={c.hatch || "solid"} line={c.color} fill={c.fill} dark={darkMode} />)}
               </defs>
-              {/* committed shapes + markups, one group per panel in its local frame */}
+              {/* committed shapes + markups, one group per panel in its local frame.
+                  Every committed element carries data-shape-id — a stable hook for
+                  the e2e harness to count what is actually IN the takeoff, so
+                  "nothing commits without an explicit accept" is an assertion and
+                  not a claim (the data-oc / data-cond-id precedent). */}
               {panels.map((p) => {
                 const pShapes = visibleShapes.filter((s) => s.sheet_id === p.key);
                 const dn = (vn) => vn.map(([x, y]) => [x * p.img.w, y * p.img.h]);
@@ -5632,19 +6036,19 @@ export default function TakeoffCanvas() {
                       const sw = (sel ? 4 : 2) / z;
                       if (s.measure_role === "count") {
                         const [cx, cy] = pts[0], r = 7 / z;
-                        return <rect key={s.id} x={cx - r} y={cy - r} width={r * 2} height={r * 2} rx={2 / z} fill={col + "cc"} stroke={sel ? "#1f3fc7" : "#fff"} strokeWidth={(sel ? 3 : 1.5) / z} />;
+                        return <rect key={s.id} data-shape-id={s.id} x={cx - r} y={cy - r} width={r * 2} height={r * 2} rx={2 / z} fill={col + "cc"} stroke={sel ? "#1f3fc7" : "#fff"} strokeWidth={(sel ? 3 : 1.5) / z} />;
                       }
                       if (s.measure_role === "surface_area") {
-                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4.5 : 3.5) / z} strokeDasharray={`${10 / z} ${3 / z} ${2 / z} ${3 / z}`} strokeLinecap="round" strokeLinejoin="round" />;
+                        return <polyline key={s.id} data-shape-id={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4.5 : 3.5) / z} strokeDasharray={`${10 / z} ${3 / z} ${2 / z} ${3 / z}`} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       if (s.measure_role === "linear") {
                         // line_style governs linear outlines (surface_area keeps its dash-dot identity above)
                         const lpts = s.curved ? flattenCurve(pts) : pts;
-                        return <polyline key={s.id} points={lpts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
+                        return <polyline key={s.id} data-shape-id={s.id} points={lpts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? "#1f3fc7" : col} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
                       }
                       const ded = s.measure_role === "deduct";
                       // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
-                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
+                      return <polygon key={s.id} data-shape-id={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill={ded ? "rgba(176,58,38,.28)" : shapeFill(cond)} stroke={ded ? "#b03a26" : (sel ? "#1f3fc7" : col)} strokeWidth={sw} strokeDasharray={ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
                     {/* vertex handles for the selected shape (drag to reshape) */}
                     {selectedId && !isMulti && (() => {
@@ -5947,6 +6351,63 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })}
+                    {/* Detected rooms under review — the One-Click proposal's own
+                        dashed cobalt language (seed star, area-and-name readout),
+                        at the agent proposals' finer dash so a machine-assembled
+                        set never reads as a selection the estimator built. A
+                        proposal under the fixture-sized threshold wears WARNING
+                        amber: on a real sheet that shape is usually the box drawn
+                        around the room tag, not a room, and it should be easy to
+                        pick out and reject.
+
+                        Only the ✓/✕ chips take pointer events — the fill does
+                        NOT. Accepting and rejecting are then the same gesture at
+                        the same size, and the One-Click hover preview and click
+                        keep working over the proposal for the rooms this pass
+                        could never reach. */}
+                    {detect && detect.key === p.key && detect.items.map((r) => {
+                      const s = tf.scale;
+                      const tiny = r.area_sf < FIXTURE_HINT_SF;
+                      const col = tiny ? "#c47a10" : "#1f3fc7";
+                      const [sx, sy] = r.seed;
+                      const cw = 17 / s, gap = 3 / s, cy = sy + 7 / s;
+                      // The chips are click targets ONLY under the tools where a
+                      // click already means "review, don't draw" — and never
+                      // over a trace in progress. Under a drawing tool a stray
+                      // click on a ✓ would silently commit a machine guess, and
+                      // an accidental commit nobody notices is worse than one
+                      // they have to undo: it ends up in a bid. Inert, not
+                      // hidden — the set stays legible while you draw.
+                      const armed = !poly.length && (tool === "oneclick" || tool === "select" || tool === "pan");
+                      const chip = (kind, x, onSel, hint) => (
+                        <g data-dt={kind} style={{ pointerEvents: armed ? "auto" : "none", cursor: "pointer", opacity: armed ? 1 : 0.35 }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); onSel(); }}>
+                          <title>{hint}</title>
+                          <rect x={x} y={cy} width={cw} height={cw} rx={2 / s}
+                            fill={darkMode ? "#0b0e14" : "#faf6ea"} stroke={kind === "accept" ? "var(--c-positive, #1f6b4a)" : "#b03a26"} strokeWidth={1.6 / s} />
+                          {kind === "accept"
+                            ? <path d={`M${x + cw * 0.24},${cy + cw * 0.52} L${x + cw * 0.44},${cy + cw * 0.72} L${x + cw * 0.78},${cy + cw * 0.28}`} fill="none" stroke="var(--c-positive, #1f6b4a)" strokeWidth={2.2 / s} strokeLinecap="round" strokeLinejoin="round" />
+                            : <path d={`M${x + cw * 0.28},${cy + cw * 0.28} L${x + cw * 0.72},${cy + cw * 0.72} M${x + cw * 0.72},${cy + cw * 0.28} L${x + cw * 0.28},${cy + cw * 0.72}`} fill="none" stroke="#b03a26" strokeWidth={2.2 / s} strokeLinecap="round" />}
+                        </g>
+                      );
+                      return (
+                        <g key={r.id} data-dt="proposal">
+                          <polygon points={r.poly.map((q) => q.join(",")).join(" ")}
+                            fill={tiny ? "rgba(196,122,16,.10)" : "rgba(31,63,199,.07)"}
+                            stroke={col} strokeOpacity={0.9} strokeWidth={2 / s}
+                            strokeDasharray={`${3.5 / s} ${3.5 / s}`} strokeLinejoin="round" style={{ pointerEvents: "none" }} />
+                          <path d={starPath(sx, sy, 4.5 / s)} fill={col} fillOpacity={0.85} stroke="#fff" strokeWidth={1 / s} style={{ pointerEvents: "none" }} />
+                          <text data-dt="label" x={sx} y={sy - 9 / s} textAnchor="middle" fontSize={12 / s} fontWeight={600}
+                            fill={col} stroke={darkMode ? "#0b0e14" : "#faf6ea"} strokeWidth={3 / s} paintOrder="stroke"
+                            style={{ pointerEvents: "none" }}>
+                            {`${fa(r.area_sf)}${r.autoName ? ` · ${r.autoName}` : ` · tag ${r.str}`}${tiny ? " · fixture-sized?" : ""}`}
+                          </text>
+                          {chip("accept", sx - cw - gap / 2, () => acceptDetected([r.id]), `Accept — create this ${fa(r.area_sf)} takeoff${r.autoName ? ` (${r.autoName})` : ""}.`)}
+                          {chip("reject", sx + gap / 2, () => rejectDetected(r.id), "Reject — drop this proposal. Nothing is created and nothing is recorded.")}
+                        </g>
+                      );
+                    })}
                   </g>
                 );
               })}
@@ -6065,8 +6526,37 @@ export default function TakeoffCanvas() {
         {/* live readout — top-right. Height is capped short of the panel rail's centered
             band (same right:14 column) so populated totals never cover the rail buttons. */}
         <div style={{ position: "absolute", right: 14, top: 14, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, padding: "12px 16px", minWidth: 200, maxWidth: 260, maxHeight: "calc(50% - 110px)", overflowY: "auto", boxShadow: "0 4px 18px rgba(0,0,0,.12)", fontVariantNumeric: "tabular-nums", zIndex: 6 }}>
-          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tool === "zone" ? "Zone check" : isMulti ? "Multi-select" : (aCond?.finish_tag || "No condition")}</div>
-          {isMulti ? (
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detectShown ? "Detect rooms" : tool === "zone" ? "Zone check" : isMulti ? "Multi-select" : (aCond?.finish_tag || "No condition")}</div>
+          {/* Detected rooms — progress, then the honest report. This box is the
+              only surface that outlives the 6-second message bar, so it is where
+              the limits live: what was tried, what came back, what could never
+              be reached. There is deliberately no "done" state, no green tick
+              and no total-SF figure — a detection pass never finishes a sheet,
+              and a readout that looks like a completed one would be a lie the
+              estimator prices work against. */}
+          {detectShown ? (
+            <>
+              {detect.running ? (
+                <>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{detect.done} <span style={{ fontSize: 13, fontWeight: 600 }}>/ {detect.total} room tags</span></div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{detect.items.length} room{detect.items.length === 1 ? "" : "s"} so far</div>
+                  <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>One flood per tag — the canvas stays live. Cancel keeps what it has found; nothing is created until you accept.</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: detect.items.length ? "var(--cobalt)" : "var(--ink-muted)" }}>{detect.items.length} <span style={{ fontSize: 13, fontWeight: 600 }}>to review</span></div>
+                  <div style={{ fontSize: 12.5, color: "var(--ink-secondary)", marginTop: 2 }}>{detect.report?.headline}</div>
+                  {detect.accepted > 0 && <div style={{ fontSize: 12.5, color: "var(--c-positive)", marginTop: 2 }}>{detect.accepted} accepted into the takeoff.</div>}
+                  {(detect.report?.limits || []).map((l, i, arr) => (
+                    <div key={i} style={{ fontSize: 11.5, marginTop: 4, color: i === arr.length - 1 ? "var(--c-warning)" : "var(--ink-muted)" }}>{l}</div>
+                  ))}
+                  <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 6 }}>
+                    {detect.items.length ? "✓ on a room accepts it · ✕ rejects it · Accept all / Reject all in the toolbar · Esc discards the set" : "Esc or Dismiss closes this. One-Click each remaining room."}
+                  </div>
+                </>
+              )}
+            </>
+          ) : isMulti ? (
             <>
               <div style={{ fontSize: 22, fontWeight: 700, color: "var(--cobalt)" }}>{multiSel.size} <span style={{ fontSize: 13, fontWeight: 600 }}>selected</span></div>
               <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginTop: 4 }}>
@@ -6294,7 +6784,7 @@ export default function TakeoffCanvas() {
           shapes={shapes} labels={galleryLabels}
           onLabel={(k, lbl) => setGalleryLabels((m) => (m[k] === lbl ? m : { ...m, [k]: lbl }))}
           onDetect={(k, det) => setDetectedScales((d) => (d[k]?.label === det.label ? d : { ...d, [k]: det }))}
-          thumbCacheRef={thumbCacheRef} busyRef={statusRef}
+          thumbCacheRef={thumbCacheRef} busyRef={statusRef} planIndexRef={planIndexRef} onIndexed={persistIndex}
           openTabs={openTabs} onOpen={openSheets}
           onAddFiles={handleFiles}
           levels={sheetLevels}

@@ -142,7 +142,7 @@ const src = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta
 
 test("F7(b): every vector One-Click ring in the product goes through oneClickRing", () => {
   const sites: Array<[string, string, number]> = [
-    ["../src/pages/TakeoffCanvas.jsx", "TakeoffCanvas", 3],   // propose / live-preview / agent tool
+    ["../src/pages/TakeoffCanvas.jsx", "TakeoffCanvas", 4],   // propose / live-preview / agent tool / detect-rooms batch
     ["../../mcp/src/session.ts", "mcp session", 2],           // one_click / detect_rooms
   ];
   for (const [rel, label, expectedVector] of sites) {

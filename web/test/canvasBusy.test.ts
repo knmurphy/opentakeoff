@@ -48,3 +48,9 @@ test("prevScale === 0 counts as busy (a present prompt, not absent) — nullish 
 test("any one busy signal is enough (OR of all modes)", () => {
   assert.equal(isCanvasBusy({ poly: [], calib: [], check: [], saveState: "saved", editing: true }), true);
 });
+
+test("a Detect-rooms pass in flight / its open review set → busy (item F)", () => {
+  assert.equal(isCanvasBusy({ detecting: true }), true);                    // ~40 floods mid-pass; a re-hydrate would fill a set nobody can act on
+  assert.equal(isCanvasBusy({ detectProposals: [{ id: "dt-1" }] }), true);  // proposals await accept/reject — the One-Click `proposal` gate, sheet-wide
+  assert.equal(isCanvasBusy({ detecting: false, detectProposals: [] }), false);  // report closed / everything reviewed
+});

@@ -13,7 +13,7 @@ import {
   MASK_MAX_DIM, SENS_BALANCED, type MaskObj, type VectorGeometry, type Point, type FloodResult,
 } from "../../web/src/lib/oneclick.ts";
 import { traceConfidence, floodSignals } from "../../web/src/lib/confidence.ts";
-import { roomLabelSeeds, detectRegions, floodAtSeed, oneClickArgs } from "../../web/src/lib/detectRooms.ts";
+import { roomLabelSeeds, detectRegions, floodAtSeed, oneClickArgs, sheetBounds } from "../../web/src/lib/detectRooms.ts";
 import { buildSnapGrid, nearestSnap, closedMetrics, openLen } from "../../web/src/lib/geometry.js";
 import { conditionTotals, grandTotals } from "../../web/src/lib/totals.js";
 
@@ -64,6 +64,13 @@ export interface ShapeOrigin {
   /** one_click: the flood-fill seed, normalized to sheet dims. */
   seed_norm?: [number, number];
   hatch_filtered?: true;
+  /** Seal ladder closed a cased opening: the dilation radius used (mask px).
+   *  A boundary that is partly synthetic must say so — the canvas records the
+   *  same field (TakeoffCanvas.jsx), and a committed shape that hides it is
+   *  indistinguishable from a clean vector-bounded trace on export. */
+  gap_sealed_px?: number;
+  /** Drawn door-swing wedges annexed into the region, and how many. */
+  door_wedges?: number;
   raster_traced?: true;
   fill_sensitivity?: number;
   /** traceConfidence's 0–1 score and the factors behind it (web/src/lib/
@@ -114,7 +121,7 @@ interface SheetState {
   detected: DetectedScale | null;
   /** real feet per image px at RENDER_SCALE; null until set_scale */
   upp: number | null;
-  text: { str: string; x: number; y: number }[];
+  text: { str: string; x: number; y: number; h: number }[];
   page: PageHandle;
   // lazy per-sheet caches (built once, reused by identity)
   geo?: VectorGeometry;
@@ -486,7 +493,7 @@ export class Session {
   }
 
   /** Batch room detection: read every room-number label off the sheet's text
-   *  layer, seed the existing One-Click flood at each, and trace/commit
+   *  layer, seed the same sealed One-Click flood at each, and trace/commit
    *  exactly like oneClick — just N of them from one call instead of N
    *  reasoning-heavy round-trips. Same contract as oneClick: no scale → a
    *  px-only preview per room; no condition → nothing commits (a review
@@ -498,7 +505,13 @@ export class Session {
     const s = this.sheet(name);
     const mask = await this.ensureMask(name);
     if (!mask) throw new UserError("This sheet has no vector linework (likely a scan); raster fallback not yet available in the MCP server.");
-    const seeds = roomLabelSeeds(s.text);
+    // Matching the room-number pattern isn't enough: a sheet's printed areas
+    // ("557 SF"), dimensions, drawing numbers and title-block text all carry
+    // 2-3 digit numerals, and the paper-space ones flood the margin — on the
+    // VA test plan that produced the largest "room" on the sheet, 847 SF of
+    // title block. The spatial gate needs the drawing extent, which only we
+    // know, so it is passed rather than assumed.
+    const seeds = roomLabelSeeds(s.text, { bounds: sheetBounds(s.widthPx, s.heightPx) });
     // A6 (audit): detectRegions now runs the sealed engine; the mask carries the
     // sheet scale, so it derives the same seal radii / wedge cap / min-passage
     // radius the canvas uses. Nothing here re-gates the result — the batch gate
@@ -603,9 +616,13 @@ export class Session {
 
   readSheetText(name: string, region?: { x0: number; y0: number; x1: number; y1: number }) {
     const s = this.sheet(name);
-    const items = region
+    const hit = region
       ? s.text.filter((t) => t.x >= region.x0 && t.x <= region.x1 && t.y >= region.y0 && t.y <= region.y1)
       : s.text;
+    // {str,x,y} is this tool's published shape. positionedText also carries a
+    // glyph height for room detection; it is projected out here rather than
+    // widening the contract, and the strict conformance check enforces that.
+    const items = hit.map(({ str, x, y }) => ({ str, x, y }));
     return { sheet: s.key, items, text: items.map((t) => t.str).join(" ") };
   }
 }

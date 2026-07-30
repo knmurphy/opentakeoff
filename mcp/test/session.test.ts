@@ -129,6 +129,24 @@ test("commit: verts_norm in [0,1], origin receipt, condition minted like the can
   assert.deepEqual(c.materials, []);
 });
 
+test("ensureMask: the working raster is rebuilt when the scale arrives (issue #184 round 9)", async () => {
+  // mppf is baked into the mask, and the flood's seal radii / door-wedge cap /
+  // minimum-passage radius are all derived from it. A mask built before
+  // set_scale would otherwise pin the sheet to the scale-unknown thresholds
+  // for the rest of the session — the canvas evicts on recalibration for the
+  // same reason.
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  const before = await s.ensureMask(KEY);
+  assert.ok(before, "sample-plan has vector linework");
+  assert.ok(!before!.mppf, "a pre-scale mask carries no feet-true scale");
+  s.setScale(KEY, { use_detected: true });
+  const after = await s.ensureMask(KEY);
+  assert.ok(after!.mppf! > 0, "the post-scale mask is feet-true");
+  assert.notEqual(after, before, "the stale mask must not be reused");
+  assert.equal(await s.ensureMask(KEY), after, "and it is cached once the scale is stable");
+});
+
 test("detectRooms: finds all 4 real room labels, excludes the title-block number and scale note", async () => {
   const s = new Session();
   await s.loadPlan(PLAN);
