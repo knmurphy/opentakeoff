@@ -2,7 +2,9 @@
 
 Every change to this repo lands on `main` through a pull request and is
 built and tested by CI. **This repo does not deploy anywhere** — there is no
-deploy workflow here.
+deploy workflow here. (The parent repo, `Kentucky-ai/opentakeoff`, does deploy
+a merge straight to <https://opentakeoff.kentucky-ai.com>; that pipeline is
+theirs, not this fork's.)
 
 ## The pipeline
 

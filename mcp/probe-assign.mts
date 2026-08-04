@@ -1,0 +1,12 @@
+import { fileURLToPath } from "node:url";
+import { Session } from "./src/session.ts";
+const FINISH = fileURLToPath(new URL("../demo/sample-finish-plan.pdf", import.meta.url));
+const FKEY = "sample-finish-plan.pdf";
+const s = new Session();
+await s.loadPlan(FINISH);
+s.setScale(FKEY, { use_detected: true });
+const r: any = await s.detectRooms(FKEY, { assignFromSchedule: true } as any);
+console.log("detected:", r.detected);
+console.log("rooms:", r.rooms.map((x: any) => `${x.label}=${x.area_sf}/${x.condition}`).join("  "));
+console.log("unresolved:", r.unresolved?.length, "->", r.unresolved?.map((u: any) => `${u.label}(${u.area_sf})`).join(" "));
+console.log("withheld:", JSON.stringify(r.withheld));

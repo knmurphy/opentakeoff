@@ -32,6 +32,7 @@ import { num } from "../lib/num.js";
 import { areaVal, areaUnit, lenVal, lenUnit, heightUnit, heightInputToFeet, heightStep, thickUnit, thickInputToInches, thickStep, dimInputStr } from "../lib/units";
 import { HATCHES, PALETTE, NO_FILL, HatchSwatch } from "./hatches.jsx";
 import { LINE_STYLES, LINE_STYLE_IDS } from "../lib/lineStyles.js";
+import { baseTagOf, localCount } from "../lib/variants.ts";
 import { materialKind, MATERIAL_PRESETS, GROUT_DEFAULTS, groutDerivedFields, showsGroutCalc, showsGroutDeriveAffordance } from "../lib/coverage.js";
 import { draftCommitValue, blurCommitValue, blurCommitNonNegative } from "../lib/draftInput.js";
 import { ROLL_FLOORING_TYPES } from "../lib/rollgoods.js";
@@ -51,7 +52,14 @@ export const CONDITION_DND_MIME = "application/x-opentakeoff-condition";
 // the panel's grouped view. VIEW-ONLY, like sort and search: the conditions
 // array order is canonical (1–9 hotkeys are positional and the payload
 // serializes it), so nothing here ever reorders the array itself.
-const tagFamily = (t) => (String(t || "").split("-")[0].trim().toUpperCase() || "—");
+// A condition minted as a TWIN carries an explicit family_id, which beats guessing from the
+// tag: "SV-1 – Level 2" and "SV-1" are one family by construction, and the group is named for
+// the base tag they share (lib/variants.ts). Everything else still groups by its tag prefix.
+const tagFamily = (c) => {
+  const t = typeof c === "string" ? c : c?.finish_tag;
+  if (typeof c === "object" && c?.family_id) return baseTagOf(t).toUpperCase() || "—";
+  return String(t || "").split("-")[0].trim().toUpperCase() || "—";
+};
 // one module-level collator — localeCompare builds a fresh collator per CALL
 // (~56× slower, benchmarked), and natCompare runs n·log n per sorted view
 const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -173,7 +181,8 @@ function CoveragePresetSelect({ material: m, onPick }) {
 }
 
 // Editable supporting-materials rows for a condition (coverage-derived order qty).
-function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libById, overridden, onRevert, onAttach, onPromote }) {
+function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libById, overridden, onRevert, onAttach, onPromote,
+    twin = false, parentTag = "", dropped = [], parentRows = [], onFollowFamilyRow, onRestoreDroppedRow }) {
   // library link affordances (#47, all optional so the editor works standalone):
   // linked lines show ⛓; a field differing from its library entry tints amber
   // and grows a per-field ↺ revert; unlinked lines can be promoted to the library
@@ -203,6 +212,19 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
         );
         return (
           <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+            {/* family state: this row still follows the original, or it is this condition's own */}
+            {twin && (
+              <span title={m.inherited
+                ? `Following ${parentTag || "the family"} — edit any field here and this row stops following (the others keep following)`
+                : `This row is this condition's own${m.origin_id ? ` — it no longer follows ${parentTag || "the family"}` : ""}`}
+                style={{ fontSize: 10, lineHeight: 1, cursor: "default", padding: "2px 3px",
+                  color: m.inherited ? "var(--ink-faint)" : "var(--cobalt)",
+                  border: `1px solid ${m.inherited ? "var(--ink-faint)" : "var(--cobalt)"}` }}>{m.inherited ? "↳" : "✎"}</span>
+            )}
+            {twin && !m.inherited && m.origin_id && onFollowFamilyRow && (
+              <button onClick={() => onFollowFamilyRow(m.id)} title={`Follow the family again — take this row's values back from ${parentTag || "the original"}`}
+                style={{ padding: "1px 4px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 10, lineHeight: 1.4 }}>↺ follow</button>
+            )}
             {lm && <span title={`Linked to “${lm.name}” in the material library — amber fields differ from the library values`} style={{ color: "var(--ink-muted)", fontSize: 11, cursor: "default" }}>⛓</span>}
             <input name="material-name" value={m.name} onChange={(e) => onUpdate(m.id, { name: e.target.value })} placeholder="Material (e.g. Adhesive)" style={{ ...ip, width: 160, ...(ov("name") ? { border: OV } : {}) }} />
             {ov("name") && rv(m, "name")}
@@ -216,6 +238,7 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
               <option value="area">floor SF</option>
               <option value="linear">linear LF</option>
               <option value="count">each</option>
+              <option value="seam_lf" title="Figured seam length from the roll layout — 0 until this condition carries a roll setup">seam LF</option>
             </select>
             {ov("basis") && rv(m, "basis")}
             <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: ov("round") ? "var(--c-warning)" : "var(--ink-muted)" }} title="Round up to whole units (you buy whole buckets/bags)">
@@ -263,6 +286,27 @@ function MaterialsEditor({ materials, onAdd, onUpdate, onRemove, library, libByI
           </div>
         );
       })}
+      {/* Rows this twin threw away. They stay visible (struck through) rather than silently
+          vanishing, because "this area has no moisture barrier" is a DECISION — and it is also
+          what stops a later family edit from quietly putting it back. */}
+      {twin && dropped.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2, paddingTop: 4, borderTop: "1px dashed var(--ink-faint)" }}>
+          {dropped.map((k) => {
+            const src = parentRows.find((r) => r.id === k);
+            return (
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--ink-muted)" }}>
+                <span style={{ color: "var(--c-danger)" }}>✕</span>
+                <span style={{ textDecoration: "line-through" }}>{src?.name || "(removed material)"}</span>
+                <span style={{ fontSize: 10 }}>removed here</span>
+                {src && onRestoreDroppedRow && (
+                  <button onClick={() => onRestoreDroppedRow(k)} title={`Put it back — takes the row from ${parentTag || "the family"} again`}
+                    style={{ padding: "1px 4px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 10, lineHeight: 1.4 }}>↺ restore</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <button onClick={onAdd}
         style={{ marginTop: 2, padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 12 }}>+ add material</button>
       {onAttach && (library || []).length > 0 && (
@@ -517,14 +561,108 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
   );
 }
 
+// ── ⟂ Transitions — where two finishes meet, onto the active condition ───────
+// The estimator's half of derive_transitions (#202). Two finishes go in; the
+// runs where their rooms BUTT — meeting inside one open space, no wall between
+// them — come back as dashed linear shapes on this condition, waiting on the
+// Accept pill like any other machine proposal.
+//
+// What does NOT come back as a shape is the whole point. Two rooms across a
+// partition are adjacent, not joined: the transition there is a threshold in a
+// doorway, and a flood trace records how much boundary it sealed, never where.
+// Committing 34 LF of threshold because two rooms share 34 LF of wall would be
+// a wrong bid with a machine's confidence behind it — so those are listed here
+// with their length and their gap, reported and never counted, for someone to
+// place with the drawing in front of them.
+function TransitionsAction({ cond: c, sources, draft, setDraft, result, setResult, onDerive, onLocate2 }) {
+  const open = draft.id === c.id;
+  // the transition lands on its OWN tag, so this condition is never a source —
+  // deriving onto C-1 would add the joint's LF to the carpet it separates
+  const opts = sources.filter((s) => s.id !== c.id);
+  const ready = open && draft.a && draft.b && draft.a !== draft.b;
+  const close = () => { setDraft({ id: "", a: "", b: "" }); setResult(null); };
+  const run = () => { if (ready) setResult(onDerive(draft.a, draft.b)); };
+  const selStyle = { ...ip, background: "var(--paper-bright)", color: "var(--ink)", maxWidth: 110 };
+  return (
+    <div style={{ padding: "7px 12px 9px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
+      {!open ? (
+        <button onClick={() => { setDraft({ id: c.id, a: opts[0]?.id || "", b: opts[1]?.id || "" }); setResult(null); }}
+          disabled={opts.length < 2}
+          title={opts.length < 2
+            ? "Two finishes with measured rooms on the open sheets are needed before anything can meet."
+            : `Derive where two finishes meet onto ${c.finish_tag}. Runs where the rooms butt inside one open space commit dashed, pending Accept; runs across a wall are reported and never counted — that transition is a threshold in a doorway no trace can locate.`}
+          style={{ padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent",
+            color: opts.length < 2 ? "var(--ink-faint)" : "var(--ink)", cursor: opts.length < 2 ? "default" : "pointer", fontSize: 11.5 }}>
+          ⟂ Transitions…
+        </button>
+      ) : (
+        <div>
+          <div style={{ color: "var(--ink-muted)", marginBottom: 5 }}>
+            Derive onto <b style={{ color: "var(--ink)" }}>{c.finish_tag}</b> — where these two meet.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+            <select name="transition-a" value={draft.a} onChange={(e) => setDraft({ ...draft, a: e.target.value })} style={selStyle}>
+              {opts.map((s) => <option key={s.id} value={s.id}>{s.finish_tag} ({s.rooms})</option>)}
+            </select>
+            <span style={{ color: "var(--ink-muted)" }}>meets</span>
+            <select name="transition-b" value={draft.b} onChange={(e) => setDraft({ ...draft, b: e.target.value })} style={selStyle}>
+              {opts.map((s) => <option key={s.id} value={s.id}>{s.finish_tag} ({s.rooms})</option>)}
+            </select>
+            <button name="transition-derive" onClick={run} disabled={!ready}
+              style={{ padding: "2px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent",
+                color: ready ? "var(--ink)" : "var(--ink-faint)", cursor: ready ? "pointer" : "default", fontSize: 11 }}>Derive</button>
+            <button onClick={close} style={{ padding: "2px 6px", border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>Cancel</button>
+          </div>
+          {result?.error && (
+            <div style={{ marginTop: 6, padding: "4px 6px", border: "1px solid var(--c-warning)", color: "var(--ink)", background: "var(--paper-bright)" }}>{result.error}</div>
+          )}
+          {result && !result.error && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ color: result.committed ? "var(--c-positive)" : "var(--ink-muted)" }}>
+                {result.committed
+                  ? `${result.committed} run${result.committed === 1 ? "" : "s"} · ${result.total_lf} LF proposed on ${result.onto} — dashed until you Accept.`
+                  : "No butt joints between these two on the open sheets."}
+              </div>
+              {result.withheld?.length > 0 && (
+                <div style={{ marginTop: 5, paddingTop: 5, borderTop: "1px solid var(--ink-faint)" }}>
+                  <div style={{ color: "var(--ink-muted)", fontSize: 10.5, letterSpacing: 0.4, textTransform: "uppercase" }}
+                    title="These rooms are adjacent across a partition. The transition is a threshold in the doorway, and nothing in the trace record says where the doorway is — so it is reported, never counted. Measure it at the door.">
+                    Reported, never counted
+                  </div>
+                  <ul style={{ margin: "3px 0 0", paddingLeft: 14, color: "var(--ink)" }}>
+                    {result.withheld.map((w, i) => (
+                      <li key={`${w.between_shape_ids.join("-")}-${i}`} style={{ marginBottom: 1 }}>
+                        {w.length_lf} LF across {w.gap_in}″ of wall
+                        <span style={{ color: "var(--ink-muted)" }}> — {w.between.join(" / ")}</span>
+                        {onLocate2 && (
+                          <button onClick={() => onLocate2(w.sheet_id, w.at)} title="Center the sheet on this run — find the door and measure the threshold there"
+                            style={{ marginLeft: 5, padding: 0, border: "none", background: "transparent", color: "var(--cobalt)", cursor: "pointer", fontSize: 11, textDecoration: "underline" }}>look</button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <div style={{ marginTop: 3, color: "var(--ink-muted)" }}>Adjacent, not joined — measure the threshold at the door.</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TakeoffsPanel({
   open, width, multiSheet, units = "imperial",
   conditions, activeCond, visRowById, projRowById = new Map(), conditionColumns, shapeLabels = [], templates, palette = [], rollByCond = null,
+  transitionSources = [],
   matLib, matLibById, linkedCountById,
   panelPrefs, onPanelPrefs, reassigning, epoch, clearSelectionRef,
   onActivate, onSetActive, onLocate,
   onAddCondition, onDeleteCondition, onUpdateCond, onSetCondParam, onAssignAttr,
   onAddMaterial, onUpdateMaterial, onRemoveMaterial,
+  onDuplicateCondition, onSplitCondition, onFollowFamilyRow, onRestoreDroppedRow,
+  onDeriveTransitions, onLocateTransition,
   onBulkWaste, onBulkColor, onBulkDelete,
   onSaveTemplate, onApplyTemplate, onRenameTemplate, onDeleteTemplate,
   onAttachLibMaterial, onPromoteMaterial, onRevertMatField, matFieldOverridden,
@@ -544,6 +682,12 @@ function TakeoffsPanel({
   const [bulkWaste, setBulkWaste] = useState("");
   const checkAnchorRef = useRef(null);
   const [panelMatOpen, setPanelMatOpen] = useState(false);    // supporting-materials editor expanded inline under the active row
+  const [twinDraft, setTwinDraft] = useState({ id: "", label: "" });   // inline "duplicate for another area" input (never a prompt)
+  // ⟂ Transitions — the two finishes to compare, and the last run's report.
+  // Inline for the same reason the twin input is: a window.prompt freezes a
+  // CDP/automation-driven session dead, and this panel is scripted in demos.
+  const [transDraft, setTransDraft] = useState({ id: "", a: "", b: "" });
+  const [transResult, setTransResult] = useState(null);   // { committed, total_lf, withheld[], between, onto } | { error }
   const rootRef = useRef(null);   // panel root — mid-drag width writes bypass React
   const dragRef = useRef(null);   // { sx, sw, w } — w is the live width during the drag
 
@@ -557,6 +701,8 @@ function TakeoffsPanel({
     checkAnchorRef.current = null;
     setCondQuery("");
     setClosedGroups((s) => (s.size ? new Set() : s));
+    setTransDraft((d) => (d.id ? { id: "", a: "", b: "" } : d));
+    setTransResult(null);   // a report about shapes that no longer exist is worse than no report
   }, [epoch]);
 
   // the canvas's activateCondition (rows, strip, 1–9 hotkeys) dismisses a live
@@ -590,7 +736,7 @@ function TakeoffsPanel({
     if (!panelPrefs.group) return [{ name: null, items: condView }];
     const by = new Map();
     for (const it of condView) {
-      const fam = tagFamily(it.c.finish_tag);
+      const fam = tagFamily(it.c);
       if (!by.has(fam)) by.set(fam, []);
       by.get(fam).push(it);
     }
@@ -713,7 +859,15 @@ function TakeoffsPanel({
           {hot && <span title={pinned ? `Palette shortcut — press ${hIdx + 1} to activate` : `Press ${hIdx + 1} to activate (pin to lock this number)`} style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinned ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinned ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px", flexShrink: 0 }}>{hIdx + 1}</span>}
           <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0, flexShrink: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}</div>
+            <div style={{ fontWeight: on ? 700 : 600, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {/* a twin reads as one: whose it is, and how many of its rows have gone their own way */}
+              {c.variant_of ? <span aria-hidden title="A twin — its materials follow another condition" style={{ color: "var(--ink-faint)", fontWeight: 400 }}>↳ </span> : null}
+              {c.finish_tag}{mult > 1 ? <span style={{ color: "var(--ink-muted)", fontWeight: 500 }}> ×{mult}</span> : null}
+              {c.variant_of && localCount(c) > 0 ? (
+                <span title={`${localCount(c)} material row${localCount(c) === 1 ? "" : "s"} no longer follow${localCount(c) === 1 ? "s" : ""} the family`}
+                  style={{ marginLeft: 5, fontFamily: "var(--f-mono,monospace)", fontSize: 9, fontWeight: 500, color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px" }}>{localCount(c)}</span>
+              ) : null}
+            </div>
             <div style={{ fontFamily: "var(--f-mono,monospace)", fontSize: 11, color: "var(--ink-muted)" }}>
               {qtys({ sf, wsf, lf, ea })}{!sf && !wsf && !lf && !ea && !projDiff ? "—" : ""}
               {projDiff ? (
@@ -744,6 +898,8 @@ function TakeoffsPanel({
             ConditionAppearanceEditor so the docked panel AND the top-bar band
             render the same editor from one source of truth. */}
         {on && <ConditionAppearanceEditor cond={c} onUpdateCond={onUpdateCond} onSetCondParam={onSetCondParam} onAssignAttr={onAssignAttr} conditionColumns={conditionColumns} units={units} rollInfo={rollByCond?.get(c.id) || null} />}
+        {on && onDeriveTransitions && <TransitionsAction cond={c} sources={transitionSources} draft={transDraft} setDraft={setTransDraft}
+          result={transResult} setResult={setTransResult} onDerive={onDeriveTransitions} onLocate2={onLocateTransition} />}
         {matOn && (
           <div style={{ padding: "8px 12px 10px", background: "var(--paper-cream)", borderTop: "1px solid var(--ink-faint)", fontSize: 11.5 }}>
             <div style={{ marginBottom: 6, color: "var(--ink-muted)" }}>Supporting Materials — order qty = measured ÷ coverage, rounded up.</div>
@@ -761,9 +917,57 @@ function TakeoffsPanel({
                   style={{ ...ip, flex: 1, minWidth: 0 }} />
               </label>
             </div>
+            {/* Family: a twin says whose it is, and how to cut it loose. */}
+            {c.variant_of && (() => {
+              const par = conditions.find((x) => x.id === c.variant_of);
+              const n = localCount(c);
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, padding: "3px 6px", border: "1px solid var(--ink-faint)", background: "var(--paper-cream)", fontSize: 11 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--ink-muted)" }}
+                    title={`These materials follow “${par?.finish_tag || "the original"}”. Edit a row and only that row stops following.`}>
+                    ↳ twin of <b style={{ color: "var(--ink)" }}>{par?.finish_tag || "—"}</b>
+                    {n ? <span style={{ color: "var(--cobalt)" }}> · {n} local</span> : null}
+                  </span>
+                  {onSplitCondition && (
+                    <button onClick={() => onSplitCondition(c.id)}
+                      title={`Split out — freeze the following rows where they stand and stop following “${par?.finish_tag || "the original"}”. Keeps its name and still groups with the family.`}
+                      style={{ padding: "1px 6px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 10.5, color: "var(--ink)", flexShrink: 0 }}>⤴ Split out</button>
+                  )}
+                </div>
+              );
+            })()}
             <MaterialsEditor materials={c.materials} onAdd={onAddMaterial} onUpdate={onUpdateMaterial} onRemove={onRemoveMaterial}
               library={matLib} libById={matLibById} overridden={matFieldOverridden} onRevert={onRevertMatField}
-              onAttach={onAttachLibMaterial} onPromote={onPromoteMaterial} />
+              onAttach={onAttachLibMaterial} onPromote={onPromoteMaterial}
+              twin={!!c.variant_of} parentTag={(conditions.find((x) => x.id === c.variant_of) || {}).finish_tag || ""}
+              dropped={c.materials_dropped || []} parentRows={(conditions.find((x) => x.id === c.variant_of) || {}).materials || []}
+              onFollowFamilyRow={onFollowFamilyRow} onRestoreDroppedRow={onRestoreDroppedRow} />
+            {/* Duplicate, inline — deliberately NOT a window.prompt: those freeze a
+                CDP/automation-driven session dead, and this panel is scripted in demos. */}
+            {onDuplicateCondition && (twinDraft.id === c.id ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>Duplicate for</span>
+                <input name="twin-label" autoFocus value={twinDraft.label}
+                  onChange={(e) => setTwinDraft({ id: c.id, label: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && twinDraft.label.trim()) { onDuplicateCondition(c.id, twinDraft.label.trim()); setTwinDraft({ id: "", label: "" }); }
+                    if (e.key === "Escape") setTwinDraft({ id: "", label: "" });
+                  }}
+                  placeholder="e.g. Level 2" style={{ ...ip, width: 120 }} />
+                <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>
+                  → <b style={{ color: "var(--ink)" }}>{twinDraft.label.trim() ? `${baseTagOf(c.finish_tag)} – ${twinDraft.label.trim()}` : "…"}</b>
+                </span>
+                <button onClick={() => { if (twinDraft.label.trim()) { onDuplicateCondition(c.id, twinDraft.label.trim()); setTwinDraft({ id: "", label: "" }); } }}
+                  disabled={!twinDraft.label.trim()}
+                  style={{ padding: "2px 8px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: twinDraft.label.trim() ? "var(--ink)" : "var(--ink-faint)", cursor: twinDraft.label.trim() ? "pointer" : "default", fontSize: 11 }}>Duplicate</button>
+                <button onClick={() => setTwinDraft({ id: "", label: "" })}
+                  style={{ padding: "2px 6px", border: "none", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>Cancel</button>
+              </div>
+            ) : (
+              <button onClick={() => setTwinDraft({ id: c.id, label: "" })}
+                title="Duplicate this condition — the same finish measured somewhere else, with its own materials. Name the area (e.g. Level 2); no takeoffs come along, you measure into it, and its materials keep following this condition until you change them there."
+                style={{ marginTop: 6, padding: "3px 9px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontSize: 11.5 }}>⎘ Duplicate for another area…</button>
+            ))}
           </div>
         )}
       </div>
@@ -924,6 +1128,7 @@ function TakeoffsPanel({
                       <option value="area">floor SF</option>
                       <option value="linear">linear LF</option>
                       <option value="count">each</option>
+                      <option value="seam_lf" title="Figured seam length from the roll layout — 0 until the condition carries a roll setup">seam LF</option>
                     </select>
                     <label style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--ink-muted)" }} title="Round up to whole units">
                       <input name="library-material-round" type="checkbox" checked={lm.round !== false} onChange={(e) => onUpdateLibMaterial(lm.id, { round: e.target.checked })} />round up

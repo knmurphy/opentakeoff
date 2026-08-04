@@ -27,23 +27,35 @@ import ToolMenu from "../components/ToolMenu.jsx";
 import PlanNavigator from "../components/PlanNavigator.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import RevisionsPanel from "../components/RevisionsPanel.jsx";
+import UserGuide from "../components/UserGuide.jsx";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText } from "../lib/sheets";
 import { buildSheetIndex, dropFileFromIndex, serializePlanIndex, sanitizePlanIndex } from "../lib/planIndex";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
+import { isStitchKey, mintStitchId, sanitizeStitches, autoButt, stitchExtent, alignMembers, seamClips, mergePoints, mergeSegs, stitchAlive, stitchLayoutSig } from "../lib/stitches";
 import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
+// Condition twins — the whole inheritance rule is in lib/variants.ts (test/variants.test.ts);
+// this file only calls it from the material write paths and the condition deletes.
+import { mintTwin, variantTag,
+  propagateRowPatch, propagateRowAdd, propagateRowRemove,
+  markRowLocal, dropRowLocal, followFamily, splitFromFamily, promoteOnDelete } from "../lib/variants.ts";
 import { isGoogleConfigured, isSignedIn, isAllowedDomain, getAccessToken, orgDomainHint } from "../lib/google/auth.js";
 import { extractVectorGeometry, buildMask, floodRegionSealed, sealRadiiFor, doorWedgeCapPx, minPassRadiusFor, oneClickRing, ringArea, MASK_MAX_DIM, MIN_PASS_FT, SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE } from "../lib/oneclick";
+import { traceConfidence, floodSignals } from "../lib/confidence";
 import { buildRasterMask, rasterMaskScale, scanNativeScale, RASTER_MIN_IMG_FRAC, RASTER_MIN_SEGS, RASTER_RDP_EPS } from "../lib/rastermask";
 import { roomLabelSeeds, detectRegions, sheetBounds, detectionReport, ROOM_LABEL_RE } from "../lib/detectRooms";
 import { roomNameFromTokens } from "../lib/roomName";
-import { traceConfidence, floodSignals } from "../lib/confidence";
+// PDF layer roles (#85): the pure name→role classifier and the override
+// plumbing shared with the MCP session — the canvas consumes buildMask's
+// opts.roles seam exactly the way the server does, one engine, one meaning.
+import { buildLayerInfos, effectiveLayerRoles, layerRoleCodes, segRoles, sanitizeLayerOverrides } from "../lib/layers";
 import { detectCandidateRule, buildRuleFromSeed, applyRuleToProject } from "../lib/rules";
+import { deriveTransitionRuns, transitionRefusal } from "../lib/transitions";
 import { conditionTotals, verticalWallSf } from "../lib/totals.js";
 import { shapesInZone } from "../lib/zone.js";
 import { shapesInStageRect } from "../lib/marquee.js";
@@ -65,8 +77,11 @@ import ImportSchedulePanel from "../components/ImportSchedulePanel.jsx";
 // here), lib/rollTakeoff.js the pure shapes→engine bridge; RollPanel is the
 // docked diagram/reorder desk. Cut edits commit through the rollcut command.
 import RollPanel from "../components/RollPanel.jsx";
+// Layers (#85 phase 2): the docked layer-table desk — stated roles + the
+// per-layer Auto/Wall/Off overrides that feed the mask's role short-circuit.
+import LayerPanel from "../components/LayerPanel.jsx";
 import { rollColorForType } from "../lib/rollgoods.js";
-import { computeRollTakeoff } from "../lib/rollTakeoff.js";
+import { computeRollTakeoff, seamLfByShape } from "../lib/rollTakeoff.js";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -114,9 +129,10 @@ import { requiredDensity as tileRequiredDensity } from "../lib/tiles";
 // nowIso stays imported for the non-shape records (markups, RFIs, conditions).
 import { nowIso, mintUuid } from "../lib/provenance.js";
 import { applyShapeCommand, geomSnapshot, vertsEqual, recordCommand } from "../lib/shapeCommands.js";
+import { applyApprovalCommand, sanitizeApprovals, approvalInk, APPROVAL_R } from "../lib/approvals.js";
 import { findCutoutParent, subtractCutout, recomposeCutouts } from "../lib/cutout.js";
 import { computeShapeMetrics, needsMetrics } from "../lib/shapeMetrics.js";
-import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, heightVal, heightUnit, heightInputToFeet, heightStep, dimInputStr } from "../lib/units";
+import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, heightVal, heightUnit, heightInputToFeet, heightStep, dimInputStr, dimLabel } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
 
 // Feed one sheet's text layer into the plan-set search index. Module-scope and
@@ -252,6 +268,10 @@ export default function TakeoffCanvas() {
   const [sheetLevels, setSheetLevels] = useState({}); // sheetKey → level label ("L1") — persisted (additive `sheet_levels` key); groups the gallery for multi-floor sets
   const [lastGroup, setLastGroup] = useState([]);     // most recent side-by-side composition — "Regroup" restores it
   const [focusKey, setFocusKey] = useState("");         // panel of the last click — scale/calibrate target in group mode
+  // Stitches (#161): persisted match-line composites (lib/stitches.ts) — a
+  // stitch opens as ONE panel; its members are a render-time concern only.
+  const [stitches, setStitches] = useState([]);
+  const [alignPt, setAlignPt] = useState(null);       // stitch-align first click (stage px) — ephemeral, never persisted
   const [zoneCheck, setZoneCheck] = useState(null);   // ephemeral zone-check region {key, pts (norm)} — never persisted (buildPayload doesn't read it)
   const [zoneExpand, setZoneExpand] = useState(null); // zone panel: condition id with materials expanded
   // Shared reset for the two zone transients — every site that discards
@@ -261,6 +281,7 @@ export default function TakeoffCanvas() {
   // matching `poly` (pending zone trace) reset, which has its own rule.
   const resetZone = () => { setZoneCheck(null); setZoneExpand(null); };
   const [markups, setMarkups] = useState([]);                // cloud/callout/text annotations (separate from measurement shapes)
+  const [approvals, setApprovals] = useState([]);            // approval seals — estimator APPROVED ink + agent AGENT marks (lib/approvals.js; its own family, not markups)
   const [markupDraft, setMarkupDraft] = useState(null);      // in-progress markup first point (cloud/callout/highlight)
   // Docked LEFT panel — one at a time, never overlapping: null | "markup" | "stamp" | "rfi".
   // The right-rail buttons switch tabs; the dock reflows the canvas (mirrors the
@@ -364,6 +385,7 @@ export default function TakeoffCanvas() {
   const [palette, setPalette] = useState([]);   // ordered condition ids pinned to the top-bar quick-access palette (≤ PALETTE_MAX)
   const [shapes, setShapes] = useState([]);
   const [poly, setPoly] = useState([]);
+  const [guideOpen, setGuideOpen] = useState(false);   // the in-app manual overlay (? / the toolbar button)
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
   // ── Detect rooms — the sheet-wide One-Click pass, under review ─────────────
   // `detect` is NOT a proposal in the One-Click sense: it never becomes a
@@ -486,6 +508,14 @@ export default function TakeoffCanvas() {
     const entry = undoStackRef.current[undoStackRef.current.length - 1];
     if (!entry) return;
     undoStackRef.current = undoStackRef.current.slice(0, -1);
+    // approval entries share the ONE gesture history (family tag, recorded by
+    // dispatchApproval below) — same stacks, different pure apply + array.
+    if (entry.family === "approval") {
+      const res = applyApprovalCommand(approvals, entry.inverse);
+      setApprovals(res.approvals);
+      redoStackRef.current = [...redoStackRef.current, { family: "approval", cmd: res.inverse, inverse: entry.inverse }];
+      return;
+    }
     const res = applyShapeCommand(shapes, entry.inverse);
     setShapes(res.shapes);
     redoStackRef.current = [...redoStackRef.current, { cmd: res.inverse, inverse: entry.inverse }];
@@ -495,10 +525,32 @@ export default function TakeoffCanvas() {
     const entry = redoStackRef.current[redoStackRef.current.length - 1];
     if (!entry) return;
     redoStackRef.current = redoStackRef.current.slice(0, -1);
+    if (entry.family === "approval") {
+      const res = applyApprovalCommand(approvals, entry.cmd);
+      setApprovals(res.approvals);
+      undoStackRef.current = [...undoStackRef.current, { family: "approval", cmd: entry.cmd, inverse: res.inverse }];
+      return;
+    }
     const res = applyShapeCommand(shapes, entry.cmd);
     setShapes(res.shapes);
     undoStackRef.current = [...undoStackRef.current, { cmd: entry.cmd, inverse: res.inverse }];
     setSelVert(null);   // same stale-index guard as undo
+  }
+  // ── the approval-command wrapper ──────────────────────────────────────────
+  // dispatchShape one size smaller: pure apply (lib/approvals.js) +
+  // setApprovals + the SHARED undo/redo stacks, entries tagged family:
+  // "approval" so ⌘Z pops seals and shapes in one gesture history. No
+  // counters and no reset path — hydrate sets the array directly, and the
+  // shape replace-reset clears the shared stacks (approval entries included).
+  function dispatchApproval(cmd, { record = true } = {}) {
+    const res = applyApprovalCommand(approvals, cmd);
+    setApprovals(res.approvals);
+    if (record && res.inverse) {
+      const st = recordCommand(undoStackRef.current, { family: "approval", cmd, inverse: res.inverse });
+      undoStackRef.current = st.undo;
+      redoStackRef.current = st.redo;   // a new command discards the redone future
+    }
+    return res;
   }
   // selecting a shape clears any markup selection and vice-versa — one live
   // selection at a time (bidirectional mutual exclusivity). Passing null clears both.
@@ -601,8 +653,19 @@ export default function TakeoffCanvas() {
   const snapGridsRef = useRef(new Map()); // sheetKey → {cell, map} spatial hash of vector endpoints
   const vectorSegsRef = useRef(new Map()); // sheetKey → flat [x1,y1,x2,y2,…] linework segments (One-Click boundary source)
   const segMetaRef = useRef(new Map());    // sheetKey → per-segment meta bytes (hatch classification input)
+  // PDF layers (#85): the op walk's per-segment OCG attribution + the sheet's
+  // classified layer table. Engine reads go through REFS (rolesForSheet runs
+  // inside click paths — a just-resolved table must be visible before React
+  // commits); sheetLayers STATE mirrors layerInfosRef for the panel render.
+  const layerGeoRef = useRef(new Map());   // sheetKey → { layerIds, layerOf }
+  const layerInfosRef = useRef(new Map()); // sheetKey → LayerInfo[] ([] = unlayered)
+  const layerOverridesRef = useRef({});    // mirror of layerOverrides — see above
+  const [sheetLayers, setSheetLayers] = useState({});        // sheetKey → LayerInfo[] (panel view)
+  const [layersOpen, setLayersOpen] = useState(false);       // docked Layers panel
+  const [layerOverrides, setLayerOverrides] = useState({});  // sheetKey → { ocgId: "include"|"exclude" } — persisted (additive `layer_overrides`)
   const maskCacheRef = useRef(new Map());  // sheetKey → built boundary mask (lazy, dropped on re-render)
   const sheetStatsRef = useRef(new Map()); // sheetKey → {segCount, imageFrac, scanPxPerPt} — raster-fallback trigger signals + the scan's own resolution (mask DPI ceiling)
+  const panelSourceDimsRef = useRef(new Map()); // stitchKey → { memberKey: {w,h} } — member dims resolved by the render effect (#161)
   const rasterMaskCacheRef = useRef(new Map()); // sheetKey → Promise<MaskObj|null> — scan-pixel mask (lazy, shared across clicks)
   const rasterMaskReadyRef = useRef(new Map()); // sheetKey → resolved MaskObj — sync view of the cache for the hover preview
   const dpiNoticedRef = useRef(new Set());      // sheetKeys already told "this is a NNN DPI scan" (say it once, not per click)
@@ -725,7 +788,10 @@ export default function TakeoffCanvas() {
   // not whatever sheet the pager held before you grouped — shapes/markups all
   // carry their own sheet_id, so nothing is lost either way.
   const ungroup = () => {
-    const k = (focusKey && sheetGroup.includes(focusKey)) ? focusKey : (sheetGroup[0] || sheetKey);
+    let k = (focusKey && sheetGroup.includes(focusKey)) ? focusKey : (sheetGroup[0] || sheetKey);
+    // ungrouping a stitch lands on its first member — the stitch id itself is
+    // not a pageable single sheet (active/page never carry stitch keys)
+    if (isStitchKey(k)) k = stitchById[k]?.members[0]?.key || sheets[0]?.name || k;
     const t = parseSheetKey(k);
     setSheetGroup([]);
     if (t.file !== active) setActive(t.file);
@@ -742,10 +808,58 @@ export default function TakeoffCanvas() {
   };
   // single-view a sheet by key (tab click, gallery View, tab restore)
   function goToSheet(key) {
+    if (isStitchKey(key)) { openStitch(key); return; }   // a stitch opens as a group of one (#161)
     const t = parseSheetKey(key);
     if (t.file !== active) setActive(t.file);
     setPage(t.page);
     setSheetGroup([]);
+  }
+  // ── stitches (#161): open / create / delete ────────────────────────────────
+  function openStitch(id) {
+    if (!stitchById[id]) return;
+    setOpenTabs((t) => (t.includes(id) ? t : [...t, id]));
+    setSheetGroup([id]);
+    setFocusKey(id);
+    setView("canvas");
+  }
+  // Mint a stitch from 2..MAX_GROUP sheet keys: members butt flush left-to-
+  // right (match-line alignment is the Align gesture's job), the stitch opens
+  // immediately, and it inherits the members' scale when they all agree.
+  async function createStitch(keys) {
+    const ks = [...new Set(keys)].slice(0, MAX_GROUP);
+    if (ks.length < 2 || ks.some((k) => isStitchKey(k))) return;
+    const dims = {};
+    try {
+      for (const k of ks) {
+        const t = parseSheetKey(k);
+        const pdf = await docFor(t.file);
+        const pg = await pdf.getPage(Math.min(Math.max(1, t.page), pdf.numPages || 1));
+        const vp = pg.getViewport({ scale: RENDER_SCALE });
+        // EXACT dims — a butt layout at ceil'd widths would open a hairline gap
+        // and drift the composite extent (see resolveSource's wf/hf note)
+        dims[k] = { w: vp.width, h: vp.height };
+      }
+    } catch (e) { setCommitMsg(`Couldn't read those sheets to stitch them: ${e.message || e}`); return; }
+    const st = { id: mintStitchId(), name: ks.map((k) => tabLabel(k)).join(" + "), members: autoButt(ks, dims), created_at: nowIso() };
+    setStitches((s) => [...s, st]);
+    const upps = ks.map((k) => scales[k]);
+    if (upps.every((u) => u != null && Math.abs(u - upps[0]) < 1e-12)) setScales((s) => ({ ...s, [st.id]: upps[0] }));
+    setOpenTabs((t) => (t.includes(st.id) ? t : [...t, st.id]));
+    setSheetGroup([st.id]);
+    setFocusKey(st.id);
+    setView("canvas");
+    setCommitMsg("Stitched — drag to pan, then Align (toolbar) joins the match line: click the same point on both sheets.");
+  }
+  // Deleting a stitch is refused while takeoffs live on it — quantities are
+  // never silently orphaned (the close-PDF confirm precedent, but stricter:
+  // a stitch has no file to re-add, so there is no restore path).
+  function deleteStitch(id) {
+    const n = shapes.filter((s) => s.sheet_id === id).length + markups.filter((m) => m.sheet_id === id).length;
+    if (n) { setCommitMsg(`This stitch carries ${n} takeoff${n === 1 ? "" : "s"}/markup${n === 1 ? "" : "s"} — delete or move them first.`); return; }
+    setStitches((s) => s.filter((st) => st.id !== id));
+    setOpenTabs((t) => t.filter((k) => k !== id));
+    if (sheetGroup.includes(id)) { const f = sheetGroup.filter((k) => k !== id); setSheetGroup(f.length >= 2 || (f.length === 1 && isStitchKey(f[0])) ? f : []); }
+    setLastGroup((g) => (g.includes(id) ? [] : g));
   }
   // gallery open: every key becomes a tab; side-by-side also groups (2–4)
   // `focus` (optional) is a normalized [0..1, 0..1] point on keys[0] to centre on
@@ -771,11 +885,12 @@ export default function TakeoffCanvas() {
     const i = openTabs.indexOf(key);
     const next = openTabs.filter((k) => k !== key);
     setOpenTabs(next);
-    if (sheetGroup.includes(key)) { const f = sheetGroup.filter((k) => k !== key); setSheetGroup(f.length >= 2 ? f : []); }
+    if (sheetGroup.includes(key)) { const f = sheetGroup.filter((k) => k !== key); setSheetGroup(f.length >= 2 || (f.length === 1 && isStitchKey(f[0])) ? f : []); }
     if (!next.length) { setView("gallery"); return; }
     if (!sheetGroup.length && key === sheetKey) { const nb = next[Math.min(Math.max(i, 0), next.length - 1)]; if (nb) goToSheet(nb); }
   }
   const tabLabel = (k) => {
+    if (isStitchKey(k)) return stitchById[k]?.name || "Stitched sheets";
     const lvl = sheetLevels[k] ? `${sheetLevels[k]} · ` : "";   // assigned floor/level rides every tab label
     if (galleryLabels[k]) return lvl + galleryLabels[k];
     const t = parseSheetKey(k);
@@ -789,13 +904,42 @@ export default function TakeoffCanvas() {
   // its xOffset. With one panel xOffset is 0, so stage space IS image space and
   // all the original single-sheet math is unchanged.
   const groupKeys = sheetGroup.length ? sheetGroup : [sheetKey];
-  const groupSig = JSON.stringify(groupKeys);
+  const stitchById = useMemo(() => Object.fromEntries(stitches.map((s) => [s.id, s])), [stitches]);
+  // docEpoch re-keys groupSig when a re-dropped file's BYTES changed under the
+  // same name (store.addPdf → revised): the render effect keyed on groupSig is
+  // the one path that resets every cache (compositor, pageObjs, snap grids) and
+  // reloads docs, so bumping it is how new revision bytes reach the screen
+  // without a reload. Same-name-same-bytes drops don't bump — no wasted repaint.
+  // The stitch-layout signature joins it (#161): re-aligning a stitch moves its
+  // members under the SAME keys, and this effect is the one path that rebuilds
+  // the merged snap/mask geometry and member placement.
+  const [docEpoch, setDocEpoch] = useState(0);
+  const groupSig = JSON.stringify(groupKeys) + "@" + docEpoch + "|" + stitchLayoutSig(groupKeys, stitches);
   let _px = 0;
   const panels = groupKeys.map((key) => {
     const dims = panelImgs[key] || { w: 0, h: 0 };
     const p = { key, ...parseSheetKey(key), img: dims, xOffset: _px };
     if (dims.w) _px += dims.w + PANEL_GAP;
     return p;
+  });
+  // Draw-time expansion (#161): a stitch panel paints as its MEMBER canvases
+  // (each positioned at its stitch offset, seam-clipped); a plain panel paints
+  // as itself with drawKey === key, so the non-stitch DOM is byte-identical.
+  // Input math (panelAt/stage space) reads `panels` only and never sees this.
+  const drawPanels = panels.flatMap((p) => {
+    const st = stitchById[p.key];
+    if (!st) return [{ drawKey: p.key, compKey: p.key, x: p.xOffset, y: 0, w: p.img.w, h: p.img.h, clip: null }];
+    const dims = panelSourceDimsRef.current.get(p.key);
+    if (!dims) return [];   // members not resolved yet — the render effect paints nothing until phase A lands
+    const clips = seamClips(st.members, dims);
+    return st.members.map((m, i) => ({
+      drawKey: `${p.key}::${m.key}`, compKey: `${p.key}::${m.key}`,
+      x: p.xOffset + m.dx, y: m.dy,
+      // ceil to match the base canvas's integer backing store (dims are exact)
+      w: Math.ceil(dims[m.key]?.w || 0), h: Math.ceil(dims[m.key]?.h || 0),
+      // clip is the member's VISIBLE box in stage space (wrapper div bounds)
+      clip: { x: p.xOffset + clips[i].x0, y: clips[i].y0, w: clips[i].x1 - clips[i].x0, h: clips[i].y1 - clips[i].y0 },
+    }));
   });
   // Pure panel-row math (stage extent, nearest-panel routing, the px→feet
   // scale factors) lives in lib/panelGeometry.js; these thin wrappers bind the
@@ -827,7 +971,7 @@ export default function TakeoffCanvas() {
   // the FOCUSED panel (the one last clicked); single mode focuses the lone panel.
   const focusPanel = (focusKey && groupKeys.includes(focusKey) && panelByKey(focusKey)) || panels[0];
   const unitsPerPx = scales[focusPanel.key] ?? null;
-  const labelFor = (p) => (p.file === active && pageLabels[p.page]) || (p.page > 1 ? `Sheet ${p.page}` : p.file);
+  const labelFor = (p) => stitchById[p.key]?.name || (p.file === active && pageLabels[p.page]) || (p.page > 1 ? `Sheet ${p.page}` : p.file);
   // Scale semantics (why geometry divides by factorFor and calibration
   // multiplies back to baseline) are documented on the pure functions in
   // lib/panelGeometry.js; these wrappers bind the live scales/renderScalesRef.
@@ -855,6 +999,11 @@ export default function TakeoffCanvas() {
   );
   const rollByCond = rollTakeoff.byCond;
   const rollCutsByPanel = rollTakeoff.cutsBySheet;
+  // Figured seam LF per shape — the basis a "seam_lf" materials row (weld rod,
+  // seam tape) divides against. Handed to every conditionTotals scope below so
+  // the HUD, the project roll-up, and a zone check agree with the Report on
+  // what the layout welds.
+  const seamCtx = useMemo(() => ({ seamByShape: seamLfByShape(rollByCond) }), [rollByCond]);
 
   // Cut drag (#136) — the self-contained element-drag pattern (the panel-resize
   // handle's): the cut's own <g> opts into pointer events in edit mode, captures
@@ -1088,8 +1237,21 @@ export default function TakeoffCanvas() {
     // addPdf keys IndexedDB on the NAME, so re-adding a reissued sheet replaces
     // the bytes under the same sheet key — its index entry must go with them or
     // search keeps answering with the superseded sheet's text.
-    for (const f of pdfs) { try { await store.addPdf(f); forgetFile(f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
+    const results = [];
+    for (const f of pdfs) { try { results.push(await store.addPdf(f)); forgetFile(f.name); } catch (e) { setCommitMsg(`Couldn't open ${f.name}: ${e.message || e}`); } }
     await refreshSheets();
+    // CO-1: a re-drop whose bytes CHANGED is a plan revision, not a re-open.
+    // The store archived the old bytes; here the stale pdf.js docs must go
+    // (docFor caches by name for the life of the view) and the render effect
+    // must re-key so the new revision actually reaches the screen.
+    const revised = results.filter((r) => r?.revised);
+    if (revised.length) {
+      for (const r of revised) {
+        const t = pdfDocsRef.current.get(r.name);
+        if (t) { t.then((task) => { try { task.destroy(); } catch { /* already gone */ } }).catch(() => {}); pdfDocsRef.current.delete(r.name); }
+      }
+      setDocEpoch((e) => e + 1);
+    }
     const names = pdfs.map((f) => f.name);
     const tail = skipped.length ? ` · ${skipped.length} skipped` : "";
     if (names.length === 1) {
@@ -1099,7 +1261,19 @@ export default function TakeoffCanvas() {
     } else {
       setView("gallery");   // a plan set → land in the gallery to pick sheets
     }
-    setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
+    if (revised.length) {
+      // "changed under your markups" only when ink actually rides that file —
+      // any page of it (sheet_id is `name` for page 1, `name#page` beyond)
+      const inked = (n) => shapes.some((s) => s.sheet_id === n || s.sheet_id.startsWith(n + "#"))
+        || markups.some((m) => m.sheet_id === n || m.sheet_id.startsWith(n + "#"));
+      const hot = revised.filter((r) => inked(r.name));
+      const label = (r) => `${r.name} → rev ${r.rev}`;
+      setCommitMsg(hot.length
+        ? `Sheet changed under your markups: ${hot.map(label).join(", ")} — earlier revision kept; re-check the affected takeoff.`
+        : `Sheet updated: ${revised.map(label).join(", ")} — earlier revision kept.`);
+    } else {
+      setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
+    }
   }
   // The empty-project landing view (the Drive picker for an empty cloud project,
   // else the gallery) depends on BOTH the sheet list and the annotations (open
@@ -1190,6 +1364,7 @@ export default function TakeoffCanvas() {
     // (pre-dating the id field) — seed a stable id + default rfi_id so the new
     // select / edit / delete / move / RFI-link flows (all keyed on m.id) work on them.
     setMarkups(Array.isArray(a.markups) ? a.markups.map((m) => ({ ...m, id: m.id || uid("mk"), rfi_id: m.rfi_id || "", condition_id: m.condition_id || "" })) : []);
+    setApprovals(sanitizeApprovals(a.approvals));   // additive — old saves load as []; load-gated so one corrupt seal can't wedge the render loop
     setRfis(Array.isArray(a.rfis) ? a.rfis : []);   // additive — old saves without rfis load as []
     // additive provenance_counters — unconditional set (the else-clear rule: a
     // snapshot load must not inherit the replaced project's deletion tallies).
@@ -1205,12 +1380,28 @@ export default function TakeoffCanvas() {
     // Extracted to sanitizeSheetLevels (lib/sheetLevels.js) so this gate has
     // its own unit tests independent of the reducer.
     setSheetLevels(sanitizeSheetLevels(a.sheet_levels));
+    // additive `layer_overrides` (#85 — per-sheet PDF-layer Wall/Off overrides
+    // for the One-Click mask): same else-clear + shape gate as sheet_levels.
+    // Masks are a lazy per-sheet cache — drop them so a loaded snapshot's
+    // overrides govern the next flood, not the replaced project's.
+    const lov = sanitizeLayerOverrides(a.layer_overrides);
+    layerOverridesRef.current = lov;
+    setLayerOverrides(lov);
+    maskCacheRef.current.clear();
+    // additive `stitches` (#161) — sanitize-gated like approvals; else-clear so a
+    // snapshot load can't inherit the replaced project's composites. Sanitized
+    // BEFORE group normalization: a solo stitch key in sheet_group is only a
+    // legitimate group of one while its stitch actually exists.
+    const loadedStitches = sanitizeStitches(a.stitches, MAX_GROUP);
+    setStitches(loadedStitches);
+    setAlignPt(null);
     // else-clear matters at runtime (snapshot load): a payload without groups/
     // tabs must not inherit the pre-load ones — autosave would persist a hybrid.
     // In group mode sheetGroup + lastGroup share ONE instance so the lastGroup-sync
     // effect below is a reference-equal no-op — otherwise its follow-up commit would
     // escape the one-shot save suppression and spuriously re-save (see normalizeLoadedGroups).
-    const { sheetGroup: grp, lastGroup: lgFinal } = normalizeLoadedGroups(a, MAX_GROUP);
+    const { sheetGroup: grp, lastGroup: lgFinal } = normalizeLoadedGroups(a, MAX_GROUP,
+      (k) => loadedStitches.some((s) => s.id === k));
     setSheetGroup(grp);
     setLastGroup(lgFinal);
     // gallery-first: tabs restore directly; legacy pinned pages migrate once
@@ -1346,6 +1537,7 @@ export default function TakeoffCanvas() {
   // slot's reserved width always fits its content (issue #61).
   useEffect(() => { if (tool !== "oneclick") setProposal(null); ocLiveHide(); }, [tool]);
   useEffect(() => { if (ocLiveRef.current) ocLiveRef.current.last = null; }, [fillSens]);   // knob moved — the cached preview no longer reflects it
+  useEffect(() => { if (tool !== "stitch-align") setAlignPt(null); }, [tool]);   // leaving the align gesture drops its half-set match point
   // Proposal gone (created, discarded, sheet changed) ⇒ drop any handle selection/hover.
   useEffect(() => { if (!proposal) { setOcSel(null); ocHoverRef.current = -1; setOcHover(-1); } }, [proposal]);
   // Switching to a different shape (or clearing the selection) drops the vertex pick.
@@ -1356,13 +1548,18 @@ export default function TakeoffCanvas() {
   useEffect(() => { if (sheetGroup.length >= 2) setLastGroup(sheetGroup); }, [sheetGroup]);
 
   // a persisted group may reference a since-deleted file — drop those keys; a
-  // group of one collapses back to single-sheet mode
+  // group of one collapses back to single-sheet mode. A stitch key is live
+  // while its stitch exists and every member's file survives (#161), and a
+  // solo stitch is a legitimate group of one.
   useEffect(() => {
     if (!sheets.length) return;
     const names = new Set(sheets.map((s) => s.name));
+    const keyLive = (k) => (isStitchKey(k)
+      ? !!stitchById[k] && stitchAlive(stitchById[k], names)
+      : names.has(parseSheetKey(k).file));
     const liveKeys = (g) => {
-      const f = g.filter((k) => names.has(parseSheetKey(k).file));
-      return f.length === g.length ? g : (f.length >= 2 ? f : []);
+      const f = g.filter(keyLive);
+      return f.length === g.length ? g : (f.length >= 2 || (f.length === 1 && isStitchKey(f[0])) ? f : []);
     };
     setSheetGroup(liveKeys);
     setLastGroup(liveKeys);
@@ -1374,8 +1571,10 @@ export default function TakeoffCanvas() {
       legacyPinnedRef.current = null;
       setOpenTabs((t) => (t.length ? t : tabs));
     }
-    setOpenTabs((t) => { const f = t.filter((k) => names.has(parseSheetKey(k).file)); return f.length === t.length ? t : f; });
-  }, [sheets]);
+    setOpenTabs((t) => { const f = t.filter(keyLive); return f.length === t.length ? t : f; });
+    // stitchById joins the deps: a stitch created/deleted this session must
+    // re-run the same liveness pass its members' files do.
+  }, [sheets, stitchById]);
 
   // land on the first restored tab (the sheet-list effect defaults to sheets[0])
   useEffect(() => {
@@ -1419,9 +1618,9 @@ export default function TakeoffCanvas() {
   useEffect(() => {
     darkModeRef.current = darkMode;
     if (status !== "ready") return;
-    for (const p of panels) {
-      const cv = panelCanvasRefs.current.get(p.key);
-      if (cv && p.img?.w) getCompositor().paintBase(cv, p.key, p.img.w, p.img.h, darkMode);
+    for (const d of drawPanels) {
+      const cv = panelCanvasRefs.current.get(d.drawKey);
+      if (cv && d.w) getCompositor().paintBase(cv, d.drawKey, d.w, d.h, darkMode);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [darkMode]);
@@ -1439,12 +1638,15 @@ export default function TakeoffCanvas() {
     if (!active) return;
     const seq = ++renderSeqRef.current;
     const stale = () => seq !== renderSeqRef.current;
-    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null); selectShape(null); setProposal(null); discardDetect(false); resetZone();
+    setStatus("rendering"); setErr(""); setPoly([]); setCalib([]); setPendingLen(""); setCheck([]); setCheckStated(""); setScaleGuide(null); setPrevScale(null); selectShape(null); setProposal(null); setAlignPt(null); discardDetect(false); resetZone();
     for (const [, rt] of renderTasksRef.current) { try { rt.cancel(); } catch { /* done */ } }
     renderTasksRef.current.clear();
     snapGridsRef.current.clear();
     vectorSegsRef.current.clear();
     segMetaRef.current.clear();
+    layerGeoRef.current.clear();
+    layerInfosRef.current.clear();
+    setSheetLayers({});
     maskCacheRef.current.clear();
     sheetStatsRef.current.clear();
     rasterMaskCacheRef.current.clear();
@@ -1460,41 +1662,113 @@ export default function TakeoffCanvas() {
     detailKeysRef.current.clear();
     for (const [, cv] of detailCanvasRefs.current) cv.style.display = "none";
     (async () => {
-      // phase A — logical dimensions for every panel
-      const metas = [];
-      for (const key of groupKeys) {
-        const { file, page: pn } = parseSheetKey(key);
-        const pdf = await docFor(file); if (stale()) return;
+      // resolve one drawable source: doc → page → viewport at the FIXED logical scale
+      const resolveSource = async (memberKey) => {
+        const { file, page: pn } = parseSheetKey(memberKey);
+        const pdf = await docFor(file); if (stale()) return null;
         if (file === active) setPageCount(pdf.numPages || 1);
         const pageNum = Math.min(Math.max(1, pn), pdf.numPages || 1);
-        const pageObj = await pdf.getPage(pageNum); if (stale()) return;
+        const pageObj = await pdf.getPage(pageNum); if (stale()) return null;
         const viewport = pageObj.getViewport({ scale: RENDER_SCALE });
-        pageObjsRef.current.set(key, pageObj);     // kept for getOperatorList/getTextContent and the independent one-off render paths (raster-mask, agent vision, schedule marquee) — unrelated to painting, still main-thread
-        renderScalesRef.current.set(key, RENDER_SCALE);
-        metas.push({ key, file, pageNum, pageObj, viewport, w: Math.ceil(viewport.width), h: Math.ceil(viewport.height) });
+        // wf/hf: the EXACT logical dims — stitch extents must accumulate these,
+        // not the ceil'd canvas dims, or a composite of N members drifts up to
+        // N px wide. That drift is not cosmetic: the one-click mask downscale
+        // (MASK_MAX_DIM/width) is resolution-sensitive, and a 6049px stitch of
+        // a 6048px drawing measurably breaks flood fills the 6048px original
+        // sustains (reproduced on the split-sheet fixture; same failure occurs
+        // feeding 6049 to the ORIGINAL sheet's mask — the drift was the bug,
+        // not the merge).
+        return { key: memberKey, file, pageNum, pageObj, viewport, w: Math.ceil(viewport.width), h: Math.ceil(viewport.height), wf: viewport.width, hf: viewport.height };
+      };
+      // phase A — logical dimensions for every panel. A stitch panel (#161)
+      // resolves each MEMBER and takes the composite extent; its members'
+      // pageObjs register under their own keys (one-off render paths address
+      // sheets, not composites), while the merged snap/mask geometry below
+      // registers under the STITCH key — the only key the input model sees.
+      const metas = [];
+      for (const key of groupKeys) {
+        const st = stitchById[key];
+        if (st) {
+          const sources = [];
+          const dims = {};   // EXACT member dims — extent, seams and align math all read these
+          for (const mem of st.members) {
+            const s = await resolveSource(mem.key); if (stale()) return; if (!s) return;
+            pageObjsRef.current.set(mem.key, s.pageObj);
+            renderScalesRef.current.set(mem.key, RENDER_SCALE);
+            dims[mem.key] = { w: s.wf, h: s.hf };
+            sources.push({ ...s, drawKey: `${key}::${mem.key}`, dx: mem.dx, dy: mem.dy });
+          }
+          panelSourceDimsRef.current.set(key, dims);
+          renderScalesRef.current.set(key, RENDER_SCALE);
+          const ext = stitchExtent(st.members, dims);
+          metas.push({ key, file: key, stitch: st, dims, sources, w: ext.w, h: ext.h });
+        } else {
+          const s = await resolveSource(key); if (stale()) return; if (!s) return;
+          pageObjsRef.current.set(key, s.pageObj);     // kept for getOperatorList/getTextContent and the independent one-off render paths (raster-mask, agent vision, schedule marquee) — unrelated to painting, still main-thread
+          renderScalesRef.current.set(key, RENDER_SCALE);
+          metas.push({ ...s, sources: [{ ...s, drawKey: key, dx: 0, dy: 0 }] });
+        }
       }
       setPanelImgs(Object.fromEntries(metas.map((m) => [m.key, { w: m.w, h: m.h }])));
       let rw = 0, rh = 0;
       for (const m of metas) { rw += (rw ? PANEL_GAP : 0) + m.w; rh = Math.max(rh, m.h); }
       fitToView(rw, rh);
-      // phase B — open each sheet in the worker pool + paint its coarse base
-      // layer. Sheets are independent pdf.js docs in the pool now (not one
-      // shared canvas context), so there's no reason to serialize them the
-      // way the old left-to-right raster loop had to.
-      await Promise.all(metas.map(async (m) => {
-        getCompositor().openSheet(m.key, m.pageNum, store.loadPdfData(m.file), m.w, m.h);
-        let canvas = panelCanvasRefs.current.get(m.key);
+      // phase B — open each source sheet in the worker pool + paint its coarse
+      // base layer (a stitch contributes one canvas per member, positioned by
+      // the drawPanels expansion). Sheets are independent pdf.js docs in the
+      // pool now (not one shared canvas context), so there's no reason to
+      // serialize them the way the old left-to-right raster loop had to.
+      await Promise.all(metas.flatMap((m) => m.sources.map(async (s) => {
+        getCompositor().openSheet(s.drawKey, s.pageNum, store.loadPdfData(s.file), s.w, s.h);
+        let canvas = panelCanvasRefs.current.get(s.drawKey);
         for (let t = 0; !canvas && t < 10; t++) {
           await new Promise((r) => requestAnimationFrame(r)); if (stale()) return;
-          canvas = panelCanvasRefs.current.get(m.key);
+          canvas = panelCanvasRefs.current.get(s.drawKey);
         }
         if (!canvas || stale()) return;
-        await getCompositor().paintBase(canvas, m.key, m.w, m.h, darkModeRef.current);
-        if (stale()) return;
+        await getCompositor().paintBase(canvas, s.drawKey, s.w, s.h, darkModeRef.current);
+      })));
+      if (stale()) return;
+      // vector geometry per PANEL (best-effort; snap is off until enabled).
+      // Plain panels keep the old per-sheet path byte-for-byte; a stitch merges
+      // its members' geometry into stitch space, seam-clipped so hidden ink
+      // near the match line neither offers snap targets nor walls off the
+      // one-click mask (lib/stitches.ts mergePoints/mergeSegs).
+      for (const m of metas) {
+        if (m.stitch) {
+          const clips = seamClips(m.stitch.members, m.dims);
+          Promise.all(m.sources.map((s) => s.pageObj.getOperatorList().then((ol) => ({ s, g: extractVectorGeometry(ol, s.viewport.transform, pdfjsLib.OPS) })))).then((parts) => {
+            if (stale()) return;
+            const byIdx = parts.map(({ s, g }, i) => ({
+              points: g.points, segs: g.segs, meta: g.meta, imageArea: g.imageArea,
+              dx: s.dx, dy: s.dy,
+              clip: { x0: clips[i].x0, y0: clips[i].y0, x1: clips[i].x1, y1: clips[i].y1 },
+            }));
+            const pts = mergePoints(byIdx);
+            const merged = mergeSegs(byIdx);
+            snapGridsRef.current.set(m.key, buildSnapGrid(pts, SNAP_CELL));
+            vectorSegsRef.current.set(m.key, merged.segs);
+            segMetaRef.current.set(m.key, merged.meta);
+            sheetStatsRef.current.set(m.key, { segCount: merged.segs.length >> 2, imageFrac: Math.min(1, merged.imageArea / (m.w * m.h)) });
+            // verbose stitch tracing, gated like __OT_DETAIL_DEBUG
+            if (window.__OT_STITCH_DEBUG) window.__stitchGeom = { key: m.key, clips, members: m.stitch.members, dims: m.dims, w: m.w, h: m.h, segs: merged.segs.length >> 2, perMember: byIdx.map((b) => ({ dx: b.dx, dy: b.dy, clip: b.clip, n: b.segs.length >> 2 })) };
+          }).catch(() => {
+            if (stale()) return;
+            sheetStatsRef.current.set(m.key, { segCount: 0, imageFrac: 1 });
+          });
+          // scale note: the first member speaks for the composite (members
+          // plot at one scale by construction — see createStitch's seeding)
+          m.sources[0].pageObj.getTextContent().then((tc) => {
+            if (stale()) return;
+            const det = detectScale(tc, m.sources[0].viewport);
+            if (det) setDetectedScales((d) => (d[m.key]?.label === det.label ? d : { ...d, [m.key]: det }));
+          }).catch(() => {});
+          continue;
+        }
         // snap-to-vector index per panel (best-effort; off until the user enables it)
-        m.pageObj.getOperatorList().then((ol) => {
+        m.pageObj.getOperatorList().then(async (ol) => {
           if (stale()) return;
-          const { points, segs, meta, imageArea } = extractVectorGeometry(ol, m.viewport.transform, pdfjsLib.OPS);
+          const { points, segs, meta, imageArea, layerOf, layerIds } = extractVectorGeometry(ol, m.viewport.transform, pdfjsLib.OPS);
           snapGridsRef.current.set(m.key, buildSnapGrid(points, SNAP_CELL));
           vectorSegsRef.current.set(m.key, segs);
           segMetaRef.current.set(m.key, meta);
@@ -1512,6 +1786,27 @@ export default function TakeoffCanvas() {
             if (nat.areaFrac >= RASTER_MIN_IMG_FRAC) scanPxPerPt = nat.pxPerPt;
           } catch { /* unmeasurable — stays 0, no clamp */ }
           sheetStatsRef.current.set(m.key, { segCount: segs.length >> 2, imageFrac: frac, scanPxPerPt });
+          // classify the sheet's PDF layer table (#85): the walk attributed
+          // segments to OCG ids; the DOCUMENT declares id → (name, default
+          // visibility). buildLayerInfos is the same pure derivation the MCP
+          // session runs, so panel and sheet_info can never disagree. An empty
+          // table is the (common) unlayered case — the Layers control stays
+          // invisible and the mask path is byte-identical to pre-#85. Own
+          // try/catch: a failed config read degrades to unlayered, and must
+          // never trip the outer catch into the corrupt-op-list stats sentinel.
+          let infos = [];
+          if (layerIds.length) {
+            try {
+              const cfg = await (await docFor(m.file)).getOptionalContentConfig();
+              const groups = cfg ? cfg.getGroups() : null;
+              infos = buildLayerInfos(layerIds, layerOf, new Map(Object.entries(groups || {})));
+            } catch { /* no resolvable declarations — nothing is stated */ }
+          }
+          if (stale()) return;
+          layerGeoRef.current.set(m.key, { layerIds, layerOf });
+          layerInfosRef.current.set(m.key, infos);
+          maskCacheRef.current.delete(m.key);   // a mask built before the table resolved was roleless
+          setSheetLayers((prev) => ({ ...prev, [m.key]: infos }));
         }).catch(() => {
           if (stale()) return;
           // A rejected op-list (corrupt embedded JBIG2/CCITT — exactly the class of
@@ -1529,7 +1824,7 @@ export default function TakeoffCanvas() {
           const det = detectScale(tc, m.viewport);
           if (det) setDetectedScales((d) => (d[m.key]?.label === det.label ? d : { ...d, [m.key]: det }));
         }).catch(() => {});
-      }));
+      }
       if (stale()) return;
       setStatus("ready");
       // title-block labels — current page now, then once per file scan the rest so
@@ -1616,31 +1911,43 @@ export default function TakeoffCanvas() {
       const r = cont.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       const density = tileRequiredDensity(t.scale, dpr);
-      for (const p of panels) {
-        const cv = detailCanvasRefs.current.get(p.key);
-        if (!cv || !p.img?.w) continue;
-        const hide = () => { cv.style.display = "none"; detailKeysRef.current.delete(p.key); };
-        // visible region of THIS panel, in image px (stage space minus xOffset)
-        let x0 = Math.max((-t.x) / t.scale, p.xOffset) - p.xOffset;
-        let y0 = Math.max((-t.y) / t.scale, 0);
-        let x1 = Math.min((r.width - t.x) / t.scale, p.xOffset + p.img.w) - p.xOffset;
-        let y1 = Math.min((r.height - t.y) / t.scale, p.img.h);
-        if (x1 <= x0 || y1 <= y0) { hide(); continue; }         // panel off-screen
+      // draw-time entries, not input panels: a stitch (#161) sharpens one crop
+      // per MEMBER, each clipped to its seam box (the wrapper div does the
+      // clipping; the canvas positions relative to it via the x/y bases).
+      for (const d of drawPanels) {
+        const cv = detailCanvasRefs.current.get(d.drawKey);
+        if (!cv || !d.w) continue;
+        const hide = () => { cv.style.display = "none"; detailKeysRef.current.delete(d.drawKey); };
+        // visible region of THIS source, in ITS image px (stage space minus its
+        // stage origin), intersected with the seam-visible box when clipped
+        const vx0 = d.clip ? Math.max(d.x, d.clip.x) : d.x;
+        const vy0 = d.clip ? Math.max(d.y, d.clip.y) : d.y;
+        const vx1 = d.clip ? Math.min(d.x + d.w, d.clip.x + d.clip.w) : d.x + d.w;
+        const vy1 = d.clip ? Math.min(d.y + d.h, d.clip.y + d.clip.h) : d.y + d.h;
+        let x0 = Math.max((-t.x) / t.scale, vx0) - d.x;
+        let y0 = Math.max((-t.y) / t.scale, vy0) - d.y;
+        let x1 = Math.min((r.width - t.x) / t.scale, vx1) - d.x;
+        let y1 = Math.min((r.height - t.y) / t.scale, vy1) - d.y;
+        if (x1 <= x0 || y1 <= y0) { hide(); continue; }         // source off-screen
         const mw = (x1 - x0) * DETAIL_MARGIN, mh = (y1 - y0) * DETAIL_MARGIN;
         x0 = Math.max(0, x0 - mw); y0 = Math.max(0, y0 - mh);
-        x1 = Math.min(p.img.w, x1 + mw); y1 = Math.min(p.img.h, y1 + mh);
+        x1 = Math.min(d.w, x1 + mw); y1 = Math.min(d.h, y1 + mh);
         // one composite per distinct crop — the sync loop re-fires this several
         // times around a settle with identical inputs
-        const renderKey = `${p.key}|${x0.toFixed(1)},${y0.toFixed(1)}|${x1.toFixed(1)},${y1.toFixed(1)}|${density.toFixed(2)}|${darkModeRef.current ? 1 : 0}`;
-        if (renderKey === detailKeysRef.current.get(p.key)) continue;
-        detailKeysRef.current.set(p.key, renderKey);
-        try { detailCancelsRef.current.get(p.key)?.cancel(); } catch { /* done */ }
+        const renderKey = `${d.drawKey}|${x0.toFixed(1)},${y0.toFixed(1)}|${x1.toFixed(1)},${y1.toFixed(1)}|${density.toFixed(2)}|${darkModeRef.current ? 1 : 0}`;
+        if (renderKey === detailKeysRef.current.get(d.drawKey)) continue;
+        detailKeysRef.current.set(d.drawKey, renderKey);
+        try { detailCancelsRef.current.get(d.drawKey)?.cancel(); } catch { /* done */ }
         // paintDetail owns position/size/pixels together now and applies all
         // three atomically on reveal — setting them here first would show a
         // correctly-positioned canvas with the OLD crop's (wrongly scaled)
         // pixels for a frame, which is its own flavor of flicker.
-        const cancel = getCompositor().paintDetail(cv, p.key, p.xOffset, x0, y0, x1, y1, density, darkModeRef.current, () => {});
-        detailCancelsRef.current.set(p.key, cancel);
+        // Position bases are relative to the canvas's offset parent: the stage
+        // for a plain panel, the clipping wrapper for a stitch member.
+        const xBase = d.clip ? d.x - d.clip.x : d.x;
+        const yBase = d.clip ? d.y - d.clip.y : d.y;
+        const cancel = getCompositor().paintDetail(cv, d.drawKey, xBase, x0, y0, x1, y1, density, darkModeRef.current, () => {}, yBase);
+        detailCancelsRef.current.set(d.drawKey, cancel);
       }
     };
   });
@@ -1773,7 +2080,7 @@ export default function TakeoffCanvas() {
     // units is additive and diff-only (the sheet_levels convention): imperial —
     // the default — omits the key, so an old imperial project's payload is
     // byte-identical on round-trip; only a metric project carries the field.
-    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, ...(rules.length ? { rules } : {}), sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}), ...(Object.keys(provCounters.shapes_deleted).length ? { provenance_counters: provCounters } : {}) };
+    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, ...(approvals.length ? { approvals } : {}), ...(rules.length ? { rules } : {}), sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(stitches.length ? { stitches } : {}), ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}), ...(Object.keys(layerOverrides).length ? { layer_overrides: layerOverrides } : {}), ...(Object.keys(provCounters.shapes_deleted).length ? { provenance_counters: provCounters } : {}) };
   };
   // Runtime restore of a saved payload — the Revisions panel's Restore lands
   // here. A runtime load (unlike mount) can interrupt work in
@@ -1859,7 +2166,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, rfis, rules, provCounters, sheetGroup, sheetLevels, lastGroup, openTabs, projectName, clientInfo, units]);
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, approvals, rfis, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -2089,6 +2396,10 @@ export default function TakeoffCanvas() {
       if (tg === "INPUT" || tg === "SELECT" || tg === "TEXTAREA") return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (menuDepthRef.current > 0) return;
+      // "?" opens the manual. Here rather than in its own listener so it
+      // inherits this effect's guards — a "?" typed into a condition tag or
+      // with a toolbar menu open must not pop a dialog over the work.
+      if (e.key === "?") { e.preventDefault(); setGuideOpen(true); return; }
       if (e.key === "Enter") {
         // router offer confirm takes the key FIRST (RFC #59 slice 5): the
         // offer is the most recent thing the user was told ⏎ does, and it
@@ -2178,7 +2489,7 @@ export default function TakeoffCanvas() {
         // point of a review set. It wins over the generic clear so one Esc
         // can't half-dismiss it.
         else if (detectRef.current) { discardDetect(detectRef.current.running ? "Stopped detecting rooms — nothing was added to the takeoff." : undefined); }
-        else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
+        else { setPoly([]); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); setAlignPt(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
       // ⌘Z: the drawing context wins — mid-trace it still pops the last placed
       // point (with or without ⇧, matching the old behavior byte-for-byte);
       // only with no trace in progress does the command stack engage
@@ -2195,7 +2506,9 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tool, selectedId, selVert, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, sheetKey, groupSig, scales, focusKey, multiSel]); // eslint-disable-line react-hooks/exhaustive-deps
+    // approvals is a real dep: ⌘Z's undoShapeCommand closes over it (the
+    // family branch), and a stale capture would undo against a pre-seal array.
+  }, [tool, selectedId, selVert, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, approvals, sheetKey, groupSig, scales, focusKey, multiSel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The typed "drawing says" value belongs to ONE completed two-point check.
   // The moment the measurement is no longer complete — third-click restart,
@@ -2351,6 +2664,31 @@ export default function TakeoffCanvas() {
     }
     else if (tool === "cloud" || tool === "callout" || tool === "text" || tool === "highlight") placeMarkup(p);
     else if (tool === "stamp") placeStamp(p);
+    else if (tool === "approve") placeApproval(p);
+    else if (tool === "stitch-align") stitchAlignAt(p);
+  }
+  // ── stitch align (#161) — the Calibrate idiom on the composite: click a
+  // point near the match line, then the SAME point where the other sheet
+  // draws it; the second sheet translates so the two coincide. Guarded while
+  // takeoffs live on the stitch (verts_norm are extent-relative — moving
+  // members under committed shapes would silently shift their quantities' ink).
+  function stitchAlignAt(p) {
+    const st = stitchById[groupKeys[0]];
+    if (!st || panels.length !== 1) { setTool("pan"); return; }
+    const n = shapes.filter((s) => s.sheet_id === st.id).length;
+    if (n) { setCommitMsg(`Align before tracing — ${n} takeoff${n === 1 ? "" : "s"} already live on this stitch. Delete them (or a fresh stitch) to re-align.`); setTool("pan"); return; }
+    if (!alignPt) {
+      setAlignPt(p);
+      setCommitMsg("Match point set — now click the SAME point where the other sheet draws it.");
+      return;
+    }
+    const dims = panelSourceDimsRef.current.get(st.id) || {};
+    const res = alignMembers(st.members, dims, [alignPt[0], alignPt[1]], [p[0], p[1]]);
+    setAlignPt(null);
+    if (res.error) { setCommitMsg(res.error); return; }
+    setStitches((list) => list.map((s) => (s.id === st.id ? { ...s, members: res.members } : s)));
+    setTool("pan");
+    setCommitMsg("Match line joined — the sheets now read as one surface. Trace straight across it.");
   }
   // Markups carry no verts_norm (cloud rect / callout at+target / text at), so
   // hitShape can't test them — this is a purpose-built bbox/point test in the
@@ -2408,8 +2746,8 @@ export default function TakeoffCanvas() {
       const y0 = Math.min(b0, b1) * H, y1 = Math.max(b0, b1) * H;
       return X >= x0 - thr && X <= x1 + thr && Y >= y0 - thr && Y <= y1 + thr;
     }
-    if (m.type === "arrow" && m.from && m.to) {
-      // a stamp-placed leader — hit its shaft (endpoint tolerance folds into the band)
+    if ((m.type === "arrow" || m.type === "dimension") && m.from && m.to) {
+      // a leader / dimension line — hit its shaft (endpoint tolerance folds into the band)
       const fx = m.from[0] * W + ox, fy = m.from[1] * H, tx = m.to[0] * W + ox, ty = m.to[1] * H;
       return distToSeg(X, Y, fx, fy, tx, ty) < thr * 1.5;
     }
@@ -2502,7 +2840,7 @@ export default function TakeoffCanvas() {
         const orig = (mHit.type === "highlight" && Array.isArray(mHit.pts)) ? { pts: mHit.pts.map((v) => [...v]) }
           : (mHit.type === "cloud" || mHit.type === "highlight") ? { rect: mHit.rect }
           : mHit.type === "callout" ? { at: mHit.at, target: mHit.target }
-            : mHit.type === "arrow" ? { from: mHit.from, to: mHit.to }
+            : (mHit.type === "arrow" || mHit.type === "dimension") ? { from: mHit.from, to: mHit.to }
               : { at: mHit.at };   // text + bubble
         // raw start (markups don't snap/angle-lock; matches the raw tracking point in
         // onPointerMove so the delta can't be contaminated by a stale snap/angle ref)
@@ -3185,8 +3523,21 @@ export default function TakeoffCanvas() {
       },
     };
   }
+  // A trace whose points span two side-by-side panels has no coherent
+  // quantity — the inter-panel gap would be measured as real feet, and the
+  // shape would bind to one sheet with vertices hanging off its edge. Refuse
+  // at commit (the calibrate cross-panel precedent) and point at the fix:
+  // stitching joins the sheets into ONE panel, where a spanning trace is
+  // exactly right (#161).
+  function spansPanels(points) {
+    if (panels.length < 2) return false;
+    const first = panelAt(points[0][0]);
+    return points.some((q) => panelAt(q[0]) !== first);
+  }
+  const SPAN_MSG = "That trace crosses onto another sheet — the gap between sheets isn't real distance. To work a floor split at a match line as one surface, stitch the sheets (Sheets → gallery → select both → Stitch).";
   function commitPoly(points, asDeduct) {
     if (points.length < 3) return;
+    if (spansPanels(points)) { setCommitMsg(SPAN_MSG); return; }
     const tp = panelAt(points[0][0]);
     const upp = uppFor(tp.key);
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
@@ -3219,6 +3570,7 @@ export default function TakeoffCanvas() {
   }
   function commitLinear(points, curved = false) {
     if (points.length < 2) return;
+    if (spansPanels(points)) { setCommitMsg(SPAN_MSG); return; }
     const tp = panelAt(points[0][0]);
     const upp = uppFor(tp.key);
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
@@ -3240,6 +3592,7 @@ export default function TakeoffCanvas() {
   // height. The wall-tile "stack" workflow: set tile height once, trace walls.
   function commitSurface(points) {
     if (points.length < 2) return;
+    if (spansPanels(points)) { setCommitMsg(SPAN_MSG); return; }
     const tp = panelAt(points[0][0]);
     const upp = uppFor(tp.key);
     if (!upp) { setCommitMsg(`Set the scale for ${labelFor(tp)} first.`); return; }
@@ -3273,6 +3626,18 @@ export default function TakeoffCanvas() {
   // takeoff until Create (⏎) — the gate where provenance is minted (origin on
   // each shape). Mask + proposal live in panel-LOCAL px; a proposal is bound to
   // one panel and dies on sheet change (render effect resets it).
+  // The sheet's stated layer roles as buildMask's per-segment codes (#85),
+  // with the estimator's Layers-panel overrides applied — include forces hard
+  // boundary, exclude drops the ink, the same semantics the MCP layers
+  // filters carry. Refs, not state: this runs inside click paths and must see
+  // a just-resolved table. null on unlayered sheets (or nothing classified) —
+  // buildMask then takes the byte-identical pre-#85 path.
+  function rolesForSheet(key) {
+    const geo = layerGeoRef.current.get(key);
+    const infos = layerInfosRef.current.get(key);
+    if (!geo || !infos || !infos.length) return null;
+    return segRoles(geo.layerOf, layerRoleCodes(geo.layerIds, effectiveLayerRoles(infos, layerOverridesRef.current[key])));
+  }
   function ensureMask(key) {
     let mo = maskCacheRef.current.get(key);
     if (!mo) {
@@ -3300,7 +3665,8 @@ export default function TakeoffCanvas() {
       const pgVp = pageObjsRef.current.get(key)?.getViewport({ scale: 1 });
       mo = buildMask(segs, dims.w, dims.h, MASK_MAX_DIM, segMetaRef.current.get(key), pxPerFt,
                      pxPerFt ? pxPerFt * RENDER_SCALE / rsNow : 0,
-                     pgVp ? { pageW: pgVp.width, pageH: pgVp.height, renderScale: rsNow, baseScale: RENDER_SCALE } : null);
+                     pgVp ? { pageW: pgVp.width, pageH: pgVp.height, renderScale: rsNow, baseScale: RENDER_SCALE } : null,
+                     rolesForSheet(key));
       maskCacheRef.current.set(key, mo);
     }
     return mo;
@@ -3391,6 +3757,9 @@ export default function TakeoffCanvas() {
     if (ring.length < 3) return null;
     const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
     const perim_lf = +(closedMetrics(ring).perim * upp).toFixed(2);
+    // Item D: the engine's own account of the trace — tier, seal, wedges,
+    // min-passage — scored to a 0–1 confidence with named factors, minted
+    // into provenance at the Create gate below.
     const conf = traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: area_sf }));
     // A1/DPI ceiling: when the working raster was capped by the SCAN's own
     // resolution rather than by MASK_MAX_DIM, that is a property of the source
@@ -3415,6 +3784,16 @@ export default function TakeoffCanvas() {
       area_sf,
       perim_lf,
       hf: !!f.hatchFiltered,
+      // Whether SENSITIVITY had anything to act on for THIS fill. The knob
+      // only tunes escalation past ink the classifier called hatch, so a fill
+      // whose boundary is entirely hard ink returns the same region at every
+      // setting — and the estimator, watching it stop short, reasonably reaches
+      // for the knob and gets nothing. Sheet-level softCount can't answer this
+      // (the VA plan classifies plenty of toilet poché while the rooms that
+      // stop short touch none of it); only this region's own softHits can.
+      // Raster-traced fills are single-tier, where sensitivity is inert by
+      // construction.
+      shs: raster ? 0 : (f.softHits || 0),
       sl: f.sealedPx || 0,
       gap: f.gapBridged || 0,
       mp: f.minPassDelta ? (f.minPassPx || 0) : 0, mpd: f.minPassDelta || 0,
@@ -3485,6 +3864,10 @@ export default function TakeoffCanvas() {
     });
     if (outcome === "dup") setCommitMsg(negative ? "That cutout is already carved." : "Already selected — ⌥-click carves an enclosed cutout; ⏎ creates.");
     else if (outcome === "needsPos") setCommitMsg("⌥-click carves an enclosed area INSIDE the selection (a column or shaft) — click its room first.");
+    // The measurement-policy receipts: when the engine sealed, wedged, or
+    // ruled a passage out, the estimator hears it at stage time — the trace is
+    // reviewable while the edge in question is still under the cursor.
+    //
     // F7(g): a wedge that annexed a CLOSED RING's interior (a round column, a
     // callout bubble) is not a door swing, and saying "incl. door swing" about a
     // full circle was simply false — there is no door in the scene. The
@@ -3593,7 +3976,7 @@ export default function TakeoffCanvas() {
         : { ok: false, message: "" };
     }
     if (!rmo) return say("Couldn't read this scan — trace it with Area (A).");
-    // The raster mask is single-tier (softCount 0), so floodRegion's hatch
+    // The raster mask is single-tier (softCount 0), so the flood's hatch
     // escalation — and with it the Fill sensitivity knob — is structurally
     // inert on scans; the default sensitivity rides along. Gap sealing still
     // applies — faded scan lines are the raster path's own flavor of open doorway.
@@ -3644,7 +4027,19 @@ export default function TakeoffCanvas() {
       // pre-edit ring only when Create didn't already.
       origin: { method: "one_click_v1", seed_norm: [r.seed[0] / tp.img.w, r.seed[1] / tp.img.h], reviewed: true, confidence: r.cf ?? 1, ...(r.cff?.length ? { confidence_factors: r.cff } : {}), ...(r.hf ? { hatch_filtered: true } : {}), ...(r.sl ? { gap_sealed_px: r.sl } : {}), ...(r.gap ? { gap_bridged_px: r.gap } : {}), ...(r.mp ? { min_pass_px: r.mp, min_pass_delta: r.mpd } : {}), ...(r.wg ? { door_wedges: r.wg } : {}), ...(r.rw ? { ring_interiors: r.rw } : {}), ...(!label && r.autoName ? { auto_named: true } : {}), ...(r.rt ? { raster_traced: true } : {}), ...(r.sens != null ? { fill_sensitivity: r.sens } : {}), ...(r.touched ? { edited_before_create: true, proposed_verts_norm: r.poly0.map(([x, y]) => [x / tp.img.w, y / tp.img.h]) } : {}) },
     }));
-    dispatchShape({ type: "add", shapes: made });   // the creation gate — id/created_at minted by the command
+    const res = dispatchShape({ type: "add", shapes: made });   // the creation gate — id/created_at minted by the command
+    // ...and the new takeoff is SELECTED. Without this, Create left nothing
+    // selected, so the ⌫ that had been deleting the proposal a moment earlier
+    // suddenly did nothing and the only way to undo a bad fill was the Edit
+    // menu — the one moment in the flow where the keyboard stopped working.
+    // Same idiom as pasteClipboard: a plain add appends, so the minted shapes
+    // are the array's last N. Deliberately WITHOUT pasteClipboard's
+    // setTool("select") — the status message says "Click the next room" and
+    // it has to stay true. Selecting while One-Click is armed is safe: a
+    // shape's own handles only grab under tool === "select", and the
+    // proposal branch sits ahead of `selectedId` in the ⌫ chain, so the next
+    // fill's ⌫ still discards that proposal first.
+    if (res?.shapes?.length) selectShape(res.shapes[res.shapes.length - 1].id);
     const sf = prop.regions.reduce((n, r) => n + (r.kind === "neg" ? -r.area_sf : r.area_sf), 0);
     // condById is a render closure — a condition minted THIS utterance is only
     // in the live mirror, so fall through to it for the tag
@@ -4260,7 +4655,14 @@ export default function TakeoffCanvas() {
     try {
       setCommitMsg("Building the marked set…");
       const exportMarkups = includeMarkups ? markups : [];
-      const keys = [...new Set([...shapes.map((s) => s.sheet_id), ...exportMarkups.map((m) => m.sheet_id)])];
+      // approval seals are ink, not markups — the include-markups checkbox
+      // never drops them, and a sheet carrying only a seal still exports
+      const allKeys = [...new Set([...shapes.map((s) => s.sheet_id), ...exportMarkups.map((m) => m.sheet_id), ...approvals.map((a) => a.sheet_id)])];
+      // Stitched surfaces (#161) have no single source page to burn ink onto —
+      // phase 1 skips them here (their quantities still ride the Report/CSV;
+      // a composite marked-set page is the documented follow-up).
+      const keys = allKeys.filter((k) => !isStitchKey(k));
+      const skippedStitches = allKeys.length - keys.length;
       const sheetMeta = keys.map((key) => {
         const { file, page } = parseSheetKey(key);
         return { key, file, page, label: tabLabel(key) };
@@ -4270,12 +4672,12 @@ export default function TakeoffCanvas() {
       const brand = resolveBranding({ ...(await loadBrandingSelection(projectIdFromUrl())), profiles: loadProfiles().profiles });
       const { bytes, filename } = await buildMarkedSetPdf({
         projectName, clientInfo, company: brand.company, credit: brand.credit, coverTitle: brand.coverTitle,
-        dark: darkMode, units, sheets: sheetMeta, shapes, markups: exportMarkups, rfis, conditions,
+        dark: darkMode, units, sheets: sheetMeta, shapes, markups: exportMarkups, approvals, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
       });
       downloadBytes(filename, bytes);
-      setCommitMsg(`Marked set downloaded — ${filename}`);
+      setCommitMsg(`Marked set downloaded — ${filename}${skippedStitches ? ` (stitched surfaces aren't burned in yet — their quantities are in the Report)` : ""}`);
     } catch (e) {
       setCommitMsg(`Marked set failed: ${e.message || e}`);
     }
@@ -4295,7 +4697,7 @@ export default function TakeoffCanvas() {
     let nx, ny;
     if (m.type === "highlight" && Array.isArray(m.pts) && m.pts.length) { const mid = m.pts[Math.floor((m.pts.length - 1) / 2)]; nx = mid[0]; ny = mid[1]; }
     else if ((m.type === "cloud" || m.type === "highlight") && m.rect) { nx = (m.rect[0][0] + m.rect[1][0]) / 2; ny = (m.rect[0][1] + m.rect[1][1]) / 2; }
-    else if (m.type === "arrow" && m.from && m.to) { nx = (m.from[0] + m.to[0]) / 2; ny = (m.from[1] + m.to[1]) / 2; }
+    else if ((m.type === "arrow" || m.type === "dimension") && m.from && m.to) { nx = (m.from[0] + m.to[0]) / 2; ny = (m.from[1] + m.to[1]) / 2; }
     else if (m.at) { nx = m.at[0]; ny = m.at[1]; }   // text + bubble + callout
     else return null;
     return [nx * sp.img.w + sp.xOffset, ny * sp.img.h];
@@ -4417,6 +4819,31 @@ export default function TakeoffCanvas() {
     }
     setCommitMsg(`Placed “${armedStamp.name}”.`);
     if (promptId) openTextEditor({ anchorStage: p, commit: (t) => updateMarkup(promptId, { text: (t || "").trim() }) });
+  }
+  // ── approval seal (ink, human-only) — the estimator's stamp. One click: on
+  // a committed shape → seal that shape (records its id); on empty plan →
+  // seal the sheet at that point. A click on an existing seal LIFTS it, so the
+  // tool is its own eraser. Both directions are real undo steps — family-
+  // tagged entries on the shared ⌘Z stack (dispatchApproval above).
+  // Deliberately NOT exposed through MCP or the in-canvas agent: machine
+  // verdicts arrive as actor "agent" records through data paths, never here.
+  function placeApproval(p) {
+    const tp = panelAt(p[0]);
+    if (!tp?.img?.w) return;
+    const nx = (p[0] - tp.xOffset) / tp.img.w, ny = p[1] / tp.img.h;
+    // lift first — distance in width-normalized units (the seal radius is
+    // normalized to sheet WIDTH, the bubble convention), topmost wins
+    const seal = [...approvals].reverse().find((a) => a.sheet_id === tp.key
+      && Math.hypot(nx - a.at[0], (ny - a.at[1]) * (tp.img.h / tp.img.w)) <= APPROVAL_R);
+    if (seal) { dispatchApproval({ type: "delete", ids: [seal.id] }); setCommitMsg("Approval seal lifted (⌘Z restores it)."); return; }
+    // topmost committed shape under the click — the selectAt scan, this panel only
+    const thr = 8 / tfRef.current.scale;
+    const shape = [...stackedShapes].reverse().find((s) => s.sheet_id === tp.key
+      && hitShapeC(s, p[0] - tp.xOffset, p[1], tp.img.w, tp.img.h, thr));
+    dispatchApproval({ type: "add", approvals: [{ actor: "estimator", sheet_id: tp.key, at: [nx, ny], ...(shape ? { shape_id: shape.id } : {}) }] });
+    setCommitMsg(shape
+      ? `Approved — seal on ${condById[shape.condition_id]?.finish_tag || "shape"} (⌘Z undoes).`
+      : "Sheet point approved — seal placed (⌘Z undoes).");
   }
   // Save the selected markup as a single-element stamp (the palette's define
   // flow). markupToStampElement re-expresses its coords as anchor-relative
@@ -4556,7 +4983,7 @@ export default function TakeoffCanvas() {
     if (m.type === "highlight" && Array.isArray(m.pts) && m.pts.length) anchor = m.pts[Math.floor((m.pts.length - 1) / 2)];
     else if ((m.type === "cloud" || m.type === "highlight") && m.rect) anchor = [(m.rect[0][0] + m.rect[1][0]) / 2, (m.rect[0][1] + m.rect[1][1]) / 2];
     else if (m.type === "callout") anchor = m.at || m.target;
-    else if (m.type === "arrow" && m.from && m.to) anchor = [(m.from[0] + m.to[0]) / 2, (m.from[1] + m.to[1]) / 2];
+    else if ((m.type === "arrow" || m.type === "dimension") && m.from && m.to) anchor = [(m.from[0] + m.to[0]) / 2, (m.from[1] + m.to[1]) / 2];
     else anchor = m.at;   // text + bubble
     if (!anchor) return false;
     const el = containerRef.current;
@@ -4720,6 +5147,19 @@ export default function TakeoffCanvas() {
     setTfNow({ x: (r.width - w * scale) / 2 - x0 * scale, y: (r.height - h * scale) / 2 - y0 * scale, scale });
   }
 
+  // A withheld transition is a QUESTION, and the answer is at a PLACE on the
+  // sheet — so its row in the panel jumps there rather than printing raw image
+  // pixels at someone. Centers the point at a working zoom; the estimator looks
+  // for the door and measures the threshold.
+  function locateSheetPoint(sheetId, at) {
+    const el = containerRef.current;
+    const sp = panelByKey(sheetId);
+    if (!el || !sp?.img?.w || !Array.isArray(at)) return;
+    const r = el.getBoundingClientRect();
+    const scale = clamp(1.2);
+    setTfNow({ x: r.width / 2 - (at[0] + sp.xOffset) * scale, y: r.height / 2 - at[1] * scale, scale });
+  }
+
   // ONE condition-minting path — the human +condition button and the agent's
   // create_condition tool both come through here, so the field set and the
   // color/hatch auto-rotation can never drift between the two.
@@ -4864,10 +5304,11 @@ export default function TakeoffCanvas() {
       ? oneClickRing(f, { raster: true, rasterEps: RASTER_RDP_EPS })
       : oneClickRing(f, { nearest: (x, y, d) => (grid ? nearestSnap(grid, x, y, d) : null) });
     if (ring.length < 3) return { error: "Couldn't trace that space into a polygon." };
-    const conf = traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: +(ringArea(ring) * upp * upp).toFixed(2) }));
+    const area_sf = +(ringArea(ring) * upp * upp).toFixed(2);
+    const conf = traceConfidence(floodSignals(f, { raster, mppf: f.ws / upp, areaSF: area_sf }));
     return {
       verts_norm: ring.map(([x, y]) => [+(x / p.img.w).toFixed(5), +(y / p.img.h).toFixed(5)]),
-      area_sf: +(ringArea(ring) * upp * upp).toFixed(2),
+      area_sf,
       perimeter_lf: +(closedMetrics(ring).perim * upp).toFixed(2),
       seed_norm: [+xn.toFixed(5), +yn.toFixed(5)],
       confidence: conf.score,
@@ -5285,6 +5726,80 @@ export default function TakeoffCanvas() {
     setCommitMsg(`Rule applied — ${made.length} deduct${made.length === 1 ? "" : "s"} added (⌘Z undoes all). ${rule.label}.`);
   }
 
+  // ── ⟂ Transitions (#202, canvas side) ──────────────────────────────────────
+  // Where two finishes meet is the most mechanical line left on a Division 9
+  // takeoff, and an estimator draws it by hand on every job. derive_transitions
+  // handed that to the agent; this hands the same thing — and the same refusal —
+  // to the person at the canvas.
+  //
+  // A BUTT JOINT (the two rooms running together inside one open space) commits
+  // as dashed pencil on the ACTIVE condition, so the Accept pill already on
+  // screen is the gate and ⌘Z undoes the sweep in one step. A WALL-SEPARATED
+  // pair never commits: the transition across a partition is a threshold in a
+  // doorway, and nothing in a flood trace says where the doorway is. Those come
+  // back as a report — length, gap, and a point to look at — for the estimator
+  // to place with the drawing in front of them.
+  //
+  // Sources are scoped to the OPEN sheets (the rule preview's rule): the
+  // derivation only proposes what you can see and review.
+  const transitionSources = useMemo(() => {
+    const rooms = new Map();
+    for (const s of visibleShapes) {
+      if (s.measure_role !== "floor_area") continue;
+      rooms.set(s.condition_id, (rooms.get(s.condition_id) || 0) + 1);
+    }
+    return conditions.filter((c) => rooms.has(c.id)).map((c) => ({ id: c.id, finish_tag: c.finish_tag, rooms: rooms.get(c.id) }));
+  }, [conditions, visibleShapes]);
+
+  function deriveTransitionsOnto(idA, idB) {
+    const target = condById[activeCond];
+    if (!target) return { error: "Pick the condition the transitions land on first." };
+    const ca = condById[idA], cb = condById[idB];
+    if (!ca || !cb) return { error: "Pick the two finishes that meet." };
+    const roomsOf = (id) => visibleShapes
+      .filter((s) => s.condition_id === id && s.measure_role === "floor_area" && (s.verts_norm || []).length >= 3)
+      .map((s) => ({ id: s.id, sheet_id: s.sheet_id, verts_norm: s.verts_norm }));
+    const a = { tag: ca.finish_tag, shapes: roomsOf(idA) };
+    const b = { tag: cb.finish_tag, shapes: roomsOf(idB) };
+    // frames for the open panels those rooms actually sit on; an unscaled one
+    // refuses the WHOLE call rather than deriving a partial answer — a
+    // transition is a real length, and half a sweep reads like a whole one.
+    const frames = new Map(), unscaled = [];
+    const inPlay = new Set([...a.shapes, ...b.shapes].map((s) => s.sheet_id));
+    for (const p of panels) {
+      if (!p.img?.w || !inPlay.has(p.key)) continue;
+      const upp = uppFor(p.key);
+      if (!upp) { unscaled.push(labelFor(p)); continue; }
+      frames.set(p.key, { widthPx: p.img.w, heightPx: p.img.h, upp });
+    }
+    const refusal = transitionRefusal({ activeTag: target.finish_tag, a, b, sheets: frames, unscaled });
+    if (refusal) return { error: refusal };
+    const { runs, withheld } = deriveTransitionRuns(a, b, frames);
+    const tIn = Number(target.thickness_in) || 0;   // a transition strip with a width prices border SF, exactly like a drawn line
+    const made = runs.map((r) => ({
+      sheet_id: r.sheet_id, condition_id: target.id, measure_role: "linear",
+      verts_norm: r.verts_norm.map((v) => [...v]),
+      computed: { perimeter_lf: r.length_lf, area_sf: tIn > 0 ? +((r.length_lf * tIn) / 12).toFixed(2) : 0 },
+      // the MCP verb's provenance vocabulary, verbatim: both parents, both
+      // tags, the measured gap, and `case` always "butt" — a wall-separated run
+      // is a question, and questions do not become shapes.
+      origin: {
+        method: "derived", actor: "canvas", reviewed: false, proposed_ts: nowIso(),
+        derived: { between_shape_ids: r.between_shape_ids, between: r.between, case: "butt", gap_in: r.gap_in },
+      },
+    }));
+    if (made.length) dispatchShape({ type: "add", shapes: made });   // ONE command — one undo entry for the whole sweep
+    const total_lf = +made.reduce((n, s) => n + s.computed.perimeter_lf, 0).toFixed(2);
+    if (made.length) {
+      setCommitMsg(`${made.length} transition${made.length === 1 ? "" : "s"} derived between ${a.tag} and ${b.tag} — ${total_lf} LF onto ${target.finish_tag}, dashed until you Accept (⌘Z undoes the sweep).`);
+    } else if (withheld.length) {
+      setCommitMsg(`Nothing to commit — every ${a.tag}/${b.tag} run is across a wall. See the Transitions panel.`);
+    } else {
+      setCommitMsg(`${a.tag} and ${b.tag} never meet on the open sheets.`);
+    }
+    return { committed: made.length, total_lf, withheld, between: [a.tag, b.tag], onto: target.finish_tag };
+  }
+
   // ── the accept gate, for shapes already IN the data ─────────────────────────
   // An imported MCP takeoff arrives committed but unreviewed (origin.reviewed
   // === false) — those render dashed pencil and gate the Accept pill. Accept
@@ -5541,7 +6056,10 @@ export default function TakeoffCanvas() {
     if (!c) return;
     const owned = shapes.filter((s) => s.condition_id === id);
     if (owned.length && !window.confirm(`Delete ${c.finish_tag} and its ${owned.length} takeoff${owned.length === 1 ? "" : "s"}? This can't be undone.`)) return;
-    const next = conditions.filter((x) => x.id !== id);
+    // Lineage first, removal second: deleting a family parent must not orphan its twins. The
+    // eldest survivor is promoted to root (its rows are already materialized — propagate-on-write
+    // guarantees that) and the rest re-point at it, origin_ids remapped.
+    const next = promoteOnDelete(conditions, new Set([id])).filter((x) => x.id !== id);
     // cascade delete of the condition's OWNED shapes — counted centrally by the
     // command, but record:false keeps it off the undo stack: the confirm just
     // said "can't be undone", and ⌘Z restoring shapes without their condition
@@ -5602,10 +6120,86 @@ export default function TakeoffCanvas() {
     setShapes((sh) => renameShapeLabel(sh, oldV, newV));   // assignments follow the vocabulary
   };
 
+  // ── the family seam (lib/variants.ts) ─────────────────────────────────────
+  // Every material write on a condition that belongs to a family goes through one of these, so
+  // inheritance can never be half-applied. Two directions, and they are opposites:
+  //   editing a FAMILY PARENT's row → the same patch lands on every twin still following it
+  //   editing a TWIN's row          → that row goes local and stops following, for good
+  const isFamilyParent = (cs, id) => cs.some((c) => c.variant_of === id);
   // supporting-materials editing (operates on the active condition)
-  const addMaterial = () => updateCond({ materials: [...(aCond?.materials || []), { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true }] });
-  const updateMaterial = (mid, patch) => updateCond({ materials: (aCond?.materials || []).map((m) => (m.id === mid ? matEditPatch(m, patch) : m)) });   // NAME edits re-classify a geometry-less line's kind
-  const removeMaterial = (mid) => updateCond({ materials: (aCond?.materials || []).filter((m) => m.id !== mid) });
+  const addMaterial = () => setConditions((cs) => {
+    const row = { id: uid("mat"), name: "", per: 0, basis: "area", unit: "", round: true };
+    const next = cs.map((c) => (c.id === activeCond
+      ? { ...c, materials: [...(c.materials || []), row], updated_at: nowIso() } : c));
+    // a row added to the family reaches every area; a row added ON a twin is that twin's own
+    // (minted with no origin_id, so nothing upstream ever touches it)
+    return isFamilyParent(cs, activeCond) ? propagateRowAdd(next, activeCond, row, uid) : next;
+  });
+  const updateMaterial = (mid, patch) => setConditions((cs) => {
+    const cur = cs.find((c) => c.id === activeCond);
+    // NAME edits re-classify a geometry-less line's kind
+    const next = cs.map((c) => (c.id === activeCond ? {
+      ...c, updated_at: nowIso(),
+      materials: (c.materials || []).map((m) => (m.id === mid ? matEditPatch(m, patch) : m)),
+    } : c));
+    if (cur?.variant_of) return next.map((c) => (c.id === activeCond ? markRowLocal(c, mid) : c));
+    if (!isFamilyParent(cs, activeCond)) return next;
+    const row = (next.find((c) => c.id === activeCond)?.materials || []).find((m) => m.id === mid);
+    return row ? propagateRowPatch(next, activeCond, mid, row) : next;
+  });
+  // Removing a row: on a twin it leaves a tombstone (so the panel can show it, and so a later
+  // family edit can't bring it back); on a parent it clears the twins' following copies but
+  // never a row a twin has taken over.
+  const removeMaterial = (mid) => setConditions((cs) => {
+    const cur = cs.find((c) => c.id === activeCond);
+    if (cur?.variant_of) return cs.map((c) => (c.id === activeCond ? { ...dropRowLocal(c, mid), updated_at: nowIso() } : c));
+    const next = cs.map((c) => (c.id === activeCond
+      ? { ...c, materials: (c.materials || []).filter((m) => m.id !== mid), updated_at: nowIso() } : c));
+    return isFamilyParent(cs, activeCond) ? propagateRowRemove(next, activeCond, mid) : next;
+  });
+  // The per-row undo of an override: this row follows the family again.
+  const followFamilyRow = (mid) => setConditions((cs) => {
+    const row = (cs.find((c) => c.id === activeCond)?.materials || []).find((m) => m.id === mid);
+    return row?.origin_id ? followFamily(cs, activeCond, row.origin_id, uid) : cs;
+  });
+  // A tombstoned row has no row left to carry the id, so the panel restores it by origin.
+  const restoreDroppedRow = (originId) => setConditions((cs) => followFamily(cs, activeCond, originId, uid));
+  // Twin the active condition: same finish somewhere else, its own materials, still following
+  // this one. The label is REQUIRED and becomes the tag suffix — every export and every MCP tool
+  // resolves a condition by tag, so two conditions sharing one make the second unreachable and
+  // collapse on a takeoff re-import.
+  const duplicateCondition = (id, label) => {
+    const src = conditions.find((c) => c.id === id);
+    const lab = String(label || "").trim();
+    if (!src || !lab) return null;
+    const tag = variantTag(src.finish_tag, lab);
+    if (conditions.some((c) => normalizeTag(c.finish_tag) === normalizeTag(tag))) {
+      setCommitMsg(`A condition is already called ${tag} — pick another label.`);
+      return null;
+    }
+    const { twin, parentPatch } = mintTwin(src, {
+      label: lab, tag, mintId: uid, nowIso,
+      // keep the family's colour, advance only the hatch: variants of one finish should read as
+      // related on the sheet, not as unrelated scopes
+      nextHatch: HATCHES[1 + ((conditions.length + 1) % (HATCHES.length - 1))].id,
+    });
+    agentStateRef.current = { ...agentStateRef.current, conditions: [...agentStateRef.current.conditions, twin] };
+    setConditions((cs) => [...cs.map((c) => (c.id === src.id && parentPatch ? { ...c, ...parentPatch } : c)), twin]);
+    activateCondition(twin.id, { reassign: false });
+    setCommitMsg(`Added ${twin.finish_tag} — its materials follow ${src.finish_tag} until you change them here.`);
+    return twin;
+  };
+  // Cut a twin loose: every following row freezes where it stands. It KEEPS its family_id, so it
+  // still groups and subtotals with its siblings — only the inheritance ends.
+  const splitCondition = (id) => {
+    const c = conditions.find((x) => x.id === id);
+    if (!c?.variant_of) return;
+    const par = conditions.find((x) => x.id === c.variant_of);
+    const n = (c.materials || []).filter((r) => r.inherited).length;
+    if (!window.confirm(`Split ${c.finish_tag} out of its family?\n\n${n} row${n === 1 ? "" : "s"} freeze at ${n === 1 ? "its" : "their"} current values, and edits to ${par?.finish_tag || "the original"} stop reaching it.\nIt keeps its name and still subtotals with the family.`)) return;
+    setConditions((cs) => splitFromFamily(cs, id));
+    setCommitMsg(`${c.finish_tag} no longer follows ${par?.finish_tag || "its family"}.`);
+  };
   // Height/Thickness are LIVE parameters (Kreo-style): changing them re-flows
   // every dependent shape on this condition — wall SF tracks the tile height.
   const setCondParam = (field, raw) => {
@@ -5677,7 +6271,7 @@ export default function TakeoffCanvas() {
   // VISIBLE shapes through the same conditionTotals rules the Report uses —
   // one source of role math, two scopes. Memoized: visRowById is a prop of the
   // memoized panel, so its identity must only change when the totals can.
-  const visRows = useMemo(() => conditionTotals(conditions, visibleShapes), [conditions, visibleShapes]);
+  const visRows = useMemo(() => conditionTotals(conditions, visibleShapes, seamCtx), [conditions, visibleShapes, seamCtx]);
   const visRowById = useMemo(() => new Map(visRows.map((r) => [r.id, r])), [visRows]);
   // Whole-project per-condition totals — the number the bid is built on. The
   // panel's rows lead with the visible-sheet slice (what you're looking at);
@@ -5685,7 +6279,7 @@ export default function TakeoffCanvas() {
   // open sheets show, so a condition whose takeoffs live on closed sheets
   // reads "Σ 412 SF" instead of a dead "—" (the whole-project number used to
   // exist only in the Report/exports). Same conditionTotals rules, no filter.
-  const projRows = useMemo(() => conditionTotals(conditions, shapes), [conditions, shapes]);
+  const projRows = useMemo(() => conditionTotals(conditions, shapes, seamCtx), [conditions, shapes, seamCtx]);
   const projRowById = useMemo(() => new Map(projRows.map((r) => [r.id, r])), [projRows]);
   // ── load-time quantity heal (#137) ─────────────────────────────────────────
   // A shape can ARRIVE without the numbers its role requires (an import that
@@ -5731,8 +6325,8 @@ export default function TakeoffCanvas() {
   // sits inside the traced zone (lib/zone.js) — third scope of the one role math.
   const zoneShapes = useMemo(() => (zoneCheck ? shapesInZone(shapes, zoneCheck) : null), [shapes, zoneCheck]);
   const zoneRows = useMemo(
-    () => (zoneShapes ? conditionTotals(conditions, zoneShapes).filter((r) => r.shape_count > 0) : null),
-    [conditions, zoneShapes]
+    () => (zoneShapes ? conditionTotals(conditions, zoneShapes, seamCtx).filter((r) => r.shape_count > 0) : null),
+    [conditions, zoneShapes, seamCtx]
   );
   const zoneIds = useMemo(() => (zoneShapes ? new Set(zoneShapes.map((sh) => sh.id)) : null), [zoneShapes]);
   const condRow = visRowById.get(activeCond);
@@ -5799,6 +6393,36 @@ export default function TakeoffCanvas() {
   const measureActive = MEASURE_TOOLS.some((t) => t.id === tool);
   const faceTool = MEASURE_TOOLS.find((t) => t.id === (measureActive ? tool : lastMeasureRef.current)) || MEASURE_TOOLS[0];
   const finishOk = ((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface" || tool === "curve") && poly.length >= 2);
+
+  // ── Layers panel (#85 phase 2) wiring ──────────────────────────────────────
+  // Open sheets that actually carry a PDF layer table. Empty for the common
+  // flattened export — the rail button and the panel then render nothing at
+  // all (zero chrome; the fallback is invisible, not a degraded mode).
+  const layerEntries = groupKeys
+    .map((k) => ({ key: k, label: tabLabel(k), layers: sheetLayers[k] || [], overrides: layerOverrides[k] || {} }))
+    .filter((e) => e.layers.length);
+  // Override mutations funnel here: the ref is the engine's source of truth
+  // (rolesForSheet reads it inside click paths), state mirrors it for render/
+  // persistence, and the sheet's lazy mask drops so the NEXT flood rebuilds
+  // with the new roles. Existing staged proposals keep their traced rings —
+  // they're under review, and re-flooding an estimator's edit would be rude.
+  const setLayerOverride = (key, id, state) => {
+    const prev = layerOverridesRef.current;
+    const cur = { ...(prev[key] || {}) };
+    if (state) cur[id] = state; else delete cur[id];
+    const next = { ...prev };
+    if (Object.keys(cur).length) next[key] = cur; else delete next[key];
+    layerOverridesRef.current = next;
+    maskCacheRef.current.delete(key);
+    setLayerOverrides(next);
+  };
+  const resetLayerOverrides = (key) => {
+    const next = { ...layerOverridesRef.current };
+    delete next[key];
+    layerOverridesRef.current = next;
+    maskCacheRef.current.delete(key);
+    setLayerOverrides(next);
+  };
 
   // panel-toggle for the right-edge rail — square like the zoom cluster, count as a
   // tiny mono line under the icon. Lives on the canvas, costs the toolbar zero rows.
@@ -5903,7 +6527,7 @@ export default function TakeoffCanvas() {
     // name what dies while the list still reads at a glance (≤5); count beyond
     const what = live.length <= 5 ? live.map((c) => c.finish_tag).join(", ") : `${live.length} conditions`;
     if (!window.confirm(`Delete ${what}${owned ? ` and their ${owned} takeoff${owned === 1 ? "" : "s"}` : ""}? This can't be undone.`)) return false;
-    setConditions((cs) => cs.filter((c) => !ids.has(c.id)));
+    setConditions((cs) => promoteOnDelete(cs, ids).filter((c) => !ids.has(c.id)));   // lineage repaired first
     // same cascade rule as deleteCondition: counted centrally, off the stack
     if (owned) dispatchShape({ type: "delete", ids: dead.map((s) => s.id), reason: "condition-delete" }, { record: false });
     setPalette((p) => p.filter((id) => !ids.has(id)));   // deleted conditions can't stay pinned
@@ -6041,6 +6665,10 @@ export default function TakeoffCanvas() {
     onAddCondition: addCondition, onDeleteCondition: deleteCondition,
     onUpdateCond: updateCond, onSetCondParam: setCondParam, onAssignAttr: assignAttr,
     onAddMaterial: addMaterial, onUpdateMaterial: updateMaterial, onRemoveMaterial: removeMaterial,
+    onDuplicateCondition: duplicateCondition, onSplitCondition: splitCondition,
+    onDeriveTransitions: deriveTransitionsOnto,   // returns its result synchronously — the panel renders the withheld report from it
+    onLocateTransition: locateSheetPoint,
+    onFollowFamilyRow: followFamilyRow, onRestoreDroppedRow: restoreDroppedRow,
     onBulkWaste: bulkWasteConditions, onBulkColor: bulkColorConditions, onBulkDelete: bulkDeleteConditions,
     onSaveTemplate: saveActiveAsTemplate, onApplyTemplate: applyTemplate,
     onRenameTemplate: renameTemplate, onDeleteTemplate: deleteTemplate,
@@ -6087,8 +6715,9 @@ export default function TakeoffCanvas() {
   // mid-row and shifting everything after them.
   // assigned floor/level rides the sheet chip + page entries (sheet key: page 1 is the bare file name)
   const levelOfPage = (n) => sheetLevels[n > 1 ? `${active}#${n}` : active] || "";
+  const soloStitch = sheetGroup.length === 1 && isStitchKey(sheetGroup[0]) ? stitchById[sheetGroup[0]] : null;
   const sheetChipLabel = sheetGroup.length
-    ? `${sheetGroup.length} sheets side-by-side`
+    ? (soloStitch ? `Stitched — ${soloStitch.name}` : `${sheetGroup.length} sheets side-by-side`)
     : `${levelOfPage(page) ? `${levelOfPage(page)} · ` : ""}${pageLabels[page] || (pageCount > 1 ? `Sheet ${page}` : active)}${pageCount > 1 ? ` · ${page}/${pageCount}` : ""}`;
   const sheetMenuItems = [];
   if (!sheetGroup.length && pageCount > 1) {
@@ -6100,7 +6729,9 @@ export default function TakeoffCanvas() {
     for (const s of sheets) sheetMenuItems.push({ id: `f-${s.name}`, label: s.name, active: s.name === active, onSelect: () => { setActive(s.name); setPage(1); } });
   }
   if (sheetMenuItems.length && (sheetGroup.length || lastGroup.length >= 2)) sheetMenuItems.push("divider");
-  if (sheetGroup.length) sheetMenuItems.push({ id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
+  if (sheetGroup.length) sheetMenuItems.push(soloStitch
+    ? { id: "ungroup", label: "Leave stitch — back to one sheet", title: "Back to a single sheet (the stitch's first member) — the stitch keeps its takeoffs and reopens from the gallery or its tab", onSelect: ungroup }
+    : { id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
   if (!sheetGroup.length && lastGroup.length >= 2) sheetMenuItems.push({ id: "regroup", label: `Regroup (${lastGroup.length})`, title: `Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`, onSelect: regroup });
   if (sheetMenuItems.length) sheetMenuItems.push("divider");
   sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
@@ -6176,15 +6807,36 @@ export default function TakeoffCanvas() {
     const NOTCHES = [SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE];
     const label = fillSens === SENS_STRICT ? "Strict" : fillSens === SENS_BALANCED ? "Balanced" : fillSens === SENS_AGGRESSIVE ? "Aggressive" : `${Math.round(fillSens * 100)}%`;
     const snap = (v) => { for (const n of NOTCHES) if (Math.abs(v - n) <= 0.06) return n; return v; };
+    // A knob that cannot move must SAY so. Sensitivity tunes one thing — how
+    // eagerly a fill escalates past ink the classifier called hatch — so a
+    // fill whose boundary is entirely hard ink returns a bit-identical region
+    // at every notch, and the estimator watching it stop short reaches for
+    // this slider and gets nothing (measured on the VA finish plan: Strict,
+    // Balanced and Aggressive agree to the square foot on every room).
+    //
+    // The claim is made from the LAST FILL's own softHits, not the sheet's
+    // softCount. Sheet level cannot answer it: AF101 classifies thousands of
+    // poché strokes in its toilet rooms — nonzero softCount all day — while
+    // the patient rooms that stop short touch none of them. Undefined means
+    // no fill yet, and discloses nothing.
+    const inert = proposal?.regions?.length
+      ? proposal.regions.every((r) => r.shs === 0)
+      : false;
     return (
-      <div title={"One-Click fill sensitivity — how far a fill reaches past a room's hatch pattern.\nStrict: stop at the linework (original behavior).\nBalanced: recover hatch-lined rooms to the walls (default).\nAggressive: cross more pattern and tolerate more growth.\nLower it if fills spill; raise it if hatched rooms come up short.\nScanned sheets trace from pixels — sensitivity doesn't apply there."}
-        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px" }}>
+      <div title={"One-Click fill sensitivity — how far a fill reaches past a room's hatch pattern.\nStrict: stop at the linework (original behavior).\nBalanced: recover hatch-lined rooms to the walls (default).\nAggressive: cross more pattern and tolerate more growth.\nLower it if fills spill; raise it if hatched rooms come up short.\nScanned sheets trace from pixels — sensitivity doesn't apply there."
+        + (inert ? "\n\nNothing on this fill's boundary classified as a hatch or tile pattern, so every setting returns the same region. It is stopping on ink the engine still reads as a wall." : "")}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", flexWrap: "wrap" }}>
         <span style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink-soft)" }}>Fill</span>
         <input name="fill-sensitivity" type="range" min={SENS_STRICT} max={SENS_AGGRESSIVE} step={0.01} value={fillSens} list="fill-sens-notches"
           onChange={(e) => setFillSens(snap(parseFloat(e.target.value)))}
-          style={{ flex: 1, accentColor: "var(--cobalt)", cursor: "pointer" }} />
+          style={{ flex: 1, accentColor: "var(--cobalt)", cursor: "pointer", opacity: inert ? 0.45 : 1 }} />
         <datalist id="fill-sens-notches"><option value={SENS_STRICT} /><option value={SENS_BALANCED} /><option value={SENS_AGGRESSIVE} /></datalist>
-        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: "var(--cobalt)", minWidth: 58 }}>{label}</span>
+        <span style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, fontWeight: 600, color: inert ? "var(--ink-faint)" : "var(--cobalt)", minWidth: 58 }}>{label}</span>
+        {inert && (
+          <span style={{ flexBasis: "100%", fontSize: 10.5, lineHeight: 1.35, color: "var(--ink-soft)" }}>
+            This fill is bounded entirely by hard ink — every setting returns the same region.
+          </span>
+        )}
       </div>
     );
   })();
@@ -6249,6 +6901,11 @@ export default function TakeoffCanvas() {
         )}
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--ink-muted)", minWidth: 44, fontFamily: "var(--f-mono)" }}>{saveState === "saving" ? "saving…" : saveState === "saved" ? "saved ✓" : ""}</span>
+        <button onClick={() => setGuideOpen(true)} title="How OpenTakeoff works — the five-minute path and every shortcut (?)"
+          aria-label="How OpenTakeoff works"
+          style={{ display: "inline-flex", alignItems: "center", padding: "6px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontSize: 13, fontWeight: 700, lineHeight: 1 }}>
+          ?
+        </button>
         <button onClick={toggleTheme} title="App theme — light / dark chrome (sheets unaffected; use ☾ on the canvas to invert the print)"
           aria-label="App theme — light / dark chrome" aria-pressed={theme === "dark"}
           style={{ display: "inline-flex", alignItems: "center", padding: "6px 9px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontSize: 14, lineHeight: 1 }}>
@@ -6333,6 +6990,14 @@ export default function TakeoffCanvas() {
               </div>
             )}
           </span>
+          {/* Approval stamp — ink over pencil. Human-only by design: this
+              button is the ONLY way an estimator seal is minted (no MCP tool,
+              no agent path), so the mark means a person looked. */}
+          <button onClick={() => setTool((t) => (t === "approve" ? "select" : "approve"))}
+            title="Approval stamp — the estimator's ink. Click a committed takeoff to approve it (records the shape), or empty plan to approve the sheet at that point; click a seal to lift it. ⌘Z undoes. Human-only: no agent or MCP path places this mark."
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "approve" ? "var(--c-positive)" : "var(--ink-faint)"}`, background: tool === "approve" ? "var(--c-positive)" : "transparent", color: tool === "approve" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="approve" size={15} />Approve
+          </button>
           <ToolMenu
             title="Edit takeoffs"
             onOpenChange={onMenuDepth}
@@ -6356,6 +7021,13 @@ export default function TakeoffCanvas() {
         </>)}
         {vRule}
         {cluster("Aids", <>
+          {panels.length === 1 && isStitchKey(panels[0].key) && (
+            <button onClick={() => setTool((t) => (t === "stitch-align" ? "pan" : "stitch-align"))}
+              title="Align the match line — click a point near the joint, then the SAME point where the other sheet draws it; that sheet slides so the two coincide. Do this before tracing (a stitch with takeoffs on it won't re-align)."
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "stitch-align" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "stitch-align" ? "var(--cobalt)" : "transparent", color: tool === "stitch-align" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+              <Icon name="calibrate" size={15} />Align
+            </button>
+          )}
           <button onClick={() => setTool((t) => (t === "zone" ? "select" : "zone"))}
             title="Zone check — trace a region (an apartment, a wing) to read every condition's quantities inside it, materials included. Nothing is saved; the outline clears when you leave the tool."
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "zone" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "zone" ? "var(--cobalt)" : "transparent", color: tool === "zone" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
@@ -6881,16 +7553,29 @@ export default function TakeoffCanvas() {
                 to the panel's full logical footprint (see tileCompositor.ts's
                 paintBase); the backing store is NOT sheet-sized, only its CSS box is,
                 which is what keeps this a bounded canvas regardless of sheet size */}
-            {panels.map((p) => (
-              <canvas key={p.key} ref={(el) => { if (el) panelCanvasRefs.current.set(p.key, el); else panelCanvasRefs.current.delete(p.key); }}
-                style={{ position: "absolute", left: p.xOffset, top: 0, width: p.img.w || undefined, height: p.img.h || undefined, boxShadow: "0 2px 20px rgba(0,0,0,.18)" }} />
+            {drawPanels.filter((d) => !d.clip).map((d) => (
+              <canvas key={d.drawKey} ref={(el) => { if (el) panelCanvasRefs.current.set(d.drawKey, el); else panelCanvasRefs.current.delete(d.drawKey); }}
+                style={{ position: "absolute", left: d.x, top: d.y, width: d.w || undefined, height: d.h || undefined, boxShadow: "0 2px 20px rgba(0,0,0,.18)" }} />
             ))}
-            {/* detail layer — one PER PANEL, a crop of the visible region + margin
+            {/* detail layer — one PER SOURCE, a crop of the visible region + margin
                 composited from cached tiles at the current zoom (see the detail-view
                 effect); group mode no longer shares a single global detail canvas */}
-            {panels.map((p) => (
-              <canvas key={`detail-${p.key}`} ref={(el) => { if (el) detailCanvasRefs.current.set(p.key, el); else detailCanvasRefs.current.delete(p.key); }}
+            {drawPanels.filter((d) => !d.clip).map((d) => (
+              <canvas key={`detail-${d.drawKey}`} ref={(el) => { if (el) detailCanvasRefs.current.set(d.drawKey, el); else detailCanvasRefs.current.delete(d.drawKey); }}
                 style={{ position: "absolute", left: 0, top: 0, display: "none", pointerEvents: "none" }} />
+            ))}
+            {/* stitch members (#161): base + detail together inside a seam-clip
+                wrapper — the div does ALL clipping (overflow:hidden at the member's
+                visible box), so the neighbor's margin/border strip near the match
+                line can't overpaint the plan. The shadow rides the wrapper: the
+                composite reads as one sheet of paper, not N taped panels. */}
+            {drawPanels.filter((d) => d.clip).map((d) => (
+              <div key={`wrap-${d.drawKey}`} style={{ position: "absolute", left: d.clip.x, top: d.clip.y, width: d.clip.w, height: d.clip.h, overflow: "hidden", boxShadow: "0 2px 20px rgba(0,0,0,.18)" }}>
+                <canvas ref={(el) => { if (el) panelCanvasRefs.current.set(d.drawKey, el); else panelCanvasRefs.current.delete(d.drawKey); }}
+                  style={{ position: "absolute", left: d.x - d.clip.x, top: d.y - d.clip.y, width: d.w || undefined, height: d.h || undefined }} />
+                <canvas ref={(el) => { if (el) detailCanvasRefs.current.set(d.drawKey, el); else detailCanvasRefs.current.delete(d.drawKey); }}
+                  style={{ position: "absolute", left: 0, top: 0, display: "none", pointerEvents: "none" }} />
+              </div>
             ))}
             <svg width={stage.w} height={stage.h} viewBox={`0 0 ${stage.w} ${stage.h}`} style={{ position: "absolute", top: 0, left: 0, overflow: "visible", pointerEvents: "none" }}>
               <defs>
@@ -7127,6 +7812,30 @@ export default function TakeoffCanvas() {
                           </g>
                         );
                       }
+                      if (m.type === "dimension" && m.from && m.to) {
+                        // a dimension line: perpendicular ticks at both ends and the
+                        // measured length (m.len_ft, snapshotted at annotate time from
+                        // the sheet scale) centered beside the line — a note ABOUT a
+                        // distance, never a takeoff quantity
+                        const [fx, fy] = [m.from[0] * p.img.w, m.from[1] * p.img.h];
+                        const [tx, ty] = [m.to[0] * p.img.w, m.to[1] * p.img.h];
+                        const dl = Math.hypot(tx - fx, ty - fy) || 1;
+                        const dnx = -(ty - fy) / dl, dny = (tx - fx) / dl;   // unit normal
+                        const tick = 7 / z;
+                        const dimText = [Number(m.len_ft) > 0 ? dimLabel(m.len_ft) : "", m.text].filter(Boolean).join(" · ");
+                        const hx0 = Math.min(fx, tx), hy0 = Math.min(fy, ty), hx1 = Math.max(fx, tx), hy1 = Math.max(fy, ty);
+                        const pad = (6 * w) / z;
+                        return (
+                          <g key={m.id}>
+                            {halo(hx0 - pad, hy0 - pad, hx1 + pad, hy1 + pad)}
+                            <line x1={fx} y1={fy} x2={tx} y2={ty} stroke={mk} strokeWidth={(2 * w) / z} strokeDasharray={dash} />
+                            <line x1={fx - dnx * tick} y1={fy - dny * tick} x2={fx + dnx * tick} y2={fy + dny * tick} stroke={mk} strokeWidth={(2 * w) / z} />
+                            <line x1={tx - dnx * tick} y1={ty - dny * tick} x2={tx + dnx * tick} y2={ty + dny * tick} stroke={mk} strokeWidth={(2 * w) / z} />
+                            {dimText && <text x={(fx + tx) / 2 + dnx * (11 / z)} y={(fy + ty) / 2 + dny * (11 / z)} fill={mk} fontSize={12 / z} fontWeight="700" textAnchor="middle" dominantBaseline="central" style={{ pointerEvents: "none" }}>{dimText}</text>}
+                            {badge(hx0, hy0 - pad - 9 / z)}
+                          </g>
+                        );
+                      }
                       if (m.type === "bubble") {
                         const cx = m.at[0] * p.img.w, cy = m.at[1] * p.img.h;
                         const rad = (Number(m.r) > 0 ? Number(m.r) : 0.02) * p.img.w;
@@ -7168,6 +7877,36 @@ export default function TakeoffCanvas() {
                           <rect x={x * p.img.w - 3 / z} y={y * p.img.h - 14 / z} width={lw} height={20 / z} fill="rgba(255,247,237,.92)" stroke={mk} strokeWidth={(1 * w) / z} strokeDasharray={dash} rx={3 / z} />
                           <text x={x * p.img.w + 2 / z} y={y * p.img.h} fill="#0e1a2e" fontSize={12 / z} fontWeight="600">{m.text}</text>
                           {badge(x * p.img.w, y * p.img.h - 22 / z)}
+                        </g>
+                      );
+                    })}
+                    {/* approval seals — ink over pencil (lib/approvals.js): the
+                        estimator's APPROVED ring, the agent's AGENT diamond. Its
+                        own layer above markups and NOT gated on showMarkups — a
+                        seal is the record of review, so it never hides with the
+                        annotations. Sizes are sheet-normalized (the bubble
+                        convention) so seals print proportionally; inks are token
+                        literals via approvalInk (SVG attrs don't resolve CSS vars). */}
+                    {approvals.filter((a) => a.sheet_id === p.key).map((a) => {
+                      const cx = a.at[0] * p.img.w, cy = a.at[1] * p.img.h;
+                      const rad = APPROVAL_R * p.img.w;
+                      const ink = approvalInk(a.actor, darkMode);
+                      const backing = darkMode ? "rgba(12,15,20,.72)" : "rgba(255,255,255,.72)";
+                      if (a.actor === "agent") {
+                        const dia = (k) => `M${cx},${cy - rad * k} L${cx + rad * k},${cy} L${cx},${cy + rad * k} L${cx - rad * k},${cy} Z`;
+                        return (
+                          <g key={a.id} style={{ pointerEvents: "none" }}>
+                            <path d={dia(1)} fill={backing} stroke={ink} strokeWidth={rad * 0.07} strokeLinejoin="round" />
+                            <path d={dia(0.72)} fill="none" stroke={ink} strokeWidth={rad * 0.035} strokeLinejoin="round" />
+                            <text x={cx} y={cy} fill={ink} fontSize={rad * 0.3} fontWeight="700" letterSpacing={rad * 0.02} textAnchor="middle" dominantBaseline="central">AGENT</text>
+                          </g>
+                        );
+                      }
+                      return (
+                        <g key={a.id} style={{ pointerEvents: "none" }}>
+                          <circle cx={cx} cy={cy} r={rad} fill={backing} stroke={ink} strokeWidth={rad * 0.07} />
+                          <circle cx={cx} cy={cy} r={rad * 0.78} fill="none" stroke={ink} strokeWidth={rad * 0.035} />
+                          <text x={cx} y={cy} fill={ink} fontSize={rad * 0.26} fontWeight="700" letterSpacing={rad * 0.03} textAnchor="middle" dominantBaseline="central">APPROVED</text>
                         </g>
                       );
                     })}
@@ -7423,6 +8162,7 @@ export default function TakeoffCanvas() {
               })}
               {calib.length === 2 && <line x1={calib[0][0]} y1={calib[0][1]} x2={calib[1][0]} y2={calib[1][1]} stroke="#1f3fc7" strokeWidth={2 / tf.scale} />}
               {calib.map((p, i) => <path key={i} d={starPath(p[0], p[1], 3.5 / tf.scale)} fill="#1f3fc7" />)}
+              {alignPt && <path d={starPath(alignPt[0], alignPt[1], 4.5 / tf.scale)} fill="#1f3fc7" stroke="#fff" strokeWidth={1 / tf.scale} />}
               {/* check tool — dashed so it never reads as calibrate's solid line */}
               {tool === "check" && check.length === 2 && !checkCross && (
                 <>
@@ -7740,6 +8480,7 @@ export default function TakeoffCanvas() {
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
           {panelBtn(() => setAgentOpen((o) => !o), "target", "Agent — describe a takeoff; it stages dashed proposals you accept or reject (bring your own AI key)", agentOpen, agentProposals.length)}
           {rollByCond.size > 0 && panelBtn(() => setRollPanelOpen((o) => !o), "roll", "Roll goods — the cut diagram, cutting order, and figured order footage", rollPanelOpen, rollByCond.size)}
+          {layerEntries.length > 0 && panelBtn(() => setLayersOpen((o) => !o), "layers", "PDF layers — what this drawing's own layer table states each ink is; set what One-Click treats as wall and what it ignores", layersOpen, layerEntries.reduce((n, e) => n + e.layers.length, 0))}
           {panelBtn(() => setShowRevisions(true), "revisions", "Revisions — save the takeoff at each bid revision, compare what moved", showRevisions)}
         </div>
 
@@ -7787,6 +8528,20 @@ export default function TakeoffCanvas() {
           />
         )}
 
+        {/* Layers panel (#85 phase 2) — DOCKED right-rail sibling like the Roll
+            panel: the sheet's PDF layer table (names + stated roles) with the
+            per-layer Auto/Wall/Off controls feeding One-Click's role
+            short-circuit. Its rail button renders only when an open sheet
+            actually carries layers, so a flattened export costs zero chrome. */}
+        {layersOpen && layerEntries.length > 0 && (
+          <LayerPanel
+            entries={layerEntries}
+            onOverride={setLayerOverride}
+            onReset={resetLayerOverrides}
+            onClose={() => setLayersOpen(false)}
+          />
+        )}
+
         {/* Takeoffs panel — DOCKED in the layout row (reflows the canvas, not an
             overlay): every condition with its running totals, plus the Library,
             Materials, and Columns tabs. Extracted to components/TakeoffsPanel.jsx and
@@ -7808,6 +8563,7 @@ export default function TakeoffCanvas() {
           templates={templates}
           palette={palette}
           rollByCond={rollByCond}
+          transitionSources={transitionSources}
           matLib={matLib}
           matLibById={matLibById}
           linkedCountById={linkedCountById}
@@ -7834,6 +8590,7 @@ export default function TakeoffCanvas() {
           onDetect={(k, det) => setDetectedScales((d) => (d[k]?.label === det.label ? d : { ...d, [k]: det }))}
           thumbCacheRef={thumbCacheRef} busyRef={statusRef} planIndexRef={planIndexRef} onIndexed={persistIndex}
           openTabs={openTabs} onOpen={openSheets}
+          stitches={stitches} onStitch={createStitch} onOpenStitch={openStitch} onDeleteStitch={deleteStitch}
           onAddFiles={handleFiles}
           levels={sheetLevels}
           onAssignLevel={(keys, label) => setSheetLevels((m) => {
@@ -7902,6 +8659,8 @@ export default function TakeoffCanvas() {
           (the Agent panel links here; closing re-renders, so `configured`
           re-reads immediately). */}
       {showAiSettings && <AiSettings onClose={() => setShowAiSettings(false)} />}
+      {/* the manual, last in the tree so it sits above every panel and dock */}
+      {guideOpen && <UserGuide onClose={() => setGuideOpen(false)} />}
     </div>
   );
 }

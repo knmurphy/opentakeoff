@@ -17,6 +17,7 @@
 // idempotent — an accepted shape does not come back as a second pencil copy).
 
 import { ANN_SCHEMA } from "./store.js";
+import { sanitizeApprovals } from "./approvals.js";
 
 /** Parse + gate an import file's text. Throws with copy the message bar shows
  * verbatim — "Couldn't…" is the canvas's danger convention (isDangerMsg), so
@@ -73,8 +74,10 @@ export function mergeTakeoffImport(current, imported, knownFiles = null) {
   // Nothing measured or marked up yet → the import IS the project. Seeded
   // default conditions and an untouched tab list are not user work, so they
   // don't block the clean-replace path (a pre-traced calibration would be rare
-  // enough here that predictability wins over preserving it).
-  if (!arr(cur.shapes).length && !arr(cur.markups).length) {
+  // enough here that predictability wins over preserving it). Approval seals
+  // DO block it (#176): a seal is ink someone placed — operator state wins,
+  // so a sealed-but-untraced project merges instead of being replaced.
+  if (!arr(cur.shapes).length && !arr(cur.markups).length && !arr(cur.approvals).length) {
     // …except the VIEW. An MCP export typically carries empty tab/group
     // state (the session has no such concept), and adopting an empty list
     // would close the operator's open sheet and bounce them to the gallery
@@ -99,13 +102,37 @@ export function mergeTakeoffImport(current, imported, knownFiles = null) {
   const byTag = new Map(conditions.map((c) => [tagKey(c.finish_tag), c.id]));
   const condIds = new Set(conditions.map((c) => c.id));
   const condMap = new Map();   // imported cond id -> id in the merged doc
+  const addedCondIds = new Set();   // ids the import CREATED (vs merged onto an operator's own)
   let condMerged = 0, condAdded = 0;
   for (const c of impConds) {
     const hit = byTag.get(tagKey(c.finish_tag));
     if (hit) { condMap.set(c.id, hit); condMerged++; continue; }
     const id = condIds.has(c.id) ? freeId(c.id, condIds) : c.id;
     const next = id === c.id ? c : { ...c, id };
-    conditions.push(next); condIds.add(id); byTag.set(tagKey(c.finish_tag), id); condMap.set(c.id, id); condAdded++;
+    conditions.push(next); condIds.add(id); byTag.set(tagKey(c.finish_tag), id); condMap.set(c.id, id);
+    addedCondIds.add(id); condAdded++;
+  }
+  // ── twin lineage: re-point it, or cut it, never leave it dangling ─────────
+  // A twin's `variant_of` is an id, so an added twin has to follow its parent through condMap
+  // (a de-collided id would otherwise point at a stranger). And lineage only survives when the
+  // PARENT also arrived as a new condition: if the parent merged into the operator's own
+  // condition, the twin's rows carry origin_ids into a materials list that never had them, so
+  // following it would mean following nothing. In that case the twin keeps its materials as its
+  // own — the numbers the file actually carried — and simply stops being a twin. Grouping
+  // (`family_id`) is a cosmetic string and rides along either way.
+  for (let i = 0; i < conditions.length; i++) {
+    const c = conditions[i];
+    if (!c?.variant_of || !addedCondIds.has(c.id)) continue;   // operator conditions stay untouched
+    const mapped = condMap.get(c.variant_of);
+    const parentArrived = !!mapped && addedCondIds.has(mapped);
+    if (parentArrived && mapped !== c.variant_of) {
+      conditions[i] = { ...c, variant_of: mapped };
+    } else if (!parentArrived) {
+      const next = { ...c, materials: (c.materials || []).map(({ origin_id: _o, inherited: _i, ...m }) => m) };
+      delete next.variant_of;
+      delete next.materials_dropped;
+      conditions[i] = next;
+    }
   }
 
   // ── shapes / markups: append new ids, skip ones already here ─────────────
@@ -117,6 +144,13 @@ export function mergeTakeoffImport(current, imported, knownFiles = null) {
   const addedMarkups = arr(imported.markups).filter((m) => m && typeof m === "object" && (!m.id || !markupIds.has(m.id)));
   const rfiIds = new Set(arr(cur.rfis).map((r) => r?.id).filter(Boolean));
   const addedRfis = arr(imported.rfis).filter((r) => r && typeof r === "object" && r.id && !rfiIds.has(r.id));
+  // ── approvals (#176): transport, not minting ──────────────────────────────
+  // The markup rule (append new ids, skip ones already here) behind the same
+  // load gate the canvas hydrate runs — an estimator seal arriving by file
+  // stays an estimator seal (the actor field is the authority), and a corrupt
+  // record is dropped here rather than wedging the render loop later.
+  const approvalIds = new Set(arr(cur.approvals).map((a) => a?.id).filter(Boolean));
+  const addedApprovals = sanitizeApprovals(imported.approvals).filter((a) => !approvalIds.has(a.id));
 
   // ── scales: the operator's calibration wins per sheet ────────────────────
   const sheets = [...arr(cur.sheets)];
@@ -135,6 +169,7 @@ export function mergeTakeoffImport(current, imported, knownFiles = null) {
     shapes: [...arr(cur.shapes), ...addedShapes],
     markups: [...arr(cur.markups), ...addedMarkups],
     ...(addedRfis.length ? { rfis: [...arr(cur.rfis), ...addedRfis] } : {}),
+    ...(addedApprovals.length ? { approvals: [...arr(cur.approvals), ...addedApprovals] } : {}),
     sheets,
   };
   return {

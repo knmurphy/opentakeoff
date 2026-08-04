@@ -20,6 +20,9 @@ export interface TextContentLike { items: TextItemLike[] }
 
 export interface PageHandle {
   pageNum: number;
+  /** page /Rotate in degrees (0/90/180/270) — the marked-set export re-applies
+   * the canvas's visual orientation to its burned-in chips from this */
+  rotate: number;
   /** page size in PDF points */
   widthPt: number;
   heightPt: number;
@@ -40,6 +43,13 @@ export interface PageHandle {
     longEdge: number,
     draw?: (ctx: object, toCanvas: (x: number, y: number) => [number, number]) => void,
   ): Promise<{ png: Uint8Array; width: number; height: number; zoom: number }>;
+  /** Rasterize the page at the given scale into RAW RGBA bytes on a
+   * width×height canvas (the caller states the ceil'd dims) — the pixel
+   * source for the raster-mask fallback (#154), which needs pixels, not a
+   * PNG. Rendered on an explicit white background, matching the canvas's
+   * dedicated mask render (dark themes must never invert the ink). Same
+   * @napi-rs/canvas requirement as renderPng. */
+  renderRgba(scale: number, width: number, height: number): Promise<Uint8ClampedArray>;
 }
 
 /** The document's NodeCanvasFactory — present on the proxy at runtime, absent
@@ -102,6 +112,7 @@ export async function openPdf(filePath: string): Promise<DocHandle> {
       const textContent = (await page.getTextContent()) as TextContentLike;
       return {
         pageNum: n,
+        rotate: page.rotate,
         widthPt: vp1.width,
         heightPt: vp1.height,
         viewport: { width: vp.width, height: vp.height, transform: vp.transform },
@@ -115,6 +126,21 @@ export async function openPdf(filePath: string): Promise<DocHandle> {
           try {
             await page.render({ canvasContext: target.context as never, viewport: rvp }).promise;
             return new Uint8Array(target.canvas.toBuffer("image/png"));
+          } finally {
+            factory.destroy(target);
+          }
+        },
+        async renderRgba(scale: number, width: number, height: number): Promise<Uint8ClampedArray> {
+          await ensureCanvasGlobals();
+          const rvp = page.getViewport({ scale });
+          const factory = (doc as unknown as { canvasFactory: CanvasFactory }).canvasFactory;
+          const target = factory.create(width, height);
+          try {
+            await page.render({ canvasContext: target.context as never, viewport: rvp, background: "#ffffff" }).promise;
+            // getImageData copies into a fresh buffer, so destroying the
+            // canvas afterwards (finally) never frees the returned bytes
+            const ctx = target.context as unknown as { getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray } };
+            return ctx.getImageData(0, 0, width, height).data;
           } finally {
             factory.destroy(target);
           }
@@ -171,15 +197,39 @@ export function positionedText(ph: PageHandle): { str: string; x: number; y: num
   return out;
 }
 
-export interface TextSpan { str: string; x0: number; y0: number; x1: number; y1: number }
+/** The page's text items FILTERED to an image-px rect (#153) — a TextContentLike
+ * detectScale can re-run on, so "does an enlarged plan's own scale note sit in
+ * this measured region" is the SAME detector the sheet-level suggestion uses,
+ * never a second regex. Items keep their raw transforms; position is judged by
+ * the same composed transform positionedText uses. */
+export function textItemsInRegion(ph: PageHandle, r: { x0: number; y0: number; x1: number; y1: number }): TextContentLike {
+  const items: TextItemLike[] = [];
+  for (const it of ph.textContent.items || []) {
+    if (!(it.str || "").trim()) continue;
+    const t = pdfjs.Util.transform(ph.viewport.transform, it.transform);
+    if (t[4] >= r.x0 && t[4] <= r.x1 && t[5] >= r.y0 && t[5] <= r.y1) items.push(it);
+  }
+  return { items };
+}
+
+export interface TextSpan { str: string; x0: number; y0: number; x1: number; y1: number; rot?: number }
 
 /** Positioned page text as BBOX SPANS in image px (issue #29's sheet_context
  * needs boxes, not points, to answer "which text is inside this region").
  * Same composed transform as positionedText: t[4], t[5] is the baseline's
  * bottom-left in device space. item.width/height are user-space units; this
  * server's viewports are unrotated at RENDER_SCALE (openPdf), so device
- * extent is a straight scale — glyphs rise from the baseline, y is down, so
- * the box spans [y − h, y]. */
+ * extent is a straight scale.
+ *
+ * Rotation-aware (#87 phase 2): the composed transform's columns are the text
+ * run's device-space direction (t[0], t[1]) and up vector (t[2], t[3]) — the
+ * box is the hull of the run's four corners, so text written at a quarter-turn
+ * (rotated schedule headers) gets its TRUE tall-narrow box instead of a
+ * horizontal one laid over the wrong cells. `rot` is the run direction in
+ * degrees, clockwise in device space (y down), emitted only when nonzero —
+ * unrotated sets stay byte-identical on the wire. For unrotated text this
+ * reduces exactly to the old math: glyphs rise from the baseline, y is down,
+ * so the box spans [y − h, y]. */
 export function textSpans(ph: PageHandle): TextSpan[] {
   const out: TextSpan[] = [];
   for (const it of ph.textContent.items || []) {
@@ -191,7 +241,19 @@ export function textSpans(ph: PageHandle): TextSpan[] {
     // pdf.js gives height on most items; the composed transform's column
     // norm is the font's device height when it doesn't
     const h = (it.height || 0) * RENDER_SCALE || Math.hypot(t[2], t[3]);
-    out.push({ str, x0: +x.toFixed(1), y0: +(y - h).toFixed(1), x1: +(x + w).toFixed(1), y1: +y.toFixed(1) });
+    const dn = Math.hypot(t[0], t[1]) || 1;
+    const un = Math.hypot(t[2], t[3]) || 1;
+    const dx = t[0] / dn, dy = t[1] / dn;   // along the run
+    const ux = t[2] / un, uy = t[3] / un;   // glyph ascent
+    const xs = [x, x + w * dx, x + h * ux, x + w * dx + h * ux];
+    const ys = [y, y + w * dy, y + h * uy, y + w * dy + h * uy];
+    const rot = ((Math.round((Math.atan2(dy, dx) * 180) / Math.PI) % 360) + 360) % 360;
+    out.push({
+      str,
+      x0: +Math.min(...xs).toFixed(1), y0: +Math.min(...ys).toFixed(1),
+      x1: +Math.max(...xs).toFixed(1), y1: +Math.max(...ys).toFixed(1),
+      ...(rot ? { rot } : {}),
+    });
   }
   return out;
 }

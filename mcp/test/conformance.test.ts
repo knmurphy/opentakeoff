@@ -24,6 +24,8 @@ import {
   exportTakeoffOutput, deleteShapeOutput, readSheetTextOutput,
   findTextOutput, editMaterialsOutput, editConditionOutput, undoLastOutput,
   exportReportOutput, sheetGraphOutput, resolveTagOutput, findScheduleOutput,
+  symbolSweepOutput, sweepScheduleRowOutput, annotateOutput, listAnnotationsOutput,
+  markVerdictOutput, deleteVerdictOutput, duplicateConditionOutput, splitConditionOutput,
 } from "../src/outputs.ts";
 
 const PLAN = fileURLToPath(new URL("../../demo/sample-plan.pdf", import.meta.url));
@@ -61,6 +63,14 @@ const SCHEMAS: Record<string, z.ZodTypeAny> = {
   sheet_graph: z.object(sheetGraphOutput).strict(),
   resolve_tag: z.object(resolveTagOutput).strict(),
   find_schedule: z.object(findScheduleOutput).strict(),
+  symbol_sweep: z.object(symbolSweepOutput).strict(),
+  sweep_schedule_row: z.object(sweepScheduleRowOutput).strict(),
+  annotate: z.object(annotateOutput).strict(),
+  list_annotations: z.object(listAnnotationsOutput).strict(),
+  mark_verdict: z.object(markVerdictOutput).strict(),
+  delete_verdict: z.object(deleteVerdictOutput).strict(),
+  duplicate_condition: z.object(duplicateConditionOutput).strict(),
+  split_condition: z.object(splitConditionOutput).strict(),
 };
 
 async function pair() {
@@ -225,6 +235,24 @@ test("every tool: canonical valid call → schema-valid structuredContent mirror
   const revRow = (await callOk(client, "takeoff_summary")).conditions.find((r: any) => r.finish_tag === "CPT-1");
   assert.deepEqual({ w: revRow.waste_pct, m: revRow.multiplier }, { w: 0, m: 1 }, "undo restores both knobs verbatim");
 
+  // condition twins (#205): mint → follow → split → exact inverses, then the
+  // session goes back to pre-twins state so the later tests see what they expect
+  const twin = await callOk(client, "duplicate_condition", { condition: "CPT-1", label: "Level 2" });
+  assert.equal(twin.condition, "CPT-1 – Level 2");
+  assert.equal(twin.inherited_rows, 1, "the adhesive row arrived following");
+  assert.match(await callErr(client, "duplicate_condition", { condition: "CPT-1", label: "level 2" }),
+    /already called/);                              // collision is case-insensitive, refused not de-collided
+  const familyEdit = await callOk(client, "edit_materials", { condition: "CPT-1",
+    patch: [{ id: materials.materials[0].id, fields: { per: 275 } }] });
+  assert.equal(familyEdit.materials[0].per, 275);
+  const cut = await callOk(client, "split_condition", { condition: "CPT-1 – Level 2" });
+  assert.deepEqual({ s: cut.split, f: cut.frozen_rows }, { s: true, f: 1 });
+  const twinUndo = await callOk(client, "undo_last", { n: 3 });   // split, family edit, mint
+  assert.deepEqual(twinUndo.steps.map((s: any) => s.op), ["split_condition", "materials", "duplicate_condition"],
+    "the journal names the twin ops and the SDK's output validation accepts them");
+  const postTwins = await callOk(client, "takeoff_summary");
+  assert.equal(postTwins.conditions.some((r: any) => r.finish_tag === "CPT-1 – Level 2"), false, "the twin is gone whole");
+
   // export_report: the canvas Report document over MCP (#130) — computed buy
   // list included, math parity with the app's totals.js
   await callOk(client, "edit_condition", { condition: "CPT-1", waste_pct: 5 });
@@ -360,6 +388,13 @@ test("schema-invalid arguments: -32602 validation error naming the tool; the ses
   await callViolation(client, "view_sheet", { sheet: KEY, region: { x0: 0, y0: 0, x1: 10 } }); // partial region
   await callViolation(client, "find_text", { sheet: KEY });                                // missing q
   await callViolation(client, "find_text", { sheet: KEY, q: "101", limit: 0 });            // limit below min 1
+  await callViolation(client, "symbol_sweep", { sheet: KEY });                             // missing seed_rect
+  await callViolation(client, "symbol_sweep", { sheet: KEY, seed_rect: [[0, 0]] });        // one corner is not a rect
+  await callViolation(client, "symbol_sweep", { sheet: KEY, seed_rect: [[0, 0], [50, 50]], tolerance_px: 0 }); // tolerance must be positive
+  await callViolation(client, "symbol_sweep", { sheet: KEY, seed_rect: [[0, 0], [50, 50]], scope: "document" }); // bad scope enum
+  await callViolation(client, "sweep_schedule_row", {});                                   // missing tag
+  await callViolation(client, "sweep_schedule_row", { tag: "" });                          // empty tag fails the min-1 gate
+  await callViolation(client, "annotate", { sheet: KEY, type: "measure" });                // bad type enum
   await callViolation(client, "edit_materials", { condition: "CPT-1", add: [{ per: 250 }] }); // add row missing name
   await callViolation(client, "edit_condition", { condition: "CPT-1", waste_pct: -5 });    // negative waste
   await callViolation(client, "edit_condition", { condition: "CPT-1", multiplier: 0 });    // 0 silently means 1 on the canvas — rejected
@@ -564,4 +599,196 @@ test("sheet graph (#87): index, resolve with citations, refusal with reasons, fi
   assert.match(found.matches[0].title, /ROOM FINISH SCHEDULE/);
   assert.ok(found.matches[0].region.x1 > found.matches[0].region.x0, "the region is viewable");
   assert.match(await callErr(client, "find_schedule", { kind: "door" }), /No "door" schedule found .* Found: /);
+});
+
+// ── the sheet graph, phase 2 (#87): continuation sheets, rotated headers, ───
+// multi-building keys — the five-page fixture pins all three lanes end to end
+// (generator: scripts/make-sheetgraph-fixture.mjs). Room 134 exists in BOTH
+// buildings; building A's schedule is only readable through its rotated
+// header band; building B's schedule continues onto page 5.
+const MB_SET = fileURLToPath(new URL("./fixtures/multibuilding-set.pdf", import.meta.url));
+
+test("sheet graph phase 2 (#87): continuation merges to ONE table, rotated headers anchor, multi-building refuses with candidates", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: MB_SET });
+
+  const g = await callOk(client, "sheet_graph");
+  assert.deepEqual(g.buildings, ["A", "B"], "the set's building designators");
+  assert.equal(g.sheets[0].building, "A");
+  assert.equal(g.sheets[1].building, "B");
+  assert.equal(g.counts.schedules, 3, "LOGICAL tables: room-finish A, room-finish B (incl. its continuation), material");
+  // rooms carry their building — the same number, twice, honestly
+  const r134 = g.rooms.filter((r: any) => r.tag === "134");
+  assert.deepEqual(r134.map((r: any) => r.building).sort(), ["A", "B"]);
+  // the rotated header band is read and disclosed
+  const schedA = g.sheets.find((s: any) => s.sheet === "multibuilding-set.pdf#3");
+  assert.equal(schedA.schedules.find((x: any) => x.kind === "room-finish").rotated_headers, true);
+  // the continuation fragment names its base
+  const contd = g.sheets.find((s: any) => s.sheet === "multibuilding-set.pdf#5");
+  assert.equal(contd.schedules[0].continues, "multibuilding-set.pdf#4");
+
+  // refusal over first-match: unqualified 134 lists the candidates per building
+  const amb = await callOk(client, "resolve_tag", { tag: "134" });
+  assert.equal(amb.status, "unresolved");
+  assert.match(amb.reason, /ambiguous: room 134 appears in 2 buildings/);
+  assert.match(amb.reason, /qualify the tag/);
+  assert.equal(amb.room, null, "citing one building's plan tag would be quietly wrong");
+  assert.deepEqual(amb.candidates.map((c: any) => c.building).sort(), ["A", "B"]);
+
+  // qualified tags pick the building the set names — through the ROTATED table
+  const a = await callOk(client, "resolve_tag", { tag: "A-134" });
+  assert.equal(a.status, "resolved");
+  assert.equal(a.building, "A");
+  assert.equal(a.room.name, "OFFICE", "building A's 134, not B's STORAGE");
+  const aFloor = a.finishes.find((f: any) => f.surface === "FLOOR");
+  assert.equal(aFloor.code, "CPT-1");
+  assert.equal(aFloor.definition.cells.MATERIAL, "CARPET TILE", "the chain still reaches the material schedule");
+  const b = await callOk(client, "resolve_tag", { tag: "B-134" });
+  assert.equal(b.finishes.find((f: any) => f.surface === "FLOOR").code, "VCT-2");
+
+  // a row carried by the CONT'D sheet resolves and cites the CONT'D sheet
+  const cont = await callOk(client, "resolve_tag", { tag: "201" });
+  assert.equal(cont.status, "resolved");
+  assert.equal(cont.building, "B");
+  assert.ok(cont.finishes.every((f: any) => f.source.sheet === "multibuilding-set.pdf#5"), "evidence points at the ink");
+
+  // a building the set never names refuses by name, with the candidates
+  const c = await callOk(client, "resolve_tag", { tag: "C-134" });
+  assert.equal(c.status, "unresolved");
+  assert.match(c.reason, /names no building "C"/);
+  assert.equal(c.candidates.length, 2);
+
+  // find_schedule: the continued table is ONE match with parts, base first
+  const found = await callOk(client, "find_schedule", { kind: "room finish" });
+  assert.equal(found.matches.length, 2, "two logical room-finish tables — A and B — not three fragments");
+  const matchA = found.matches.find((m: any) => m.building === "A");
+  assert.equal(matchA.rotated_headers, true);
+  const matchB = found.matches.find((m: any) => m.building === "B");
+  assert.equal(matchB.rows, 2, "total rows across fragments");
+  assert.deepEqual(matchB.parts.map((p: any) => [p.sheet, p.rows]), [["multibuilding-set.pdf#4", 1], ["multibuilding-set.pdf#5", 1]]);
+});
+
+// 0.9.20 — symbol_sweep's output contract, both modes, schema round-tripped
+// unstripped (the assign-mode deepEqual discipline: zod strips unknown keys,
+// so equality proves the schema states EVERY returned field).
+const SYMPLAN = fileURLToPath(new URL("./fixtures/symbol-plan.pdf", import.meta.url));
+
+test("symbol_sweep: reply validates AND round-trips the schema unstripped, in read and commit modes", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: SYMPLAN });
+  const read = await callOk(client, "symbol_sweep", { sheet: "symbol-plan.pdf", seed_rect: [[196, 980], [272, 1028]] });
+  assert.deepEqual(z.object(symbolSweepOutput).parse(read), read, "schema states every returned field — nothing stripped");
+  assert.equal(read.found, read.matches.length);
+  assert.ok(read.withheld.every((w: any) => typeof w.reason === "string" && w.reason.length > 0));
+  assert.equal(read.committed, undefined, "read mode commits nothing");
+
+  const commit = await callOk(client, "symbol_sweep", { sheet: "symbol-plan.pdf", seed_rect: [[196, 980], [272, 1028]], commit: true, condition: "FD-1" });
+  assert.deepEqual(z.object(symbolSweepOutput).parse(commit), commit);
+  assert.equal(commit.committed, commit.found);
+  assert.equal(commit.shape_ids.length, commit.found);
+  assert.equal(commit.condition, "FD-1");
+});
+
+// phase 2 — set-wide sweeps + schedule-row seeding: both output contracts
+// round-trip unstripped on the multi-sheet fixture, and the refusals are
+// clean error surfaces with the reason and the fix.
+const SYMSET = fileURLToPath(new URL("./fixtures/symbol-set.pdf", import.meta.url));
+
+test("symbol_sweep scope 'set' and sweep_schedule_row: replies round-trip their schemas unstripped; refusals name reason and fix", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: SYMSET });
+
+  // #186: a detail seed is drawn at its own scale, so both ends must be stated
+  // before the sweep will run — the fixture draws its detail at plan size, so
+  // one label everywhere is truthful and the ratio comes out 1
+  assert.match(
+    await callErr(client, "symbol_sweep", { sheet: "symbol-set.pdf#3", seed_rect: [[590, 574], [678, 634]], scope: "set" }),
+    /drawn at its own enlarged scale .* set_scale/,
+  );
+  for (const sheet of ["symbol-set.pdf", "symbol-set.pdf#2", "symbol-set.pdf#3"]) {
+    await callOk(client, "set_scale", { sheet, upp: 0.25 });
+  }
+
+  // set scope, seeded from the DETAIL sheet's drain — plan-only counting
+  const set = await callOk(client, "symbol_sweep", { sheet: "symbol-set.pdf#3", seed_rect: [[590, 574], [678, 634]], scope: "set" });
+  assert.deepEqual(z.object(symbolSweepOutput).parse(set), set, "schema states every returned field — nothing stripped");
+  assert.equal(set.scope, "set");
+  assert.equal(set.found, set.sheets.reduce((n: number, p: any) => n + p.found, 0), "the total reconciles to the per-sheet counts");
+  assert.ok(set.sheets.every((p: any) => typeof p.elapsed_ms === "number"), "every swept sheet reports its wall-clock");
+  assert.ok(set.skipped.length >= 2 && set.skipped.every((s: any) => s.reason.length > 0), "every excluded sheet says why");
+
+  // schedule-row seeding, read then commit
+  const row = await callOk(client, "sweep_schedule_row", { tag: "T1" });
+  assert.deepEqual(z.object(sweepScheduleRowOutput).parse(row), row, "schema states every returned field — nothing stripped");
+  assert.equal(row.committed, undefined, "read mode commits nothing");
+  const committed = await callOk(client, "sweep_schedule_row", { tag: "T1", commit: true });
+  assert.deepEqual(z.object(sweepScheduleRowOutput).parse(committed), committed);
+  assert.equal(committed.committed, committed.found);
+  assert.equal(committed.condition, "T1", "the condition is the row's own key");
+
+  // refusals: reason + fix, never a guess
+  assert.match(await callErr(client, "sweep_schedule_row", { tag: "T9" }), /cannot be geometrically anchored .* never guessed from text alone/);
+  assert.match(await callErr(client, "sweep_schedule_row", { tag: "ZZ" }), /No schedule row "ZZ" .* tables found/);
+});
+
+// dimension annotation (0.9.20): the annotate reply's schema covers the new
+// length_lf field, both on annotate and on the list round-trip.
+test("annotate dimension: reply validates against the schema, length rides the round-trip", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: PLAN });
+  await callOk(client, "set_scale", { sheet: KEY, use_detected: true });
+  const dim = await callOk(client, "annotate", { sheet: KEY, type: "dimension", from: [100, 100], to: [460, 100] });
+  assert.deepEqual(z.object(annotateOutput).parse(dim), dim, "schema states every returned field");
+  assert.equal(dim.length_lf, 10);
+});
+
+// verdict marks (#176): both directions for the two new tools plus the
+// extended list_annotations, with the unstripped deepEqual proving the
+// schemas state EVERY field the tools actually return.
+test("mark_verdict / delete_verdict / list_annotations verdicts: replies validate and round-trip the schema unstripped", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: PLAN });
+  await callOk(client, "set_scale", { sheet: KEY, use_detected: true });
+  const poly = await callOk(client, "measure_polygon", { sheet: KEY, verts: [[100, 100], [460, 100], [460, 460], [100, 460]], condition: "CPT-1" });
+
+  const onShape = await callOk(client, "mark_verdict", { shape_id: poly.shape_id, text: "checked against walls" });
+  assert.deepEqual(z.object(markVerdictOutput).parse(onShape), onShape, "schema states every returned field");
+  assert.equal(onShape.actor, "agent");
+  assert.equal(onShape.condition, "CPT-1");
+  const onSheet = await callOk(client, "mark_verdict", { sheet: KEY, at: [900, 900] });
+  assert.deepEqual(z.object(markVerdictOutput).parse(onSheet), onSheet);
+
+  const listed = await callOk(client, "list_annotations", {});
+  assert.deepEqual(z.object(listAnnotationsOutput).parse(listed), listed, "verdicts[] and verdict_count are fully stated");
+  assert.equal(listed.verdict_count, 2);
+
+  const del = await callOk(client, "delete_verdict", { verdict_id: onSheet.id });
+  assert.deepEqual(z.object(deleteVerdictOutput).parse(del), del);
+
+  // semantic misuse is a clean isError surface
+  await callErr(client, "mark_verdict", {});                                              // no target
+  await callErr(client, "mark_verdict", { shape_id: poly.shape_id, sheet: KEY, at: [1, 1] }); // both targets
+  await callErr(client, "mark_verdict", { shape_id: "shp-nope" });                        // unknown shape
+  await callErr(client, "delete_verdict", { verdict_id: "apr-nope" });                    // unknown record
+
+  // schema violations are -32602, session unharmed
+  await callViolation(client, "mark_verdict", { sheet: KEY, at: [100] });                 // one coordinate is not a point
+  await callViolation(client, "mark_verdict", { shape_id: 42 });                          // wrong type
+  await callViolation(client, "delete_verdict", {});                                      // missing id
+  const alive = await callOk(client, "list_annotations", {});
+  assert.equal(alive.verdict_count, 1, "the violations changed nothing");
+});
+
+// 0.9.18 — assign-from-schedule's output contract. The deepEqual is the
+// load-bearing assertion: zod strips unknown keys, so a bare parse would pass
+// with an incomplete schema — equality proves the schema states EVERY field
+// the tool actually returns (unresolved[], withheld.unresolved, rooms[].condition).
+test("detect_rooms assign mode: reply validates AND round-trips the schema unstripped", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: FINISH_PLAN });
+  await callOk(client, "set_scale", { sheet: "sample-finish-plan.pdf", use_detected: true });
+  const r = await callOk(client, "detect_rooms", { sheet: "sample-finish-plan.pdf", assign_from_schedule: true });
+  assert.deepEqual(z.object(detectRoomsOutput).parse(r), r, "schema states every returned field — nothing stripped");
+  assert.ok(Array.isArray(r.unresolved), "assign mode always states the answer, empty array included");
+  assert.equal(r.withheld.unresolved, r.unresolved.length, "the counter and the array agree");
 });
