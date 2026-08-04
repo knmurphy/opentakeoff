@@ -364,6 +364,7 @@ export default function App({ embedded = false }) {
         </div>
 
         <CursorPuck units={units} x={cursor.x} y={cursor.y} softened={softened}
+          suppressed={!!tray}
           hover={puckHover}
           baseRun={{ latched: baseLatched, skipHeld, skipArmed }} />
 

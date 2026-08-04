@@ -42,6 +42,7 @@ export default function CursorPuck({
   units = "imperial",
   x, y,                      // cursor position, host-container px
   softened = false,          // T6: presentation-only fade while the cursor is moving fast
+  suppressed = false,        // the commit tray is up — the readout yields to it fast
   hover,                     // null | { label, area_sf, confidence, committed } — the passive readout
   baseRun,                   // { latched, skipHeld, skipArmed } — latched-mode state, always shown when latched
 }) {
@@ -52,10 +53,14 @@ export default function CursorPuck({
   const conf = hover?.confidence;
   const pct = conf ? Math.round(conf.score * 100) : null;
 
+  // While the tray is showing this commit, the readout is the same numbers
+  // twice — fade it out fast and yield. The base-run tag is exempt: latched
+  // mode state stays at the locus of attention no matter what else is up.
+  const readoutOpacity = suppressed ? 0 : softened ? 0.45 : 1;
+
   return (
     <div style={{
       position: "absolute", left: x + 18, top: y + 20, zIndex: 9,
-      opacity: softened ? 0.45 : 1, transition: "opacity .15s var(--ease)",
       display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4,
       pointerEvents: "none",   // a passive surface can never eat the canvas's events
     }}>
@@ -76,6 +81,7 @@ export default function CursorPuck({
           background: "var(--paper-bright)", border: "1px solid var(--ink-faint)",
           boxShadow: "var(--shadow-1)", padding: "5px 9px 6px",
           fontVariantNumeric: "tabular-nums", maxWidth: 240,
+          opacity: readoutOpacity, transition: "opacity .12s var(--ease)",
         }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: hover.committed ? "var(--ink)" : "var(--cobalt)" }}>
