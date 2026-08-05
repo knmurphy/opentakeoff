@@ -636,12 +636,26 @@ test("detect_rooms assign_from_schedule: each room commits under its own row; un
   //     136 (93.07): real rooms whose tag box is tied to a wall by its leader,
   //     so the traced outer ring notches around the box and the label center
   //     falls outside it. floodSurroundsLabelPx is what reaches them.
-  //   the reported (never committed) list grows 17 -> 23 and stops being junk:
-  //     the pre-guard run reported a 70,497 SF "room" seeded from the numeral
-  //     10, plus 557 / 706 / 250 / 411 / 270 / 189 / 640 — printed areas,
-  //     drawing numbers and title-block text flooding PAPER SPACE.
-  //     roomLabelSeeds' textual filters and the per-rung drawing-extent gate
-  //     reject all of them; every one of the 23 now reported is a real room.
+  //   the reported (never committed) list goes 17 -> 23. CORRECTED 2026-08-04
+  //     after adversarial review: an earlier version of this note called the
+  //     pre-guard run's 557 / 706 / 250 / 411 / 270 / 189 / 640 "paper-space
+  //     floods". SEVEN OF THOSE EIGHT WERE REAL FLOOR — the sheet's corridors
+  //     and elevator lobby, which carry no room number at all (it prints
+  //     CORRIDOR / CE-4 / 250 SF), so upstream seeded off the printed area and
+  //     traced the actual corridor. 1,786 SF of it. The filters DO correctly
+  //     refuse to commit a corridor under the finish tag "250", but refusing
+  //     to commit became refusing to mention, and they vanished from rooms,
+  //     unresolved[] and withheld.total alike. They are now traced and
+  //     reported in `unnamed_spaces[]` with area, perimeter and a seed — see
+  //     the VA pin in session.test.ts. What the guards genuinely killed is the
+  //     70,497 SF "room" seeded from the numeral 10, its 862 SF sibling, and
+  //     one of the two title-block cells.
+  //   of the 23 reported here, 22 are real rooms. The 23rd is the title-block
+  //     cell "Building Number / 28", reported as a 51 SF room whose reason
+  //     positively asserts "the plan shows the room". Upstream reports the
+  //     same cell at 91 SF, so this is inherited, not caused — the guards
+  //     narrowed it rather than removing it. Tracked as a known defect; the
+  //     honest thing is that this note says 22, not 23.
   assert.equal(r.data.detected, 4);
   assert.ok(r.data.rooms.every((x: any) => typeof x.shape_id === "string" && typeof x.condition === "string"),
     "every reported room committed, each carrying the tag it committed under");

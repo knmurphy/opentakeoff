@@ -21,7 +21,7 @@ const traceProvenance = {
   gap_sealed_px: z.number().optional().describe("Present when the seal ladder closed a genuine OPENING this many mask px wide (doorway-scale — scaled by the sheet's feet, distinct from gap_bridged_px's drafting-pinhole rescue). Part of the boundary is synthetic, and confidence deducts by that share; rides origin.gap_sealed_px on the committed shape"),
   min_pass_px: z.number().optional().describe("The feet-true minimum-passage rule (openings under ~0.5 ft never connect two spaces) ran at this dilation radius AND changed the answer — present only with min_pass_delta"),
   min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed; 1 means the drawn linework bounds nothing here and the rule is the only reason there is a measurement — audit before trusting"),
-  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the region under grow-but-verify — how many doorways' swings were included, the canvas's own door handling; rides origin.door_wedges"),
+  door_wedges: z.number().int().optional().describe("Door-swing OPENINGS the grow-but-verify retry annexed, the canvas's own door handling; rides origin.door_wedges. NOT a count of doors: since #191 a door's LEAF is offered as its own opening beside its arc (the only mark separating an IN-SWING sector from its room), so one drawn door can contribute two"),
   ring_interiors: z.number().int().optional().describe("Of those wedges, how many were a CLOSED ring's interior (round column, callout bubble) rather than a door swing — annexed floor you may want as a deduct instead"),
 };
 
@@ -93,7 +93,7 @@ export const oneClickOutput = {
   gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
   min_pass_px: z.number().optional().describe("Minimum-passage dilation radius (mask px) that ran, present only when the rule changed the answer — a passage narrower than 6 in was treated as not connecting"),
   min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed (0-1). 1 means the drawn linework bounded nothing and the rule IS the measurement — read `gap_sealed_px`/`confidence_factors` beside it"),
-  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  door_wedges: z.number().int().optional().describe("Door-swing OPENINGS the grow-but-verify retry annexed. NOT a count of doors: since #191 the retry offers a door's LEAF as its own opening beside its arc — the only mark that separates an IN-SWING sector from the room behind it — so one drawn door can contribute two. Read it as \"how many synthesized openings this boundary rests on\""),
   ring_interiors: z.number().int().optional().describe("How many of `door_wedges` annexed the interior of a closed drawn ring (round column, callout bubble) rather than a door swing — same measurement, but not a door"),
   scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 };
@@ -122,7 +122,7 @@ const detectedRoom = z.object({
   gap_sealed_px: z.number().optional().describe("Dilation radius used to close a doorway gap, when the flood was sealed"),
   min_pass_px: z.number().optional().describe("Minimum-passage dilation radius (mask px) that ran, present only when the rule changed the answer — a passage narrower than 6 in was treated as not connecting"),
   min_pass_delta: z.number().optional().describe("Fraction of the verbatim flood the minimum-passage rule removed (0-1). 1 means the drawn linework bounded nothing and the rule IS the measurement — read `gap_sealed_px`/`confidence_factors` beside it"),
-  door_wedges: z.number().int().optional().describe("Door-swing wedges annexed into the measurement"),
+  door_wedges: z.number().int().optional().describe("Door-swing OPENINGS the grow-but-verify retry annexed. NOT a count of doors: since #191 the retry offers a door's LEAF as its own opening beside its arc — the only mark that separates an IN-SWING sector from the room behind it — so one drawn door can contribute two. Read it as \"how many synthesized openings this boundary rests on\""),
   ring_interiors: z.number().int().optional().describe("How many of `door_wedges` annexed the interior of a closed drawn ring (round column, callout bubble) rather than a door swing — same measurement, but not a door"),
   scale_blind: z.literal(true).optional().describe("No sheet scale was set, so feet-true guards were off and this outline can differ from the scaled one"),
 }).strict();  // published schema is additionalProperties:false; strict makes runtime + conformance match it (per-room entries carry the receipts spread, so undeclared keys would land HERE first)
@@ -140,6 +140,8 @@ export const detectRoomsOutput = {
     degenerate: z.number().int().describe("Traced to fewer than 3 vertices"),
     duplicate: z.number().int().describe("Flooded to a region another label already claimed — counted once, never twice"),
     bubble: z.number().int().describe("Labels whose every clean flood was their own label BUBBLE (ring bbox ≈ label bbox — plans box their room numbers). Scale-free, so it guards unscaled previews too"),
+    ownership: z.number().int().describe("Labels whose only clean, non-bubble flood was NOT their own space — a ladder rung stepped through a doorway into the neighbouring room. Committing it would file one room's floor under another room's tag"),
+    unnamed: z.number().int().describe("Spaces the sheet labels by printed AREA (\"250 SF\") rather than a room number — traced and reported in unnamed_spaces[], never committed, because the area is not a finish tag"),
     implausible: z.number().int().describe("Enclosed, clean, non-bubble, but smaller than min_area_sf — a door swing or wall cavity rather than a room"),
     unresolved: z.number().int().describe("Assign mode: rooms the schedule could not answer for (no row, no FLOOR cell, or a compound cell) — withheld into unresolved[], never committed under a guess. Always present; 0 outside assign mode"),
     min_area_sf: z.number().optional().describe("The plausibility floor applied (scaled mode only)"),
@@ -151,6 +153,13 @@ export const detectRoomsOutput = {
     perimeter_lf: z.number(),
     seed: z.tuple([z.number(), z.number()]).describe("The flood seed (image px) — once the estimator answers, one_click here with the stated condition commits it"),
   })).optional().describe("Assign mode only, empty array included: [] is the positive claim that every detected room resolved against its own schedule row"),
+  unnamed_spaces: z.array(z.object({
+    label: z.string().describe("The printed area as drawn, e.g. \"250 SF\" — this is what the sheet says, not a room number"),
+    reason: z.string().describe("Why it is reported rather than committed"),
+    area_sf: z.number().describe("The space's real traced area — withheld from committing, not from reporting"),
+    perimeter_lf: z.number(),
+    seed: z.tuple([z.number(), z.number()]).describe("The flood seed (image px) — one_click here with the finish you intend to commit it"),
+  })).optional().describe("Real floor the sheet names only by printed area — on a finish plan this is how CIRCULATION is labelled (CORRIDOR / CE-4 / 250 SF), so it is usually the largest continuous finish on the sheet. Present only when the sweep traced some"),
   note: z.string().optional().describe("Human-readable summary of what was withheld, when anything was"),
   multiple_scales: z.literal(true).optional().describe("Several DISTINCT scale notes on this sheet (#153) — rooms inside an enlarged viewport may be figured at the wrong scale"),
   warning: z.string().optional().describe("Preview mode (no scale): why quantities are unavailable and what to do"),

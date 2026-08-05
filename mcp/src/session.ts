@@ -56,6 +56,12 @@ const SNAP_CELL = 24; // snap-grid bucket, raster px
 // The one-click vertex-snap TOLERANCE used to live here as a local `SNAP_TOL = 7`,
 // duplicating the canvas's literal 7. It is now oneclick.SNAP_TOL_PX, applied
 // inside the shared `oneClickRing` — one number, one place (audit F7(b)).
+// A span whose whole text is a printed AREA — "557 SF", "1,240 SQ FT". The
+// room-number filters reject these (correctly: "250" is not a finish tag), but
+// on a finish plan they are how circulation gets named, so the space behind
+// one is real floor. Recognized here rather than in web/src/lib/detectRooms.ts
+// so that shared engine file stays byte-identical to upstream's.
+const AREA_LABEL_RE = /^\d{1,3}(?:,\d{3})*\s*(?:SF|S\.F\.|SQ\.?\s?FT\.?)$/i;
 const PALETTE = ["#c96442", "#2f7d54", "#2563eb", "#9333ea", "#b8860b", "#0d9488", "#be185d", "#1f2937", "#dc2626", "#0891b2"];
 // (2026-07: dropped a drifted "fleur" entry that never existed in this app's
 // HATCHES, restoring "dots", and appended the signal-set ids.)
@@ -1215,11 +1221,14 @@ export class Session {
    *  px-only preview per room; no condition → nothing commits (a review
    *  pass, not a proposal-acceptance gate — this server has none).
    *
-   *  Withholding — nothing is committed until it survives all three, and the
+   *  Withholding — nothing is committed until it survives every gate, and the
    *  batch NEVER silently drops work: every withheld seed is counted and
    *  reasoned in `withheld`, because a room the tool knows it skipped is a
    *  question the caller can ask, while a room it skipped silently is a hole
-   *  in a bid.
+   *  in a bid. That claim has to be earned by each gate that gets added: the
+   *  ownership and area-label gates below were both added without a counter,
+   *  and the area-label one took 1,786 SF of drawn corridor off the bundled VA
+   *  plan with nothing anywhere saying so. A gate with no bucket is a hole.
    *    1. degenerate — traced to fewer than 3 vertices.
    *    2. duplicate — two labels flooding one region (a room tagged twice, or
    *       a legend number landing in the same space) trace to an identical
@@ -1233,7 +1242,16 @@ export class Session {
    *       and bubble rings are rejected scale-free (ring bbox ≈ label bbox) —
    *       so the guard holds even before any scale is set. A label whose
    *       every clean flood was its bubble counts here.
-   *    4. implausible — enclosed, clean, non-bubble, and still smaller than
+   *    4. ownership — a rung reached a clean, non-bubble region that is not
+   *       this label's own space (it stepped through a doorway into the
+   *       neighbour). Committing it would put one room's floor under another
+   *       room's tag; deduping it by ring key would erase the neighbour's own
+   *       detection into a false `merged_labels`.
+   *    5. unnamed — the sheet labels the space by printed AREA ("250 SF")
+   *       rather than by a room number, so nothing there names a room. These
+   *       are traced and REPORTED in `unnamed_spaces[]` with area, perimeter
+   *       and a seed, and never committed.
+   *    6. implausible — enclosed, clean, non-bubble, and still smaller than
    *       `minAreaSf` (default 5 SF — smaller than any real finished space; a
    *       broom closet is ~10 SF): a door swing or wall cavity. Only applied
    *       once a scale exists, since without one there is no real area to
@@ -1284,19 +1302,33 @@ export class Session {
     // #184 round 9). Placement is "anchor" because the ladder below does its
     // own probing from the bbox.
     const bounds = sheetBounds(s.widthPx, s.heightPx);
+    const inBounds = (b: LabelBBox) => b.x0 >= bounds.x0 && b.x1 <= bounds.x1 && b.y0 >= bounds.y0 && b.y1 <= bounds.y1;
     const labels: { str: string; bbox: LabelBBox }[] = [];
+    // Spans the room-number filters reject because the text is a printed AREA
+    // ("557 SF"), not a room number. On a real finish plan that is how
+    // CIRCULATION is labelled — the sheet prints CORRIDOR / CE-4 / 250 SF and
+    // gives it no room number at all — so the space behind such a span is real
+    // floor even though nothing there names a room. It must never COMMIT (the
+    // finish tag would be "250"), but it must be REPORTED: on the bundled VA
+    // plan these are seven corridors and the elevator lobby, 1,786 SF, and
+    // dropping them at this filter took them out of `rooms`, out of
+    // `unresolved[]` and out of `withheld.total` alike — no count, no seed, no
+    // reason, which is the one thing this tool's contract forbids.
+    const areaLabels: { str: string; bbox: LabelBBox }[] = [];
     for (const sp of s.spans) {
       const hit = roomLabelSeeds(
         [{ str: sp.str, x: sp.x0, y: sp.y1, h: sp.y1 - sp.y0 }],
         { bounds, placement: "anchor" },
       )[0];
-      if (hit) labels.push({ str: hit.str, bbox: sp });
+      if (hit) { labels.push({ str: hit.str, bbox: sp }); continue; }
+      const raw = (sp.str || "").trim();
+      if (AREA_LABEL_RE.test(raw) && inBounds(sp)) areaLabels.push({ str: raw, bbox: sp });
     }
 
     // Trace every label first (ladder + bubble guard per label). Nothing
     // commits in this pass — withholding has to be decided across the whole
     // batch (dedupe needs to see every ring).
-    const withheld = { degenerate: 0, duplicate: 0, bubble: 0, implausible: 0, unresolved: 0 };
+    const withheld = { degenerate: 0, duplicate: 0, bubble: 0, ownership: 0, implausible: 0, unresolved: 0, unnamed: 0 };
     const unresolved: { label: string; reason: string; area_sf: number; perimeter_lf: number; seed: [number, number] }[] = [];
     type Cand = { label: string; ring: Point[]; areaPx2: number; perimPx: number; seed: readonly [number, number] | number[]; ev: FloodEvidence; merged: string[] };
     const byRing = new Map<string, Cand>();
@@ -1305,14 +1337,27 @@ export class Session {
     // scale of its own (buildRasterMask cannot know it), so mask px per foot
     // is passed explicitly there, exactly as oneClick does
     const sweepMppf = raster ? (s.upp ? mask.ws / s.upp : 0) : (mask.mppf || 0);
-    for (const lb of labels) {
-      let ring: Point[] | null = null, ev: FloodEvidence | null = null, seed: [number, number] | null = null;
-      let sawBubble = false, sawDegenerate = false;
+
+    /** One label's walk down the seed ladder, with the ownership guards. Both
+     *  passes below go through THIS — the room-number pass and the area-label
+     *  pass — so the guards cannot drift apart between them, which is how the
+     *  fork lost them once already (the 36b6626 merge regression). Returns the
+     *  accepted ring + evidence, or the reason no rung produced one. */
+    type LadderResult =
+      | { ok: true; ring: Point[]; ev: FloodEvidence; seed: [number, number] }
+      | { ok: false; why: "ownership" | "bubble" | "degenerate" | null };
+    const walkLadder = (lb: { str: string; bbox: LabelBBox }): LadderResult => {
+      let sawBubble = false, sawDegenerate = false, sawForeign = false;
       const labelCx = (lb.bbox.x0 + lb.bbox.x1) / 2, labelCy = (lb.bbox.y0 + lb.bbox.y1) / 2;
       // "below-box" leads the ladder — issue #184 item F: a rectangle drawn
       // AROUND the room tag floods box-interior from the center seed, and the
       // below-box rung reaches the room first. Center stays as a later rung
-      // for tags whose room lies above or all around them.
+      // for tags whose room lies above or all around them. Individually this
+      // ordering is now a no-op on the VA plan; run it back to "anchor"
+      // TOGETHER with a post-snap bubble test and detection collapses 27 rooms
+      // /3697 SF to 8 rooms/517 SF. The guards are individually redundant and
+      // jointly load-bearing, which is exactly how a future sync takes
+      // upstream's default, sees green, and re-opens the regression.
       for (const probe of seedLadderPx(lb.bbox, "below-box")) {
         // Every RUNG honors the drawing-extent gate, not just the label anchor:
         // a rung stepped below a near-edge label can land in the title block
@@ -1341,23 +1386,39 @@ export class Session {
         // the outer ring inward around itself, so the center falls outside the
         // polygon even though the flood IS the room; 7 real rooms on the VA
         // finish plan, 35-172 SF, fail the center test that way).
-        if (!pointInPoly(labelCx, labelCy, raw) && !floodSurroundsLabelPx(f, lb.bbox)) continue;
+        //
+        // KNOWN LIMIT: floodSurroundsLabelPx sizes its horizontal probes off
+        // the MATCHED SPAN, and a tag drawn as "ABA TOILET 138A" boxes the
+        // whole phrase while the matched span is just the number — so the
+        // probes land inside the drawn box and a real room can score 1 of 4
+        // sides. 138A on the VA plan is refused that way. It is reported below
+        // rather than dropped, which is why this is a limit and not a hole.
+        if (!pointInPoly(labelCx, labelCy, raw) && !floodSurroundsLabelPx(f, lb.bbox)) { sawForeign = true; continue; }
         // raster trace differences mirror oneClick (#154): looser eps, no snap
         const r = oneClickRing(f, raster
           ? { raster: true, rasterEps: RASTER_RDP_EPS }
           : { nearest: (px, py, d) => (s.snap ? nearestSnap(s.snap, px, py, d) : null) });
-        if (r.length < 3) { sawDegenerate = true; continue; }
         // harvest the scalar evidence now; the region bitmap goes with `f`
-        ring = r; ev = Session.floodEvidence(f, raster, sweepMppf); seed = probe;
-        break;
+        return { ok: true, ring: r, ev: Session.floodEvidence(f, raster, sweepMppf), seed: probe as [number, number] };
       }
-      if (!ring || !ev || !seed) {
-        if (sawBubble) withheld.bubble++;            // only its own bubble ever flooded clean
-        else if (sawDegenerate) withheld.degenerate++;
+      // WHY nothing traced, in the order that describes the label best. A
+      // foreign flood outranks a bubble: "its own tag box is all that ever
+      // flooded clean" is a statement about the label, and it is false the
+      // moment some rung reached a real space this label does not own. The
+      // old precedence said `bubble` for 8 of the VA plan's 14, including the
+      // one whose REAL ROOM was the thing refused.
+      return { ok: false, why: sawForeign ? "ownership" : sawBubble ? "bubble" : sawDegenerate ? "degenerate" : null };
+    };
+
+    for (const lb of labels) {
+      const got = walkLadder(lb);
+      if (!got.ok) {
+        if (got.why) withheld[got.why]++;
         // a label with no clean flood at any probe simply isn't counted as a
         // seed that traced — same as the historical single-seed gate
         continue;
       }
+      const { ring, ev, seed } = got;
       const key = ring.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(";");
       const seen = byRing.get(key);
       if (seen) { seen.merged.push(lb.str); withheld.duplicate++; continue; }
@@ -1367,6 +1428,25 @@ export class Session {
       };
       byRing.set(key, cand);
       order.push(cand);
+    }
+
+    // The area-label pass: same engine, same ladder, same guards — but these
+    // spaces are REPORTED and never committed, because "250" is a printed area
+    // and would be a lie as a finish tag. A region another label already
+    // claimed is skipped by ring key, so a corridor that some room's ladder
+    // already reached is not reported twice.
+    const unnamedSpaces: { label: string; reason: string; area_sf: number; perimeter_lf: number; seed: [number, number] }[] = [];
+    const unnamedCands: { label: string; ring: Point[]; areaPx2: number; perimPx: number; seed: [number, number] }[] = [];
+    for (const lb of areaLabels) {
+      const got = walkLadder(lb);
+      if (!got.ok) continue;               // the withheld counters describe ROOMS; these are not rooms
+      const key = got.ring.map(([x, y]) => `${Math.round(x)},${Math.round(y)}`).join(";");
+      if (byRing.has(key) || unnamedCands.some((u) => u.ring.length === got.ring.length && u.seed[0] === got.seed[0] && u.seed[1] === got.seed[1])) continue;
+      byRing.set(key, { label: lb.str, ring: got.ring, areaPx2: 0, perimPx: 0, seed: got.seed, ev: got.ev, merged: [] });
+      unnamedCands.push({
+        label: lb.str, ring: got.ring, areaPx2: ringArea(got.ring),
+        perimPx: closedMetrics(got.ring).perim, seed: got.seed,
+      });
     }
 
     const upp = s.upp;
@@ -1421,6 +1501,15 @@ export class Session {
             seed_norm: [c.seed[0] / s.widthPx, c.seed[1] / s.heightPx],
             reviewed: false,
             ...(assignment ? { assignment } : {}),
+            // The SAME two receipts one_click mints, which upstream stamps at
+            // its commit site only. A batch-detected room and a clicked room
+            // with identical geometry and identical engine evidence must not
+            // carry different provenance because of which tool made them —
+            // and `fill_sensitivity` absent MEANS balanced, so omitting it on
+            // a sweep the agent ran aggressive is a false claim, not a gap.
+            ...(opts.sensitivity !== undefined && opts.sensitivity !== SENS_BALANCED ? { fill_sensitivity: opts.sensitivity } : {}),
+            // #85 (vector path only — the raster mask never saw the layer table)
+            ...(!raster && (s.layers || []).some((l) => l.visible && (l.role === "boundary" || l.role === "structure")) ? { layer_bounded: true as const } : {}),
           }, c.ev);
           // The room number this ring was traced FROM becomes the shape's
           // label — the same field the canvas's room/phase grouping reads. A
@@ -1444,7 +1533,21 @@ export class Session {
         seed_norm: [u.seed[0] / s.widthPx, u.seed[1] / s.heightPx] as [number, number],
       }));
     }
-    const withheldTotal = withheld.degenerate + withheld.duplicate + withheld.bubble + withheld.implausible + withheld.unresolved;
+    // the area-labelled spaces, priced now that the scale is known
+    for (const u of unnamedCands) {
+      if (upp == null) continue;                       // px-only preview reports rooms only
+      const area_sf = round2(u.areaPx2 * upp * upp);
+      if (area_sf < minAreaSf) continue;
+      unnamedSpaces.push({
+        label: u.label,
+        reason: `the sheet labels this space by printed AREA (${u.label}), not by a room number — nothing here names a room, so it is reported and never committed. one_click at this seed with the finish you intend.`,
+        area_sf, perimeter_lf: round2(u.perimPx * upp),
+        seed: [round1(u.seed[0]), round1(u.seed[1])],
+      });
+    }
+    withheld.unnamed = unnamedSpaces.length;
+    const withheldTotal = withheld.degenerate + withheld.duplicate + withheld.bubble + withheld.ownership
+      + withheld.implausible + withheld.unresolved + withheld.unnamed;
     return {
       detected: rooms.length,
       rooms,
@@ -1456,9 +1559,10 @@ export class Session {
       // assign mode always states the answer, empty array included: [] is the
       // positive claim "every detected room resolved against its own row"
       ...(assign ? { unresolved } : {}),
+      ...(unnamedSpaces.length ? { unnamed_spaces: unnamedSpaces } : {}),
       ...(s.detected?.multi ? { multiple_scales: true as const } : {}),
       ...(withheldTotal
-        ? { note: `${withheldTotal} seed(s) withheld — ${withheld.duplicate} duplicate region(s), ${withheld.bubble} label-bubble(s), ${withheld.implausible} under ${minAreaSf} SF, ${withheld.degenerate} untraceable${assign ? `, ${withheld.unresolved} unresolved against the schedule (see unresolved[])` : ""}.` }
+        ? { note: `${withheldTotal} seed(s) withheld — ${withheld.duplicate} duplicate region(s), ${withheld.bubble} label-bubble(s), ${withheld.ownership} flood(s) that were not their label's own space, ${withheld.implausible} under ${minAreaSf} SF, ${withheld.degenerate} untraceable${withheld.unnamed ? `, ${withheld.unnamed} space(s) the sheet labels only by printed area (see unnamed_spaces[])` : ""}${assign ? `, ${withheld.unresolved} unresolved against the schedule (see unresolved[])` : ""}.` }
         : {}),
       ...(s.upp == null ? { warning: `No scale set for ${s.key} — quantities unavailable. Call set_scale${s.detected ? ` (detected: ${s.detected.label})` : ""}.` } : {}),
     };
