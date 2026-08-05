@@ -3,8 +3,8 @@
  "scale": 2,
  "ptPerFt": 18,
  "wallSemantics": "drawn-path-vertex",
- "note": "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor.",
- "pinnedAt": "reviewed traces, issue #184",
+ "note": "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor. Re-reviewed 2026-08-04 at the upstream sync, where #188 (annotation-ring recovery) and #191 (in-swing door leaf) both landed: two case probes move, and across the sheet 13 of the 27 rooms detect_rooms finds move more than 2.5%. Independent oracle: the engine reads this sheet's own printed areas 33.8% low on average, improved from 35.6% across that sync (bench:callouts, reports and never gates).",
+ "pinnedAt": "reviewed traces, issue #184; re-pinned 2026-08-04 for upstream #188 + #191",
  "adjudications": [
   {
    "at": "2026-07-28",
@@ -164,6 +164,10 @@
      "delta_pct": 20.29,
      "iou_old_new": 0.824,
      "reason": "The room now reads WALL-TO-WALL instead of to its finish-tag annotation ring. The +34.09 SF (167.96 -> 202.05) is floor the engine was losing, not floor it invented. This sheet labels each WALL, not just each room: a hairline offset run is drawn 1.6-2.18 ft inside every wall with 45-degree corner ties and the P-1/P-2/P-3 tag boxes STRADDLING it, so the ring is a closed loop and a flood started in the room stopped on it -- the corpus already documented the loss (the perimeter band was only measurable as its own click, pinned separately at 20.65 SF) and pinned the wall-to-wall intent as the synthetic annotation-ring-room known-fail. classifyOffsetAnnotationSegs (oneclick.ts section 2c) supplies the missing evidence: a stroke is annotation when the first thing running alongside it within 2 ft on one side is substantially heavier (ring pen nibble 1, wall pen 2 on this sheet) and NOTHING runs alongside on the other. It feeds the SAME soft plane hatch does, so the strict pass still treated the ring as a barrier and this result came from the moderate GROW-BUT-VERIFY tier (hatchTier bounded, 1.22x growth), never an unbounded override. REVIEWED ON SCREEN: the traced boundary sits on the inside face of the heavy wall on all four sides, the 45-degree corner ties remain as small hard nubs, and toilet 137A is NOT annexed. Corpus-wide this probe is the ONLY one that moves -- all seven other probes on this case, and every probe on sample-plan, are unchanged at IoU 1.000, and all four known-fails hold their exact baseline values with pair IoU 1.000. The WEST band is deliberately still excluded: its ring stands off 2.18 ft, past the 2 ft cap, and widening the cap to reach it makes a click inside the 1.15 ft band double-count 20.7 SF against the room, which the bench catches. That residual needs the sliver rule -- a 1.15 ft x 16 ft strip is not a room and should escalate unbounded -- not a wider cap."
+    },
+    {
+     "at": "2026-08-04",
+     "reason": "CORRECTION to the 2026-08-02 entry above, which came in with upstream #188 and contradicts itself: it says the traced boundary 'sits on the inside face of the heavy wall on all four sides' and then, four sentences later, that 'the WEST band is deliberately still excluded'. Both cannot be true. Profiling the old and new goldens says the second one is: the west edge is unchanged at x=2576, still on the annotation ring, and so are north and south. ONE side moved — east, 2744 → 2768, +1.33 ft, which is ~33.6 SF of the +34.09; the rest is collapsed degenerate slits (43 verts → 30). So 202.05 SF is a real improvement and is NOT wall-to-wall: true wall-to-wall is at least 202.05 + the 20.65 SF band probe = 222.70, and the number the record called wall-to-wall is ≥9.3% short of the boundary it claims. Corroborating: the synthetic annotation-ring-room known-fail, cited IN that entry as pinning the wall-to-wall intent, is unchanged at IoU 0.667 / SF ±33.3% before and after — the classifier is pen-weight-specific to this sheet. The GOLDEN is not changed by this entry; only the claim about it is."
     }
    ]
   },
@@ -434,6 +438,14 @@
      "delta_pct": 4.27,
      "iou_old_new": 0.946,
      "reason": "A5b re-pin. Drawn-door elevator lobby; the flood, its swing wedge and its status are unchanged. Vertex count drops 22 to 21 because two traced corners snapped onto the SAME PDF vertex and snapVertices collapsed the resulting sub-2px duplicate — the documented cleanup, not a lost feature. 0.87in outward over an 82.0 ft perimeter = +5.84 SF. 142.63 SF is the product`s reading."
+    },
+    {
+     "at": "2026-08-04",
+     "from_sf": 142.63,
+     "to_sf": 143.43,
+     "delta_pct": 0.56,
+     "iou_old_new": 0.997,
+     "reason": "Upstream sync. #191 offers a door's LEAF as its own opening beside its arc — the only mark separating an IN-SWING sector from the room behind it — and this lobe gains 0.80 SF of real leaf sector, exactly the move upstream's own commit message reports. UPSTREAM SHIPPED THE ENGINE CHANGE WITHOUT RE-PINNING THIS GOLDEN: their bench passes at IoU 0.994 against the stale 21-vertex ring, so the corpus described a ring the engine no longer returns. 17 verts now; the four dropped are the notch the leaf sector fills. Zero other probes move on either real-plan case. Recorded here BY HAND, and that is itself the finding: +0.56% is inside pin-goldens' ±2.5% band, so the tool rewrote the golden and wrote no reason — by design, and tested as such (repinProtocol.test.ts). A sub-band move is silent, so the ledger and the golden can disagree and nothing notices. NOT captured by the SF band, and un-narrated until now: confidence drops 0.97 → 0.92 because #191's leaf retry propagates r2.hatchFiltered (oneclick.ts), so this trace is stamped hatch-filtered(bounded) — 'this came from a hatch escalation' — when NO hatch was involved. The provenance is wrong even though the square footage is better. Reported upstream."
     }
    ]
   },

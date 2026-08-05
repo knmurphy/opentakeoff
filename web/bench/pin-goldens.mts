@@ -91,7 +91,7 @@ const PINNED = [
   },
   {
     file: "va-finish-plan.json", pdf: "../../../demo/sample-finish-plan.pdf", scale: 2, ptPerFt: 9 * 2,
-    note: "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor.",
+    note: "VA plan (1/8\" assumed): rooms visually reviewed in-browser (issue #184 rounds 2-4; re-reviewed round 8 for the periodicity classifier + polyline-arc door recognition). Includes drawn-door rooms, a dense-hatch toilet room, and the cloud-bounded corridor. Re-reviewed 2026-08-04 at the upstream sync, where #188 (annotation-ring recovery) and #191 (in-swing door leaf) both landed: two case probes move, and across the sheet 13 of the 27 rooms detect_rooms finds move more than 2.5%. Independent oracle: the engine reads this sheet's own printed areas 33.8% low on average, improved from 35.6% across that sync (bench:callouts, reports and never gates).",
     probes: [
       // Round-8 re-pin (item C): the patient room no longer annexes its
       // toilet room — the toilet's PT-tile floor is a different finish zone
@@ -465,7 +465,7 @@ async function main() {
     // must not be silently overwritten with the engine's measurand on re-pin —
     // the field exists to carry information, and this writer was one of the two
     // tautology sources. Engine-pinned cases with no prior get the engine's value.
-    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: prior?.wallSemantics ?? WALL_SEMANTICS, note: c.note, pinnedAt: "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
+    const out = { pdf: c.pdf, scale: c.scale, ptPerFt: c.ptPerFt, wallSemantics: prior?.wallSemantics ?? WALL_SEMANTICS, note: c.note, pinnedAt: prior?.pinnedAt ?? "reviewed traces, issue #184", ...(caseAdj.length ? { adjudications: caseAdj } : {}), probes };
     pending.push({ path, json: JSON.stringify(out, null, 1), diff });
   }
 
