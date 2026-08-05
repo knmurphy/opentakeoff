@@ -111,10 +111,11 @@ test("A6: detectRegions and the canvas produce the SAME ring for the same seed a
   );
   // through floodSignals on BOTH sides, so the receipt covers every signal the
   // engine emits — not a hand-listed subset. Audit A2: hand-listing is how
-  // `wedgeGrowth` came to be declared and supplied by nobody. (NOTE: a FIFTH
-  // call site, mcp/src/session.ts:298, still hand-lists its fields and so
-  // under-reports the signals added by A2/A3; it is outside this change's
-  // edit scope and is reported as a follow-up.)
+  // `wedgeGrowth` came to be declared and supplied by nobody. (A fifth call
+  // site in mcp/src/session.ts hand-listed its fields and so under-reported
+  // A2/A3's signals; that was the follow-up this note used to name, and it is
+  // done — the server's floodStamp now reads them off floodSignals, which the
+  // F7(d) guards at the bottom of this file pin.)
   assert.deepEqual(
     traceConfidence(floodSignals(a)),
     traceConfidence(floodSignals(b)),
@@ -207,10 +208,10 @@ test("detectRegions still gates on status only — a hatchFiltered 'ok' is kept,
 });
 
 // ── F7(d): the MCP provenance surface must carry every receipt the canvas does ─
-// A6's failure class, one surface further out. `mcp/src/session.ts`'s
-// `receipts()` is a HAND-LISTED field set; the canvas mints `min_pass_px` /
+// A6's failure class, one surface further out. `mcp/src/session.ts`'s receipt
+// mapping is a HAND-LISTED field set; the canvas mints `min_pass_px` /
 // `min_pass_delta` (from A3) on its proposal origin and on its agent one-click
-// reply, and receipts() did not, so an MCP caller could not tell a verbatim
+// reply, and the mapping did not, so an MCP caller could not tell a verbatim
 // closet from one the minimum-passage rule had trimmed a third off — only
 // `confidence` moved, with nothing machine-readable saying why. Measured on the
 // real VA finish plan through the MCP Session after the fix: seven of seven
@@ -221,20 +222,26 @@ test("detectRegions still gates on status only — a hatchFiltered 'ok' is kept,
 // and its tests live under mcp/test), so this is a source-level guard — the same
 // device benchProductionRing.test.ts uses for the ring call sites. Two things it
 // pins, and the second is the general form of the defect:
-//   1. receipts() emits the min-passage pair on the SAME condition the canvas
+//   1. the mapping emits the min-passage pair on the SAME condition the canvas
 //      uses (`minPassDelta` truthy — the engine decides when that is set);
-//   2. EVERY key receipts() can emit is DECLARED in mcp/src/outputs.ts. The
+//   2. EVERY key it can emit is DECLARED in mcp/src/outputs.ts. The
 //      conformance suite runs the schemas with `.strict()`, so an undeclared key
 //      fails there — this makes it fail here too, in the suite that owns parity,
 //      and names the missing key instead of printing a zod path.
+//
+// RE-POINTED 2026-08-04 (upstream sync): the fork's `receipts()` and upstream's
+// `floodStamp()` are the same mapping, reached from the same two call paths.
+// Upstream's reads the pair off `floodSignals(f)` rather than off `f` directly,
+// so the gate reads `sig.minPassDelta`; the INVARIANT — one condition, both
+// fields, every emitted key declared — is unchanged, and that is what is pinned.
 const mcpSrc = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
-test("F7(d): mcp receipts() mints the min-passage pair on the canvas's own condition", () => {
+test("F7(d): the mcp flood stamp mints the min-passage pair on the canvas's own condition", () => {
   const session = mcpSrc("../../mcp/src/session.ts");
-  const body = session.match(/private receipts\([\s\S]*?\n  \}/);
-  assert.ok(body, "receipts() not found in mcp/src/session.ts — re-point this guard");
-  assert.match(body[0], /f\.minPassDelta \? \{ min_pass_px: f\.minPassPx, min_pass_delta: f\.minPassDelta \}/,
-    "receipts() must emit min_pass_px + min_pass_delta together, gated on minPassDelta");
+  const body = session.match(/private static floodStamp\([\s\S]*?\n  \}/);
+  assert.ok(body, "floodStamp() not found in mcp/src/session.ts — re-point this guard");
+  assert.match(body[0], /sig\.minPassDelta \? \{ min_pass_px: sig\.minPassPx \|\| 0, min_pass_delta: sig\.minPassDelta \}/,
+    "the stamp must emit min_pass_px + min_pass_delta together, gated on minPassDelta");
   // …and the canvas gates on exactly the same fact, in both of the places it mints them
   const canvas = mcpSrc("../src/pages/TakeoffCanvas.jsx");
   assert.match(canvas, /mp: f\.minPassDelta \? \(f\.minPassPx \|\| 0\) : 0, mpd: f\.minPassDelta \|\| 0/,
@@ -246,12 +253,12 @@ test("F7(d): mcp receipts() mints the min-passage pair on the canvas's own condi
 test("F7(d): every receipt key mcp can emit is DECLARED in outputs.ts (both schemas)", () => {
   const session = mcpSrc("../../mcp/src/session.ts");
   const outputs = mcpSrc("../../mcp/src/outputs.ts");
-  const body = session.match(/private receipts\([\s\S]*?\n  \}/);
-  assert.ok(body);
-  // every key receipts() can put on a reply — read off its returned literal, so
+  const body = session.match(/private static floodStamp\([\s\S]*?\n  \}/);
+  assert.ok(body, "floodStamp() not found in mcp/src/session.ts — re-point this guard");
+  // every key the stamp can put on a reply — read off its returned literal, so
   // adding a receipt without declaring it fails HERE rather than in a zod path
   const ret = body[0].match(/return \{[\s\S]*?\n    \};/);
-  assert.ok(ret, "receipts() must end in a single returned object literal — re-point this guard");
+  assert.ok(ret, "the stamp must end in a single returned object literal — re-point this guard");
   const keys = [...ret[0].matchAll(/[{,]\s*([a-z][a-z0-9_]*):/g)].map((m) => m[1]);
   assert.ok(keys.length >= 9, `expected the full receipt set, found ${keys.length}: ${keys.join(", ")}`);
   assert.ok(keys.includes("min_pass_px") && keys.includes("min_pass_delta"), "the F7(d) pair must be in the emitted set");

@@ -292,7 +292,15 @@ test("A4: a real 3 ft door swing still annexes its wedge (the guard must not eat
   const f = floodRegionSealed(mask, 200, 200, SENS_BALANCED, sealRadiiFor(PXFT), doorWedgeCapPx(PXFT));
   assert.equal(f.status, "ok");
   if (f.status !== "ok") return;
-  assert.equal(f.wedges, 1, "the swing wedge is annexed");
+  // RE-PINNED 2026-08-04 (upstream sync): 1 -> 2 wedges, and the MEASUREMENT is
+  // unchanged (the wall-to-wall assertion below is the same). Upstream's #191
+  // offers a door's LEAF as its own opening as well as its arc — the correct
+  // mark for an IN-SWING door, whose sector sits behind the leaf where opening
+  // the arc can never reach. This fixture draws both marks, so both openings are
+  // now tried and both are accepted; the sector they admit is the same floor.
+  // What the guard here is for — that the wedge is annexed at all, and bounded
+  // by the arc's own fitted radius — is asserted unchanged.
+  assert.equal(f.wedges, 2, "the swing wedge is annexed (arc opening + leaf opening, #191)");
   assert.ok(Math.abs(ringArea(traceRegion(f)) - 214 * 178) / (214 * 178) < 0.04, "reads wall-to-wall");
 
   // …and it is bounded by the arc's OWN radius: the sector the leaf sweeps

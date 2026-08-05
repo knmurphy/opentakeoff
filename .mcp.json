@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "opentakeoff": {
+      "command": "node",
+      "args": ["--import", "tsx", "mcp/server.ts"]
+    }
+  }
+}

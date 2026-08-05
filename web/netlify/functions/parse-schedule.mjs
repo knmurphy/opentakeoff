@@ -16,6 +16,7 @@
 // path stays dark, so a fork that doesn't configure it never exposes anything.
 
 const GOOGLE_USERINFO = "https://www.googleapis.com/oauth2/v3/userinfo";
+const GOOGLE_TOKENINFO = "https://www.googleapis.com/oauth2/v3/tokeninfo";
 // Default to gemini-3.1-flash-lite (GA, image-capable): the low-latency Flash-Lite
 // tier, chosen to shrink the cold-start time that overran Netlify's sync cap and
 // 504'd on the heavier gemini-3.5-flash (#102/#100). A schedule crop is small,
@@ -115,7 +116,7 @@ const PROMPT = [
   "Do NOT invent rows or fields. Leave a field as an empty string if the table doesn't show it. Skip section-header and column-header rows.",
 ].join(" ");
 
-async function verifyGoogleUser(authHeader) {
+export async function verifyGoogleUser(authHeader) {
   const token = /^Bearer\s+(.+)$/i.exec(authHeader || "")?.[1];
   if (!token) return { ok: false, status: 401, msg: "Sign in to import from scanned plans." };
   let profile;
@@ -129,6 +130,41 @@ async function verifyGoogleUser(authHeader) {
   const email = (profile.email || "").toLowerCase();
   if (!email || profile.email_verified === false) {
     return { ok: false, status: 401, msg: "Your Google sign-in doesn't have a verified email." };
+  }
+  // Verify the token audience matches this application's client ID to prevent
+  // tokens issued to other Google apps from being accepted here.
+  const expectedAud = process.env.GOOGLE_CLIENT_ID;
+  if (!expectedAud) {
+    console.warn("parse-schedule: aud check inactive — GOOGLE_CLIENT_ID unset");
+  }
+  if (expectedAud) {
+    // GET with the token as a query parameter. tokeninfo is a GET endpoint; the
+    // POST form-encoded call this used to make always failed, so `tiRes.ok` was
+    // false, `aud` fell back to "", and EVERY caller got 401 "audience mismatch"
+    // the moment GOOGLE_CLIENT_ID was set — i.e. turning the check on turned the
+    // endpoint off, and the only deployments that worked were the ones that had
+    // silently skipped the check. Reported upstream (their #167 introduced it).
+    let tiRes;
+    try {
+      tiRes = await fetch(`${GOOGLE_TOKENINFO}?access_token=${encodeURIComponent(token)}`);
+    } catch {
+      return { ok: false, status: 502, msg: "Couldn't verify your sign-in." };
+    }
+    // "we could not check" and "this token is for another app" are different
+    // facts and must not share a status. A 502 says try again / look at the
+    // logs; a 401 tells the user to sign in again, which does not help and is
+    // not true when Google simply did not answer.
+    if (!tiRes.ok) return { ok: false, status: 502, msg: "Couldn't verify your sign-in." };
+    let tiData;
+    try {
+      tiData = await tiRes.json();
+    } catch {
+      return { ok: false, status: 502, msg: "Couldn't verify your sign-in." };
+    }
+    const aud = tiData?.aud || tiData?.azp || "";
+    if (aud !== expectedAud) {
+      return { ok: false, status: 401, msg: "Token audience mismatch — sign in again." };
+    }
   }
   const hd = (profile.hd || email.split("@")[1] || "").toLowerCase();
   if (ALLOWED_HDS.length && !ALLOWED_HDS.includes(hd)) return { ok: false, status: 403, msg: "This deployment is limited to a specific organization." };

@@ -100,12 +100,21 @@ const hover = (mo: MaskObj, seed: [number, number]) => {
 // Every field floodRegionSealed reports, plus a digest of the region bitmap
 // and the traced ring, pinned from the pre-A8 engine. A8 was a pure
 // performance change: not one of these may move for one.
+// RE-PINNED 2026-08-04 (upstream sync) for #191, which offers a door's LEAF as
+// its own opening alongside its arc — the only mark that separates an IN-SWING
+// sector from the room it belongs to. Each drawn door in this scene carries
+// both marks, so `wedges` doubles (1/3/6/8 -> 2/6/12/16) and `virtualFrac`
+// rises with the extra synthesized boundary. EVERYTHING THE ESTIMATOR IS SOLD
+// IS UNCHANGED, which is what this test is named for: `count`, `hardHits`, the
+// region `digest`, `ringLen`, `ringArea` and `wedgeGrowth` are identical on
+// every row, byte for byte. Only the two provenance counters moved, and they
+// moved because there really are two openings now.
 const PINNED = [
   { doors: 0, count: 290521, hardHits: 2116, softHits: 0, sealedPx: null, virtualFrac: null, wedges: null, wedgeGrowth: null, digest: "f9748100:290521", ringLen: 4, ringArea: 289444 },
-  { doors: 1, count: 290575, hardHits: 2224, softHits: 0, sealedPx: 32, virtualFrac: 0.021, wedges: 1, wedgeGrowth: 1.008, digest: "909de76a:290575", ringLen: 5, ringArea: 289713 },
-  { doors: 3, count: 290683, hardHits: 2440, softHits: 0, sealedPx: 32, virtualFrac: 0.02, wedges: 3, wedgeGrowth: 1.025, digest: "50f3e7d0:290683", ringLen: 5, ringArea: 289713 },
-  { doors: 6, count: 290845, hardHits: 2764, softHits: 0, sealedPx: 32, virtualFrac: 0.018, wedges: 6, wedgeGrowth: 1.052, digest: "5b116ac0:290845", ringLen: 5, ringArea: 289713 },
-  { doors: 8, count: 290953, hardHits: 2980, softHits: 0, sealedPx: 32, virtualFrac: 0.017, wedges: 8, wedgeGrowth: 1.07, digest: "5b9f8dc0:290953", ringLen: 5, ringArea: 289713 },
+  { doors: 1, count: 290575, hardHits: 2224, softHits: 0, sealedPx: 32, virtualFrac: 0.027, wedges: 2, wedgeGrowth: 1.008, digest: "909de76a:290575", ringLen: 5, ringArea: 289713 },
+  { doors: 3, count: 290683, hardHits: 2440, softHits: 0, sealedPx: 32, virtualFrac: 0.025, wedges: 6, wedgeGrowth: 1.025, digest: "50f3e7d0:290683", ringLen: 5, ringArea: 289713 },
+  { doors: 6, count: 290845, hardHits: 2764, softHits: 0, sealedPx: 32, virtualFrac: 0.023, wedges: 12, wedgeGrowth: 1.052, digest: "5b116ac0:290845", ringLen: 5, ringArea: 289713 },
+  { doors: 8, count: 290953, hardHits: 2980, softHits: 0, sealedPx: 32, virtualFrac: 0.022, wedges: 16, wedgeGrowth: 1.07, digest: "5b9f8dc0:290953", ringLen: 5, ringArea: 289713 },
 ];
 
 function digest(a: Uint8Array): string {
