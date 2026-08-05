@@ -111,10 +111,11 @@ test("A6: detectRegions and the canvas produce the SAME ring for the same seed a
   );
   // through floodSignals on BOTH sides, so the receipt covers every signal the
   // engine emits — not a hand-listed subset. Audit A2: hand-listing is how
-  // `wedgeGrowth` came to be declared and supplied by nobody. (NOTE: a FIFTH
-  // call site, mcp/src/session.ts:298, still hand-lists its fields and so
-  // under-reports the signals added by A2/A3; it is outside this change's
-  // edit scope and is reported as a follow-up.)
+  // `wedgeGrowth` came to be declared and supplied by nobody. (A fifth call
+  // site in mcp/src/session.ts hand-listed its fields and so under-reported
+  // A2/A3's signals; that was the follow-up this note used to name, and it is
+  // done — the server's floodStamp now reads them off floodSignals, which the
+  // F7(d) guards at the bottom of this file pin.)
   assert.deepEqual(
     traceConfidence(floodSignals(a)),
     traceConfidence(floodSignals(b)),

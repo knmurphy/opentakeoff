@@ -299,8 +299,8 @@
    "probeName": "elevator-e01",
    "expect": "golden",
    "status": "ok",
-   "iou": 0.9920689506942355,
-   "sfErr": 0.005964405002622087,
+   "iou": 0.9979581309375403,
+   "sfErr": 0.0003352456484223992,
    "leak": false,
    "refused": false,
    "confidence": 0.92,
@@ -382,7 +382,7 @@
  ],
  "aggregate": {
   "goldenProbes": 21,
-  "meanIoU": 0.9990215757569564,
+  "meanIoU": 0.9993020129113994,
   "floorIoU": 0.9903403448587162,
   "refusalRate": 0,
   "leakRate": 0,
@@ -406,13 +406,13 @@
   {
    "caseName": "va-finish-plan",
    "probes": 8,
-   "sumGoldenSF": 2614.3091975308735,
+   "sumGoldenSF": 2615.1118055555644,
    "sumEngineSF": 2615.2274407589775,
-   "ratio": 1.000351237424009,
+   "ratio": 1.0000442180724998,
    "overlapSF": 0,
-   "maxSfErr": 0.005964405002622073,
-   "maxSfAbs": 0.8506925925892688,
-   "maxSfAbsProbe": "elevator-e01",
+   "maxSfErr": 0.0006276338205593411,
+   "maxSfAbs": 0.050546087710870324,
+   "maxSfAbsProbe": "ward-room",
    "humanMeasured": false
   }
  ],
@@ -975,9 +975,9 @@
    ],
    "statusAgree": true,
    "iouByRes": [
-    0.9937139412727116,
-    0.9603188355570959,
-    0.9312944030497314
+    0.999827779212951,
+    0.9544476018255403,
+    0.9256006199948333
    ],
    "subFloorRes": [
     0.75,
@@ -1196,6 +1196,10 @@
     "confidence": 0.9
    },
    {
+    "probe": "va-finish-plan/elevator-e01",
+    "confidence": 0.92
+   },
+   {
     "probe": "va-finish-plan/ward-room",
     "confidence": 0.94
    },
@@ -1322,8 +1326,8 @@
   {
    "caseName": "va-finish-plan",
    "probeName": "elevator-e01",
-   "onVertex": 21,
-   "verts": 21,
+   "onVertex": 17,
+   "verts": 17,
    "cov": 1
   },
   {
@@ -1531,10 +1535,10 @@
    {
     "caseName": "va-finish-plan",
     "probeName": "elevator-e01",
-    "iou": 0.9491873835678036,
-    "sfErr": 0.03177031923836624,
-    "prodIou": 0.9920689506942355,
-    "prodSfErr": 0.005964405002622087
+    "iou": 0.9545736732815276,
+    "sfErr": 0.03718832323271127,
+    "prodIou": 0.9979581309375403,
+    "prodSfErr": 0.0003352456484223992
    },
    {
     "caseName": "va-finish-plan",
@@ -1569,7 +1573,7 @@
     "prodSfErr": 0.00015917263913391673
    }
   ],
-  "meanIoU": 0.9693044951574175,
+  "meanIoU": 0.9695609851437852,
   "floorIoU": 0.8602150537634409,
   "worstSfErr": 0.07834835470271602,
   "crossFloorIoU": 0.9618671926364234,
