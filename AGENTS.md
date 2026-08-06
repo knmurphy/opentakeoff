@@ -11,7 +11,7 @@ npm install
 npm run dev      # http://localhost:5173 — hot reload
 npm test         # node:test over the pure geometry + totals math (test/*.test.ts)
 npm run build    # → web/dist/ (static output; this is what Netlify deploys)
-npm run check    # typecheck + lint + test + build (see the CI note below)
+npm run check    # typecheck + lint + test + bench + build (see the CI note below)
 ```
 
 ## Shipping — the required steps, every change
@@ -33,14 +33,24 @@ So:
 
 1. **Branch first** — never commit on `main`: `git checkout -b <topic>`.
 2. **`npm run check` before pushing** (in `web/`), on the same Node
-   (`web/.nvmrc`). Note it is **not identical to CI**: `check` includes `lint`
-   and CI's `web` job does not, and CI additionally runs an **`mcp` job on
-   Ubuntu *and* Windows** (typecheck/test/build/`smoke:dist`) plus a
-   **`capture` job** (`python3 capture/capture_server.py selftest`). A green
-   `check` predicts the `web` job only — if you touched `mcp/` or `capture/`,
-   run those locally too.
-3. **Open a PR** and wait for **all three** checks — `web`, `mcp` (Ubuntu and
-   Windows), `capture` — to pass. Don't merge red or pending.
+   (`web/.nvmrc`). `check` is typecheck → lint → test → **bench** → build, which
+   is now exactly the `web` job's five steps in the same order — so a green
+   `check` **does** predict `web`. It predicts nothing else, and CI runs six
+   more jobs: **`web-e2e`** (`npm run e2e` against a real vite dev server under
+   Chromium — split out so a ~150 MB browser install doesn't delay typecheck
+   feedback), an **`mcp` job on Ubuntu *and* Windows**
+   (typecheck/test/build/`smoke:dist`), **`mcp-version-guard`**,
+   **`mcp-release-reminder`**, **`capture`**
+   (`python3 capture/capture_server.py selftest`) and **`server`**
+   (`python -m pytest`). Touched `mcp/`, `capture/`, `server/` — or anything
+   the browser exercises — run those locally too.
+3. **Open a PR** and wait for **every** check to pass, not a fixed list — the
+   set grows. Today: `web`, `web-e2e`, `mcp` (Ubuntu and Windows),
+   `mcp-version-guard`, `capture`, `server`, and **`copilot-review`**, which
+   stays red until Copilot's review actually posts (that gate exists because a
+   PR once merged green before Copilot weighed in and shipped a
+   `ReferenceError`). `mcp-release-reminder` reports `skipped` when `mcp/` is
+   untouched — that is a pass, not a failure. Don't merge red or pending.
 4. **Squash-merge with branch delete**
    (`gh pr merge <n> --squash --delete-branch`), then
    `git checkout main && git pull --ff-only` and delete the local branch
