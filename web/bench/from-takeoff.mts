@@ -1,6 +1,6 @@
 // Answer-key exporter — turn a HUMAN takeoff into a frozen benchmark case.
 //
-//   node --import tsx bench/from-takeoff.mts <annotations.json> <plan.pdf> <sheet_id> <out.json> [--name my-plan] [--allow-machine]
+//   node --import tsx bench/from-takeoff.mts <annotations.json> <plan.pdf> <sheet_id> <out.json> --wall-semantics <drawn-path-vertex|centerline|interior-clear> [--name my-plan] [--allow-machine]
 //
 // The input is an OpenTakeoff project payload — the same { conditions, shapes,
 // sheets, ... } object the autosave writes, a snapshot stores, and
@@ -15,10 +15,21 @@
 //
 // Cases written by this tool carry humanMeasured: true — the bench applies
 // hard SF-error and coverage gates to those (engine-pinned cases only report).
+//
+// WALL SEMANTICS IS A REQUIRED ARGUMENT (audit F5). This tool used to stamp
+// `wallSemantics: WALL_SEMANTICS` unconditionally, which made bench/run.mts's
+// semantics check compare a constant to itself on the one kind of case where
+// the field could carry information: a HUMAN answer key is the only place a
+// measurand is chosen by a person rather than produced by the engine, so the
+// person has to say which line they measured to. There is no default, because
+// every available default is a guess about someone else's tape measure — and
+// the guess was wrong for three months (the corpus declared "centerline" while
+// the VA plan's goldens sit on wall faces ~5.9 in apart).
 import { createRequire } from "module";
 import { readFileSync, writeFileSync } from "fs";
 import { resolve, relative, dirname } from "path";
 import { fileURLToPath } from "url";
+import { KNOWN_WALL_SEMANTICS, WALL_SEMANTICS, type WallSemantics } from "./corpus.ts";
 
 export type Pt = [number, number];
 interface ShapeIn {
@@ -38,6 +49,14 @@ interface PayloadIn {
 export interface ExportProbe { name: string; seed: Pt; expect: "golden"; golden: Pt[]; tags: string[] }
 export interface ExportCase {
   pdf: string; page: number; scale: number; ptPerFt: number;
+  /** Which line this case's goldens trace to — see bench/corpus.ts. Supplied by
+   *  the person who measured, via --wall-semantics; never defaulted (audit F5).
+   *  A key drawn with the canvas's snap-to-vector ON lands on PDF path
+   *  vertices, which is `WALL_SEMANTICS` — the same measurand the engine's
+   *  snapped ring returns, so the two are comparable under the 2.5% SF gate.
+   *  A key measured by eye to wall centres or to interior faces is a DIFFERENT
+   *  measurand and bench/run.mts says so instead of grading it silently. */
+  wallSemantics: WallSemantics;
   humanMeasured: true; note: string; pinnedAt: string;
   deducts_sf?: number;
   probes: ExportProbe[];
@@ -50,6 +69,27 @@ export function sheetPage(sheetId: string): number {
   const i = sheetId.lastIndexOf("#");
   if (i > 0 && /^\d+$/.test(sheetId.slice(i + 1))) return parseInt(sheetId.slice(i + 1), 10);
   return 1;
+}
+
+/** Read the REQUIRED --wall-semantics argument out of an argv tail (audit F5).
+ *  Pure and exported so the requirement itself is testable: the failure mode
+ *  this replaces was a silent default, and a silent default is exactly the kind
+ *  of thing a CLI-only code path never gets a test for. Returns the declared
+ *  value, or throws with the vocabulary and the reason it is not optional. */
+export function parseWallSemantics(argv: string[]): WallSemantics {
+  const i = argv.indexOf("--wall-semantics");
+  const v = i >= 0 ? argv[i + 1] : undefined;
+  if (i < 0 || v === undefined || v.startsWith("--")) {
+    throw new Error(
+      `--wall-semantics <${KNOWN_WALL_SEMANTICS.join("|")}> is REQUIRED: a human answer key has to declare which line it was measured to. ` +
+      `Pass "${WALL_SEMANTICS}" if the polygons were drawn with the canvas's snap-to-vector ON (they then sit on PDF path vertices, the same measurand the engine returns); ` +
+      `"centerline" if measured wall-centre to wall-centre by eye; "interior-clear" if measured face to face. See bench/corpus.ts.`,
+    );
+  }
+  if (!(KNOWN_WALL_SEMANTICS as readonly string[]).includes(v)) {
+    throw new Error(`--wall-semantics "${v}" is not one of ${KNOWN_WALL_SEMANTICS.join(", ")} — bench/run.mts cannot read a case it does not have a measurand for.`);
+  }
+  return v as WallSemantics;
 }
 
 const shoelace = (pts: Pt[]): number => {
@@ -141,17 +181,38 @@ export function extractCase(payload: PayloadIn, sheetId: string, vpW: number, vp
   return { probes, deductsSf, skippedMachine, warnings };
 }
 
+const USAGE = 'usage: node --import tsx bench/from-takeoff.mts <annotations.json> <plan.pdf> <sheet_id> <out.json>'
+  + ` --wall-semantics <${KNOWN_WALL_SEMANTICS.join("|")}> [--name case-name] [--allow-machine]`;
+
 // ── CLI ─────────────────────────────────────────────────────────────────────
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-  const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
-  const nameIdx = process.argv.indexOf("--name");
-  if (args.length < 4) {
-    console.error('usage: node --import tsx bench/from-takeoff.mts <annotations.json> <plan.pdf> <sheet_id> <out.json> [--name case-name] [--allow-machine]');
+  const argv = process.argv.slice(2);
+  // A flag's VALUE is not a positional. The old split was
+  // `filter(a => !a.startsWith("--"))`, which put `my-plan` (and now the
+  // semantics string) into the positional list — harmless only because the
+  // destructure took the first four and flags happened to come last.
+  const VALUE_FLAGS = new Set(["--name", "--wall-semantics"]);
+  const args: string[] = [];
+  const flags = new Set<string>();
+  for (let i = 0; i < argv.length; i++) {
+    if (!argv[i].startsWith("--")) { args.push(argv[i]); continue; }
+    flags.add(argv[i]);
+    if (VALUE_FLAGS.has(argv[i])) i++;
+  }
+  let wallSemantics: WallSemantics;
+  try {
+    wallSemantics = parseWallSemantics(argv);
+  } catch (e) {
+    console.error(`${(e as Error).message}\n${USAGE}`);
     process.exit(2);
   }
-  const [annPath, pdfPath, sheetId, outPath] = args.map((a) => resolve(a));
+  const nameIdx = argv.indexOf("--name");
+  if (args.length < 4) {
+    console.error(USAGE);
+    process.exit(2);
+  }
+  const [annPath, pdfPath, , outPath] = args.map((a) => resolve(a));
   const payload: PayloadIn = JSON.parse(readFileSync(annPath, "utf8"));
   const sheetRec = (payload.sheets ?? []).find((s) => s.sheet_id === args[2]);
   if (!sheetRec || !Number.isFinite(sheetRec.units_per_px) || (sheetRec.units_per_px as number) <= 0) {
@@ -172,7 +233,7 @@ if (isMain) {
     console.error("no human floor_area shapes on that sheet — nothing to export");
     process.exit(1);
   }
-  const caseName = nameIdx > 0 ? process.argv[nameIdx + 1] : undefined;
+  const caseName = nameIdx >= 0 ? argv[nameIdx + 1] : undefined;
   const out: ExportCase = {
     // relative to where the CASE FILE lives (bench/run.mts resolves the pdf
     // against the case's own directory, so corpus/ and corpus/sealed/ both work)
@@ -180,6 +241,7 @@ if (isMain) {
     page,
     scale: SCALE,
     ptPerFt: 1 / upp,
+    wallSemantics,                 // declared on the command line, never defaulted (F5)
     humanMeasured: true,
     note: `${caseName ?? args[2]}: human-measured takeoff exported as answer key (${res.probes.length} probes${res.skippedMachine ? `; ${res.skippedMachine} machine-origin shapes excluded` : ""})`,
     pinnedAt: "human-measured takeoff (from-takeoff.mts)",
@@ -188,6 +250,6 @@ if (isMain) {
   };
   writeFileSync(outPath, JSON.stringify(out, null, 1));
   const total = res.probes.reduce((a, p) => a + shoelace(p.golden) * upp * upp, 0);
-  console.log(`wrote ${args[3]} — ${res.probes.length} probes, ${total.toFixed(1)} SF total${res.deductsSf ? ` (deducts ${res.deductsSf.toFixed(1)} SF)` : ""}`);
+  console.log(`wrote ${args[3]} — ${res.probes.length} probes, ${total.toFixed(1)} SF total${res.deductsSf ? ` (deducts ${res.deductsSf.toFixed(1)} SF)` : ""}, wallSemantics "${wallSemantics}"${wallSemantics !== WALL_SEMANTICS ? " — NOT the engine's measurand; bench/run.mts will refuse to grade it against the engine's snapped ring" : ""}`);
   console.log("drop it in bench/corpus/ to gate every run, or bench/corpus/sealed/ for the run-once protocol (BENCH_SEALED=1 npm run bench).");
 }

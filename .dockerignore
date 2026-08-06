@@ -1,0 +1,34 @@
+# The Dockerfile does `COPY . .` into the build stage. On a registry builder
+# that runs against a clean checkout there is nothing here to exclude — but a
+# LOCAL build copies the working tree, and this repo's working trees hold real
+# client plan sets and real credentials. Both would enter the build context and
+# its cache. The build stage is discarded by the multi-stage split, so this is
+# about the context and the cache, not the published image.
+
+# real project PDFs — never leave the machine (see .gitignore)
+example-plans/
+
+# credentials and local env
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# never needed by the mcp build, and large
+.git/
+.claude/
+node_modules/
+**/node_modules/
+web/dist/
+mcp/dist/
+mcp/dist-mcpb/
+mcp/dist-smithery/
+web/public/models/
+web/public/fonts/
+web/e2e/out/
+docs/evidence/
+.netlify/
+**/.netlify/
+.playwright-mcp/

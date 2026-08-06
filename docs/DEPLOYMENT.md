@@ -2,7 +2,9 @@
 
 Every change to this repo lands on `main` through a pull request and is
 built and tested by CI. **This repo does not deploy anywhere** — there is no
-deploy workflow here.
+deploy workflow here. (The parent repo, `Kentucky-ai/opentakeoff`, does deploy
+a merge straight to <https://opentakeoff.kentucky-ai.com>; that pipeline is
+theirs, not this fork's.)
 
 ## The pipeline
 
@@ -50,6 +52,23 @@ local-only). Set them as build environment variables wherever
 `npm run check`/`build` runs (or in `web/.env.local` locally — see
 [`web/.env.example`](../web/.env.example)). Full one-time setup is in
 [`GOOGLE_SETUP.md`](GOOGLE_SETUP.md).
+
+### Server-side (Netlify function) env vars
+
+These are **not** `VITE_` variables — they are read by the Netlify function at
+request time, never inlined into the bundle. The gated *Import from scanned
+schedule* path stays dark unless `GEMINI_API_KEY` is set. One of them is easy
+to miss because nothing fails loudly without it:
+
+- `GOOGLE_CLIENT_ID` — the same client id as `VITE_GOOGLE_CLIENT_ID`, minus the
+  prefix. It is what lets the function check the caller's token was minted for
+  *this* app. Unset, the token is still verified against Google and still
+  subject to `ALLOWED_HD`, but the audience check is skipped with only a log
+  line to say so. Set it wherever the function runs.
+
+The full table — `GEMINI_API_KEY`, `GEMINI_MODEL`, `ALLOWED_HD`,
+`GOOGLE_CLIENT_ID` — is in
+[`web/netlify/functions/README.md`](../web/netlify/functions/README.md).
 
 ## Rules on `main`
 

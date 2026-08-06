@@ -3,8 +3,9 @@
 // the tool must handle:
 //   OFFICE 101 — fully enclosed room                    → plain flood, 120 SF
 //   CONF   102 — 3'-0" CASED opening (no door symbol)   → gap sealing, 120 SF
-//   STOR   103 — same opening WITH leaf + swing arc     → arc bounds the fill,
-//                no sealing, 120 SF minus the ~7 SF swing wedge
+//   STOR   103 — same opening WITH leaf + swing arc     → the swing wedge is
+//                INCLUDED and the fill reads the full 120 SF (round-2 change;
+//                this comment previously described the pre-round-2 behaviour)
 // The swing arc is emitted as a real cubic bezier (drawSvgPath), matching how
 // CAD exports draw door swings, so extractVectorGeometry's curve path is what
 // gets tested — not a polyline stand-in.

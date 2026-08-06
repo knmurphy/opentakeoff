@@ -5,8 +5,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import ToolMenu from "./ToolMenu.jsx";
-import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, labelGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
-import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, laborColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf, applyUnits } from "../lib/reportColumns.js";
+import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, labelGroupedRows, sheetLabelGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
+import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, laborColProfile, rollColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf, applyUnits } from "../lib/reportColumns.js";
+import { rollReportRows, seamLfByShape } from "../lib/rollTakeoff.js";
 import { areaVal, areaUnit, lenVal, lenUnit } from "../lib/units";
 import { columnLabel } from "../lib/conditionColumns.js";
 import { shapeLabelValue } from "../lib/shapeLabels.js";
@@ -44,7 +45,7 @@ const sheetNum = (v, d = 1) => {
   return num(r, d);
 };
 
-export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onExportTakeoff, onClose, markups = [], rfis = [], scaleInfo = [], provenanceCounters = null, clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [], units = "imperial" }) {
+export default function ReportPanel({ projectName, onProjectName, conditions, shapes, sheetLabel, onMarkedSet, markedSetDark, onClose, markups = [], rfis = [], scaleInfo = [], provenanceCounters = null, clientInfo = {}, onClientInfo, conditionColumns = [], shapeLabels = [], units = "imperial", rollByCond = null, onExportTakeoff }) {
   // memoized on the source arrays: project-name/client-info keystrokes re-render
   // the panel without touching conditions/shapes, so the totaling passes skip
   // imported report theme → { vars, name, warnings }. vars are spread onto this
@@ -73,7 +74,13 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   };
   const resetTheme = () => { clearActiveTheme(); setTheme({ vars: {}, name: null, warnings: [] }); };
 
-  const rows = useMemo(() => conditionTotals(conditions, shapes).filter((r) => r.shape_count > 0), [conditions, shapes]);
+  // Figured seam LF per shape (#147) — what a materials row with basis
+  // "seam_lf" (weld rod, seam tape) divides against. Per SHAPE, so the grouped
+  // views below slice it for free instead of repeating the whole condition's
+  // welding on every sheet. Empty map for a project with no roll goods, which
+  // makes every seam_lf row read 0 — the honest answer before a layout exists.
+  const seamCtx = useMemo(() => ({ seamByShape: seamLfByShape(rollByCond) }), [rollByCond]);
+  const rows = useMemo(() => conditionTotals(conditions, shapes, seamCtx).filter((r) => r.shape_count > 0), [conditions, shapes, seamCtx]);
   const bySheet = useMemo(() => sheetTotals(conditions, shapes), [conditions, shapes]);
   const g = useMemo(() => grandTotals(rows), [rows]);
   const matSummary = useMemo(() => materialsSummary(rows), [rows]);
@@ -129,6 +136,11 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // opt-ins → custom → spec → labor), present only when at least one
   // condition carries a laborType/subfloorType value.
   const laborCols = laborColProfile(conditions);
+  // roll-goods columns (#136) — the figured order (Roll Order LF / Rolls)
+  // beside the measured quantities, appended after labor (frozen 13 →
+  // built-in opt-ins → custom → spec → labor → roll), present only when at
+  // least one condition figures a roll layout.
+  const rollCols = rollColProfile(rollByCond);
   // metric display converts AT THE DESCRIPTOR (applyUnits): headers swap to
   // m²/m, the SY column retires, and every dimensioned getter/foot wraps in
   // the converter — renderCell and the tfoot below need no unit awareness.
@@ -136,7 +148,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // inside totalsToCsv/reportWorkbook so each output has ONE conversion site.
   const M = units === "metric";
   const AU = areaUnit(units), LU = lenUnit(units);
-  const tableCols = applyUnits(visibleCols([...TABLE_PROFILE, ...customCols, ...specCols, ...laborCols], colPrefs), units);
+  const tableCols = applyUnits(visibleCols([...TABLE_PROFILE, ...customCols, ...specCols, ...laborCols, ...rollCols], colPrefs), units);
   // group-by choice: "" (none) | "sheet" | a custom column id; normalized
   // ONCE per render and used everywhere (select value AND partitioning) — a
   // stale colId must fall back to None, never reach the select or the
@@ -149,7 +161,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const groupBy = groupByRaw === "sheet" || (groupByRaw === "label" && shapeLabels.length > 0) || conditionColumns.some((cc) => cc.id === groupByRaw) ? groupByRaw : "";
   // grouping force-includes its column in the CSV/XLSX even when hidden in
   // the picker (D7) — a grouped report's export always carries its grouping
-  const csvCols = forceIncludeGroupCol(visibleCols([...CSV_PROFILE, ...customCols, ...specCols, ...laborCols], colPrefs), customCols, groupBy);
+  const csvCols = forceIncludeGroupCol(visibleCols([...CSV_PROFILE, ...customCols, ...specCols, ...laborCols, ...rollCols], colPrefs), customCols, groupBy);
   const perimByCond = useMemo(() => floorPerimeterLf(shapes), [shapes]);
   // custom-column values reach the getters through ctx, never as row fields
   // (conditionTotals rows are spread into the contribution payload)
@@ -158,7 +170,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const specByCond = useMemo(() => new Map(conditions.map((c) => [c.id, c.spec])), [conditions]);
   // labor columns read the hand-typed labor/subfloor type off the same ctx seam
   const laborByCond = useMemo(() => new Map(conditions.map((c) => [c.id, { laborType: c.laborType, subfloorType: c.subfloorType }])), [conditions]);
-  const ctx = { perimByCond, attrsByCond, specByCond, laborByCond };
+  const ctx = { perimByCond, attrsByCond, specByCond, laborByCond, rollByCond };
   // grouped view. Custom-column mode partitions the already-computed rows
   // (no recompute); sheet mode re-runs conditionTotals per sheet's shapes —
   // ORDERED quantities per slice (waste + ×N applied), each group carrying
@@ -175,10 +187,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // still suppressed — it would duplicate the grand TOTAL directly below it.
   const groupCol = groupBy && groupBy !== "sheet" ? conditionColumns.find((cc) => cc.id === groupBy) : null;
   const colGroups = useMemo(() => (groupCol ? partitionRowsBy(rows, groupCol, attrsByCond) : null), [rows, groupCol, attrsByCond]);
-  const sheetGroups = useMemo(() => (groupBy === "sheet" ? sheetGroupedRows(conditions, shapes) : null), [groupBy, conditions, shapes]);
+  const sheetGroups = useMemo(() => (groupBy === "sheet" ? sheetGroupedRows(conditions, shapes, seamCtx) : null), [groupBy, conditions, shapes, seamCtx]);
   // label mode: ORDERED per-bucket rows (waste + ×N per slice), already shaped
   // { value, label, rows, perimByCond } like the sheet groups after mapping.
-  const labelGroups = useMemo(() => (groupBy === "label" ? labelGroupedRows(conditions, shapes, shapeLabels) : null), [groupBy, conditions, shapes, shapeLabels]);
+  const labelGroups = useMemo(() => (groupBy === "label" ? labelGroupedRows(conditions, shapes, shapeLabels, seamCtx) : null), [groupBy, conditions, shapes, shapeLabels, seamCtx]);
   const groups = sheetGroups
     ? sheetGroups.map((gp) => ({ value: gp.sheet_id, label: sheetLabel ? sheetLabel(gp.sheet_id) : gp.sheet_id, rows: gp.rows, perimByCond: gp.perimByCond }))
     : labelGroups || colGroups;
@@ -186,7 +198,12 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // exports always carry the by-label breakdown when any shape is labeled,
   // independent of the current group-by view; empty (→ CSV/JSON byte-unchanged)
   // for label-less projects.
-  const byLabelExport = useMemo(() => (shapes.some((s) => shapeLabelValue(s)) ? labelGroupedRows(conditions, shapes, shapeLabels) : []), [conditions, shapes, shapeLabels]);
+  const byLabelExport = useMemo(() => (shapes.some((s) => shapeLabelValue(s)) ? labelGroupedRows(conditions, shapes, shapeLabels, seamCtx) : []), [conditions, shapes, shapeLabels, seamCtx]);
+  // The workbook's floor × room tab. Unlike byLabelExport this is NOT gated on
+  // a label existing: an unlabeled project's tab is one Unlabeled roll-up per
+  // floor, which still reconciles to By sheet — and the workbook's tab list
+  // stays fixed whatever the project carries.
+  const byFloorRoom = useMemo(() => sheetLabelGroupedRows(conditions, shapes, shapeLabels, seamCtx), [conditions, shapes, shapeLabels, seamCtx]);
 
   // while the report is up, the print stylesheet (app.css @media print) hides
   // the canvas chrome behind it and lets the report flow across pages
@@ -296,7 +313,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const baseName = (projectName || "takeoff").replace(/[^\w.-]+/g, "_");
   const exportCsv = () => downloadText(`${baseName}.csv`, totalsToCsv(rows, projectName, bySheet, sheetLabel, csvCols, ctx, byLabelExport.length ? byLabelExport : null, brand.brandName, units), "text/csv");
   const exportJson = () => downloadText(`${baseName}.json`,
-    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, rfis, sheetLabel, conditionColumns, attrsByCond, shapeLabels, byLabel: byLabelExport, displayUnits: units }), null, 2),
+    JSON.stringify(reportJson({ projectName, rows, bySheet, scaleInfo, markups, rfis, sheetLabel, conditionColumns, attrsByCond, shapeLabels, byLabel: byLabelExport, displayUnits: units, rollGoods: rollReportRows(rollByCond, rows) }), null, 2),
     "application/json");
   const exportRfisCsv = () => downloadText(`${baseName}_rfis.csv`, rfisToCsv(rfis, markups, projectName, sheetLabel, brand.brandName), "text/csv");
   const exportRfisJson = () => downloadText(`${baseName}_rfis.json`,
@@ -304,7 +321,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // Excel workbook — same sources as the CSV/JSON (Conditions tab follows the
   // column picker like the CSV); buildXlsx lazy-loads fflate on first use
   const exportXlsx = async () => {
-    const sheets = reportWorkbook({ rows, bySheet, shapeRows: shapesDetail(conditions, shapes, sheetLabel), cols: csvCols, ctx, sheetLabel, units });
+    const sheets = reportWorkbook({ rows, bySheet, shapeRows: shapesDetail(conditions, shapes, sheetLabel), cols: csvCols, ctx, sheetLabel, units, byFloorRoom });
     const bytes = await buildXlsx(sheets);
     downloadText(`${baseName}.xlsx`, bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   };

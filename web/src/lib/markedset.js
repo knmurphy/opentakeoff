@@ -19,12 +19,14 @@
 // nothing until used and the app stays zero-install.
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
+import { approvalInk, approvalTally, APPROVAL_R } from "./approvals.js";
 import { pointInPoly, starPath, arrowheadPath, cloudBezier, chiselRibbon } from "./geometry.js";
 import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { rfiStatus } from "./rfi.js";
 import { flattenCurve } from "./curve.js";
 import { RENDER_SCALE } from "./sheets";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
+import { dimLabel } from "./units";
 
 const COBALT = "#1f3fc7";
 const DEDUCT_RED = "#b03a26";
@@ -41,6 +43,58 @@ const HATCH_FAMILIES = {
   herring: [[45, 14], [135, 14]], basket: [[0, 10], [90, 10]],
   checker: [[45, 7]], wave: [[0, 10]], dots: [[45, 20]], speckle: [[45, 20]],
 };
+
+// Signal-set (2026-07) hatches carry real per-tile segments instead of a
+// line-family approximation — every one of them is segment-representable, so
+// the print keeps pattern identity. Authored in canvas SVG tile units and
+// scaled ×2 at draw time, matching the line families' print pitch convention.
+const TILE_K = 2;
+const hexSegs = (cx, cy, s) => {
+  const h = 0.866 * s;
+  const p = [[cx - s, cy], [cx - s / 2, cy - h], [cx + s / 2, cy - h], [cx + s, cy], [cx + s / 2, cy + h], [cx - s / 2, cy + h]];
+  return p.map((a, i) => [...a, ...p[(i + 1) % 6]]);
+};
+const ovalSegs = (cx, cy, rx, ry, rotDeg, n = 16) => {
+  const rot = (rotDeg * Math.PI) / 180, c = Math.cos(rot), s = Math.sin(rot), pts = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (2 * Math.PI * i) / n, ex = rx * Math.cos(a), ey = ry * Math.sin(a);
+    pts.push([cx + ex * c - ey * s, cy + ex * s + ey * c]);
+  }
+  return pts.slice(1).map((p, i) => [...pts[i], ...p]);
+};
+const HATCH_TILES = {
+  iso: { w: 13.86, h: 8, segs: [[0, 8, 13.86, 0], [0, 0, 13.86, 8], [6.93, 0, 6.93, 8]] },
+  honeycomb: { w: 12, h: 6.9282, segs: [...hexSegs(0, 0, 4), ...hexSegs(6, 3.4641, 4)] },
+  scan: { w: 16, h: 8, segs: [[0, 2, 10, 2], [8, 6, 16, 6], [0, 6, 2, 6]] },
+  plus: { w: 12, h: 12, segs: [[6, 3.5, 6, 8.5], [3.5, 6, 8.5, 6], [0, -2.5, 0, 2.5], [-2.5, 0, 2.5, 0]] },
+  circuit: {
+    w: 20, h: 20,
+    segs: [[2, 2, 10, 2], [10, 2, 10, 10], [14, 18, 14, 13], [14, 13, 18, 13]],
+    dots: [[2, 2], [10, 10], [14, 18], [18, 13]],
+  },
+  topo: { w: 24, h: 24, segs: [...ovalSegs(12, 12, 8, 5, -18), ...ovalSegs(12, 12, 4.6, 2.6, -18, 12)] },
+};
+
+// tile-based hatch (image px): per-tile segments clipped to the polygon; a
+// spec's dots come back separately for the caller to draw as filled circles.
+function hatchTiles(poly, spec) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of poly) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  const w = spec.w * TILE_K, h = spec.h * TILE_K;
+  const segs = [], dots = [];
+  for (let ty = Math.floor(y0 / h) * h; ty < y1 + h; ty += h) {
+    for (let tx = Math.floor(x0 / w) * w; tx < x1 + w; tx += w) {
+      for (const [ax, ay, bx, by] of spec.segs) {
+        segs.push(...clipSegToPoly(tx + ax * TILE_K, ty + ay * TILE_K, tx + bx * TILE_K, ty + by * TILE_K, poly));
+      }
+      for (const [cx, cy] of spec.dots || []) {
+        const x = tx + cx * TILE_K, y = ty + cy * TILE_K;
+        if (pointInPoly(x, y, poly)) dots.push([x, y]);
+      }
+    }
+  }
+  return { segs, dots };
+}
 
 const hex = (h) => {
   const s = String(h || "#888").replace("#", "");
@@ -157,7 +211,7 @@ function invertPixels(cv) {
   ctx.restore();
 }
 
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, coverTitle = "Marked Set", units = "imperial" }) {
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial" }) {
   // display-unit edge (lib/units contract): quantities arrive as internal feet;
   // metric converts at the drawn string only — legend rows, by-sheet rows, and
   // the per-shape chips. ASCII "m2" (Helvetica WinAnsi has no superscript 2).
@@ -174,8 +228,10 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     for (const s of arr) { const a = m.get(s.sheet_id) || []; a.push(s); m.set(s.sheet_id, a); }
     return m;
   };
-  const shapesBy = byKey(shapes), marksBy = byKey(markups);
-  const marked = sheets.filter((sh) => (shapesBy.get(sh.key) || []).length || (marksBy.get(sh.key) || []).length);
+  const shapesBy = byKey(shapes), marksBy = byKey(markups), apBy = byKey(approvals);
+  // an approval seal marks its sheet like any other work — a sheet carrying
+  // only a seal (a sheet-point approval before any takeoff) still exports
+  const marked = sheets.filter((sh) => (shapesBy.get(sh.key) || []).length || (marksBy.get(sh.key) || []).length || (apBy.get(sh.key) || []).length);
   // a live RFI can outlive its markups, so an RFI-only project still exports
   // (cover + RFI schedule, no per-sheet pages) — only a truly empty set aborts
   if (!marked.length && !rfis?.length) throw new Error("Nothing to export — no sheet carries takeoffs or markups.");
@@ -268,6 +324,19 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       }
     }
     draw(`${marked.length} marked sheet${marked.length === 1 ? "" : "s"} · ${markedShapes.length} takeoff item${markedShapes.length === 1 ? "" : "s"} · quantities net of deducts, waste-adjusted where noted`, { x: 52, y: metaY, size: 9.5, font, color: muted });
+    // assignment provenance (0.9.18): where the finish tags came from
+    // (schedule-resolved / agent-asserted / withheld) — drawn only when the
+    // caller states it, so canvas output stays byte-identical without it
+    if (provenance) { metaY -= 12; draw(provenance, { x: 52, y: metaY, size: 9.5, font, color: muted }); }
+    // approval-seal tally — the ink/pencil split for the whole exported set:
+    // how much a human APPROVED vs what an agent merely marked. Drawn only
+    // when seals exist (the provenance-line convention), so a seal-free
+    // export stays byte-identical.
+    const apCount = approvalTally(marked.flatMap((sh) => apBy.get(sh.key) || []));
+    if (apCount.estimator || apCount.agent) {
+      metaY -= 12;
+      draw(`Approval stamps: ${apCount.estimator} estimator-approved · ${apCount.agent} agent-marked`, { x: 52, y: metaY, size: 9.5, font, color: muted });
+    }
     let y = metaY - 34;
     const rows = conditionTotals(conditions, markedShapes).filter((r) => r.shape_count > 0);
     draw("CONDITIONS", { x: 52, y, size: 9, font: bold, color: muted }); y -= 16;
@@ -293,7 +362,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     for (const sh of marked) {
       if (y < 90) break;
       const items = shapesBy.get(sh.key) || [];
-      draw(`${sh.label} · page ${sh.page} · ${items.length + (marksBy.get(sh.key) || []).length} item(s)`, { x: 52, y, size: 9.5, font: bold, color: ink }); y -= 13;
+      draw(`${sh.label} · page ${sh.page} · ${items.length + (marksBy.get(sh.key) || []).length + (apBy.get(sh.key) || []).length} item(s)`, { x: 52, y, size: 9.5, font: bold, color: ink }); y -= 13;
       for (const r of bySheetId.get(sh.key)?.rows || []) {
         if (y < 92) break;   // stop above the fixed footnote slot at y=60 — rows never collide with it
         const c = condById[r.id] || {};
@@ -448,7 +517,17 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         const fill = cond?.fill && cond.fill !== "none" && !isDeduct ? rgb(...hex(cond.fill)) : col;
         pg.drawSvgPath(svgPath(pts), { x: 0, y: 0, color: fill, opacity: (isDeduct ? 0.14 : 0.16) + alphaBoost / 2, borderColor: col, borderWidth: 1.1, borderOpacity: 0.95, ...(borderDash ? { borderDashArray: borderDash } : {}) });
         if (!isDeduct && cond?.hatch && cond.hatch !== "solid") {
-          for (const [ax, ay, bx, by] of hatchLines(pts, cond.hatch)) line(ax, ay, bx, by, col, 0.5, 0.55 + alphaBoost);
+          const tiled = HATCH_TILES[cond.hatch];
+          if (tiled) {
+            const { segs, dots } = hatchTiles(pts, tiled);
+            for (const [ax, ay, bx, by] of segs) line(ax, ay, bx, by, col, 0.5, 0.55 + alphaBoost);
+            for (const [dx, dy] of dots) {
+              const [px, py] = toPage(dx, dy);
+              pg.drawEllipse({ x: px, y: py, xScale: 1.4, yScale: 1.4, color: col, opacity: 0.55 + alphaBoost });
+            }
+          } else {
+            for (const [ax, ay, bx, by] of hatchLines(pts, cond.hatch)) line(ax, ay, bx, by, col, 0.5, 0.55 + alphaBoost);
+          }
         }
         chip(shapeChip(s, cond, M), ...centroid(pts), col);
       } else if (s.measure_role === "linear" || s.measure_role === "surface_area") {
@@ -473,9 +552,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const lbl = (t) => [rlabel, t].filter((s) => s != null && s !== "").join(" ");
       // per-markup color drives the STROKE/FILL and the note text, dark-boosted for
       // the dark sheet — mirroring the canvas fallback exactly (custom color, else
-      // cobalt when linked, else amber). Legacy/uncolored markups match the canvas.
+      // the LINKED CONDITION's color, else cobalt when RFI-linked, else amber).
+      // Legacy/uncolored markups match the canvas. This precedence must stay in
+      // step with TakeoffCanvas's markup layer, or the burned set stops looking
+      // like the screen it was reviewed on — the one thing a marked set owes.
       // Linkage still prints via the RFI number prefix (lbl), independent of color.
-      const mbase = m.color || (m.rfi_id ? COBALT : "#c47a10");
+      const mCond = m.condition_id ? (conditions || []).find((c) => c.id === m.condition_id) : null;
+      const mbase = m.color || mCond?.color || (m.rfi_id ? COBALT : "#c47a10");
       const mcol = rgb(...hex(dark ? boostForDark(mbase) : mbase));
       const mdash = pdfDashFor(m.line_style || "solid");
       const mw = clampWeight(m.weight);   // stroke-width multiplier (markups only), default ×1
@@ -533,6 +616,27 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         pg.drawSvgPath(arrowheadPath(pfx, -pfy, ptx, -pty, 6 * mw), { x: 0, y: 0, color: mcol, opacity: 0.95 });
         const t = lbl(m.text);
         if (t) text(t, (m.from[0] + m.to[0]) / 2 * W, (m.from[1] + m.to[1]) / 2 * H - 6 / ptScale, 8, mcol, bold);
+      } else if (m.type === "dimension" && m.from && m.to) {
+        // a dimension line: perpendicular ticks at both ends, the measured
+        // length centered beside it. m.len_ft was snapshotted at annotate
+        // time from the sheet scale, so this draws with no scale plumbing —
+        // and dimLabel is ASCII feet-inches, safe through the WinAnsi funnel.
+        const fx = m.from[0] * W, fy = m.from[1] * H, dxq = m.to[0] * W, dyq = m.to[1] * H;
+        line(fx, fy, dxq, dyq, mcol, 1.1 * mw, 0.95, mdash);
+        const dl = Math.hypot(dxq - fx, dyq - fy) || 1;
+        const dnx = -(dyq - fy) / dl, dny = (dxq - fx) / dl;
+        const tk = 5 / ptScale;
+        line(fx - dnx * tk, fy - dny * tk, fx + dnx * tk, fy + dny * tk, mcol, 1.1 * mw, 0.95);
+        line(dxq - dnx * tk, dyq - dny * tk, dxq + dnx * tk, dyq + dny * tk, mcol, 1.1 * mw, 0.95);
+        const t = lbl([Number(m.len_ft) > 0 ? dimLabel(m.len_ft, M ? "metric" : "imperial") : "", m.text].filter(Boolean).join(" · "));
+        if (t) {
+          // centered on the offset midpoint (the bubble's centering), so a
+          // vertical dimension's label sits beside the line, not across it
+          const size = 8;
+          const tw = bold.widthOfTextAtSize(winAnsiSafe(t), size);
+          const [pmx, pmy] = toPage((fx + dxq) / 2 + dnx * (14 / ptScale), (fy + dyq) / 2 + dny * (14 / ptScale));
+          pg.drawText(winAnsiSafe(t), { x: pmx - tw / 2, y: pmy - size / 2.7, size, font: bold, color: mcol, rotate: chipRot });
+        }
       } else if (m.type === "bubble" && m.at) {
         // a circle carrying centered text — detail/section/keynote bubbles and
         // pattern-origin markers. Radius is normalized to sheet WIDTH, so it maps
@@ -575,6 +679,32 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       } else if (m.type === "text" && m.at) {
         text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
       }
+    }
+    // approval seals burn in ABOVE the markups, exactly as the canvas layers
+    // them: the estimator's APPROVED ring, the agent's AGENT diamond. Radius
+    // is normalized to sheet WIDTH (the bubble convention → ptScale), inks are
+    // the shared token literals (approvalInk), dark variant included.
+    for (const a of apBy.get(sh.key) || []) {
+      const isAgent = a.actor === "agent";
+      const acol = rgb(...hex(approvalInk(a.actor, dark)));
+      const cxImg = a.at[0] * W, cyImg = a.at[1] * H;
+      const rImg = APPROVAL_R * W, rPt = rImg * ptScale;
+      const [pcx, pcy] = toPage(cxImg, cyImg);
+      const backing = dark ? rgb(0.08, 0.1, 0.12) : rgb(1, 1, 1);
+      if (isAgent) {
+        // diamond through svgPath so rotated sheets transform it correctly
+        const dia = (k) => [[cxImg, cyImg - rImg * k], [cxImg + rImg * k, cyImg], [cxImg, cyImg + rImg * k], [cxImg - rImg * k, cyImg]];
+        pg.drawSvgPath(svgPath(dia(1)), { x: 0, y: 0, color: backing, opacity: 0.72, borderColor: acol, borderWidth: rPt * 0.07 });
+        pg.drawSvgPath(svgPath(dia(0.72)), { x: 0, y: 0, borderColor: acol, borderWidth: rPt * 0.035 });
+      } else {
+        pg.drawEllipse({ x: pcx, y: pcy, xScale: rPt, yScale: rPt, color: backing, opacity: 0.72, borderColor: acol, borderWidth: rPt * 0.07 });
+        pg.drawEllipse({ x: pcx, y: pcy, xScale: rPt * 0.78, yScale: rPt * 0.78, borderColor: acol, borderWidth: rPt * 0.035 });
+      }
+      // centered label, the bubble-text centering precedent (ASCII, WinAnsi-safe)
+      const label = isAgent ? "AGENT" : "APPROVED";
+      const size = rPt * (isAgent ? 0.3 : 0.26);
+      const tw = bold.widthOfTextAtSize(label, size);
+      pg.drawText(label, { x: pcx - tw / 2, y: pcy - size / 2.7, size, font: bold, color: acol, rotate: chipRot });
     }
     // sheet stamp, top-left in visual space
     text(`${sh.label} · marked set`, 14, 20, 8, muted);

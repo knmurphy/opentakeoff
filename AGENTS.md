@@ -22,10 +22,12 @@ made on `main`. **Merging to `main` no longer deploys anything** — the
 production deploy workflow has been removed from this repo; it now only
 builds and tests every change.
 
-> **The project's live demo is <https://opentakeoff.netlify.app>** — the parent
-> repo's (Kentucky-ai/opentakeoff) deployment. This fork tracks that repo and
-> exists to contribute back to it, so that's the deployment its README badge and
-> links point at; the fork serves none of its own, and merging here does not deploy.
+> **This is `knmurphy/opentakeoff`, a fork of `Kentucky-ai/opentakeoff`.** The
+> parent repo is the canonical project and its production deployment is
+> <https://opentakeoff.kentucky-ai.com> — that's the deployment this README's
+> badge and links point at. This fork tracks the parent and exists to
+> contribute back to it; it serves no deployment of its own, and merging here
+> does not deploy anything.
 
 So:
 
@@ -86,3 +88,22 @@ The tests cover the pure math (`web/test/geometry.test.ts`, `web/test/totals.tes
 1. `README.md` (Features + "What's in the box")
 2. `docs/USER_GUIDE.md` (shortcuts + the relevant section)
 3. `CHANGELOG.md`
+
+Touching the **MCP server** adds four more, and they drift independently — the
+tool count alone lives in five places, so grep the old number before you assume
+you got them all:
+
+4. `mcp/src/tools.ts` — the tool's own `description` **is** its integration.
+   An MCP client reads it at runtime; nothing else you write reaches the model.
+5. `mcp/server.ts` — the `instructions` block sent at `initialize`. This is the
+   decision tree every client receives before its first call. A new *verb* does
+   not belong here; a new *step in the standard finish* does.
+6. `mcp/README.md` (the tool table) and `docs/MCP.md` (the reach-for-it ordering,
+   the example session, and the tool count in its opening line).
+7. **Version, on three surfaces that must agree**: `mcp/package.json`,
+   `mcp/server.json`, `web/public/.well-known/mcp.json`. They have drifted
+   before (#171, and again at 0.9.28). Check `git show HEAD:mcp/package.json`
+   before bumping — a concurrent branch may already have claimed the number.
+
+Architecture rather than behavior — what MCP is versus what the `/ai` sandbox
+is, and why the server is in-process — lives in `docs/MCP_AND_API.md`.

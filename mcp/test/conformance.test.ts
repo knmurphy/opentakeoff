@@ -22,6 +22,10 @@ import {
   loadPlanOutput, sheetInfoOutput, setScaleOutput, oneClickOutput, detectRoomsOutput,
   measurePolygonOutput, measureLineOutput, takeoffSummaryOutput,
   exportTakeoffOutput, deleteShapeOutput, readSheetTextOutput,
+  findTextOutput, editMaterialsOutput, editConditionOutput, undoLastOutput,
+  exportReportOutput, sheetGraphOutput, resolveTagOutput, findScheduleOutput,
+  symbolSweepOutput, sweepScheduleRowOutput, annotateOutput, listAnnotationsOutput,
+  markVerdictOutput, deleteVerdictOutput, duplicateConditionOutput, splitConditionOutput,
 } from "../src/outputs.ts";
 
 const PLAN = fileURLToPath(new URL("../../demo/sample-plan.pdf", import.meta.url));
@@ -29,13 +33,16 @@ const NOT_A_PDF = fileURLToPath(new URL("../package.json", import.meta.url));
 const KEY = "sample-plan.pdf";
 const UPP = 1 / 36; // 1/4" = 1'-0" at render scale 2.0
 
-// .strict() matters: the SDK publishes these shapes as JSON Schema with
-// additionalProperties:false, and a real client REJECTS a reply carrying a key
-// the schema doesn't declare (-32602). A plain z.object() strips unknown keys
-// instead of failing, so it would wave through exactly that break — it did,
-// once (round-9 review: one_click gained gap_sealed_px/door_wedges in the
-// reply without them being declared here, and the suite stayed green because
-// the only test plan never seals or wedges).
+// .strict() everywhere: the published outputSchema is additionalProperties:false,
+// and a real client REJECTS a reply carrying a key the schema doesn't declare
+// (-32602) — but zod's default parse runs in STRIP mode and silently drops
+// unknown keys, so an undeclared reply key passed this suite while a conforming
+// client would reject it. That exact gap shipped twice, independently: b2c1ba7
+// declared five keys the replies already carried (reverting it left this suite
+// green), and round-9 review found one_click gained gap_sealed_px/door_wedges
+// undeclared while the suite stayed green because the only test plan never
+// seals or wedges. Strict mode makes the check as strict as the schema it
+// certifies. Verified: an undeclared key on the one_click reply now fails.
 const SCHEMAS: Record<string, z.ZodTypeAny> = {
   load_plan: z.object(loadPlanOutput).strict(),
   sheet_info: z.object(sheetInfoOutput).strict(),
@@ -48,6 +55,22 @@ const SCHEMAS: Record<string, z.ZodTypeAny> = {
   export_takeoff: z.object(exportTakeoffOutput).strict(),
   delete_shape: z.object(deleteShapeOutput).strict(),
   read_sheet_text: z.object(readSheetTextOutput).strict(),
+  find_text: z.object(findTextOutput).strict(),
+  edit_materials: z.object(editMaterialsOutput).strict(),
+  edit_condition: z.object(editConditionOutput).strict(),
+  undo_last: z.object(undoLastOutput).strict(),
+  export_report: z.object(exportReportOutput).strict(),
+  sheet_graph: z.object(sheetGraphOutput).strict(),
+  resolve_tag: z.object(resolveTagOutput).strict(),
+  find_schedule: z.object(findScheduleOutput).strict(),
+  symbol_sweep: z.object(symbolSweepOutput).strict(),
+  sweep_schedule_row: z.object(sweepScheduleRowOutput).strict(),
+  annotate: z.object(annotateOutput).strict(),
+  list_annotations: z.object(listAnnotationsOutput).strict(),
+  mark_verdict: z.object(markVerdictOutput).strict(),
+  delete_verdict: z.object(deleteVerdictOutput).strict(),
+  duplicate_condition: z.object(duplicateConditionOutput).strict(),
+  split_condition: z.object(splitConditionOutput).strict(),
 };
 
 async function pair() {
@@ -179,6 +202,78 @@ test("every tool: canonical valid call → schema-valid structuredContent mirror
   const empty = await callOk(client, "read_sheet_text", { sheet: KEY, region: { x0: 0, y0: 0, x1: 10, y1: 10 } });
   assert.deepEqual({ items: empty.items, text: empty.text }, { items: [], text: "" });
 
+  // "101" substring-matches both the room label and the sheet number ("A-101")
+  const found = await callOk(client, "find_text", { sheet: KEY, q: "101" });
+  assert.equal(found.count, 2);
+  assert.deepEqual(found.hits.map((h: any) => h.str).sort(), ["A-101", "OFFICE 101"]);
+  const foundRegion = await callOk(client, "find_text", { sheet: KEY, q: "office", region: { x0: 500, y0: 1000, x1: 700, y1: 1200 } });
+  assert.deepEqual(foundRegion.hits.map((h: any) => h.str), ["OFFICE 101"]);
+
+  const materials = await callOk(client, "edit_materials", { condition: "CPT-1", add: [
+    { name: "Adhesive", per: 250, basis: "area", unit: "gal" },
+  ] });
+  assert.equal(materials.materials.length, 1);
+  assert.equal(materials.materials[0].round, true);
+  const matched = await callOk(client, "edit_materials", { condition: "CPT-1",
+    patch: [{ id: materials.materials[0].id, fields: { per: 300 } }] });
+  assert.equal(matched.materials[0].per, 300);
+
+  // edit_condition: the waste/multiplier knobs actually move takeoff_summary's
+  // nets (#131 — before this tool, an agent takeoff always shipped net === gross)
+  const preRow = (await callOk(client, "takeoff_summary")).conditions.find((r: any) => r.finish_tag === "CPT-1");
+  assert.deepEqual({ w: preRow.waste_pct, m: preRow.multiplier }, { w: 0, m: 1 }, "minted conditions start net === gross");
+  const knobs = await callOk(client, "edit_condition", { condition: "CPT-1", waste_pct: 10, multiplier: 2 });
+  assert.deepEqual({ w: knobs.waste_pct, m: knobs.multiplier }, { w: 10, m: 2 });
+  const postRow = (await callOk(client, "takeoff_summary")).conditions.find((r: any) => r.finish_tag === "CPT-1");
+  assert.ok(Math.abs(postRow.total_sf - preRow.total_sf * 2) < 0.05, "multiplier scales gross");
+  assert.ok(Math.abs(postRow.total_sf_net - postRow.total_sf * 1.1) < 0.05, "waste lifts net over gross");
+  assert.match(await callErr(client, "edit_condition", { condition: "NOPE-9", waste_pct: 5 }),
+    /No condition "NOPE-9"\. Known tags: /);        // resolve-or-error — a typo must not mint
+  assert.match(await callErr(client, "edit_condition", { condition: "CPT-1" }), /Nothing to change/);
+  const undone = await callOk(client, "undo_last", { n: 1 });
+  assert.equal(undone.steps[0].op, "condition");
+  const revRow = (await callOk(client, "takeoff_summary")).conditions.find((r: any) => r.finish_tag === "CPT-1");
+  assert.deepEqual({ w: revRow.waste_pct, m: revRow.multiplier }, { w: 0, m: 1 }, "undo restores both knobs verbatim");
+
+  // condition twins (#205): mint → follow → split → exact inverses, then the
+  // session goes back to pre-twins state so the later tests see what they expect
+  const twin = await callOk(client, "duplicate_condition", { condition: "CPT-1", label: "Level 2" });
+  assert.equal(twin.condition, "CPT-1 – Level 2");
+  assert.equal(twin.inherited_rows, 1, "the adhesive row arrived following");
+  assert.match(await callErr(client, "duplicate_condition", { condition: "CPT-1", label: "level 2" }),
+    /already called/);                              // collision is case-insensitive, refused not de-collided
+  const familyEdit = await callOk(client, "edit_materials", { condition: "CPT-1",
+    patch: [{ id: materials.materials[0].id, fields: { per: 275 } }] });
+  assert.equal(familyEdit.materials[0].per, 275);
+  const cut = await callOk(client, "split_condition", { condition: "CPT-1 – Level 2" });
+  assert.deepEqual({ s: cut.split, f: cut.frozen_rows }, { s: true, f: 1 });
+  const twinUndo = await callOk(client, "undo_last", { n: 3 });   // split, family edit, mint
+  assert.deepEqual(twinUndo.steps.map((s: any) => s.op), ["split_condition", "materials", "duplicate_condition"],
+    "the journal names the twin ops and the SDK's output validation accepts them");
+  const postTwins = await callOk(client, "takeoff_summary");
+  assert.equal(postTwins.conditions.some((r: any) => r.finish_tag === "CPT-1 – Level 2"), false, "the twin is gone whole");
+
+  // export_report: the canvas Report document over MCP (#130) — computed buy
+  // list included, math parity with the app's totals.js
+  await callOk(client, "edit_condition", { condition: "CPT-1", waste_pct: 5 });
+  const report = await callOk(client, "export_report");
+  assert.equal(report.schema, "opentakeoff.report.v1");
+  const rRow = report.conditions.find((r: any) => r.finish_tag === "CPT-1");
+  assert.ok(rRow.shape_count > 0, "report rows are shape-bearing conditions only");
+  assert.ok(Math.abs(rRow.total_sf_net - rRow.total_sf * 1.05) < 0.05, "net carries the waste knob");
+  assert.equal(rRow.materials.length, 1, "the buy list rides the row — the thing summary strips and the canvas payload never computes");
+  const mLine = rRow.materials[0];
+  assert.equal(mLine.per, 300);
+  assert.equal(mLine.qty, Math.ceil(mLine.basis_qty / 300 - 1e-9), "order qty = basis ÷ coverage, rounded up to whole purchase units");
+  assert.deepEqual(report.materials, [{ name: "Adhesive", unit: "gal", qty: mLine.qty }], "project-wide roll-up sums by (name, unit)");
+  assert.ok(["standard", "upp", "calibrated", "detected"].includes(report.sheets[0].scale_source), "scale provenance rides the report");
+  assert.ok(report.totals.total_sf_net > report.totals.total_sf, "grand totals carry waste");
+  assert.equal(report.project_name, null, "a headless session has no project of its own — null, never ''");
+  assert.deepEqual(report.roll_goods, [], "roll_goods (#136) always emitted — empty until a condition carries a roll_setup");
+  const labeled = await callOk(client, "export_report", { project_name: "Summit Phase 2" });
+  assert.equal(labeled.project_name, "Summit Phase 2", "a consumer can label the document it prices from");
+  await callOk(client, "edit_condition", { condition: "CPT-1", waste_pct: 0 });   // leave the session as the later tests expect
+
   const del = await callOk(client, "delete_shape", { shape_id: clicked.shape_id });
   assert.deepEqual(del, { deleted: clicked.shape_id, shape_count: 2 });
 
@@ -188,10 +283,62 @@ test("every tool: canonical valid call → schema-valid structuredContent mirror
   assert.equal(infoAfter.shape_count, 2);
 });
 
+test("view_sheet: image + meta reply, grid math pinned, overlay drawn, misuse clean", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: PLAN });
+
+  // the image tool's reply shape: PNG content item first, JSON meta second
+  const callImage = async (args: Record<string, unknown>) => {
+    const res: any = await client.callTool({ name: "view_sheet", arguments: args });
+    assert.equal(!!res.isError, false, `view_sheet failed: ${res.content?.[0]?.text}`);
+    assert.equal(res.content.length, 2, "image item + meta text item");
+    assert.equal(res.content[0].type, "image");
+    assert.equal(res.content[0].mimeType, "image/png");
+    assert.equal(res.structuredContent, undefined, "no outputSchema → no structuredContent");
+    const png = Buffer.from(res.content[0].data, "base64");
+    assert.deepEqual([...png.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], "PNG signature");
+    assert.equal(res.content[1].type, "text");
+    return { png, meta: JSON.parse(res.content[1].text) };
+  };
+
+  // before the scale: grid "auto" refuses toward set_scale, the drawing scale works
+  assert.match(await callErr(client, "view_sheet", { sheet: KEY, grid: "auto" }), /set_scale/);
+  const gridded = await callImage({ sheet: KEY, px: 400, grid: "1/4" });
+  assert.equal(gridded.meta.grid_px_per_foot, 36, "1/4\" = 1'-0\" → 36 image px per foot");
+  assert.equal(Math.max(...gridded.meta.img_px), 400, "long edge honors the px budget");
+  assert.equal(gridded.meta.page, 1);
+  assert.equal(gridded.meta.overlay, false);
+
+  // after set_scale, auto derives the same grid the drawing scale gave
+  await callOk(client, "set_scale", { sheet: KEY, use_detected: true });
+  const auto = await callImage({ sheet: KEY, px: 400, grid: "auto" });
+  assert.ok(Math.abs(auto.meta.grid_px_per_foot - 36) < 1e-6, "auto agrees with the detected 1/4\" scale");
+
+  // a crop honors the region and maps back: square region → square image
+  const crop = await callImage({ sheet: KEY, region: { x0: 100, y0: 100, x1: 460, y1: 460 }, px: 300 });
+  assert.deepEqual(crop.meta.region, [100, 100, 460, 460]);
+  assert.deepEqual(crop.meta.img_px, [300, 300]);
+  assert.ok(Math.abs(crop.meta.zoom - 300 / 360) < 1e-3, "zoom = canvas px per image px");
+
+  // overlay burns committed shapes in: same render differs byte-for-byte
+  const clicked = await callOk(client, "one_click", { sheet: KEY, x: 600, y: 1084, condition: "CPT-1" });
+  assert.ok(clicked.shape_id);
+  const bare = await callImage({ sheet: KEY, px: 400 });
+  const overlaid = await callImage({ sheet: KEY, px: 400, overlay: true });
+  assert.equal(overlaid.meta.overlay, true);
+  assert.equal(overlaid.meta.shapes_drawn, 1);
+  assert.ok(!bare.png.equals(overlaid.png), "the overlay visibly changes the render");
+
+  // misuse: degenerate region and junk grid are clean isError replies
+  assert.match(await callErr(client, "view_sheet", { sheet: KEY, region: { x0: 400, y0: 100, x1: 100, y1: 460 } }), /Empty view region/);
+  assert.match(await callErr(client, "view_sheet", { sheet: KEY, grid: "banana" }), /inches-per-foot/);
+});
+
 test("before any plan: sheet tools and export refuse cleanly; summary is a valid empty reply", async () => {
   const client = await pair();
   const gate = /No plan loaded — call load_plan first\./;
   assert.match(await callErr(client, "sheet_info", { sheet: KEY }), gate);
+  assert.match(await callErr(client, "view_sheet", { sheet: KEY }), gate);
   assert.match(await callErr(client, "set_scale", { sheet: KEY, use_detected: true }), gate);
   assert.match(await callErr(client, "one_click", { sheet: KEY, x: 1, y: 1 }), gate);
   assert.match(await callErr(client, "detect_rooms", { sheet: KEY }), gate);
@@ -199,6 +346,7 @@ test("before any plan: sheet tools and export refuse cleanly; summary is a valid
   assert.match(await callErr(client, "measure_line", { sheet: KEY, pts: [[0, 0], [1, 1]] }), gate);
   assert.match(await callErr(client, "read_sheet_text", { sheet: KEY }), gate);
   assert.match(await callErr(client, "export_takeoff"), gate);
+  assert.match(await callErr(client, "export_report"), gate);
   assert.match(await callErr(client, "delete_shape", { shape_id: "shp-nope" }), /No shape with id "shp-nope"\./);
 
   const summary = await callOk(client, "takeoff_summary");
@@ -217,6 +365,7 @@ test("unknown sheet: every sheet-addressed tool names the miss and lists what is
   assert.match(await callErr(client, "measure_polygon", { sheet: "no-such-sheet", verts: [[0, 0], [1, 0], [1, 1]] }), miss);
   assert.match(await callErr(client, "measure_line", { sheet: "no-such-sheet", pts: [[0, 0], [1, 1]] }), miss);
   assert.match(await callErr(client, "read_sheet_text", { sheet: "no-such-sheet" }), miss);
+  assert.match(await callErr(client, "view_sheet", { sheet: "no-such-sheet" }), miss);
 });
 
 test("schema-invalid arguments: -32602 validation error naming the tool; the session survives", async () => {
@@ -235,6 +384,21 @@ test("schema-invalid arguments: -32602 validation error naming the tool; the ses
   await callViolation(client, "delete_shape", {});                                         // missing shape_id
   await callViolation(client, "read_sheet_text", { sheet: KEY, region: { x0: 0, y0: 0, x1: 10 } }); // partial region
   await callViolation(client, "export_takeoff", { path: 42 });                             // path not a string
+  await callViolation(client, "view_sheet", { sheet: KEY, px: 50 });                       // px below the 200 floor
+  await callViolation(client, "view_sheet", { sheet: KEY, region: { x0: 0, y0: 0, x1: 10 } }); // partial region
+  await callViolation(client, "find_text", { sheet: KEY });                                // missing q
+  await callViolation(client, "find_text", { sheet: KEY, q: "101", limit: 0 });            // limit below min 1
+  await callViolation(client, "symbol_sweep", { sheet: KEY });                             // missing seed_rect
+  await callViolation(client, "symbol_sweep", { sheet: KEY, seed_rect: [[0, 0]] });        // one corner is not a rect
+  await callViolation(client, "symbol_sweep", { sheet: KEY, seed_rect: [[0, 0], [50, 50]], tolerance_px: 0 }); // tolerance must be positive
+  await callViolation(client, "symbol_sweep", { sheet: KEY, seed_rect: [[0, 0], [50, 50]], scope: "document" }); // bad scope enum
+  await callViolation(client, "sweep_schedule_row", {});                                   // missing tag
+  await callViolation(client, "sweep_schedule_row", { tag: "" });                          // empty tag fails the min-1 gate
+  await callViolation(client, "annotate", { sheet: KEY, type: "measure" });                // bad type enum
+  await callViolation(client, "edit_materials", { condition: "CPT-1", add: [{ per: 250 }] }); // add row missing name
+  await callViolation(client, "edit_condition", { condition: "CPT-1", waste_pct: -5 });    // negative waste
+  await callViolation(client, "edit_condition", { condition: "CPT-1", multiplier: 0 });    // 0 silently means 1 on the canvas — rejected
+  await callViolation(client, "edit_condition", { condition: "CPT-1", waste_pct: "ten" }); // wrong type
 
   // none of that touched the session — a real call still works on the same pair
   const r = await callOk(client, "one_click", { sheet: KEY, x: 600, y: 1084 });
@@ -339,4 +503,292 @@ test("sealed/wedged rooms: the reply a real client validates carries the seal pr
   assert.ok(batch.detected > 0, "the VA plan has room-number labels");
   assert.ok(batch.rooms.some((x: any) => (x.gap_sealed_px ?? 0) > 0 || (x.door_wedges ?? 0) > 0),
     "at least one batch-detected room seals or wedges on this plan");
+});
+
+// ── PDF layers (#85): the layered fixture drives the whole loop ─────────────
+// test/fixtures/layered-plan.pdf (see scripts/make-layered-fixture.mjs): a
+// 300×300 pt room on A-WALL-FULL, a 3×3 tile grid on A-FLOR-PATT (FOUR lines
+// — far below HATCH_MIN_RUN, so pitch heuristics keep them hard and a naive
+// flood traps in one cell), a leader on A-ANNO-TEXT crossing the room, and a
+// demolition wall on A-WALL-DEMO hidden in the default config.
+const LAYERED = fileURLToPath(new URL("./fixtures/layered-plan.pdf", import.meta.url));
+
+test("layers (#85): the table reads, stated roles feed the mask, include/exclude bite, unlayered refuses", async () => {
+  const client = await pair();
+  const LKEY = "layered-plan.pdf";
+  const loaded = await callOk(client, "load_plan", { path: LAYERED });
+  assert.equal(loaded.page_count, 1);
+
+  const info = await callOk(client, "sheet_info", { sheet: LKEY });
+  const byName = Object.fromEntries(info.layers.map((l: any) => [l.name, l]));
+  assert.deepEqual(Object.keys(byName).sort(), ["A-ANNO-TEXT", "A-FLOR-PATT", "A-WALL-DEMO", "A-WALL-FULL"]);
+  assert.equal(byName["A-WALL-FULL"].role, "boundary");
+  assert.equal(byName["A-FLOR-PATT"].role, "finish-pattern");
+  assert.equal(byName["A-ANNO-TEXT"].role, "annotation");
+  assert.deepEqual({ role: byName["A-WALL-DEMO"].role, visible: byName["A-WALL-DEMO"].visible },
+    { role: "demolition", visible: false }, "hidden demolition arrives stated, not guessed");
+  assert.ok(info.layers.every((l: any) => l.seg_count > 0 && l.confidence > 0.5), "every layer owns ink and classifies confidently");
+
+  await callOk(client, "set_scale", { sheet: LKEY, upp: 1 / 24 });
+  // seed (300, 924) image px = pdf (150, 150) — inside ONE tile cell. The
+  // stated layers exclude the grid (pattern), the leader (annotation), and
+  // the hidden demo wall, so the flood reaches the whole 25×25 ft room.
+  const room = await callOk(client, "one_click", { sheet: LKEY, x: 300, y: 924, condition: "CPT-1" });
+  assert.ok(Math.abs(room.area_sf - 625) < 20, `whole room, not a tile cell: ${room.area_sf} SF`);
+
+  // provenance: a trace bounded by DECLARED layers says so on the wire
+  const payload = await callOk(client, "export_takeoff");
+  assert.equal(payload.shapes[0].origin.layer_bounded, true);
+
+  // include: the hidden demolition wall becomes hard boundary — the room halves
+  const half = await callOk(client, "one_click", { sheet: LKEY, x: 300, y: 924, layers: { include: ["A-WALL-DEMO"] } });
+  assert.ok(Math.abs(half.area_sf - 312.5) < 15, `the included demo wall splits the room: ${half.area_sf} SF`);
+
+  // exclude the boundary itself → nothing encloses (never a silent guess)
+  assert.match(await callErr(client, "one_click", { sheet: LKEY, x: 300, y: 924, layers: { exclude: ["A-WALL-FULL"] } }), /isn't enclosed/);
+  // unknown layer name → resolve-or-error, listing the sheet's actual layers
+  assert.match(await callErr(client, "one_click", { sheet: LKEY, x: 300, y: 924, layers: { exclude: ["NOPE"] } }), /No layer "NOPE".*A-WALL-FULL/);
+
+  // the unlayered world stays exactly as it was: empty table, and a layer
+  // filter REFUSES rather than silently no-ops
+  await callOk(client, "load_plan", { path: PLAN });
+  const plain = await callOk(client, "sheet_info", { sheet: KEY });
+  assert.deepEqual(plain.layers, []);
+  assert.match(await callErr(client, "one_click", { sheet: KEY, x: 600, y: 1084, layers: { exclude: ["A-WALL-FULL"] } }), /no PDF layers/);
+});
+
+// ── the sheet graph (#87): the two-page demo set drives all three tools ─────
+const FINISH_PLAN = fileURLToPath(new URL("../../demo/sample-finish-plan.pdf", import.meta.url));
+
+test("sheet graph (#87): index, resolve with citations, refusal with reasons, find_schedule", async () => {
+  const client = await pair();
+  // the graph needs a document
+  assert.match(await callErr(client, "sheet_graph"), /No plan loaded/);
+
+  await callOk(client, "load_plan", { path: FINISH_PLAN });
+  const g = await callOk(client, "sheet_graph");
+  assert.equal(g.available, true);
+  const roles = Object.fromEntries(g.sheets.map((s: any) => [s.sheet, s.role]));
+  assert.equal(roles["sample-finish-plan.pdf"], "plan", "page 1 is the finish plan");
+  assert.equal(roles["sample-finish-plan.pdf#2"], "schedule", "page 2 is the schedule sheet — its room-number column must NOT mint phantom rooms");
+  assert.ok(g.counts.rooms >= 40, `the plan's room tags: ${g.counts.rooms}`);
+  assert.ok(g.counts.schedules >= 2, "a room-finish table AND a finish/material table");
+  assert.ok(g.rooms.every((r: any) => r.sheet === "sample-finish-plan.pdf"), "rooms come from the plan sheet only");
+  const r134 = g.rooms.find((r: any) => r.tag === "134");
+  assert.ok(r134 && r134.bbox.x1 > r134.bbox.x0, "a tag carries its bbox");
+
+  // THE question: what finish is specified in room 134, and how do you know
+  const res = await callOk(client, "resolve_tag", { tag: "134" });
+  assert.equal(res.status, "resolved");
+  const bySurface = Object.fromEntries(res.finishes.map((f: any) => [f.surface, f]));
+  assert.equal(bySurface.FLOOR.code, "CPT-1/VCT-1", "the dual-finish floor cell survives verbatim");
+  assert.equal(bySurface.BASE.code, "RB-1");
+  assert.equal(bySurface.BASE.definition.cells.MATERIAL, "RESILIENT BASE", "the code chains to its material-schedule definition");
+  for (const f of res.finishes) {
+    assert.ok(f.source.sheet && f.source.bbox.x1 > f.source.bbox.x0, `${f.surface} carries a citation`);
+  }
+  assert.ok(res.sources.length >= 2, "the chain cites the plan tag AND the schedule row");
+
+  // refusal over guessing: a tag with no row names the gap, never omits it
+  const missing = await callOk(client, "resolve_tag", { tag: "999" });
+  assert.equal(missing.status, "unresolved");
+  assert.match(missing.reason, /no schedule row for 999/);
+
+  const found = await callOk(client, "find_schedule", { kind: "room finish" });
+  assert.ok(found.matches[0].rows >= 30);
+  assert.match(found.matches[0].title, /ROOM FINISH SCHEDULE/);
+  assert.ok(found.matches[0].region.x1 > found.matches[0].region.x0, "the region is viewable");
+  assert.match(await callErr(client, "find_schedule", { kind: "door" }), /No "door" schedule found .* Found: /);
+});
+
+// ── the sheet graph, phase 2 (#87): continuation sheets, rotated headers, ───
+// multi-building keys — the five-page fixture pins all three lanes end to end
+// (generator: scripts/make-sheetgraph-fixture.mjs). Room 134 exists in BOTH
+// buildings; building A's schedule is only readable through its rotated
+// header band; building B's schedule continues onto page 5.
+const MB_SET = fileURLToPath(new URL("./fixtures/multibuilding-set.pdf", import.meta.url));
+
+test("sheet graph phase 2 (#87): continuation merges to ONE table, rotated headers anchor, multi-building refuses with candidates", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: MB_SET });
+
+  const g = await callOk(client, "sheet_graph");
+  assert.deepEqual(g.buildings, ["A", "B"], "the set's building designators");
+  assert.equal(g.sheets[0].building, "A");
+  assert.equal(g.sheets[1].building, "B");
+  assert.equal(g.counts.schedules, 3, "LOGICAL tables: room-finish A, room-finish B (incl. its continuation), material");
+  // rooms carry their building — the same number, twice, honestly
+  const r134 = g.rooms.filter((r: any) => r.tag === "134");
+  assert.deepEqual(r134.map((r: any) => r.building).sort(), ["A", "B"]);
+  // the rotated header band is read and disclosed
+  const schedA = g.sheets.find((s: any) => s.sheet === "multibuilding-set.pdf#3");
+  assert.equal(schedA.schedules.find((x: any) => x.kind === "room-finish").rotated_headers, true);
+  // the continuation fragment names its base
+  const contd = g.sheets.find((s: any) => s.sheet === "multibuilding-set.pdf#5");
+  assert.equal(contd.schedules[0].continues, "multibuilding-set.pdf#4");
+
+  // refusal over first-match: unqualified 134 lists the candidates per building
+  const amb = await callOk(client, "resolve_tag", { tag: "134" });
+  assert.equal(amb.status, "unresolved");
+  assert.match(amb.reason, /ambiguous: room 134 appears in 2 buildings/);
+  assert.match(amb.reason, /qualify the tag/);
+  assert.equal(amb.room, null, "citing one building's plan tag would be quietly wrong");
+  assert.deepEqual(amb.candidates.map((c: any) => c.building).sort(), ["A", "B"]);
+
+  // qualified tags pick the building the set names — through the ROTATED table
+  const a = await callOk(client, "resolve_tag", { tag: "A-134" });
+  assert.equal(a.status, "resolved");
+  assert.equal(a.building, "A");
+  assert.equal(a.room.name, "OFFICE", "building A's 134, not B's STORAGE");
+  const aFloor = a.finishes.find((f: any) => f.surface === "FLOOR");
+  assert.equal(aFloor.code, "CPT-1");
+  assert.equal(aFloor.definition.cells.MATERIAL, "CARPET TILE", "the chain still reaches the material schedule");
+  const b = await callOk(client, "resolve_tag", { tag: "B-134" });
+  assert.equal(b.finishes.find((f: any) => f.surface === "FLOOR").code, "VCT-2");
+
+  // a row carried by the CONT'D sheet resolves and cites the CONT'D sheet
+  const cont = await callOk(client, "resolve_tag", { tag: "201" });
+  assert.equal(cont.status, "resolved");
+  assert.equal(cont.building, "B");
+  assert.ok(cont.finishes.every((f: any) => f.source.sheet === "multibuilding-set.pdf#5"), "evidence points at the ink");
+
+  // a building the set never names refuses by name, with the candidates
+  const c = await callOk(client, "resolve_tag", { tag: "C-134" });
+  assert.equal(c.status, "unresolved");
+  assert.match(c.reason, /names no building "C"/);
+  assert.equal(c.candidates.length, 2);
+
+  // find_schedule: the continued table is ONE match with parts, base first
+  const found = await callOk(client, "find_schedule", { kind: "room finish" });
+  assert.equal(found.matches.length, 2, "two logical room-finish tables — A and B — not three fragments");
+  const matchA = found.matches.find((m: any) => m.building === "A");
+  assert.equal(matchA.rotated_headers, true);
+  const matchB = found.matches.find((m: any) => m.building === "B");
+  assert.equal(matchB.rows, 2, "total rows across fragments");
+  assert.deepEqual(matchB.parts.map((p: any) => [p.sheet, p.rows]), [["multibuilding-set.pdf#4", 1], ["multibuilding-set.pdf#5", 1]]);
+});
+
+// 0.9.20 — symbol_sweep's output contract, both modes, schema round-tripped
+// unstripped (the assign-mode deepEqual discipline: zod strips unknown keys,
+// so equality proves the schema states EVERY returned field).
+const SYMPLAN = fileURLToPath(new URL("./fixtures/symbol-plan.pdf", import.meta.url));
+
+test("symbol_sweep: reply validates AND round-trips the schema unstripped, in read and commit modes", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: SYMPLAN });
+  const read = await callOk(client, "symbol_sweep", { sheet: "symbol-plan.pdf", seed_rect: [[196, 980], [272, 1028]] });
+  assert.deepEqual(z.object(symbolSweepOutput).parse(read), read, "schema states every returned field — nothing stripped");
+  assert.equal(read.found, read.matches.length);
+  assert.ok(read.withheld.every((w: any) => typeof w.reason === "string" && w.reason.length > 0));
+  assert.equal(read.committed, undefined, "read mode commits nothing");
+
+  const commit = await callOk(client, "symbol_sweep", { sheet: "symbol-plan.pdf", seed_rect: [[196, 980], [272, 1028]], commit: true, condition: "FD-1" });
+  assert.deepEqual(z.object(symbolSweepOutput).parse(commit), commit);
+  assert.equal(commit.committed, commit.found);
+  assert.equal(commit.shape_ids.length, commit.found);
+  assert.equal(commit.condition, "FD-1");
+});
+
+// phase 2 — set-wide sweeps + schedule-row seeding: both output contracts
+// round-trip unstripped on the multi-sheet fixture, and the refusals are
+// clean error surfaces with the reason and the fix.
+const SYMSET = fileURLToPath(new URL("./fixtures/symbol-set.pdf", import.meta.url));
+
+test("symbol_sweep scope 'set' and sweep_schedule_row: replies round-trip their schemas unstripped; refusals name reason and fix", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: SYMSET });
+
+  // #186: a detail seed is drawn at its own scale, so both ends must be stated
+  // before the sweep will run — the fixture draws its detail at plan size, so
+  // one label everywhere is truthful and the ratio comes out 1
+  assert.match(
+    await callErr(client, "symbol_sweep", { sheet: "symbol-set.pdf#3", seed_rect: [[590, 574], [678, 634]], scope: "set" }),
+    /drawn at its own enlarged scale .* set_scale/,
+  );
+  for (const sheet of ["symbol-set.pdf", "symbol-set.pdf#2", "symbol-set.pdf#3"]) {
+    await callOk(client, "set_scale", { sheet, upp: 0.25 });
+  }
+
+  // set scope, seeded from the DETAIL sheet's drain — plan-only counting
+  const set = await callOk(client, "symbol_sweep", { sheet: "symbol-set.pdf#3", seed_rect: [[590, 574], [678, 634]], scope: "set" });
+  assert.deepEqual(z.object(symbolSweepOutput).parse(set), set, "schema states every returned field — nothing stripped");
+  assert.equal(set.scope, "set");
+  assert.equal(set.found, set.sheets.reduce((n: number, p: any) => n + p.found, 0), "the total reconciles to the per-sheet counts");
+  assert.ok(set.sheets.every((p: any) => typeof p.elapsed_ms === "number"), "every swept sheet reports its wall-clock");
+  assert.ok(set.skipped.length >= 2 && set.skipped.every((s: any) => s.reason.length > 0), "every excluded sheet says why");
+
+  // schedule-row seeding, read then commit
+  const row = await callOk(client, "sweep_schedule_row", { tag: "T1" });
+  assert.deepEqual(z.object(sweepScheduleRowOutput).parse(row), row, "schema states every returned field — nothing stripped");
+  assert.equal(row.committed, undefined, "read mode commits nothing");
+  const committed = await callOk(client, "sweep_schedule_row", { tag: "T1", commit: true });
+  assert.deepEqual(z.object(sweepScheduleRowOutput).parse(committed), committed);
+  assert.equal(committed.committed, committed.found);
+  assert.equal(committed.condition, "T1", "the condition is the row's own key");
+
+  // refusals: reason + fix, never a guess
+  assert.match(await callErr(client, "sweep_schedule_row", { tag: "T9" }), /cannot be geometrically anchored .* never guessed from text alone/);
+  assert.match(await callErr(client, "sweep_schedule_row", { tag: "ZZ" }), /No schedule row "ZZ" .* tables found/);
+});
+
+// dimension annotation (0.9.20): the annotate reply's schema covers the new
+// length_lf field, both on annotate and on the list round-trip.
+test("annotate dimension: reply validates against the schema, length rides the round-trip", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: PLAN });
+  await callOk(client, "set_scale", { sheet: KEY, use_detected: true });
+  const dim = await callOk(client, "annotate", { sheet: KEY, type: "dimension", from: [100, 100], to: [460, 100] });
+  assert.deepEqual(z.object(annotateOutput).parse(dim), dim, "schema states every returned field");
+  assert.equal(dim.length_lf, 10);
+});
+
+// verdict marks (#176): both directions for the two new tools plus the
+// extended list_annotations, with the unstripped deepEqual proving the
+// schemas state EVERY field the tools actually return.
+test("mark_verdict / delete_verdict / list_annotations verdicts: replies validate and round-trip the schema unstripped", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: PLAN });
+  await callOk(client, "set_scale", { sheet: KEY, use_detected: true });
+  const poly = await callOk(client, "measure_polygon", { sheet: KEY, verts: [[100, 100], [460, 100], [460, 460], [100, 460]], condition: "CPT-1" });
+
+  const onShape = await callOk(client, "mark_verdict", { shape_id: poly.shape_id, text: "checked against walls" });
+  assert.deepEqual(z.object(markVerdictOutput).parse(onShape), onShape, "schema states every returned field");
+  assert.equal(onShape.actor, "agent");
+  assert.equal(onShape.condition, "CPT-1");
+  const onSheet = await callOk(client, "mark_verdict", { sheet: KEY, at: [900, 900] });
+  assert.deepEqual(z.object(markVerdictOutput).parse(onSheet), onSheet);
+
+  const listed = await callOk(client, "list_annotations", {});
+  assert.deepEqual(z.object(listAnnotationsOutput).parse(listed), listed, "verdicts[] and verdict_count are fully stated");
+  assert.equal(listed.verdict_count, 2);
+
+  const del = await callOk(client, "delete_verdict", { verdict_id: onSheet.id });
+  assert.deepEqual(z.object(deleteVerdictOutput).parse(del), del);
+
+  // semantic misuse is a clean isError surface
+  await callErr(client, "mark_verdict", {});                                              // no target
+  await callErr(client, "mark_verdict", { shape_id: poly.shape_id, sheet: KEY, at: [1, 1] }); // both targets
+  await callErr(client, "mark_verdict", { shape_id: "shp-nope" });                        // unknown shape
+  await callErr(client, "delete_verdict", { verdict_id: "apr-nope" });                    // unknown record
+
+  // schema violations are -32602, session unharmed
+  await callViolation(client, "mark_verdict", { sheet: KEY, at: [100] });                 // one coordinate is not a point
+  await callViolation(client, "mark_verdict", { shape_id: 42 });                          // wrong type
+  await callViolation(client, "delete_verdict", {});                                      // missing id
+  const alive = await callOk(client, "list_annotations", {});
+  assert.equal(alive.verdict_count, 1, "the violations changed nothing");
+});
+
+// 0.9.18 — assign-from-schedule's output contract. The deepEqual is the
+// load-bearing assertion: zod strips unknown keys, so a bare parse would pass
+// with an incomplete schema — equality proves the schema states EVERY field
+// the tool actually returns (unresolved[], withheld.unresolved, rooms[].condition).
+test("detect_rooms assign mode: reply validates AND round-trips the schema unstripped", async () => {
+  const client = await pair();
+  await callOk(client, "load_plan", { path: FINISH_PLAN });
+  await callOk(client, "set_scale", { sheet: "sample-finish-plan.pdf", use_detected: true });
+  const r = await callOk(client, "detect_rooms", { sheet: "sample-finish-plan.pdf", assign_from_schedule: true });
+  assert.deepEqual(z.object(detectRoomsOutput).parse(r), r, "schema states every returned field — nothing stripped");
+  assert.ok(Array.isArray(r.unresolved), "assign mode always states the answer, empty array included");
+  assert.equal(r.withheld.unresolved, r.unresolved.length, "the counter and the array agree");
 });

@@ -1,6 +1,6 @@
 {
   "name": "opentakeoff-mcp",
-  "version": "0.6.0",
+  "version": "0.9.33",
   "mcpName": "io.github.Kentucky-ai/opentakeoff",
   "type": "module",
   "description": "OpenTakeoff MCP server — drive the takeoff engine from your MCP client over stdio.",
@@ -16,18 +16,22 @@
     "mcpb": "npm run build && node scripts/build-mcpb.mjs",
     "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/conformance.test.ts test/e2e.test.ts test/resources.test.ts test/session.test.ts test/tools.test.ts"
+    "test": "node --import tsx --test test/conformance.test.ts test/context.test.ts test/doubleCount.test.ts test/e2e.test.ts test/labels.test.ts test/parity.test.ts test/raster.test.ts test/resources.test.ts test/scalewarn.test.ts test/session.test.ts test/tools.test.ts test/transitions.test.ts test/twins.test.ts test/view.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",
     "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "@napi-rs/canvas": "^0.1.100"
   },
   "devDependencies": {
     "@types/node": "^22.19.21",
     "typescript": "^5.7.2",
     "tsx": "^4.19.2",
-    "esbuild": "^0.24.2"
+    "esbuild": "^0.25.0"
   },
   "bin": {
     "opentakeoff-mcp": "dist/server.js"
@@ -51,6 +55,15 @@
     "estimating",
     "pdf",
     "quantity-takeoff",
-    "flooring"
-  ]
+    "flooring",
+    "ai-agent",
+    "agentic-ai",
+    "preconstruction",
+    "construction-management",
+    "project-management"
+  ],
+  "overrides": {
+    "fast-uri": "^3.1.4",
+    "@hono/node-server": "^2.0.5"
+  }
 }

@@ -12,6 +12,7 @@ permissions:
 jobs:
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web
@@ -23,9 +24,58 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # Voice model (RFC #59): ~44 MB, cached between runs; the fetch script
+      # is the cache key, so bumping MODEL_REV/files in it invalidates cleanly.
+      # With the model staged, the corpus + privacy voice tests run for real
+      # (they skip loudly when it's absent, e.g. on forks with cache misses).
+      - uses: actions/cache@v4
+        with:
+          path: web/public/models
+          key: voice-model-${{ hashFiles('web/scripts/fetch-voice-model.mjs') }}
+      - run: node scripts/fetch-voice-model.mjs
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm test
+      # the corpus gate the RFC calls for. It existed since 46ad9d0 but nothing
+      # ran it, so "bench gate green" was a manual claim (audit B2).
+      - run: npm run bench
       - run: npm run build
+
+  # Browser E2E lives in its own job on purpose (audit 0.1b). It is the only job
+  # that needs a ~150 MB Chromium download plus apt system libs, and it drives a
+  # real vite dev server, so folding it into `web` would put a minute of browser
+  # provisioning in front of typecheck/lint/test feedback that costs seconds.
+  # Split, it runs in parallel, fails with its own attributable red X, can be
+  # re-run alone when a browser flakes, and carries a timeout that suits a
+  # browser run rather than one that would have to cover linting too.
+  web-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # playwright is a pinned devDependency now; this only fetches the browser
+      # binary + its system libs, which npm cannot carry.
+      - run: npx playwright install --with-deps chromium
+      # `npm run e2e` exits non-zero on any failed check, a crashed driver, or a
+      # dev server that never came up — so a red suite is a red job.
+      - run: npm run e2e
+      - name: Upload e2e artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-out
+          path: web/e2e/out/
+          retention-days: 7
+          if-no-files-found: ignore
 
   mcp:
     runs-on: ${{ matrix.os }}
@@ -55,8 +105,121 @@ jobs:
       - run: npm run smoke:dist
         working-directory: mcp
 
+  # Publishing the MCP server is fully unattended ONCE an mcp-v* tag exists —
+  # but nothing ever checked that a change to mcp/ came with a version bump, so
+  # "publish when needed" quietly depended on remembering. This is the check.
+  #
+  # It deliberately does NOT create the tag. publish-mcp.yml fires on the tag
+  # push, and a tag pushed by a workflow's GITHUB_TOKEN does not trigger other
+  # workflows — an auto-tag here would fire nothing AND consume the tag name,
+  # so the manual push that would have published is now a no-op. That trades a
+  # forgotten publish for a silently impossible one. Auto-publishing needs a
+  # PAT, which is a credential decision, not a CI one.
+  mcp-version-guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need the base commit to diff against
+      - name: Require a version bump when mcp/ changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$BASE" HEAD -- mcp/; then
+            echo "mcp/ untouched — nothing to check."
+            exit 0
+          fi
+          echo "mcp/ changed in this PR:"
+          git diff --name-only "$BASE" HEAD -- mcp/ | sed 's/^/  /'
+
+          PKG=$(jq -r .version mcp/package.json)
+          SRV=$(jq -r .version mcp/server.json)
+          SRVPKG=$(jq -r '.packages[0].version' mcp/server.json)
+          # Same three-way agreement publish-mcp.yml enforces at tag time.
+          # Catching it here means a mismatch fails a PR instead of a release.
+          if [ "$PKG" != "$SRV" ] || [ "$PKG" != "$SRVPKG" ]; then
+            echo "::error::version fields disagree (package.json=$PKG server.json=$SRV packages[0]=$SRVPKG) — bump them together"
+            exit 1
+          fi
+
+          # ...and the DEPLOYED manifest, which is the surface nobody remembers.
+          # AGENTS.md has always said the version lives on three surfaces, but
+          # this guard only ever checked two, so the third silently rotted: at
+          # 0.9.29 the well-known file still said 0.9.27 while npm and the
+          # registry served 0.9.29. It is not cosmetic — directory indexers
+          # (Smithery among them) cache whatever they last scanned, and the same
+          # drift once had them describing the 17-tool era of a 31-tool server.
+          # It ships from web/, not mcp/, which is exactly why a change confined
+          # to mcp/ forgets it, so it is checked HERE where mcp/ is the trigger.
+          WK=web/public/.well-known/mcp.json
+          WKV=$(jq -r .version "$WK")
+          WKPKG=$(jq -r '.packages[0].version' "$WK")
+          if [ "$PKG" != "$WKV" ] || [ "$PKG" != "$WKPKG" ]; then
+            echo "::error file=$WK::the deployed manifest still says $WKV/$WKPKG while mcp/ is $PKG — bump BOTH version fields in $WK too, or the directories keep advertising the old server"
+            exit 1
+          fi
+
+          BASE_PKG=$(git show "$BASE:mcp/package.json" | jq -r .version)
+          if [ "$PKG" = "$BASE_PKG" ]; then
+            echo "::error file=mcp/package.json::mcp/ changed but the version is still $PKG. Bump mcp/package.json AND mcp/server.json (.version and .packages[0].version), or the change ships to nobody: the registry only ever sees a published mcp-v* tag."
+            exit 1
+          fi
+          echo "version $BASE_PKG -> $PKG"
+          if git rev-parse -q --verify "refs/tags/mcp-v$PKG" >/dev/null; then
+            echo "::error::tag mcp-v$PKG already exists — pick an unused version"
+            exit 1
+          fi
+          echo "OK — merge, then publish with:  git tag mcp-v$PKG && git push origin mcp-v$PKG"
+
+  # Post-merge nudge: says exactly what to run, so a bumped-but-unpublished
+  # version can't sit unnoticed. Never fails the build — main is already green
+  # by here and an unpublished version is a pending action, not a defect.
+  mcp-release-reminder:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Flag an unpublished version
+        run: |
+          set -euo pipefail
+          PKG=$(jq -r .version mcp/package.json)
+          if git rev-parse -q --verify "refs/tags/mcp-v$PKG" >/dev/null; then
+            echo "mcp v$PKG is tagged — nothing pending." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### MCP v$PKG is not published"
+              echo ""
+              echo '```'
+              echo "git tag mcp-v$PKG && git push origin mcp-v$PKG"
+              echo '```'
+              echo ""
+              echo "That tag push runs \`publish-mcp.yml\` end to end: npm (OIDC, provenance), the MCP registry entry, the GitHub release, and the MCPB bundle."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::mcp v$PKG has no mcp-v$PKG tag — not published yet"
+          fi
+
   capture:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: python3 capture/capture_server.py selftest
+
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -q

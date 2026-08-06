@@ -14,6 +14,7 @@ export const icons = {
   document: (s) => <I size={s}><path d="M6 3 H 16 L 19 6 V 21 H 6 Z" /><path d="M16 3 V 6 H 19" /><line x1="9" y1="12" x2="16" y2="12" /><line x1="9" y1="16" x2="16" y2="16" /></I>,
   product: (s) => <I size={s}><rect x="3" y="7" width="18" height="13" /><path d="M3 7 L 12 3 L 21 7" /><line x1="12" y1="3" x2="12" y2="20" /></I>,
   takeoff: (s) => <I size={s}><rect x="3" y="3" width="18" height="18" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="9" y1="3" x2="9" y2="21" /><circle cx="15" cy="15" r="1.2" fill="currentColor" /></I>,
+  roll: (s) => <I size={s}><circle cx="7.5" cy="9" r="4.8" /><circle cx="7.5" cy="9" r="1.1" fill="currentColor" stroke="none" /><path d="M12.3 9 H 21 V 19 H 3" /></I>,
   plus: (s) => <I size={s}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></I>,
 
   // ── takeoff canvas set — drafting monoline, vertex-dot motif on measure tools ──
@@ -50,6 +51,8 @@ export const icons = {
   markup: (s) => <I size={s}><path d="M12 3 L 17 10 L 12 21 L 7 10 Z" /><line x1="12" y1="3" x2="12" y2="12.5" /><circle cx="12" cy="13" r="1" fill="currentColor" /></I>,
   // stamp — a press-down rubber stamp over its impression line (the tool-chest motif)
   stamp: (s) => <I size={s}><rect x="8" y="3" width="8" height="6" rx="1" /><path d="M6 15 L 9 9 H 15 L 18 15 Z" /><line x1="4" y1="19" x2="20" y2="19" /></I>,
+  // approve — the circular approval seal with its check (the on-canvas glyph in miniature)
+  approve: (s) => <I size={s}><circle cx="12" cy="12" r="8.5" /><path d="M8.2 12.4 L 11 15.2 L 16 9.4" /></I>,
   // RFI — a hexagon echoing the on-canvas ⬢ RFI marker, with a question motif
   rfi: (s) => <I size={s}><path d="M12 3 L 19 7 V 15 L 12 19 L 5 15 V 7 Z" /><path d="M10 10 a2 2 0 1 1 2.6 1.9 C 12 12.2 12 12.6 12 13.2" /><circle cx="12" cy="15.6" r="0.9" fill="currentColor" /></I>,
   takeoffs: (s) => <I size={s}><rect x="4" y="5" width="3" height="3" fill="currentColor" stroke="none" /><line x1="10" y1="6.5" x2="20" y2="6.5" /><rect x="4" y="10.5" width="3" height="3" fill="currentColor" stroke="none" /><line x1="10" y1="12" x2="20" y2="12" /><rect x="4" y="16" width="3" height="3" fill="currentColor" stroke="none" /><line x1="10" y1="17.5" x2="20" y2="17.5" /></I>,
@@ -65,6 +68,8 @@ export const icons = {
   pin: (s) => <I size={s}><line x1="8" y1="3" x2="16" y2="3" /><path d="M10 3 V 8 L 7 11 H 17 L 14 8 V 3" /><line x1="12" y1="11" x2="12" y2="20" /></I>,
   // mixer sliders — the toolbar render/fill settings menu
   sliders: (s) => <I size={s}><path d="M4 7 H 6.8 M11.2 7 H 20" /><path d="M4 17 H 12.8 M17.2 17 H 20" /><circle cx="9" cy="7" r="2.2" /><circle cx="15" cy="17" r="2.2" /></I>,
+  // stacked plan sheets in isometric — the PDF layer table (Optional Content Groups)
+  layers: (s) => <I size={s}><path d="M12 3 L 21 7.5 L 12 12 L 3 7.5 Z" /><path d="M3 12 L 12 16.5 L 21 12" /><path d="M3 16.5 L 12 21 L 21 16.5" /></I>,
 };
 
 export function Icon({ name, size = 18 }) {
