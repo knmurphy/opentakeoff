@@ -173,9 +173,7 @@ Changes apply immediately and persist to this browser.
 | `web/src/lib/useKeymap.js` (new, or a hook in `keymap.ts`) | `useSyncExternalStore` wrapper so React surfaces re-render on override change. |
 | `web/src/components/ShortcutConfig.jsx` (new) | The modal + capture/conflict/reset UI. |
 | `web/src/components/UserGuide.jsx` (modify) | Footer button; tables read effective bindings (command rows dynamic, fixed rows literal). |
-| `web/src/pages/TakeoffCanvas.jsx` (modify) | Merge letter+edit effects into keymap dispatch; swap key literals for `matches`/`matchCommand` (including the voice effect's Esc discard); `shortcutsOpen` state + render modal. |
 | `web/src/components/PlanNavigator.jsx`, gallery, `ToolMenu.jsx` (modify) | Escape consumers read `escape` binding. |
-| `web/src/lib/keys.ts` (modify) | Add `Esc`/`Delete`/`Space`/`mod` display glyphs for the new chord display. |
 | `web/test/keymap.test.ts` (new) | TDD over the pure layer. |
 | `docs/USER_GUIDE.md` §15, `CHANGELOG.md` | Document the feature + the remap note + the Select floor. |
 
