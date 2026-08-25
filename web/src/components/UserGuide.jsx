@@ -37,6 +37,7 @@ const COMMAND_ROW = {
   "Check a dimension against what the drawing says": "check",
   "Dimension line — a standalone length label at the sheet's scale (markup, never counted)": "dimension",
   "Select": "select",
+  "Trace another one like the selected shape — its condition and its tool arm, the selection drops": "repeat",
   "Sheet gallery": "gallery",
   "Finish the shape. In One-Click: Create the selection": "commit",
   "Back out one step — the last point, then the picked vertex, the region, the selected shape, the markup": "deleteBack",

@@ -96,14 +96,41 @@ test("chordToKeys: display tokens, platform-aware", () => {
   assert.deepEqual(chordToKeys("?", true), ["?"]);
 });
 
-test("DEFAULT_KEYMAP: 25 commands, categories partition", () => {
+test("DEFAULT_KEYMAP: 26 commands, categories partition", () => {
   const ids = Object.keys(DEFAULT_KEYMAP);
-  assert.equal(ids.length, 25);
+  assert.equal(ids.length, 26);
   for (const cat of ["Tools", "Navigation", "Edit", "Escape hatch"]) {
     assert.ok(ids.some((id) => DEFAULT_KEYMAP[id].category === cat), cat);
   }
   assert.deepEqual(DEFAULT_KEYMAP.deleteBack.default, ["backspace", "delete"]);
   assert.equal(DEFAULT_KEYMAP.escape.default, "escape");
+});
+
+test("repeat (T): registry shape, match, conflict, override round-trip", () => {
+  resetAll();
+  applyOverrides({});
+  // registry shape — the ported T command is a first-class Tools entry
+  assert.equal(DEFAULT_KEYMAP.repeat.label, "Trace another like the selection");
+  assert.equal(DEFAULT_KEYMAP.repeat.category, "Tools");
+  assert.equal(DEFAULT_KEYMAP.repeat.default, "t");
+  // matching — exact, shift-insensitive fallback, dispatch-facing pin
+  assert.equal(matchCommand(ev("t")), "repeat");
+  assert.equal(matchCommand(ev("T", { shiftKey: true })), "repeat");
+  assert.equal(matches(ev("t"), "repeat"), true);
+  assert.equal(matches(ev("t"), "area"), false);
+  // conflicts — t is repeat's default; another command eyeing it collides; self never does
+  assert.equal(findConflict("t", {}, "area"), "repeat");
+  assert.equal(findConflict("t", {}, "repeat"), null);
+  // consumer round-trip — rebinding repeat frees t for another command
+  applyOverrides({ repeat: "x" });
+  assert.equal(matchCommand(ev("x")), "repeat");
+  assert.equal(matchCommand(ev("t")), null);
+  assert.equal(findConflict("t", { repeat: "x" }, "area"), null);
+  setOverride("repeat", "w");
+  assert.equal(matchCommand(ev("w")), "repeat");
+  resetCommand("repeat");
+  assert.equal(matchCommand(ev("t")), "repeat");
+  resetAll();
 });
 
 test("resolveKeymap: defaults spread, override wins", () => {

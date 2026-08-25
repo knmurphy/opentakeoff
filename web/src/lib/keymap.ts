@@ -84,6 +84,7 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandDef>> = Object.freez
   check:      { label: "Check dimension", category: "Tools", default: "k" },
   select:     { label: "Select", category: "Tools", default: "v" },
   symbol:     { label: "Symbol sweep", category: "Tools", default: "y" },
+  repeat:     { label: "Trace another like the selection", category: "Tools", default: "t" },
   curveFlip:  { label: "Straight ⇄ Curve", category: "Tools", default: "q" },
   gallery:    { label: "Sheet gallery", category: "Navigation", default: "g" },
   focusMode:  { label: "Focus mode", category: "Navigation", default: "f" },
