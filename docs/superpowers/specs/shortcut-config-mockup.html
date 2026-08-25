@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTakeoff — Keyboard shortcuts (mockup)</title>
+<style>
+:root{
+  --paper-cream:#ffffff; --paper-bright:#fafcfe; --paper-shadow:#e3e9f1;
+  --ink:#0d1526; --ink-soft:#2a3a52; --ink-muted:#5c6b82; --ink-faint:#d8e0ec;
+  --cobalt:#1f3fc7; --cobalt-deep:#152a8c;
+  --c-positive:#1f6b4a; --c-warning:#c47a10; --c-danger:#b03a26;
+  --tint-select:#e8eefc; --tint-08:rgba(31,63,199,.07); --tint-14:rgba(31,63,199,.13);
+  --scrim:rgba(13,21,38,.45); --shadow-2:0 12px 36px rgba(13,21,38,.16);
+  --f-display:"Bricolage Grotesque",system-ui,sans-serif;
+  --f-body:system-ui,sans-serif;
+  --f-mono:ui-monospace,"JetBrains Mono",monospace;
+  --r-1:3px; --fs-2xs:9px; --fs-xs:11px; --fs-s:12px; --fs-m:13px;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--f-body);background:linear-gradient(#edf1f7,#e6ebf3);color:var(--ink);
+  min-height:100vh;display:flex;flex-direction:column;gap:28px;align-items:center;padding:32px 16px}
+.note{font-family:var(--f-mono);font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted)}
+.panel{background:var(--paper-bright);color:var(--ink);border:1px solid var(--ink-faint);border-radius:0;
+  box-shadow:var(--shadow-2);padding:22px 26px 26px;width:min(720px,100%)}
+.panel h2{margin:0;font-family:var(--f-display);font-size:17px;letter-spacing:-.02em;font-weight:700}
+.panel .sub{margin:4px 0 0;font-size:var(--fs-s);color:var(--ink-soft);line-height:1.5}
+.t-label{font-family:var(--f-mono);font-weight:500;letter-spacing:.12em;text-transform:uppercase;font-size:10px;color:var(--ink-muted)}
+
+kbd{font-family:var(--f-mono);font-size:11px;padding:2px 6px;border:1px solid var(--ink-faint);
+  border-bottom-width:2px;border-radius:5px;background:var(--paper-bright);color:var(--ink);white-space:nowrap}
+.keygroup{display:inline-flex;gap:3px;align-items:center}
+
+/* help modal footer button (entry point) */
+.entry-btn{font-family:var(--f-mono);font-size:var(--fs-xs);letter-spacing:.02em;padding:6px 12px;border:1px solid var(--cobalt);
+  color:var(--cobalt);background:transparent;border-radius:0;cursor:pointer}
+.entry-btn:hover{background:var(--tint-08)}
+
+/* config modal */
+.scrim{position:fixed;inset:0;background:var(--scrim);display:flex;align-items:flex-start;justify-content:center;
+  padding:5vh 16px;overflow:auto}
+.modal{width:min(760px,100%);background:var(--paper-bright);color:var(--ink);border:1px solid var(--ink-faint);
+  border-radius:0;box-shadow:var(--shadow-2);padding:22px 26px 26px}
+.modhead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:4px}
+.modhead h2{font-family:var(--f-display);font-size:17px;letter-spacing:-.02em;margin:0}
+.close{background:none;border:none;color:var(--ink-soft);font-size:18px;cursor:pointer;line-height:1;padding:4px}
+.search{margin:14px 0 4px;width:100%;padding:6px 10px;border:1px solid var(--ink-faint);border-radius:0;
+  font-family:var(--f-mono);font-size:var(--fs-s);color:var(--ink);background:var(--paper-bright)}
+.search:focus{outline:none;border-color:var(--cobalt);box-shadow:0 0 0 3px rgba(31,63,199,.18)}
+.scroll{max-height:56vh;overflow:auto;margin-top:14px}
+.cat{margin:16px 0 6px;font-family:var(--f-mono);font-weight:500;letter-spacing:.12em;text-transform:uppercase;
+  font-size:10px;color:var(--ink-muted);padding-top:10px;border-top:1px solid var(--ink-faint)}
+.cat:first-child{border-top:none;padding-top:0;margin-top:0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 10px;border-radius:0;
+  cursor:pointer;border:1px solid transparent}
+.row:hover{background:var(--tint-08)}
+.row .lbl{font-size:var(--fs-m);color:var(--ink-soft)}
+.row .hint{font-family:var(--f-mono);font-size:var(--fs-2xs);color:var(--ink-muted);margin-left:8px}
+.row .right{display:flex;align-items:center;gap:10px}
+.reset{font-family:var(--f-mono);font-size:var(--fs-2xs);color:var(--cobalt);background:none;border:none;cursor:pointer;
+  padding:2px 4px;opacity:.85}
+.reset:hover{opacity:1;text-decoration:underline}
+
+/* capture state */
+.row.capturing{border:1px solid var(--cobalt);background:var(--tint-select)}
+.capture{display:inline-flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:var(--fs-s);
+  color:var(--cobalt);border:1px dashed var(--cobalt);border-radius:var(--r-1);padding:4px 10px}
+.caret{display:inline-block;width:7px;height:14px;background:var(--cobalt);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.capture-cancel{font-family:var(--f-mono);font-size:var(--fs-2xs);color:var(--ink-muted)}
+
+/* conflict banner */
+.conflict{margin-top:8px;padding:8px 12px;border-left:3px solid var(--c-danger);background:rgba(176,58,38,.06);
+  font-size:var(--fs-s);color:var(--ink-soft);display:flex;gap:8px;align-items:baseline}
+.conflict kbd{border-color:var(--c-danger);color:var(--c-danger)}
+.conflict .name{font-weight:600;color:var(--c-danger)}
+
+.modfoot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px;padding-top:14px;
+  border-top:1px solid var(--ink-faint);font-size:var(--fs-s);color:var(--ink-soft)}
+.btn-danger{font-family:var(--f-mono);font-size:var(--fs-xs);padding:6px 12px;border:1px solid var(--ink-faint);
+  background:transparent;color:var(--ink-soft);border-radius:0;cursor:pointer}
+.btn-danger:hover{border-color:var(--c-danger);color:var(--c-danger)}
+.fixed-note{font-size:var(--fs-s);color:var(--ink-muted);line-height:1.45;max-width:60%}
+</style>
+</head>
+<body>
+
+<div class="note">1 · Entry point — footer of the in-app guide (?)</div>
+<div class="panel">
+  <h2>How OpenTakeoff works</h2>
+  <p class="sub">A takeoff canvas that runs entirely in your browser — no account, no upload, no install.</p>
+  <div style="display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--ink-faint);align-items:center;justify-content:flex-end">
+    <span class="sub" style="margin:0;color:var(--ink-muted)">Want to change a key?</span>
+    <button class="entry-btn">Keyboard shortcuts…</button>
+  </div>
+</div>
+
+<div class="note">2 · Keyboard shortcuts — config modal</div>
+<div class="panel" style="padding:0">
+  <div class="modal" style="border:none;box-shadow:none;width:100%">
+    <div class="modhead">
+      <h2>Keyboard shortcuts</h2>
+      <button class="close" aria-label="Close">×</button>
+    </div>
+    <p class="sub" style="margin:2px 0 0">Click a binding, then press the key combination you want. Changes apply immediately and are saved to this browser.</p>
+    <input class="search" placeholder="Filter commands…" aria-label="Filter commands">
+
+    <div class="scroll">
+      <div class="cat">Tools</div>
+      <div class="row"><span class="lbl">One-Click Area</span><span class="keygroup"><kbd>O</kbd></span></div>
+      <div class="row"><span class="lbl">Area</span><span class="keygroup"><kbd>A</kbd></span></div>
+      <div class="row"><span class="lbl">Rectangle</span><span class="keygroup"><kbd>R</kbd></span></div>
+      <div class="row"><span class="lbl">Linear</span><span class="keygroup"><kbd>L</kbd></span></div>
+      <div class="row"><span class="lbl">Surface Area</span><span class="keygroup"><kbd>S</kbd></span></div>
+      <div class="row"><span class="lbl">Count</span><span class="keygroup"><kbd>C</kbd></span></div>
+      <div class="row"><span class="lbl">Deduct shape</span><span class="keygroup"><kbd>D</kbd></span></div>
+      <div class="row"><span class="lbl">Deduct rectangle</span><span class="right"><span class="keygroup"><kbd>⇧</kbd><kbd>D</kbd></span></span></div>
+      <div class="row"><span class="lbl">Highlighter</span><span class="keygroup"><kbd>H</kbd></span></div>
+      <div class="row"><span class="lbl">Dimension line</span><span class="keygroup"><kbd>N</kbd></span></div>
+      <div class="row"><span class="lbl">Check dimension</span><span class="keygroup"><kbd>K</kbd></span></div>
+      <div class="row"><span class="lbl">Select</span><span class="keygroup"><kbd>V</kbd></span></div>
+      <div class="row"><span class="lbl">Symbol sweep</span><span class="keygroup"><kbd>Y</kbd></span></div>
+      <div class="row"><span class="lbl">Straight ⇄ Curve <span class="hint">mid-trace</span></span><span class="keygroup"><kbd>Q</kbd></span></div>
+
+      <div class="cat">Navigation</div>
+      <div class="row"><span class="lbl">Sheet gallery</span><span class="keygroup"><kbd>G</kbd></span></div>
+      <div class="row"><span class="lbl">Focus mode</span><span class="keygroup"><kbd>F</kbd></span></div>
+      <div class="row"><span class="lbl">Open this guide</span><span class="keygroup"><kbd>?</kbd></span></div>
+
+      <div class="cat">Edit</div>
+      <div class="row"><span class="lbl">Undo</span><span class="keygroup"><kbd>⌘</kbd><kbd>Z</kbd></span></div>
+      <div class="row"><span class="lbl">Redo</span><span class="keygroup"><kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd></span></div>
+      <div class="row"><span class="lbl">Copy</span><span class="keygroup"><kbd>⌘</kbd><kbd>C</kbd></span></div>
+      <div class="row"><span class="lbl">Paste</span><span class="keygroup"><kbd>⌘</kbd><kbd>V</kbd></span></div>
+      <div class="row"><span class="lbl">Duplicate</span><span class="keygroup"><kbd>⌘</kbd><kbd>D</kbd></span></div>
+
+      <div class="cat">Escape hatch</div>
+      <div class="row"><span class="lbl">Back out one level</span><span class="keygroup"><kbd>Esc</kbd></span></div>
+      <div class="row"><span class="lbl">Commit · create · accept</span><span class="keygroup"><kbd>⏎</kbd></span></div>
+      <div class="row"><span class="lbl">Delete back one step</span><span class="keygroup"><kbd>⌫</kbd><span style="color:var(--ink-muted);font-family:var(--f-mono);font-size:11px">or</span><kbd>Delete</kbd></span></div>
+    </div>
+
+    <div class="modfoot">
+      <button class="btn-danger">Restore all defaults</button>
+      <span class="fixed-note">Fixed keys — Space (pan), hold&nbsp;M (dictation), hold&nbsp;⇧ (angle lock), ⌥/⇧‑click, and 1–9 (condition palette) — aren't listed here.</span>
+    </div>
+  </div>
+</div>
+
+<div class="note">3 · Capture state — “Deduct rectangle” clicked, waiting for keys</div>
+<div class="panel" style="padding:0">
+  <div class="modal" style="border:none;box-shadow:none;width:100%">
+    <div class="cat" style="margin:0">Tools</div>
+    <div class="row capturing">
+      <span class="lbl">Deduct rectangle</span>
+      <span class="right">
+        <span class="capture">Press keys… <span class="caret"></span></span>
+        <span class="capture-cancel">Esc to cancel</span>
+      </span>
+    </div>
+  </div>
+</div>
+
+<div class="note">4 · Conflict — user typed ⇧D, already bound to “Deduct rectangle”</div>
+<div class="panel" style="padding:0">
+  <div class="modal" style="border:none;box-shadow:none;width:100%">
+    <div class="cat" style="margin:0">Tools</div>
+    <div class="row capturing">
+      <span class="lbl">Highlighter</span>
+      <span class="right"><span class="keygroup"><kbd>⇧</kbd><kbd>D</kbd></span></span>
+    </div>
+    <div class="conflict">
+      <span><kbd>⇧</kbd><kbd>D</kbd> is already bound to</span>
+      <span class="name">Deduct rectangle</span>
+      <span>— press a different key, or Esc to cancel.</span>
+    </div>
+  </div>
+</div>
+
+<div class="note">5 · After a remap — a custom binding is shown with a reset affordance</div>
+<div class="panel" style="padding:0">
+  <div class="modal" style="border:none;box-shadow:none;width:100%">
+    <div class="cat" style="margin:0">Tools</div>
+    <div class="row">
+      <span class="lbl">Highlighter</span>
+      <span class="right"><span class="keygroup"><kbd>⌘</kbd><kbd>⇧</kbd><kbd>H</kbd></span><button class="reset">reset</button></span>
+    </div>
+    <div class="cat">Edit</div>
+    <div class="row"><span class="lbl">Undo</span><span class="keygroup"><kbd>⌘</kbd><kbd>Z</kbd></span></div>
+  </div>
+</div>
+
+</body>
+</html>
