@@ -178,8 +178,9 @@ Tile Pro (Laurel Creek), the names that map onto this feature:
   strips are Precision Tile Pro's words. This is the commercial form of "trim
   tile on selected edges," generalized to *bands*, not just perimeter edges.
 - **Obstructions** — tile *around* cabinets, registers, windows (Precision Tile
-  Pro step 2). OpenTakeoff already has the Eraser/deduct role; the layout engine
-  must cut the field around deductions, not merely subtract their area.
+  Pro step 2). A tile that straddles a hole must be cut to fit, and that cut
+  still consumes a whole tile (its offcut is largely waste) — so a hole adds cut
+  tiles that net-SF math would hide.
 - **Install phasing** — group rooms into phases and report per phase.
 - **Wall elevation design** — walls as multiple stacked panels/bands (the
   wall-tile projection problem, named).
@@ -246,8 +247,9 @@ counts and offcut reuse — "real tiles ordered vs naive waste," the exact thing
 
 ### E. Process & scope (commercial extras to weigh later)
 
-- **Obstructions** — the field must cut around deductions (registers, cabinets),
-  not just subtract their area. OpenTakeoff's Eraser role is the input.
+- **Obstructions** — a tile straddling a register or cabinet is cut to fit, and
+  that cut still consumes a full tile with mostly-waste offcut. Net SF
+  understates the tile count at holes; the cut count must see them.
 - **Install phasing** — group rooms into phases and report per phase.
 - **Wall elevation design** — walls as stacked panels/bands; the wall-tile
   projection problem, named and separate from floor field.
@@ -379,7 +381,7 @@ pure engine, drawn overlay, report `ctx`); its **problem shape is new** — 2D
 with rotation, motif super-cells, a 2D origin/edge-strategy search space, and
 trim/curb geometry with no precedent in this codebase. A mockup that proves only
 grid + origin drag on one convex room will feel done while hiding the features
-that carry estimator value: trim LF, deduct-hole clipping, concave L-rooms, and
+that carry estimator value: trim LF, hole cut accounting, concave L-rooms, and
 honest angled-pattern ordering.
 ### 7.2 Design recommendations from the architect review
 
@@ -420,8 +422,9 @@ honest angled-pattern ordering.
 
 - Origin/edge-strategy **solver** (centered symmetric band; "tile scrolling" =
   search origin for minimum cuts) — not just UI knobs.
-- **Deduct-hole clipping** — layout must cut around in-room holes, not only use
-  net SF.
+- **Hole cut accounting** — a tile cut to fit around an in-room hole still
+  consumes a full tile (mostly-waste offcut), so holes add cuts that net-SF math
+  hides; count them, not just the reduced net area.
 - **Wall-tile unwrap** — surface-area ring → 2D elevation strip with openings/
   niches; a separate feature from floor lattice.
 - **Band/border inset** — offset the interior polygon and lay the field inside
