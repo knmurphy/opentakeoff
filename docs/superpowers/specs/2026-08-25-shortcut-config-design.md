@@ -6,7 +6,7 @@
 
 ## 1. Problem
 
-Every shortcut in OpenTakeoff is hardcoded across ~5 separate `window.addEventListener("keydown")` handlers in `TakeoffCanvas.jsx`, with the *labels* already living as data in `canvasConstants.js` (`MEASURE_TOOLS`/`CUT_TOOLS`/`MARKUP_TOOLS` carry `shortcut` fields). There is no way for an estimator to change a binding. The motivating example from the product owner: estimators carry muscle memory where **Esc** drops back toward Select; in OpenTakeoff Esc already does "back out one level" (and it takes two presses to unwind deeply), but it is *not remappable* — and the owner's constraint is that remapping Esc must never "break the app."
+Every shortcut in OpenTakeoff is hardcoded across ~5 separate `window.addEventListener("keydown")` handlers in `TakeoffCanvas.jsx`, with the *labels* already living as data in `canvasConstants.js` (`MEASURE_TOOLS`/`CUT_TOOLS`/`MARKUP_TOOLS` carry `shortcut` fields). There is no way for an estimator to change a binding. The motivating example from the product owner: estimators carry muscle memory where **Esc** drops back toward Select; in OpenTakeoff Esc already does "back out one level" (and it takes two presses to unwind deeply), but it is *not remappable* — and the owner's constraint is that remapping Esc must never "break the app." Two asks are bundled: (1) make bindings remappable, and (2) make Esc land on the Select tool (§3a).
 
 ## 2. The core idea: a command model
 
@@ -50,6 +50,23 @@ Every remappable shortcut becomes a **named command**. A **binding** is one **ch
 
 **Fixed — not commands, not in the modal:** Space (hold-pan), hold-`M` (dictation), hold-`⇧` (angle lock), `⌥`-click and `⇧`-click (pointer gestures), digits `1`–`9` (positional condition palette), and scroll/zoom/pan gestures. The modal footer states this.
 
+## 3a. The Select floor — Esc lands on the Select tool
+
+The owner's motivating need is not only *remapping* Esc but what Esc *does*: estimators expect Esc to drop them back toward Select. Under the command model this is an isolated, one-line addition to the `escape` command's canvas handler.
+
+**Decision: keep the ladder.** The `escape` command's canvas handler retains its existing rung order — dismiss a pending agent offer → clear the One-Click selection → clear the picked vertex → clear everything else (trace, calibration, check, selection, markup draft, proposal, armed stamp, zone). The final "clear everything" rung additionally arms the Select tool. Net effect:
+
+- A stray Esc (nothing in progress) clears and selects in one press.
+- Backing out of a One-Click selection or a picked vertex takes one more Esc to reach the floor — the "sometimes two presses" muscle memory, now with a Select floor instead of a dead end.
+- A live trace is cleared *and* selects in the same press (the trace sits in the clear-everything rung, not a dedicated rung).
+
+The rejected alternative — Esc clears everything *and* selects unconditionally in one press — abandons a live trace in a single key instead of letting the estimator back out point-by-point; the ladder was kept for that muscle memory.
+
+Two safety properties keep this scoped:
+
+1. **Isolated to the canvas `escape` handler.** The other consumers of the `escape` trigger — sweep cancel, guide close, gallery close, menu close, navigator back — keep their own behavior and do NOT switch tools. A command determines *which key fires*; each handler keyed to it determines *what that key does* in its own context.
+2. **Composes with remapping.** Whatever key is bound to `escape` inherits the Select floor.
+
 ## 4. Chord grammar (the pure contract)
 
 A canonical chord string has a fixed modifier order and a lowercase key token:
@@ -60,9 +77,16 @@ chord := (mod|shift|alt) ("+" (mod|shift|alt))* "+" key | key
 
 - `mod` is the **primary modifier** — `⌘` on macOS (`metaKey`), `Ctrl` on Windows/Linux (`ctrlKey`). Both normalize to `mod`, exactly as today's handlers test `e.metaKey || e.ctrlKey` together. This is the same platform-independence `lib/keys.ts` already encodes for *labels*; here it is applied to *behavior*.
 - `shift` = `shiftKey`, `alt` = `altKey`.
-- Key token: single letters lowercase (`d`, `z`), digits as-is (`1`), named keys lowercase (`escape`, `enter`, `backspace`, `delete`, `space`, arrow keys, F-keys), punctuation as-is (`?`).
+- Key token: single letters lowercase (`d`, `z`), digits as-is (`1`), named keys lowercase (`escape`, `enter`, `backspace`, `delete`, `space`, arrow keys, F-keys), punctuation as-is (`?`). `?` is the one punctuation key whose physical `shiftKey` varies by keyboard layout (shift+`/` on US, unshifted elsewhere) — see the matching rule below.
 - **Modifier-only presses are not chords** — a chord requires a non-modifier key.
 - `normalizeEvent(e)` derives the canonical string from a `KeyboardEvent`-shaped object; `normalizeChord(str)` parses a stored string. Both must agree on one canonical form (the storage form and the runtime form are identical).
+
+**Matching** is a two-step lookup over the effective keymap:
+
+1. **Exact match** — normalize the event to its canonical chord and look it up.
+2. **Shift-insensitive fallback** — if nothing is bound to that chord and its only modifier is `shift`, drop the shift and look up again.
+
+This reproduces today's behavior exactly: `⇧D` resolves to `shift+d` (deduct-rect) at step 1, while `⇧A` misses step 1 (no `shift+a` binding) and falls back to `a` (area) at step 2; `⇧⌘Z` → `mod+shift+z` (redo); and the `?` key — physically shift+`/` on US layouts, unshifted elsewhere — reaches `guide` via the fallback regardless. A user who binds a command to `shift+a` makes `⇧A` resolve to *that* command (exact match wins). `mod` and `alt` are always exact — there is no fallback that drops them, mirroring today's `metaKey || ctrlKey || altKey` early-return.
 
 Display (in the modal, guide tables, tool labels) reuses `lib/keys.ts` vocabulary: `mod`→`⌘`/`Ctrl`, `shift`→`⇧`/`Shift`, `alt`→`⌥`/`Alt`, `escape`→`Esc`, `enter`→`⏎`/`Enter`, `backspace`→`⌫`/`Backspace`, `delete`→`Delete`.
 
