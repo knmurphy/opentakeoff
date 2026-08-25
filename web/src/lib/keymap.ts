@@ -54,7 +54,7 @@ export function normalizeChord(chord: string): string | null {
 }
 
 const GLYPH: Record<string, string> = { mod: "⌘", shift: "⇧", alt: "⌥", enter: "⏎", backspace: "⌫" };
-const PC: Record<string, string> = { mod: "Ctrl", shift: "Shift", alt: "Alt", enter: "Enter", backspace: "Backspace", delete: "Delete" };
+const PC: Record<string, string> = { mod: "Ctrl", shift: "Shift", alt: "Alt", enter: "Enter", backspace: "Backspace", escape: "Esc", delete: "Delete" };
 
 export function chordToKeys(chord: string, apple: boolean = typeof navigator === "undefined" ? false : /Mac|iPhone|iPad|iPod/i.test(navigator.platform)): string[] {
   return chord.split("+").map((p) => {
