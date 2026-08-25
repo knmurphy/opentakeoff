@@ -16,8 +16,38 @@
 import { useEffect } from "react";
 import { Z } from "../lib/ui.js";
 import { keyLabel, keyText, isApplePlatform } from "../lib/keys.ts";
+import { chordToKeys, matches } from "../lib/keymap.ts";
+import { useKeymap } from "../lib/useKeymap.js";
 
 const GUIDE_URL = "https://github.com/Kentucky-ai/opentakeoff/blob/main/docs/USER_GUIDE.md";
+
+// Command-backed shortcut rows — keyed by the row's description text in TOOLS/DRAW/VIEW.
+const COMMAND_ROW = {
+  "One-Click Area — click inside a room, it selects itself": "oneclick",
+  "Area": "area",
+  "Rectangle": "rect",
+  "Linear": "linear",
+  "Straight ⇄ Curve (mid-trace)": "curveFlip",
+  "Surface Area (walls)": "surface",
+  "Count": "count",
+  "Deduct shape (Cut Out)": "deduct",
+  "Deduct rectangle": "deduct-rect",
+  "Highlighter": "highlighter",
+  "Check a dimension against what the drawing says": "check",
+  "Dimension line — a standalone length label at the sheet's scale (markup, never counted)": "dimension",
+  "Select": "select",
+  "Sheet gallery": "gallery",
+  "Finish the shape. In One-Click: Create the selection": "commit",
+  "Back out one step — the last point, then the picked vertex, the region, the selected shape, the markup": "deleteBack",
+  "Mid-trace pops the last point; otherwise undo": "undo",
+  "Redo": "redo",
+  "Back out one level — vertex pick first, then anything in progress": "escape",
+  "Copy": "copy",
+  "Paste under the cursor": "paste",
+  "Duplicate": "duplicate",
+  "Focus mode — collapse the chrome, trade it for canvas height": "focusMode",
+  "Open this guide": "guide",
+};
 
 function Kbd({ children }) {
   return (
@@ -28,9 +58,22 @@ function Kbd({ children }) {
   );
 }
 
-function Keys({ combo }) {
+function Keys({ combo, chords, apple }) {
+  if (chords) {
+    return (
+      <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
+        {chords.map((chord, ci) => (
+          <span key={chord} style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
+            {ci > 0 && (
+              <span style={{ color: "var(--ink-muted)", fontFamily: "var(--f-mono)", fontSize: 11 }}>or</span>
+            )}
+            {chordToKeys(chord, apple).map((k, i) => <Kbd key={i}>{k}</Kbd>)}
+          </span>
+        ))}
+      </span>
+    );
+  }
   // Labels only — the handlers already treat ⌘ and Ctrl as one key. See lib/keys.ts.
-  const apple = isApplePlatform();
   return (
     <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
       {combo.map((k, i) => <Kbd key={i}>{keyLabel(k, apple)}</Kbd>)}
@@ -38,15 +81,22 @@ function Keys({ combo }) {
   );
 }
 
-function Table({ rows }) {
+function Table({ rows, keymap }) {
+  const apple = isApplePlatform();
   return (
     <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "7px 14px", alignItems: "baseline" }}>
-      {rows.map(([combo, what], i) => (
-        <div key={i} style={{ display: "contents" }}>
-          <div style={{ justifySelf: "start" }}><Keys combo={combo} /></div>
-          <div style={{ fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>{keyText(what)}</div>
-        </div>
-      ))}
+      {rows.map(([combo, what], i) => {
+        const cmdId = COMMAND_ROW[what];
+        const chords = cmdId ? keymap[cmdId] : null;
+        return (
+          <div key={i} style={{ display: "contents" }}>
+            <div style={{ justifySelf: "start" }}>
+              <Keys combo={combo} chords={chords} apple={apple} />
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.45 }}>{keyText(what)}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -101,7 +151,9 @@ export const VIEW = [
   [["?"], "Open this guide"],
 ];
 
-export default function UserGuide({ onClose }) {
+export default function UserGuide({ onClose, onOpenShortcuts }) {
+  const keymap = useKeymap();
+
   // The dialog closes ITSELF, and that is not a style preference. The canvas's
   // Escape chain lives in an effect that early-returns while the plan-set
   // gallery is up — so a guide dismissed from there would have swallowed the
@@ -111,7 +163,7 @@ export default function UserGuide({ onClose }) {
   // cannot also back out of a trace the user cannot see behind the overlay.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key !== "Escape") return;
+      if (!matches(e, "escape")) return;
       e.preventDefault();
       e.stopPropagation();
       onClose();
@@ -159,14 +211,29 @@ export default function UserGuide({ onClose }) {
           </ol>
         </Section>
 
-        <Section title="Tools"><Table rows={TOOLS} /></Section>
-        <Section title="Drawing & editing"><Table rows={DRAW} /></Section>
-        <Section title="Getting around"><Table rows={VIEW} /></Section>
+        <Section title="Tools"><Table rows={TOOLS} keymap={keymap} /></Section>
+        <Section title="Drawing & editing"><Table rows={DRAW} keymap={keymap} /></Section>
+        <Section title="Getting around"><Table rows={VIEW} keymap={keymap} /></Section>
 
         <div style={{ borderTop: "1px solid var(--ink-faint)", paddingTop: 14, fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.5 }}>
           This is the short version. The full manual covers conditions, markups and RFIs, revisions,
           the report and exports, the Agent panel, and driving OpenTakeoff from an AI agent over MCP —{" "}
           <a href={GUIDE_URL} target="_blank" rel="noreferrer" style={{ color: "var(--cobalt)" }}>read the complete guide</a>.
+          {onOpenShortcuts && (
+            <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", justifyContent: "flex-end" }}>
+              <span style={{ margin: 0, color: "var(--ink-muted)" }}>Want to change a key?</span>
+              <button
+                type="button"
+                onClick={() => { onOpenShortcuts(); onClose(); }}
+                style={{
+                  fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.02em", padding: "6px 12px",
+                  border: "1px solid var(--cobalt)", color: "var(--cobalt)", background: "transparent",
+                  borderRadius: 0, cursor: "pointer",
+                }}>
+                Keyboard shortcuts…
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
