@@ -12,7 +12,7 @@ the design.
 
 There is **no tile-patterning feature**. Waste is a hand-entered per-condition
 percentage, not layout-derived. But five existing systems are directly relevant
-either as building blocks or as the architectural template the feature should copy.
+as building blocks and precedents:
 
 ### 1.1 Hatch patterns — visual only, no geometry
 
@@ -303,9 +303,9 @@ Ordered roughly by dependency.
 
 2. **Data model.** Tile size and pattern today live in the grout material. A
    layout feature needs a tile *spec* (size, joint, pattern, origin, rotation,
-   edge strategy) — on the condition? A new "tile setup" object beside
-   `roll_setup`? Shared with grout so the two can't drift (the `CT-1` seed
-   already imports `GROUT_DEFAULTS` for exactly this reason)?
+   edge strategy) — on the condition, as a new `tile_setup` object that grout
+   geometry *references* rather than duplicates (the `CT-1` seed already imports
+   `GROUT_DEFAULTS` for exactly this drift reason)?
 
 3. **Which patterns in v1.** grid/brick/diagonal/herringbone/basketweave are
    proven by prior art; chevron/pinwheel/Versailles are motif extensions; modular
@@ -317,8 +317,8 @@ Ordered roughly by dependency.
 
 5. **Interaction model.** Grid designer as a separate modal, or inline docked
    panel like Roll? How does the estimator set origin/rotation — drag on canvas
-   (the roll-cut idiom) vs numeric fields? How do they mark "this edge gets
-   bullnose" — click edges, or auto-derive from exposure? ("Tile scrolling" from
+   (a drag gesture committing one undo command) vs numeric fields? How do they
+   mark "this edge gets bullnose" — click edges, or auto-derive from exposure? ("Tile scrolling" from
    PTP is a concrete answer to the origin question.)
 
 6. **Relationship to the hatch.** Does a tile layout *replace* the visual hatch
@@ -347,8 +347,8 @@ borrows only the codebase-wide convention (condition opt-in config → pure engi
   hatched/tinted, grout-true, over the committed rooms.
 - A docked **Tile panel** shows full/cut/corner counts, the cut list, trim LF,
   and corner-piece counts, numbered in install order.
-- **Edit mode** drags the origin / rotates the field (the roll-cut gesture),
-  committing one undoable command per gesture.
+- **Edit mode** drags the origin / rotates the field, committing one undoable
+  command per gesture.
 - Edge trim is assigned by selecting a room edge and tagging it (bullnose / cove /
   profile / threshold), or by accepting an auto-derivation the estimator corrects.
 
