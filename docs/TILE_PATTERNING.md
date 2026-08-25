@@ -125,29 +125,79 @@ It has **no trim/bullnose/cove/threshold/curb/edge treatment at all** — a "wal
 material is only a `perimeter × height` proxy. So even the best prior art stops
 short of the user's full list; the trim/edge/curb dimension is greenfield.
 
-### 2.2 Lighter references
+### 2.2 Generative / geometric pattern algorithms
 
-- **`foozmeat/tiles`** — a Python random color-mosaic generator (YAML → HTML).
-  3 stars. A pattern *renderer*, not a takeoff tool; not a model to copy.
-- **Commercial feature vocabularies** (closed source, useful only to confirm the
-  feature list estimators expect): TilePro Calculator, Herron, and Toolblocks
-  tile-layout tools (visual pattern planners with per-cut views); The EDGE,
-  MeasureSquare, and BuildVisionAI (pro tile takeoff with lineal trim/bullnose/
-  cove/threshold/niche quantities). They define the *words* — bullnose types, cove
-  base, thresholds, curbs, niches — not the algorithms.
+- **`ChortleMortal/TiledPatternMaker`** — C++ (Qt) port of Craig Kaplan's
+  **Taprats**, the seminal Islamic/Andalusian star-pattern tool. Implements
+  Hankin's "polygons-in-contact" method: from a tileable arrangement of regular
+  polygons, draw the star/rosette motif by extending edges to their contact
+  points, and fill the residual polygons. Ships hundreds of saved designs
+  (10-fold, 12-fold, 8-fold, 6-4-3 …) as XML parameter sets. This is the
+  algorithmic source for the **"very intricate" end** of the user's spectrum —
+  girih, quasi-crystalline, star-and-cross motifs. **License matters:** it is
+  GPL-2.0, so the *code* is off-limits for Apache-2.0 OpenTakeoff, but the
+  *methods* (Hankin, Lee) are published mathematics and re-implementable. Likely
+  a later, decorative phase — not v1 takeoff.
+- **`james-camilleri/madum-ts`** — TypeScript/Svelte SVG tiler for **irregular**
+  shapes using a "Wordle-style" packing algorithm (after Jonathan Feinberg's
+  *Beautiful Visualization* ch. 3): a `collision-map` + `scale-sequence` +
+  `svg-tiler` trio that grows and repels shapes into a randomized interlocking
+  layout. Relevant to the **randomized / percentage layouts** the commercial
+  tools expose (specify tile colors/sizes by %, output an installer-followable
+  random pattern). WTFPL. Algorithmically interesting; a distinct feature from
+  deterministic takeoff.
+- **`codebyjustin/Tile-floor-Background-Pattern-Pure-CSS`** — a single-file CSS
+  floor pattern. Visual only; no algorithm. Noted for completeness, not a model.
+
+### 2.3 Commercial feature vocabularies — what to mine, not what to copy
+
+Closed tools can't be copied, but their feature lists are the best map of *what
+estimators already expect*. Mined from MeasureSquare Stone & Tile and Precision
+Tile Pro (Laurel Creek), the names that map onto this feature:
+
+- **Pattern controls named explicitly:** *layout direction* (rotation) and
+  *pattern position / start point* (origin) are the two knobs every tool exposes —
+  the same pair `tiletakeoff` models as `angleDeg` + `origin`. They are the
+  concrete form of the user's edge-cut-strategy question.
+- **Accent tile replacement** — swap individual tiles in a running pattern with
+  an accent tile (MeasureSquare "tile replacement").
+- **Randomize by percentages** — specify tile colors/sizes as percentages and
+  emit a randomized layout for the installer (the `madum-ts` algorithm).
+- **Custom tile shapes** — hexagon, triangle, diamond, fan (MeasureSquare
+  "custom tile pattern").
+- **Borders / inserts / listellos / accent strips** — multiple borders and
+  inserts on a floor; listellos and deco strips on walls. This is the
+  commercial form of "trim tile on selected edges," generalized to *bands*, not
+  just perimeter edges.
+- **Obstructions** — tile *around* cabinets, registers, windows (Precision Tile
+  Pro step 2). OpenTakeoff already has the Eraser/deduct role; the layout engine
+  must cut the field around deductions, not merely subtract their area.
+- **Install phasing** — group rooms into phases and report per phase.
+- **Wall elevation design** — walls as multiple stacked panels/bands (the
+  wall-tile projection problem, named).
+- **"Tile scrolling" / optimal-layout finder** — PTP's drag-to-scroll the origin
+  until the cut pattern is best. A direct ergonomics hint for the grid designer.
+- **Quote generation** — exact tile count + SF + labor + thinset/grout. This is
+  OpenTakeoff's existing Report; the tile feature just has to feed it real counts.
 
 ---
 
 ## 3. Feature taxonomy — the "advanced options" decomposed
 
-The user's list, organized into four axes. Axes A–B are what `tiletakeoff`
-proves; axes C–D are where OpenTakeoff would exceed it.
+The user's list, organized into five axes. Axes A–B are what `tiletakeoff`
+proves; axes C–D are where OpenTakeoff would exceed it; axis E is commercial
+scope to weigh later.
 
 ### A. Pattern / layout (floor field, and later wall field)
 
 - Straight grid; running bond 50% / 33% (offset); diagonal 45°.
 - Herringbone, chevron, basketweave, checker, pinwheel/hopscotch, harlequin.
 - Modular/Versailles — a multi-size super-cell (16+16, 16+24, 24+24 …).
+- **Custom tile shapes** (commercial) — hexagon, triangle, diamond, fan.
+- **Accent tile replacement** (commercial) — swap a running tile for an accent
+  piece in a defined rhythm.
+- **Randomize-by-percentage** (commercial + `madum-ts`) — emit a randomized
+  interlocking layout from color/size percentages.
 - Controls: origin, rotation, joint included vs not, and (the user's exact
   question) **edge-cut strategy** — full tile from one corner (asymmetric cuts)
   vs uniform cut border / centered layout (symmetric band of cut tiles around the
@@ -157,6 +207,9 @@ proves; axes C–D are where OpenTakeoff would exceed it.
 
 - **Trim tile on selected edges** — field tile on the floor body, a different
   finish (bullnose/trim) on the exposed perimeter edges.
+- **Borders / inserts / listellos / accent strips** (commercial generalization) —
+  bands and inserts on a floor, deco strips on walls; the band form of "trim tile
+  on an edge," not just a perimeter course.
 - **Edge profiles** — metal (Schluter-style) or plastic/other-material trim
   pieces, linear, with corner/end caps (EA).
 - **Marble thresholds** — at doorways and finish transitions (geometry already
@@ -173,13 +226,23 @@ proves; axes C–D are where OpenTakeoff would exceed it.
 
 The room's cut plan is precise: where the layout starts, whether the boundary is
 a uniform cut band or a full tile in one corner, and whether a piece is a
-field/corner/cut piece (corner = touches two perpendicular room edges).
+field/corner/cut piece (corner = touches two perpendicular room edges). The two
+commercial knobs — *layout direction* and *pattern position/start point* — are
+exactly this.
 
 ### D. Waste-from-layout
 
 Replace (or supplement) the heuristic waste % with the real full/cut/corner
 counts and offcut reuse — "real tiles ordered vs naive waste," the exact thing
 `cutEngine.js` reports.
+
+### E. Process & scope (commercial extras to weigh later)
+
+- **Obstructions** — the field must cut around deductions (registers, cabinets),
+  not just subtract their area. OpenTakeoff's Eraser role is the input.
+- **Install phasing** — group rooms into phases and report per phase.
+- **Wall elevation design** — walls as stacked panels/bands; the wall-tile
+  projection problem, named and separate from floor field.
 
 ---
 
@@ -239,7 +302,8 @@ Ordered roughly by dependency.
 
 3. **Which patterns in v1.** grid/brick/diagonal/herringbone/basketweave are
    proven by prior art; chevron/pinwheel/Versailles are motif extensions; modular
-   multi-size is the hardest. Which ship first?
+   multi-size is the hardest; custom shapes and randomized layouts are a
+   different engine (`madum-ts`-style packing). Which ship first?
 
 4. **Trim depth.** Edge *derivation* alone is a substantial feature. How much of
    axis B in v1 — trim tile + edge profiles + thresholds first, curbs last?
@@ -247,7 +311,8 @@ Ordered roughly by dependency.
 5. **Interaction model.** Grid designer as a separate modal, or inline docked
    panel like Roll? How does the estimator set origin/rotation — drag on canvas
    (the roll-cut idiom) vs numeric fields? How do they mark "this edge gets
-   bullnose" — click edges, or auto-derive from exposure?
+   bullnose" — click edges, or auto-derive from exposure? ("Tile scrolling" from
+   PTP is a concrete answer to the origin question.)
 
 6. **Relationship to the hatch.** Does a tile layout *replace* the visual hatch
    for tile conditions (the drawn grid *is* the appearance), or complement it
