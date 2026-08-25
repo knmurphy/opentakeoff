@@ -34,6 +34,10 @@ import PlanNavigator from "../components/PlanNavigator.jsx";
 import ReportPanel from "../components/ReportPanel.jsx";
 import RevisionsPanel from "../components/RevisionsPanel.jsx";
 import UserGuide from "../components/UserGuide.jsx";
+import ShortcutConfig from "../components/ShortcutConfig.jsx";
+import { matchCommand, matches, chordToKeys } from "../lib/keymap.ts";
+import { loadKeybindOverrides } from "../lib/keybindStore.js";
+import { useKeymap } from "../lib/useKeymap.js";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
@@ -492,6 +496,12 @@ export default function TakeoffCanvas() {
     draftStatsRef.current.cross = dCross;
   }
   const [guideOpen, setGuideOpen] = useState(false);   // the in-app manual overlay (? / the toolbar button)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const keymap = useKeymap();
+  const shortcutLabel = (cmdId, fallback) => {
+    const chords = keymap[cmdId];
+    return chords?.length ? chordToKeys(chords[0]).join("") : fallback;
+  };
   const [proposal, setProposal] = useState(null);  // One-Click selection under review: { key, regions: [{kind:'pos'|'neg', seed, poly, area_sf, perim_lf}] } — panel-LOCAL px
   // ── in-canvas takeoff agent state ──────────────────────────────────────────
   // agentProposals are NOT shapes: committed truth stays committed. Each entry
@@ -1577,6 +1587,7 @@ export default function TakeoffCanvas() {
   };
   useEffect(() => {
     let off = false;
+    void loadKeybindOverrides();
     // templates load BEFORE annotations: hydrate's fresh-workspace seeding
     // reads templatesRef, so the library must be in hand first
     store.loadTemplates().catch(() => []).then((tpl) => {
@@ -2629,54 +2640,26 @@ export default function TakeoffCanvas() {
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, []);
 
-  // Single-letter tool shortcuts (STACK-style) — suppressed while typing or
-  // while a toolbar menu is open. ⌘-combos and 1–9 live in their own handlers.
+  // Remappable shortcuts — one keymap dispatch (tools, edit chords, escape ladder).
+  // Digits 1–9, Space-pan, and hold-M voice stay on separate fixed handlers.
+  const TOOL_COMMANDS = new Set([
+    "oneclick", "area", "rect", "linear", "surface", "count", "deduct", "deduct-rect",
+    "highlighter", "dimension", "check", "select", "symbol",
+  ]);
+  const NAV_COMMANDS = new Set(["gallery", "focusMode", "guide", "curveFlip"]);
   useEffect(() => {
     const onKey = (e) => {
       const tg = e.target.tagName;
       if (tg === "INPUT" || tg === "SELECT" || tg === "TEXTAREA") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (menuDepthRef.current > 0) return;
-      // "?" opens the manual. Here rather than in its own listener so it
-      // inherits this effect's guards — a "?" typed into a condition tag or
-      // with a toolbar menu open must not pop a dialog over the work.
-      if (e.key === "?") { e.preventDefault(); setGuideOpen(true); return; }
-      if (e.key === "Enter") {
-        // router offer confirm takes the key FIRST (RFC #59 slice 5): the
-        // offer is the most recent thing the user was told ⏎ does, and it
-        // auto-expires — so it can never contest ⏎ for long, and a pending
-        // agent-proposal accept resumes the key the moment the offer clears
-        if (agentOfferFnsRef.current?.pending()) { e.preventDefault(); agentOfferFnsRef.current.confirm(); return; }
-        if (tool === "oneclick" && proposal?.regions.length) { e.preventDefault(); createProposal(); return; }
-        const ok = !bowOpen && (((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2));
-        if (ok) { e.preventDefault(); finishShape(); return; }
-        // ⏎ with agent proposals pending on a visible sheet = accept them all —
-        // the agent's analogue of one-click's Create gate. Only fires when no
-        // trace/proposal claimed the key above, so mid-draw ⏎ is untouched.
-        if (agentProposals.some((p) => panelKeySet.has(p.sheet_id))) { e.preventDefault(); acceptAllVisibleAgentProposals(); }
-        return;
-      }
+      if (shortcutsOpen) return;
       const lower = e.key.toLowerCase();
-      if (viewRef.current === "gallery") return;
-      if (lower === "g") { setView("gallery"); return; }
-      if (lower === "f") { toggleFocusMode(); return; }
-      if (e.key === "D" && e.shiftKey) { setTool("deduct-rect"); return; }
-      // no `p` binding: pan is not a tool — drag open canvas, or Space/middle/right-drag
-      // Q with a bendable trace in flight flips the straight/curve switch
-      // instead of jumping to the Curve Line tool — switching tools mid-trace
-      // would abandon the points already placed, so this binding can only be
-      // an improvement on the one it shadows.
-      if (lower === "q" && CURVABLE.has(tool) && poly.length) { setCurveMode((c) => !c); return; }
-      // Symbol review (#264): while a sweep is under review the keyboard walks
-      // the questions — one keystroke per answer, taking priority over tool
-      // bindings (stopImmediatePropagation keeps the proposal-Enter handler,
-      // registered after this one, from double-acting).
+      // Symbol review (#264): sweep hoisted above matchCommand — Enter/Esc use live bindings.
       if (sweepRef.current) {
         const sw = sweepRef.current;
         const hasOpen = sw.questions.some((q) => q.state === "open");
-        if ((e.key === "Enter" || lower === "x") && hasOpen) {
+        if ((matches(e, "commit") || lower === "x") && hasOpen) {
           e.preventDefault(); e.stopImmediatePropagation();
-          const verdict = e.key === "Enter" ? "accepted" : "dismissed";
+          const verdict = matches(e, "commit") ? "accepted" : "dismissed";
           setSweep((s) => {
             const qs = s.questions.map((q, i) => (i === s.qIndex && q.state === "open" ? { ...q, state: verdict } : q));
             let j = s.qIndex;
@@ -2695,19 +2678,94 @@ export default function TakeoffCanvas() {
           });
           return;
         }
-        if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); setSweep(null); return; }
+        if (matches(e, "escape")) { e.preventDefault(); e.stopImmediatePropagation(); setSweep(null); return; }
       }
-      const map = { v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter", n: "dimension", y: "symbol" };
-      const t = map[lower];
-      if (t) setTool(t);
+      const cmd = matchCommand(e);
+      if (!cmd) return;
+      const inGallery = viewRef.current === "gallery";
+      if (cmd === "commit") {
+        // router offer confirm takes the key FIRST (RFC #59 slice 5): the
+        // offer is the most recent thing the user was told ⏎ does, and it
+        // auto-expires — so it can never contest ⏎ for long, and a pending
+        // agent-proposal accept resumes the key the moment the offer clears
+        if (agentOfferFnsRef.current?.pending()) { e.preventDefault(); agentOfferFnsRef.current.confirm(); return; }
+        if (tool === "oneclick" && proposal?.regions.length) { e.preventDefault(); createProposal(); return; }
+        const ok = !bowOpen && (((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2));
+        if (ok) { e.preventDefault(); finishShape(); return; }
+        // ⏎ with agent proposals pending on a visible sheet = accept them all —
+        // the agent's analogue of one-click's Create gate. Only fires when no
+        // trace/proposal claimed the key above, so mid-draw ⏎ is untouched.
+        if (agentProposals.some((p) => panelKeySet.has(p.sheet_id))) { e.preventDefault(); acceptAllVisibleAgentProposals(); }
+        return;
+      }
+      if (inGallery && cmd !== "gallery") {
+        if (cmd === "undo" || cmd === "redo" || cmd === "copy" || cmd === "paste" || cmd === "duplicate" || cmd === "escape" || cmd === "deleteBack") return;
+        if (TOOL_COMMANDS.has(cmd) || NAV_COMMANDS.has(cmd)) return;
+      }
+      if (cmd === "guide") {
+        e.preventDefault();
+        if (menuDepthRef.current > 0) return;
+        setGuideOpen(true);
+        return;
+      }
+      if (cmd === "gallery") {
+        if (!inGallery) setView("gallery");
+        return;
+      }
+      if (NAV_COMMANDS.has(cmd) || TOOL_COMMANDS.has(cmd)) {
+        if (menuDepthRef.current > 0) return;
+        if (cmd === "focusMode") { toggleFocusMode(); return; }
+        if (cmd === "curveFlip") {
+          if (CURVABLE.has(tool) && poly.length) setCurveMode((c) => !c);
+          return;
+        }
+        setTool(cmd);
+        return;
+      }
+      if (cmd === "undo" || cmd === "redo") {
+        e.preventDefault();
+        if (poly.length) dropLastPoint();
+        else if (cmd === "redo") redoShapeCommand();
+        else undoShapeCommand();
+        return;
+      }
+      if (cmd === "copy") {
+        if (selectedId) { e.preventDefault(); copySelected(); }
+        return;
+      }
+      if (cmd === "paste") {
+        if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); }
+        return;
+      }
+      if (cmd === "duplicate") {
+        if (selectedId) { e.preventDefault(); duplicateSelected(); }
+        return;
+      }
+      if (cmd === "escape") {
+        if (agentOfferFnsRef.current?.pending()) { agentOfferFnsRef.current.dismiss(); return; }
+        if (ocSel) { setOcSel(null); return; }
+        if (selVert != null) { setSelVert(null); return; }
+        const hadSomething = poly.length > 0 || calib.length > 0 || check.length > 0 || checkStated !== "" || scaleGuide || selectedId || selectedMarkupId || markupDraft || proposal || armedStamp || scheduleAnchor || symbolAnchor || alignPt || zoneCheck || hlRef.current;
+        clearPoly(); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); setSymbolAnchor(null); setAlignPt(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none";
+        if (!hadSomething) setTool("select");
+        return;
+      }
+      if (cmd === "deleteBack") {
+        e.preventDefault();
+        if (poly.length) { dropLastPoint(); }
+        else if (ocSel && proposal) { deleteSelectedOcVertex(); }
+        else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
+        else if (selVert != null && selectedId) { deleteSelectedShapeVertex(); }
+        else if (selectedId) { deleteSelected(); }
+        else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
+        else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
+        else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales]);
-  // ^ shapes/scales joined the deps with the agent accept path (the delete-handler
-  //   precedent): ⏎ accept dispatches an `add` against the CURRENT array, so a
-  //   shapes change with no other dep change must re-subscribe this handler.
+  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales, selectedId, selVert, selectedMarkupId, showMarkups, ocSel, approvals, groupSig, focusKey, shortcutsOpen, bowOpen]);
 
   // remember the last armed measure tool — the Measure menu face shows it
   useEffect(() => { if (MEASURE_TOOLS.some((t) => t.id === tool)) lastMeasureRef.current = tool; }, [tool]);
@@ -2723,6 +2781,7 @@ export default function TakeoffCanvas() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
+      if (shortcutsOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;   // let ⌘/Ctrl+1..9 (native tab switch) through — mirror the letter handler
       if (menuDepthRef.current > 0) return;              // a toolbar menu is open; digits are paused like the letter shortcuts
       const n = parseInt(e.key, 10);
@@ -2732,51 +2791,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [conditions, palette, tool, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Undo a wrong click: Backspace/Delete (or Cmd/Ctrl+Z) removes the last placed
-  // point; Escape cancels the whole in-progress shape.
-  useEffect(() => {
-    const onKey = (e) => {
-      const t = e.target.tagName;
-      if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
-      if (viewRef.current === "gallery") return;
-      if (e.key === "Backspace" || e.key === "Delete") {
-        e.preventDefault();
-        if (poly.length) { dropLastPoint(); }
-        else if (ocSel && proposal) { deleteSelectedOcVertex(); }
-        else if (proposal?.regions.length) { setProposal((pr) => { const rg = pr.regions.slice(0, -1); return rg.length ? { ...pr, regions: rg } : null; }); }
-        else if (selVert != null && selectedId) { deleteSelectedShapeVertex(); }
-        // route through deleteSelected — a reconciled Cut Out (#137) must
-        // revert its hole out of the parent, keyboard and menu alike
-        else if (selectedId) { deleteSelected(); }
-        else if (selectedMarkupId && showMarkups) { deleteMarkup(selectedMarkupId); setSelectedMarkupId(null); }
-        // pop ONLY the armed tool's pending points — calibrate and check both
-        // keep two-click state (calib points even render while another tool is
-        // armed), and an unguarded pop used to silently cross-slice the other
-        // tool's points, on-screen or hidden
-        else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
-        else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { if (agentOfferFnsRef.current?.pending()) { agentOfferFnsRef.current.dismiss(); } else if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { clearPoly(); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); setSymbolAnchor(null); setAlignPt(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
-      // ⌘Z: the drawing context wins — mid-trace it still pops the last placed
-      // point (with or without ⇧, matching the old behavior byte-for-byte);
-      // only with no trace in progress does the command stack engage
-      // (⌘Z = undo, ⇧⌘Z = redo).
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        if (poly.length) dropLastPoint();
-        else if (e.shiftKey) redoShapeCommand();
-        else undoShapeCommand();
-      }
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") { if (selectedId) { e.preventDefault(); copySelected(); } }
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") { if (clipRef.current.length) { e.preventDefault(); pasteClipboard(); } }
-      else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { if (selectedId) { e.preventDefault(); duplicateSelected(); } }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // approvals is a real dep: ⌘Z's undoShapeCommand closes over it (the
-    // family branch), and a stale capture would undo against a pre-seal array.
-  }, [tool, selectedId, selVert, selectedMarkupId, showMarkups, poly, proposal, ocSel, shapes, approvals, sheetKey, groupSig, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [conditions, palette, tool, selectedId, shortcutsOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The typed "drawing says" value belongs to ONE completed two-point check.
   // The moment the measurement is no longer complete — third-click restart,
@@ -5866,7 +5881,7 @@ export default function TakeoffCanvas() {
   voiceFnsRef.current = { start: voiceHoldStart, end: voiceHoldEnd };
   useEffect(() => {
     const down = (e) => {
-      if (e.key === "Escape" && voiceCaptureRef.current) { voiceFnsRef.current.end(false); return; }
+      if (matches(e, "escape") && voiceCaptureRef.current) { voiceFnsRef.current.end(false); return; }
       const tg = e.target.tagName;
       if (tg === "INPUT" || tg === "SELECT" || tg === "TEXTAREA") return;
       if (menuDepthRef.current > 0) return;
@@ -6972,12 +6987,13 @@ export default function TakeoffCanvas() {
   // filled cobalt (+ HUD glow) when armed. Tooltip = label · shortcut.
   const railTile = (id, iconName, label, shortcut, onArm, opts = {}) => {
     const armed = opts.armed ?? (tool === id);
+    const keyLabel = shortcutLabel(id, shortcut);
     return (
       <button key={id} type="button" onClick={onArm || (() => setTool(id))}
-        title={shortcut ? keyText(`${label} · ${shortcut}`) : label} aria-label={label} aria-pressed={armed}
+        title={keyLabel ? keyText(`${label} · ${keyLabel}`) : label} aria-label={label} aria-pressed={armed}
         style={{ position: "relative", width: "var(--ctl-l)", height: "var(--ctl-l)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid transparent", borderRadius: "var(--r-1)", background: armed ? (opts.tint || "var(--cobalt)") : "transparent", color: armed ? "var(--accent-contrast)" : (opts.tint || "var(--ink)"), boxShadow: armed ? "var(--glow)" : "none", cursor: "pointer", lineHeight: 1 }}>
         <Icon name={iconName} size={17} />
-        {shortcut && <span aria-hidden="true" style={{ position: "absolute", bottom: 1, right: 3, fontFamily: "var(--f-mono)", fontSize: 8, color: armed ? "var(--accent-contrast)" : "var(--ink-muted)", opacity: armed ? 0.75 : 1 }}>{keyText(shortcut)}</span>}
+        {keyLabel && <span aria-hidden="true" style={{ position: "absolute", bottom: 1, right: 3, fontFamily: "var(--f-mono)", fontSize: 8, color: armed ? "var(--accent-contrast)" : "var(--ink-muted)", opacity: armed ? 0.75 : 1 }}>{keyText(keyLabel)}</span>}
       </button>
     );
   };
@@ -7010,7 +7026,7 @@ export default function TakeoffCanvas() {
     : { id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
   if (!sheetGroup.length && lastGroup.length >= 2) sheetMenuItems.push({ id: "regroup", label: `Regroup (${lastGroup.length})`, title: `Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`, onSelect: regroup });
   if (sheetMenuItems.length) sheetMenuItems.push("divider");
-  sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
+  sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: shortcutLabel("gallery", "G"), onSelect: () => setView("gallery") });
   sheetMenuItems.push({
     id: "export-takeoff", icon: "document", label: "Export takeoff…",
     title: "Save this whole takeoff to a JSON file on your computer — every shape, condition, scale, markup and RFI, in the app's own format. Import takeoff reads it back as an editable takeoff (the plan PDF isn't in the file: open it first, then import).",
@@ -7105,7 +7121,7 @@ export default function TakeoffCanvas() {
   for (const s of STANDARD_SCALES) scaleItems.push({ id: s.label, label: s.label, active: stdValue === s.label, onSelect: () => { rescaleSheet(focusPanel.key, s.upp); setScaleSources((sc) => ({ ...sc, [focusPanel.key]: "standard" })); showScaleGuide(focusPanel.key, s.upp, s.label); } });
   scaleItems.push("divider");
   scaleItems.push({ id: "calibrate", icon: "calibrate", label: "Calibrate two points…", title: "Calibrate — click two points of a known dimension", active: tool === "calibrate", onSelect: () => setTool("calibrate") });
-  scaleItems.push({ id: "check", icon: "check", label: "Check a dimension…", shortcut: "K", title: "Check a dimension (K) — click both ends of a printed dimension string; compares the measured length against what the drawing says", active: tool === "check", onSelect: () => setTool("check") });
+  scaleItems.push({ id: "check", icon: "check", label: "Check a dimension…", shortcut: shortcutLabel("check", "K"), title: "Check a dimension (K) — click both ends of a printed dimension string; compares the measured length against what the drawing says", active: tool === "check", onSelect: () => setTool("check") });
   scaleItems.push({ note: "Remembered per sheet." });
 
   // One-Click fill sensitivity — lives in the render menu now, so arming
@@ -7237,20 +7253,20 @@ export default function TakeoffCanvas() {
             onOpenChange={onMenuDepth}
             face={<span>Edit</span>}
             items={[
-              { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
-              { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
-              { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
+              { id: "copy", icon: "copy", label: "Copy", shortcut: shortcutLabel("copy", "⌘C"), disabled: !selectedId, onSelect: copySelected },
+              { id: "paste", icon: "paste", label: "Paste", shortcut: shortcutLabel("paste", "⌘V"), disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
+              { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: shortcutLabel("duplicate", "⌘D"), disabled: !selectedId, onSelect: duplicateSelected },
               "divider",
               { id: "flipH", label: "Flip Horizontal", disabled: !selectedId, onSelect: () => flipSelected("h") },
               { id: "flipV", label: "Flip Vertical", disabled: !selectedId, onSelect: () => flipSelected("v") },
               { id: "tidy", label: "Tidy shape", disabled: !selectedId, onSelect: tidySelected },
               "divider",
-              { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
-              { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: dropLastPoint },
+              { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: shortcutLabel("commit", "↵"), disabled: !finishOk, onSelect: finishShape },
+              { id: "undopt", icon: "undo", label: "Undo last point", shortcut: shortcutLabel("undo", "⌘Z"), disabled: !poly.length, onSelect: dropLastPoint },
               { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
-              { id: "redo", label: "Redo", shortcut: "⇧⌘Z", onSelect: redoShapeCommand },
+              { id: "redo", label: "Redo", shortcut: shortcutLabel("redo", "⇧⌘Z"), onSelect: redoShapeCommand },
               "divider",
-              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
+              { id: "del", icon: "close", label: "Delete selected", shortcut: shortcutLabel("deleteBack", "⌫"), disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
             ]}
           />
         </>)}
@@ -7374,7 +7390,7 @@ export default function TakeoffCanvas() {
           onOpenChange={onMenuDepth}
           face={<span style={{ fontWeight: 700, letterSpacing: "0.08em" }}>⋯</span>}
           items={[
-            { id: "guide", label: "How OpenTakeoff works", shortcut: "?", onSelect: () => setGuideOpen(true) },
+            { id: "guide", label: "How OpenTakeoff works", shortcut: shortcutLabel("guide", "?"), onSelect: () => setGuideOpen(true) },
             { id: "theme", label: theme === "dark" ? "Light chrome" : "Dark chrome", onSelect: toggleTheme },
             { section: "Drawing style" },
             { id: "drawstyle", custom: drawStyleRow },
@@ -7600,7 +7616,7 @@ export default function TakeoffCanvas() {
              face={<Icon name="markup" size={17} />}
              items={[
                { section: "Markup — notes on the plan, never measured" },
-               ...MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } })),
+               ...MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: shortcutLabel(t.id, t.shortcut), active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } })),
              ]}
            />
            {/* highlighter style popover — fixed beside the rail while armed
@@ -9172,7 +9188,8 @@ export default function TakeoffCanvas() {
           re-reads immediately). */}
       {showAiSettings && <AiSettings onClose={() => setShowAiSettings(false)} />}
       {/* the manual, last in the tree so it sits above every panel and dock */}
-      {guideOpen && <UserGuide onClose={() => setGuideOpen(false)} />}
+      {guideOpen && <UserGuide onClose={() => setGuideOpen(false)} onOpenShortcuts={() => { setGuideOpen(false); setShortcutsOpen(true); }} />}
+      {shortcutsOpen && <ShortcutConfig onClose={() => setShortcutsOpen(false)} />}
     </div>
   );
 }
