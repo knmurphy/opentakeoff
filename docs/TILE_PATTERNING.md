@@ -86,8 +86,9 @@ trim derivation, and layout-derived waste.
 ## 2. Prior art
 
 ### 2.1 `moshegluck/tiletakeoff` (forked: `knmurphy/tiletakeoff`) — the reference
-React + Vite, pure engine layer (no DOM) with an ~84-test Vitest suite (README
-says 82). **License: not declared** — no LICENSE file, no `license` field in
+React + Vite, pure engine layer (no DOM) with an 82-engine-test Vitest suite (84
+total in `test/` once the 7 canvasUtils UI tests are counted). **License: not
+declared** — no LICENSE file, no `license` field in
 `package.json`, GitHub reports none. Treat it as proprietary until the author
 states one; it cannot be assumed Apache-2.0-compatible. This is the closest
 thing to what the feature wants, and it is worth reading
@@ -257,23 +258,25 @@ counts and offcut reuse — "real tiles ordered vs naive waste," the exact thing
 
 Ordered roughly by dependency.
 
-1. **Layout engine.** Pattern → tile placements over the ring. Lattice patterns
-   (grid, brick) are pure grids; motif patterns (herringbone, basketweave,
-   chevron, pinwheel, Versailles) are multi-tile super-cells tiled like a lattice.
-   Output: tile quads in feet (grout-inclusive), anchored to an origin, with
-   rotation. Straight port of `layouts.js`, extended with a motif abstraction and
-   the centered-layout option.
+1. **Layout engine.** Pattern → tile placements over the ring, behind one
+   `generateLayout` API with three generators (see §7.2): lattice (grid/brick),
+   motif (herringbone, basketweave), and — later — modular/multi-SKU and
+   non-rectangular (hex/penny). Output: tile quads in feet (grout-inclusive),
+   anchored to an origin, with rotation. Reimplement the `layouts.js` *approach*
+   (the code is license-unresolved), extended with a centered-layout option.
 
-2. **Cut classification + sizing.** Point-in-polygon corner test for full/cut/out;
-   polygon clipping (Sutherland–Hodgman, or Greiner–Hormann when concave-room
-   exactness matters) for the installed fragment → cut-piece dimensions. Corner
-   detection: a cut tile touching two near-perpendicular room edges is a corner
-   piece (relevant for trim derivation and the cut sheet).
+2. **Cut classification + sizing.** General polygon intersection (tile rect →
+   rotated-rect polygon → intersect room) for the installed fragment → cut-piece
+   dimensions. Corner = edge-contact with the room boundary, not a corner
+   point-in-polygon test (which misreads diagonal slivers). Inset
+   `max(joint/2, ε·min(w,h))` in feet. (tiletakeoff's own SH-on-concave caveat
+   calls it "approximate"; a correct engine needs a true intersection — §7.2.)
 
-3. **Offcut redistribution.** The `cutEngine.js` model — full/cut separation,
-   offcut pool, first-fit vs best-fit-decreasing, grain-lock, sliver threshold.
-   This is the single highest-value piece: it converts "waste %" into a real
-   tile order and produces the installer cut sheet.
+3. **Offcut redistribution (gated, not v1).** The `cutEngine.js` model — full/cut
+   separation, offcut pool, first-fit vs best-fit-decreasing, grain-lock, sliver
+   threshold. Valuable but **not the first slice**: ship layout + naive cut counts
+   + pattern-aware waste% first, then add the offcut pool as gated v1.5 (see
+   §7.2 and Q8).
 
 4. **Edge/trim derivation.** From a committed room ring: classify each perimeter
    edge by exposure (which edges take bullnose/trim/cove), sum trim LF per edge
@@ -329,9 +332,10 @@ Ordered roughly by dependency.
    `edit_condition`). Should tile layout be agent-drivable the same way, or is
    v1 canvas-only?
 
-8. **Offcut reuse or waste only?** Adopt the cut-redistribution engine (the
-   highest-value, most-algorithmically-involved piece), or ship layout + waste
-   first and add reuse later?
+8. **Offcut reuse — when, not whether.** Layout always yields both installed
+   counts and a naive order baseline; offcut reuse is a refinement on top. Does
+   v1 ship layout + naive cut counts + pattern-aware waste% and defer the offcut
+   pool to v1.5, or does it land in v1 behind a `reuse_mode` gate?
 
 ---
 
@@ -377,8 +381,7 @@ trim/curb geometry with no precedent in this codebase. A mockup that proves only
 grid + origin drag on one convex room will feel done while hiding the features
 that carry estimator value: trim LF, deduct-hole clipping, concave L-rooms, and
 honest angled-pattern ordering.
-
-### 7.2 Concrete corrections from the review
+### 7.2 Design recommendations from the architect review
 
 - **Layout-state ownership.** Roll stores per-shape `roll_layout` overrides;
   tile origin/rotation is usually *condition-scoped* (all rooms share a field
