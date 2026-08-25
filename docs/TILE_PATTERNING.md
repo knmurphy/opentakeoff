@@ -38,25 +38,26 @@ Tile size is therefore **not a first-class property of the condition** — it is
 buried inside a grout material row. The `CT-1` seed (`web/src/lib/canvasConstants.js`)
 defaults to `12×24×3/8″ @ 1/8″`, but only as a string in the grout note.
 
-### 1.3 Roll-goods layout engine — the template to copy
+### 1.3 Roll goods — a precedent for *wiring*, not a template for tile
 
-`web/src/lib/rollgoods.js` + `rollTakeoff.js` is the closest architectural analog
-to a tile-layout engine, and the feature should follow its shape:
+`web/src/lib/rollgoods.js` + `rollTakeoff.js` is the one existing feature that
+derives quantities from a *figured layout* rather than a factor off area. It is
+worth reading for its plumbing, not as a model to copy:
 
 - A condition **opts in** with a setup object (`roll_setup`: material class, roll
   width, max length, allowances, direction).
 - A **pure engine** figures the layout over the condition's floor-area rings:
   lanes, seams, multi-roll splits, order footage.
-- The canvas **draws the cuts to scale** over the rooms in material-true colors,
-  numbered in cutting order.
-- Cuts are **editable** (drag/resize/reset), stored as `roll_layout` on the shape
-  via an undoable `rollcut` command.
-- A **docked panel** shows the cut list nested on the roll; report columns
-  (`roll:order_lf`, `roll:rolls`, `roll:seam_lf`) flow into the Report/CSV/XLSX.
+- The canvas **draws the result to scale**, and a **docked panel** + report
+  columns (`roll:order_lf`, `roll:rolls`, `roll:seam_lf`) surface it.
+- Edits ride an undoable command (`rollcut`).
 
-Seam LF is the instructive precedent: a quantity that is *not* a factor off area,
-but a property of the figured layout. A tile feature's "real tiles vs naive waste"
-is the same idea one layer up.
+That shape — opt-in config on a condition → pure engine → drawn overlay →
+report seam — is **codebase-wide convention, not roll-goods-specific**: seam LF,
+transitions, and the marked set all follow the same "pure engine feeds the
+report" seam. Tile shares this generic plumbing and **nothing else**: roll goods
+is 1D strip packing, tile is a 2D lattice/motif problem. A tile-layout engine is
+new code, not an adaptation of `rollgoods.js`.
 
 ### 1.4 Roles, conditions, transitions
 
@@ -336,14 +337,14 @@ Ordered roughly by dependency.
 
 ## 6. Tool ergonomics — the grid-designer sketch
 
-Not a spec, a direction to pressure-test. The strong hypothesis: **a tile setup
-follows the roll-goods pattern**, not a brand-new paradigm.
+Not a spec, a direction to pressure-test. Tile layout is a **new engine** — it
+borrows only the codebase-wide convention (condition opt-in config → pure engine
+→ drawn overlay → report seam), not roll goods specifically.
 
-- A condition opts into a **tile setup** (beside `roll_setup`): tile spec, pattern,
-  origin, rotation, edge-cut strategy.
+- A condition opts into a **tile setup**: tile spec, pattern, origin, rotation,
+  edge-cut strategy.
 - The engine figures the layout; the canvas draws full tiles solid and cut tiles
-  hatched/tinted, grout-true, over the committed rooms — exactly how roll cuts
-  draw today.
+  hatched/tinted, grout-true, over the committed rooms.
 - A docked **Tile panel** shows full/cut/corner counts, the cut list, trim LF,
   and corner-piece counts, numbered in install order.
 - **Edit mode** drags the origin / rotates the field (the roll-cut gesture),
@@ -368,16 +369,16 @@ input the architect surfaced, and the residual research gaps.
 
 ### 7.1 The single biggest architectural risk
 
-The roll-goods template transfers its *wiring* (opt-in setup on condition, pure
-engine, scaled overlay, undoable edits, report `ctx`), but **not its problem
-shape**. Roll goods is 1D strip packing with O(lanes) rectangles; tile is 2D
+The single biggest risk is underestimating the gap between tile and any existing
+feature. Tile shares only the generic plumbing (opt-in config on a condition,
+pure engine, drawn overlay, report `ctx`); its **problem shape is new** — 2D
 with rotation, motif super-cells, a 2D origin/edge-strategy search space, and
-trim/curb geometry with no roll analog. A mockup that proves only grid + origin
-drag on one convex room will feel done while hiding the features that carry
-estimator value: trim LF, deduct-hole clipping, concave L-rooms, and honest
-angled-pattern ordering.
+trim/curb geometry with no precedent in this codebase. A mockup that proves only
+grid + origin drag on one convex room will feel done while hiding the features
+that carry estimator value: trim LF, deduct-hole clipping, concave L-rooms, and
+honest angled-pattern ordering.
 
-### 7.2 Where the analogy breaks — concrete corrections
+### 7.2 Concrete corrections from the review
 
 - **Layout-state ownership.** Roll stores per-shape `roll_layout` overrides;
   tile origin/rotation is usually *condition-scoped* (all rooms share a field
