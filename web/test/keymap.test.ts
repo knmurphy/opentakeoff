@@ -71,6 +71,8 @@ test("chordToKeys: display tokens, platform-aware", () => {
   assert.deepEqual(chordToKeys("shift+d", false), ["Shift", "D"]);
   assert.deepEqual(chordToKeys("mod+z", true), ["⌘", "Z"]);
   assert.deepEqual(chordToKeys("mod+z", false), ["Ctrl", "Z"]);
+  assert.deepEqual(chordToKeys("escape", false), ["Esc"]);
+  assert.deepEqual(chordToKeys("delete", true), ["Delete"]);
   assert.deepEqual(chordToKeys("escape", true), ["Esc"]);
   assert.deepEqual(chordToKeys("enter", true), ["⏎"]);
   assert.deepEqual(chordToKeys("backspace", true), ["⌫"]);
