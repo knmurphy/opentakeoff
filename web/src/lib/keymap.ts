@@ -66,3 +66,92 @@ export function chordToKeys(chord: string, apple: boolean = typeof navigator ===
     return PC[p] ?? (p.length === 1 ? p.toUpperCase() : p);
   });
 }
+
+// ── command registry ─────────────────────────────────────────────────────────
+export interface CommandDef { label: string; category: Category; default: string | string[]; }
+
+export const DEFAULT_KEYMAP: Readonly<Record<string, CommandDef>> = Object.freeze({
+  oneclick:   { label: "One-Click Area", category: "Tools", default: "o" },
+  area:       { label: "Area", category: "Tools", default: "a" },
+  rect:       { label: "Rectangle", category: "Tools", default: "r" },
+  linear:     { label: "Linear", category: "Tools", default: "l" },
+  surface:    { label: "Surface Area", category: "Tools", default: "s" },
+  count:      { label: "Count", category: "Tools", default: "c" },
+  deduct:     { label: "Deduct shape", category: "Tools", default: "d" },
+  "deduct-rect": { label: "Deduct rectangle", category: "Tools", default: "shift+d" },
+  highlighter:{ label: "Highlighter", category: "Tools", default: "h" },
+  dimension:  { label: "Dimension line", category: "Tools", default: "n" },
+  check:      { label: "Check dimension", category: "Tools", default: "k" },
+  select:     { label: "Select", category: "Tools", default: "v" },
+  symbol:     { label: "Symbol sweep", category: "Tools", default: "y" },
+  curveFlip:  { label: "Straight ⇄ Curve", category: "Tools", default: "q" },
+  gallery:    { label: "Sheet gallery", category: "Navigation", default: "g" },
+  focusMode:  { label: "Focus mode", category: "Navigation", default: "f" },
+  guide:      { label: "Open this guide", category: "Navigation", default: "?" },
+  undo:       { label: "Undo", category: "Edit", default: "mod+z" },
+  redo:       { label: "Redo", category: "Edit", default: "mod+shift+z" },
+  copy:       { label: "Copy", category: "Edit", default: "mod+c" },
+  paste:      { label: "Paste", category: "Edit", default: "mod+v" },
+  duplicate:  { label: "Duplicate", category: "Edit", default: "mod+d" },
+  escape:     { label: "Back out one level · drop to Select", category: "Escape hatch", default: "escape" },
+  commit:     { label: "Commit · create · accept", category: "Escape hatch", default: "enter" },
+  deleteBack: { label: "Delete back one step", category: "Escape hatch", default: ["backspace", "delete"] },
+});
+
+// ── resolution & conflict ─────────────────────────────────────────────────────
+export function resolveKeymap(overrides: Record<string, string>): Record<string, string[]> {
+  const eff: Record<string, string[]> = {};
+  for (const [id, def] of Object.entries(DEFAULT_KEYMAP)) {
+    const bound = overrides[id] ?? def.default;
+    eff[id] = Array.isArray(bound) ? bound : [bound];
+  }
+  return eff;
+}
+
+function reverseIndex(eff: Record<string, string[]>): Map<string, string> {
+  const idx = new Map<string, string>();
+  for (const [id, chords] of Object.entries(eff)) for (const c of chords) if (!idx.has(c)) idx.set(c, id);
+  return idx;
+}
+
+// A chord collides if the EFFECTIVE map already assigns it to another command.
+export function findConflict(chord: string, overrides: Record<string, string>, excludeId: string): string | null {
+  const eff = resolveKeymap(overrides);
+  const idx = reverseIndex(eff);
+  const hit = idx.get(chord);
+  return hit && hit !== excludeId ? hit : null;
+}
+
+// ── live keymap (module-level binding, like `export let store` in store.js) ──
+let overrides: Record<string, string> = {};
+let loaded = false;   // flips true when applyOverrides first runs (the startup load-complete gate)
+const listeners = new Set<() => void>();
+function notify() { for (const fn of listeners) fn(); }
+
+export function getOverrides(): Record<string, string> { return { ...overrides }; }
+export function isKeymapLoaded(): boolean { return loaded; }
+export function applyOverrides(next: Record<string, string>): void { overrides = { ...next }; loaded = true; notify(); }
+export function setOverride(commandId: string, chord: string): void { overrides = { ...overrides, [commandId]: chord }; notify(); }
+export function resetCommand(commandId: string): void { if (!(commandId in overrides)) return; const n = { ...overrides }; delete n[commandId]; overrides = n; notify(); }
+export function resetAll(): void { if (Object.keys(overrides).length === 0) return; overrides = {}; notify(); }
+export function subscribe(fn: () => void): () => void { listeners.add(fn); return () => listeners.delete(fn); }
+
+// ── matching ─────────────────────────────────────────────────────────────────
+function commandForChord(eff: Record<string, string[]>, chord: string): string | null {
+  const idx = reverseIndex(eff);
+  const hit = idx.get(chord);
+  if (hit) return hit;
+  const parts = chord.split("+");
+  if (parts.length === 2 && parts[0] === "shift") return idx.get(parts[1]) ?? null; // shift-insensitive fallback
+  return null;
+}
+
+export function matchCommand(e: EventLike): string | null {
+  const chord = normalizeEvent(e);
+  if (!chord) return null;
+  return commandForChord(resolveKeymap(overrides), chord);
+}
+
+export function matches(e: EventLike, commandId: string): boolean {
+  return matchCommand(e) === commandId;
+}

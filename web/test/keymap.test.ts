@@ -1,6 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeChord, normalizeEvent, isModifierKey, chordToKeys } from "../src/lib/keymap.ts";
+import {
+  normalizeChord,
+  normalizeEvent,
+  isModifierKey,
+  chordToKeys,
+  DEFAULT_KEYMAP,
+  resolveKeymap,
+  findConflict,
+  matchCommand,
+  matches,
+  getOverrides,
+  isKeymapLoaded,
+  applyOverrides,
+  setOverride,
+  resetCommand,
+  resetAll,
+} from "../src/lib/keymap.ts";
 
 const ev = (key: string, m: Partial<{ shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean }> = {}) =>
   ({ key, shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, ...m });
@@ -78,4 +94,75 @@ test("chordToKeys: display tokens, platform-aware", () => {
   assert.deepEqual(chordToKeys("backspace", true), ["⌫"]);
   assert.deepEqual(chordToKeys("delete", false), ["Delete"]);
   assert.deepEqual(chordToKeys("?", true), ["?"]);
+});
+
+test("DEFAULT_KEYMAP: 25 commands, categories partition", () => {
+  const ids = Object.keys(DEFAULT_KEYMAP);
+  assert.equal(ids.length, 25);
+  for (const cat of ["Tools", "Navigation", "Edit", "Escape hatch"]) {
+    assert.ok(ids.some((id) => DEFAULT_KEYMAP[id].category === cat), cat);
+  }
+  assert.deepEqual(DEFAULT_KEYMAP.deleteBack.default, ["backspace", "delete"]);
+  assert.equal(DEFAULT_KEYMAP.escape.default, "escape");
+});
+
+test("resolveKeymap: defaults spread, override wins", () => {
+  const eff = resolveKeymap({});
+  assert.deepEqual(eff.area, ["a"]);
+  assert.deepEqual(eff.deductRect ?? eff["deduct-rect"], ["shift+d"]);
+  const over = resolveKeymap({ area: "x" });
+  assert.deepEqual(over.area, ["x"]);
+  assert.deepEqual(resolveKeymap({ area: "a" }).area, ["a"]); // override == default is idempotent
+});
+
+test("resolveKeymap: deleteBack pair indexes both tokens", () => {
+  const eff = resolveKeymap({});
+  assert.deepEqual(eff.deleteBack, ["backspace", "delete"]);
+});
+
+test("findConflict: collision, self, overridden-away default", () => {
+  assert.equal(findConflict("a", {}, "rect"), "area");       // "a" is area's default
+  assert.equal(findConflict("a", {}, "area"), null);          // self is not a conflict
+  assert.equal(findConflict("a", { area: "x" }, "rect"), null); // area moved off "a" -> no conflict
+});
+
+test("matchCommand: exact then shift-fallback", () => {
+  applyOverrides({});
+  assert.equal(matchCommand({ key: "a" }), "area");
+  assert.equal(matchCommand({ key: "A", shiftKey: true }), "area");     // shift+A -> fallback -> a
+  assert.equal(matchCommand({ key: "D", shiftKey: true }), "deduct-rect"); // shift+d exact
+  assert.equal(matchCommand({ key: "d" }), "deduct");
+  assert.equal(matchCommand({ key: "z", metaKey: true }), "undo");
+  assert.equal(matchCommand({ key: "z", ctrlKey: true }), "undo");   // mod is meta OR ctrl
+  assert.equal(matchCommand({ key: "z", shiftKey: true, metaKey: true }), "redo");
+  assert.equal(matchCommand({ key: "?" }), "guide");
+  assert.equal(matchCommand({ key: "?", shiftKey: true }), "guide");     // US shift+/ -> "?" via fallback
+  assert.equal(matchCommand({ key: "Backspace" }), "deleteBack");
+  assert.equal(matchCommand({ key: "Delete" }), "deleteBack");
+});
+
+test("matchCommand: override changes the trigger", () => {
+  applyOverrides({ area: "shift+p" });
+  assert.equal(matchCommand({ key: "p", shiftKey: true }), "area");
+  assert.equal(matchCommand({ key: "a" }), null); // a no longer binds anything
+});
+
+test("matches: is-event-the-binding", () => {
+  applyOverrides({});
+  assert.equal(matches({ key: "Escape" }, "escape"), true);
+  assert.equal(matches({ key: "Enter" }, "escape"), false);
+  assert.equal(matches({ key: "z", metaKey: true }, "undo"), true);
+});
+
+test("live state: set/reset/round-trip", () => {
+  resetAll();
+  applyOverrides({});
+  assert.equal(isKeymapLoaded(), true);
+  setOverride("area", "x");
+  assert.deepEqual(getOverrides(), { area: "x" });
+  resetCommand("area");
+  assert.deepEqual(getOverrides(), {});
+  setOverride("area", "x"); setOverride("rect", "r");
+  resetAll();
+  assert.deepEqual(getOverrides(), {});
 });
