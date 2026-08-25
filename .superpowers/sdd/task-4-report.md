@@ -19,3 +19,9 @@ Complete.
 
 ## Commit
 `feat(shortcuts): config modal (capture, conflict, reset)`
+
+## Fix round 1 (review)
+- **Nested buttons:** each row is now a `<div>` with sibling `<button>`s — main row control (label + keycaps/capture) and a separate `reset` button when overridden.
+- **Capture + search:** `onFocus={cancelCapture}` on the search input; `handleReset` calls `cancelCapture()` before resetting.
+- Re-smoke-tested at `/shortcut-smoke`: Tab order is row main → reset; Enter on reset restores default; clicking search mid-capture cancels capture and allows typing.
+- Commit: `fix(shortcuts): valid row buttons + cancel capture on search focus`

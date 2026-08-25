@@ -182,6 +182,7 @@ export default function ShortcutConfig({ onClose }) {
 
   const handleReset = (e, id) => {
     e.stopPropagation();
+    cancelCapture();
     resetCommand(id);
     saveKeybindOverrides();
   };
@@ -256,6 +257,7 @@ export default function ShortcutConfig({ onClose }) {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onFocus={cancelCapture}
           placeholder="Filter commands…"
           aria-label="Filter commands"
           style={{
@@ -284,66 +286,74 @@ export default function ShortcutConfig({ onClose }) {
                 const active = capturing === id;
                 const overridden = isOverridden(id, eff);
                 return (
-                  <button
+                  <div
                     key={id}
-                    type="button"
-                    disabled={!loaded}
-                    onClick={() => startCapture(id)}
                     style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      gap: 16, width: "100%", padding: "8px 10px", borderRadius: 0, cursor: loaded ? "pointer" : "default",
+                      display: "flex", alignItems: "center", gap: 10,
+                      width: "100%", padding: "8px 10px", borderRadius: 0,
                       border: active ? "1px solid var(--cobalt)" : "1px solid transparent",
                       background: active ? "var(--tint-select)" : "transparent",
                       opacity: loaded ? 1 : 0.55,
-                      textAlign: "left",
                     }}
                     onMouseEnter={(e) => { if (!active && loaded) e.currentTarget.style.background = "var(--tint-08)"; }}
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = active ? "var(--tint-select)" : "transparent"; }}
                   >
-                    <span style={{ fontSize: "var(--fs-m)", color: "var(--ink-soft)" }}>
-                      {def.label}
-                      {id === "curveFlip" && (
-                        <span style={{ fontFamily: "var(--f-mono)", fontSize: "var(--fs-2xs)", color: "var(--ink-muted)", marginLeft: 8 }}>
-                          mid-trace
-                        </span>
-                      )}
-                    </span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                      {active ? (
-                        <>
-                          <span style={{
-                            display: "inline-flex", alignItems: "center", gap: 8,
-                            fontFamily: "var(--f-mono)", fontSize: "var(--fs-s)", color: "var(--cobalt)",
-                            border: "1px dashed var(--cobalt)", borderRadius: "var(--r-1)", padding: "4px 10px",
-                          }}>
-                            Press keys…
+                    <button
+                      type="button"
+                      disabled={!loaded}
+                      onClick={() => startCapture(id)}
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        gap: 16, flex: 1, minWidth: 0, padding: 0,
+                        border: "none", background: "transparent",
+                        cursor: loaded ? "pointer" : "default", textAlign: "left",
+                      }}
+                    >
+                      <span style={{ fontSize: "var(--fs-m)", color: "var(--ink-soft)" }}>
+                        {def.label}
+                        {id === "curveFlip" && (
+                          <span style={{ fontFamily: "var(--f-mono)", fontSize: "var(--fs-2xs)", color: "var(--ink-muted)", marginLeft: 8 }}>
+                            mid-trace
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                        {active ? (
+                          <>
                             <span style={{
-                              display: "inline-block", width: 7, height: 14, background: "var(--cobalt)",
-                              animation: reduceMotion ? "none" : "shortcut-caret-blink 1s steps(1) infinite",
-                            }} />
-                          </span>
-                          <span style={{ fontFamily: "var(--f-mono)", fontSize: "var(--fs-2xs)", color: "var(--ink-muted)" }}>
-                            Esc to cancel
-                          </span>
-                        </>
-                      ) : (
-                        <>
+                              display: "inline-flex", alignItems: "center", gap: 8,
+                              fontFamily: "var(--f-mono)", fontSize: "var(--fs-s)", color: "var(--cobalt)",
+                              border: "1px dashed var(--cobalt)", borderRadius: "var(--r-1)", padding: "4px 10px",
+                            }}>
+                              Press keys…
+                              <span style={{
+                                display: "inline-block", width: 7, height: 14, background: "var(--cobalt)",
+                                animation: reduceMotion ? "none" : "shortcut-caret-blink 1s steps(1) infinite",
+                              }} />
+                            </span>
+                            <span style={{ fontFamily: "var(--f-mono)", fontSize: "var(--fs-2xs)", color: "var(--ink-muted)" }}>
+                              Esc to cancel
+                            </span>
+                          </>
+                        ) : (
                           <Keycaps chords={eff[id]} />
-                          {overridden && (
-                            <button
-                              type="button"
-                              className="reset"
-                              onClick={(e) => handleReset(e, id)}
-                              style={{
-                                fontFamily: "var(--f-mono)", fontSize: "var(--fs-2xs)", color: "var(--cobalt)",
-                                background: "none", border: "none", cursor: "pointer", padding: "2px 4px", opacity: 0.85,
-                              }}
-                            >reset</button>
-                          )}
-                        </>
-                      )}
-                    </span>
-                  </button>
+                        )}
+                      </span>
+                    </button>
+                    {overridden && !active && (
+                      <button
+                        type="button"
+                        className="reset"
+                        disabled={!loaded}
+                        onClick={(e) => handleReset(e, id)}
+                        style={{
+                          fontFamily: "var(--f-mono)", fontSize: "var(--fs-2xs)", color: "var(--cobalt)",
+                          background: "none", border: "none", cursor: loaded ? "pointer" : "default",
+                          padding: "2px 4px", opacity: 0.85, flexShrink: 0,
+                        }}
+                      >reset</button>
+                    )}
+                  </div>
                 );
               })}
             </div>
