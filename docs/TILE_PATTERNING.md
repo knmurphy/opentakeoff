@@ -16,7 +16,7 @@ either as building blocks or as the architectural template the feature should co
 
 ### 1.1 Hatch patterns — visual only, no geometry
 
-`web/src/components/hatches.jsx` ships 32 CAD hatches. The flooring set already
+`web/src/components/hatches.jsx` ships 31 CAD hatches. The flooring set already
 names the tile patterns an estimator recognizes: `grid` (Square/tile), `brick`
 (Brick/running bond), `plank`, `herring` (Herringbone), `basket` (Basketweave),
 `checker`, `hexagon`, `penny`, `octagondot`, `pinwheel` (hopscotch), `harlequin`
@@ -67,7 +67,8 @@ is the same idea one layer up.
   and EA from a room's edges.
 - Conditions already carry `height_ft` (wall H) and `thickness` (border).
 - Transitions (`web/src/lib/transitions.ts` + MCP `derive_transitions`) derive
-  runs where two finishes meet — butt joint vs wall-separated. That is
+  runs where two finishes meet — butt joint (`kind: "butt"`) vs wall-separated
+  (`kind: "wall"`, measured but not auto-committed as a threshold). That is
   finish-to-finish; a marble **threshold** at a doorway is the same geometry with
   a trim material instead of a transition condition.
 
@@ -84,17 +85,21 @@ trim derivation, and layout-derived waste.
 ## 2. Prior art
 
 ### 2.1 `moshegluck/tiletakeoff` (forked: `knmurphy/tiletakeoff`) — the reference
-
-MIT, React + Vite, pure engine layer (no DOM) with an 82-test Vitest suite.
-This is the closest thing to what the feature wants, and it is worth reading
+React + Vite, pure engine layer (no DOM) with an ~84-test Vitest suite (README
+says 82). **License: not declared** — no LICENSE file, no `license` field in
+`package.json`, GitHub reports none. Treat it as proprietary until the author
+states one; it cannot be assumed Apache-2.0-compatible. This is the closest
+thing to what the feature wants, and it is worth reading
 line-by-line before designing. Its relevant modules:
 
 - **`engine/layouts.js`** — `generateLayout(poly, opts)` returns tile quads
   `{cx, cy, w, h, rot}` in feet (grout included). Six patterns: `grid`,
-  `brick_50`, `brick_33`, `herringbone`, `diagonal` (45°), `basketweave`; origin
-  offset + rotation. Key detail: the grid is **anchored so a tile edge falls on
-  the origin**, then walked outward, so tiles flush with a room boundary classify
-  as *full* rather than spuriously cut.
+  `brick_50`, `brick_33`, `herringbone`, `diagonal` (45°), `basketweave`.
+  Origin + `angleDeg` apply to grid/brick; `diagonal` is fixed at 45°; herringbone
+  and basketweave **ignore the origin** (their signatures take `_origin` unused).
+  Key detail: the grid is **anchored so a tile edge falls on the origin**, then
+  walked outward, so tiles flush with a room boundary classify as *full* rather
+  than spuriously cut.
 - **`engine/geometry.js`** — `classifyTile` (full/cut/out) via point-in-polygon on
   the four corners with a 2% inset; `clipPolygon` (Sutherland–Hodgman) for the
   exact installed fragment of a cut tile. Honest about its limit: SH is exact for
@@ -144,8 +149,9 @@ short of the user's full list; the trim/edge/curb dimension is greenfield.
   `svg-tiler` trio that grows and repels shapes into a randomized interlocking
   layout. Relevant to the **randomized / percentage layouts** the commercial
   tools expose (specify tile colors/sizes by %, output an installer-followable
-  random pattern). WTFPL. Algorithmically interesting; a distinct feature from
-  deterministic takeoff.
+  random pattern). License is conflicted: `LICENCE.md` says WTFPL, `package.json`
+  declares ISC — resolve before any reuse. Algorithmically interesting; a
+  distinct feature from deterministic takeoff.
 - **`codebyjustin/Tile-floor-Background-Pattern-Pure-CSS`** — a single-file CSS
   floor pattern. Visual only; no algorithm. Noted for completeness, not a model.
 
@@ -166,9 +172,9 @@ Tile Pro (Laurel Creek), the names that map onto this feature:
 - **Custom tile shapes** — hexagon, triangle, diamond, fan (MeasureSquare
   "custom tile pattern").
 - **Borders / inserts / listellos / accent strips** — multiple borders and
-  inserts on a floor; listellos and deco strips on walls. This is the
-  commercial form of "trim tile on selected edges," generalized to *bands*, not
-  just perimeter edges.
+  inserts on a floor (MeasureSquare "borders & inserts"); "listello" and deco
+  strips are Precision Tile Pro's words. This is the commercial form of "trim
+  tile on selected edges," generalized to *bands*, not just perimeter edges.
 - **Obstructions** — tile *around* cabinets, registers, windows (Precision Tile
   Pro step 2). OpenTakeoff already has the Eraser/deduct role; the layout engine
   must cut the field around deductions, not merely subtract their area.
@@ -349,3 +355,96 @@ The open question is whether the grid designer deserves a full-screen modal (the
 way the Report is) for the pattern/origin/rotation playground, or stays a docked
 panel. That is an ergonomics decision the mockup phase should settle with a
 prototype, not an argument.
+
+---
+
+## 7. Adversarial review — findings to carry into the spec
+
+Two independent adversarial reviews (research editor + architect) were run
+against this document. Their factual corrections are already folded into the
+sections above (license status, origin/rotation scope, hatch count, test count,
+license conflicts, transitions vocabulary). What follows is the design-phase
+input the architect surfaced, and the residual research gaps.
+
+### 7.1 The single biggest architectural risk
+
+The roll-goods template transfers its *wiring* (opt-in setup on condition, pure
+engine, scaled overlay, undoable edits, report `ctx`), but **not its problem
+shape**. Roll goods is 1D strip packing with O(lanes) rectangles; tile is 2D
+with rotation, motif super-cells, a 2D origin/edge-strategy search space, and
+trim/curb geometry with no roll analog. A mockup that proves only grid + origin
+drag on one convex room will feel done while hiding the features that carry
+estimator value: trim LF, deduct-hole clipping, concave L-rooms, and honest
+angled-pattern ordering.
+
+### 7.2 Where the analogy breaks — concrete corrections
+
+- **Layout-state ownership.** Roll stores per-shape `roll_layout` overrides;
+  tile origin/rotation is usually *condition-scoped* (all rooms share a field
+  direction) with optional per-room exceptions. Do not copy the per-shape model
+  blindly — store `{ condition: tile_setup, shapes: {[id]: {origin?, rotation?,
+  edge_overrides?}} }` with invalidation keyed on vertex hash + setup hash, not a
+  laneCount guard.
+- **Three generators, not two.** Lattice (grid/brick) vs motif is insufficient.
+  Chevron ≠ herringbone; Versailles/modular is multi-SKU placement (per-quad
+  `skuId`), not a bigger super-cell; hex/penny are a third (non-rectangular
+  lattice) generator. v1: Lattice + one Motif (herringbone); Modular out.
+- **Cut sizing.** Corner point-in-polygon misclassifies diagonal slivers;
+  sequential Sutherland–Hodgman is not "approximate" on concave rooms — it is
+  wrong. Use general polygon intersection (tile rect → rotated-rect polygon →
+  intersect room), corner test = edge-contact (not corner PiP), inset =
+  `max(joint/2, ε·min(w,h))` in feet.
+- **Offcut reuse is not v1's highest value.** Grid on the plan + full/cut/corner
+  counts + pattern-aware waste% (`WASTE_BY_PATTERN`) earns more trust first; the
+  reuse engine models herringbone fragments as AABBs and is dangerous for angled
+  patterns. Reframe Q8: ship layout + naive counts, add offcut pool as gated
+  v1.5 behind `reuse_mode: 'none'|'practical'` with auto-downgrade for angled
+  patterns until fragment geometry is exact.
+- **Edge exposure can't be inferred from one ring.** Flood-traced rooms don't
+  share edges; "external vs shared wall" needs adjacency across gaps, door
+  openings split edges, deducts create interior exposed edges. Model edges as
+  `{shapeEdgeIndex, length_lf, exposure: 'free'|'wall'|'opening'|'finish_transition',
+  finish_neighbor?, user_override?}`, auto-suggested and estimator-confirmed.
+- **Curb as LF × cross-section only holds for straight curbs.** L-plan, radius,
+  and dam corners need a developed surface (unfolded net) with per-face piece
+  roles. v1: straight-profile only, explicitly fenced.
+- **Taxonomy.** Axis C (edge-cut strategy) duplicates axis A (it is a layout
+  control). Axis E conflates three unrelated concerns — obstructions (layout
+  input), phasing (report grouping), wall elevation (a separate projection).
+
+### 7.3 Missing algorithms and questions the spec must add
+
+- Origin/edge-strategy **solver** (centered symmetric band; "tile scrolling" =
+  search origin for minimum cuts) — not just UI knobs.
+- **Deduct-hole clipping** — layout must cut around in-room holes, not only use
+  net SF.
+- **Wall-tile unwrap** — surface-area ring → 2D elevation strip with openings/
+  niches; a separate feature from floor lattice.
+- **Band/border inset** — offset the interior polygon and lay the field inside
+  decorative perimeter bands.
+- **Layout-invalidation contract** — what persists vs resets when `verts_norm`,
+  scale, or `tile_setup` change.
+- **Per-room vs per-condition layout ownership** — can two rooms on one condition
+  carry different origins?
+- **Multi-sheet / match-line policy** — layout stops at a sheet boundary; a
+  stitched room needs an explicit human seam (the AGENTS.md match-line doctrine).
+  The doc never asked this.
+- **Render performance** — LOD / tile cap / region-only regeneration for
+  thousands of quads at pan/zoom.
+- **Export schema** — `report.v1` / `takeoff_canvas.v1` fields for tile counts,
+  layout snapshot, and trim edges; version-bump plan.
+- **Order-unit math** — box/case rounding and EA vs SF downstream of tile count.
+- **Exact angled-pattern fragment geometry** — the real hard problem for honest
+  ordering (herringbone/pinwheel/Versailles), more than "motif abstraction".
+
+### 7.4 Residual research gaps
+
+- `tiletakeoff` license is unresolved — needed before any code reuse.
+- Primary citations beyond the fork: Kaplan's Taprats (SourceForge) and his
+  published PIC/Hankin work.
+- 2D nesting libraries for non-rectangular remnants (libnest2d, OR-Tools bin
+  packing) — the doc names Greiner–Hormann but not industrial nesting.
+- Other open-source tile estimators and commercial peers (FloorRight,
+  RapidSketch Tile, CTD, TilePlanner) for a feature-parity matrix.
+- OpenTakeoff's own `stitches.ts` (match-line stitching) as adjacent multi-sheet
+  geometry.
