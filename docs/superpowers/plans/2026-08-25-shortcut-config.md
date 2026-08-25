@@ -52,7 +52,7 @@ const ev = (key: string, m: Partial<{ shiftKey: boolean; altKey: boolean; metaKe
 
 test("normalizeEvent: bare letters lowercase", () => {
   assert.equal(normalizeEvent(ev("d")), "d");
-  assert.equal(normalizeEvent(ev("A")), "shift+a");   // e.key reports the shifted char; shiftKey carries the modifier
+  assert.equal(normalizeEvent(ev("A", { shiftKey: true })), "shift+a");   // physical shift+A: e.key is the shifted char, shiftKey carries the modifier
 });
 
 test("normalizeEvent: mod is meta OR ctrl", () => {
@@ -75,9 +75,8 @@ test("normalizeEvent: named keys lowercase, punctuation/digits as-is", () => {
 });
 
 test("normalizeEvent: caps lock does not read as shift", () => {
-  assert.equal(normalizeEvent(ev("A")), "shift+a");       // real shift
-  assert.equal(normalizeEvent(ev("a", { shiftKey: false })), "a"); // (caps-lock "A" arrives as e.key "A" but shiftKey false — see next)
-  assert.equal(normalizeEvent({ key: "A" }), "a");        // e.key already shifted, no shiftKey flag
+  assert.equal(normalizeEvent(ev("A")), "a");             // caps-lock A: e.key "A" but shiftKey false -> no shift modifier
+  assert.equal(normalizeEvent({ key: "A" }), "a");        // same shape with no flags at all
 });
 
 test("normalizeEvent: modifier-only presses are not chords", () => {
@@ -219,7 +218,7 @@ export function chordToKeys(chord: string, apple: boolean = typeof navigator ===
   - `export function findConflict(chord: string, overrides: Record<string, string>, excludeId: string): string | null` — the commandId currently owning `chord`, or `null`.
   - `export function matchCommand(e: EventLike): string | null` — reads the live keymap.
   - `export function matches(e: EventLike, commandId: string): boolean`
-  - Live state: `getOverrides()`, `applyOverrides(o)`, `setOverride(commandId, chord)`, `resetCommand(commandId)`, `resetAll()`, `subscribe(fn)`.
+  - Live state: `getOverrides()`, `isKeymapLoaded()`, `applyOverrides(o)`, `setOverride(commandId, chord)`, `resetCommand(commandId)`, `resetAll()`, `subscribe(fn)`.
 
 - [ ] **Step 1: Write the failing tests** (append):
 
@@ -242,6 +241,7 @@ test("resolveKeymap: defaults spread, override wins", () => {
   assert.deepEqual(eff.deductRect ?? eff["deduct-rect"], ["shift+d"]);
   const over = resolveKeymap({ area: "x" });
   assert.deepEqual(over.area, ["x"]);
+  assert.deepEqual(resolveKeymap({ area: "a" }).area, ["a"]); // override == default is idempotent
 });
 
 test("resolveKeymap: deleteBack pair indexes both tokens", () => {
@@ -262,6 +262,7 @@ test("matchCommand: exact then shift-fallback", () => {
   assert.equal(matchCommand({ key: "D", shiftKey: true }), "deduct-rect"); // shift+d exact
   assert.equal(matchCommand({ key: "d" }), "deduct");
   assert.equal(matchCommand({ key: "z", metaKey: true }), "undo");
+  assert.equal(matchCommand({ key: "z", ctrlKey: true }), "undo");   // mod is meta OR ctrl
   assert.equal(matchCommand({ key: "z", shiftKey: true, metaKey: true }), "redo");
   assert.equal(matchCommand({ key: "?" }), "guide");
   assert.equal(matchCommand({ key: "?", shiftKey: true }), "guide");     // US shift+/ -> "?" via fallback
@@ -356,11 +357,13 @@ export function findConflict(chord: string, overrides: Record<string, string>, e
 
 // ── live keymap (module-level binding, like `export let store` in store.js) ──
 let overrides: Record<string, string> = {};
+let loaded = false;   // flips true when applyOverrides first runs (the startup load-complete gate)
 const listeners = new Set<() => void>();
 function notify() { for (const fn of listeners) fn(); }
 
 export function getOverrides(): Record<string, string> { return { ...overrides }; }
-export function applyOverrides(next: Record<string, string>): void { overrides = { ...next }; notify(); }
+export function isKeymapLoaded(): boolean { return loaded; }
+export function applyOverrides(next: Record<string, string>): void { overrides = { ...next }; loaded = true; notify(); }
 export function setOverride(commandId: string, chord: string): void { overrides = { ...overrides, [commandId]: chord }; notify(); }
 export function resetCommand(commandId: string): void { if (!(commandId in overrides)) return; const n = { ...overrides }; delete n[commandId]; overrides = n; notify(); }
 export function resetAll(): void { if (Object.keys(overrides).length === 0) return; overrides = {}; notify(); }
@@ -502,7 +505,9 @@ function getSnapshot() {
 let cacheKey = "";
 
 export function useKeymap() {
-  return useSyncExternalStore(subscribe, getSnapshot);
+  // getServerSnapshot mirrors getSnapshot — this app is client-only, so the
+  // cache is safe on both paths and React 18 won't warn on hydration.
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 ```
 
@@ -518,16 +523,15 @@ export function useKeymap() {
 
 **Files:**
 - Create: `web/src/components/ShortcutConfig.jsx`
+- Consumes: `DEFAULT_KEYMAP`, `getOverrides`, `isKeymapLoaded`, `setOverride`, `resetCommand`, `resetAll`, `normalizeChord`, `findConflict`, `chordToKeys`, `matches` from `../lib/keymap.ts`; `saveKeybindOverrides`, `clearKeybindOverrides` from `../lib/keybindStore.js`; `useKeymap` from `../lib/useKeymap.js`; `Z` from `../lib/ui.js`.
+- Produces: `export default function ShortcutConfig({ onClose })` — renders nothing that depends on the canvas; closes on the `escape` binding via `matches(e, "escape")` (capture-phase), never the literal Esc.
 
-**Interfaces:**
-- Consumes: `DEFAULT_KEYMAP`, `getOverrides`, `setOverride`, `resetCommand`, `resetAll`, `normalizeChord`, `findConflict`, `chordToKeys`, `matches` from `../lib/keymap.ts`; `saveKeybindOverrides`, `clearKeybindOverrides` from `../lib/keybindStore.js`; `useKeymap` from `../lib/useKeymap.js`; `Z` from `../lib/ui.js`; `keyLabel`, `keyText`, `isApplePlatform` from `../lib/keys.ts`.
-- Produces: `export default function ShortcutConfig({ onClose })` — renders nothing that depends on the canvas; self-closing on Esc (capture-phase, mirroring `UserGuide.jsx`).
 
-- [ ] **Step 1: Skeleton + a11y shell.** Model on `UserGuide.jsx`'s overlay (scrim + `role="dialog"` `aria-modal="true"` panel + capture-phase Esc). Add: header "Keyboard shortcuts" + `×` close; a search `<input>`; a grouped list rendered from `DEFAULT_KEYMAP` grouped by `category` in the order Tools → Navigation → Edit → Escape hatch. Each row is a `<button>` (full-width, label left, keycap(s) right) — never a bare `div`; the keycaps reuse the `Kbd`-style markup from `UserGuide.jsx` verbatim (mono, 5px radius, bottom-border). Footer: **Restore all defaults** button (left) + the fixed-keys note (Space, hold M, hold ⇧, ⌥/⇧-click, 1–9). Focus moves into the modal on mount; trap focus while open.
+- [ ] **Step 1: Skeleton + a11y shell.** Model on `UserGuide.jsx`'s overlay (scrim + `role="dialog"` `aria-modal="true"` panel + a capture-phase `keydown` that closes on `matches(e, "escape")`). Add: header "Keyboard shortcuts" + `×` close; a search `<input>`; a grouped list rendered from `DEFAULT_KEYMAP` grouped by `category` in the order Tools → Navigation → Edit → Escape hatch. Each row is a `<button>` (full-width, label left, keycap(s) right) — never a bare `div`; the keycaps reuse the `Kbd`-style markup from `UserGuide.jsx` verbatim (mono, 5px radius, bottom-border). Footer: **Restore all defaults** button (left) + the fixed-keys note (Space, hold M, hold ⇧, ⌥/⇧-click, 1–9). Focus moves into the modal on mount; trap focus while open.
 
 - [ ] **Step 2: Live bindings.** Read `const eff = useKeymap()`; render each row's keycap(s) from `eff[id]` via `chordToKeys`. Show a `reset` affordance on a row when `id in getOverrides()` — wait, `getOverrides()` isn't reactive; instead derive "is overridden" from `useKeymap` + `DEFAULT_KEYMAP` (compare `eff[id]` joined vs the default joined). Implement reset as `resetCommand(id)` then `saveKeybindOverrides()`.
+- [ ] **Step 3: Capture mode + load gate.** Clicking/Enter on a row sets `capturing = id` — but **only when `isKeymapLoaded()` is true**; before the startup load resolves, rows are inert (render at `opacity` muted with a "loading…" hint) so an early save can't be stomped by the async read (spec §5). `useKeymap()` re-renders when `applyOverrides` flips `loaded`, so the gate releases on its own. While capturing, install a capture-phase `keydown` that `preventDefault()` + `stopPropagation()`s everything, then: **physical `Esc`/`Backspace`** → cancel capture; `normalizeEvent(e)` → if `null` (modifier-only) stay capturing; else apply (Step 4). Also cancel capture on `blur` of the modal and on a scrim click. The row shows the capture prompt "Press keys…" with the blinking caret (respect `prefers-reduced-motion`). Capture-cancel is the ONE place physical Esc/Backspace is used (spec §9) — the modal's own *close* uses `matches(e, "escape")`.
 
-- [ ] **Step 3: Capture mode.** Clicking/Enter on a row sets `capturing = id`. While capturing, install a capture-phase `keydown` that `preventDefault()` + `stopPropagation()`s everything, then: `Esc`/`Backspace` → cancel capture; `normalizeEvent(e)` → if `null` (modifier-only) stay capturing; else apply (Step 4). Also cancel capture on `blur` of the modal and on a scrim click. The row shows the capture prompt "Press keys…" with the blinking caret (respect `prefers-reduced-motion`). `matches(e, "escape")`/`matches(e, "deleteBack")` are NOT consulted here — capture cancel is the physical Esc/Backspace (spec §9).
 
 - [ ] **Step 4: Apply + conflict.** On a complete chord `c`: if `c` equals the command's current binding → exit capture (no-op). Else `findConflict(c, getOverrides(), id)` → if non-null, show an inline danger banner "`<chordToKeys(c)>` is already bound to `<label>` — press a different key, or Esc to cancel" and stay capturing. Else `setOverride(id, c)`; `saveKeybindOverrides()`; clear capture.
 
@@ -545,15 +549,17 @@ export function useKeymap() {
 - Modify: `web/src/components/UserGuide.jsx`
 
 **Interfaces:**
-- Consumes: `useKeymap`, `DEFAULT_KEYMAP`, `chordToKeys` from `../lib/keymap.ts`; imports `ShortcutConfig` (rendered by the *canvas*, not here — this task only adds the footer button that calls a new `onOpenShortcuts` prop).
+- Consumes: `useKeymap`, `DEFAULT_KEYMAP`, `chordToKeys`, `matches` from `../lib/keymap.ts`; imports `ShortcutConfig` (rendered by the *canvas*, not here — this task only adds the footer button that calls a new `onOpenShortcuts` prop).
 
 - [ ] **Step 1: Add the `onOpenShortcuts` prop + footer button.** Change the signature to `function UserGuide({ onClose, onOpenShortcuts })`. In the footer (`<div>` that holds the "full manual" link), add a right-aligned cluster: a muted "Want to change a key?" line + a `<button>` labeled **Keyboard shortcuts…** that calls `onOpenShortcuts` (then `onClose`). Match the mockup: mono button, cobalt border, no radius.
 
 - [ ] **Step 2: Make command-backed rows live.** `TOOLS`/`DRAW`/`VIEW` are currently `[combo, what]` literal arrays where `combo` is a glyph array. Convert the command-backed entries to reference a command id and render the *effective* chord via `useKeymap` + `chordToKeys`. Fixed rows (hold-`M`, `1`–`9`, Space, the `⌥`/`⇧`-click gestures, field-local `⏎`/`⌫`) stay literal glyphs. The minimal change that stays faithful: add a parallel map `COMMAND_ROW = { "One-Click Area": "oneclick", "Area": "area", … }` keyed by the existing label, and in `Table`, when a row's label is in `COMMAND_ROW`, render `chordToKeys(eff[id])` instead of the literal `combo`. Also update the `VIEW` "Open this guide" row and the `DRAW` "⏎ / double-click" row only where they correspond to `guide`/`commit`.
 
-- [ ] **Step 3: Verify in the browser.** After a remap (Task 4), reopen the guide and confirm the remapped command shows its new keycap, and the fixed rows are unchanged.
+- [ ] **Step 3: Esc follows the live binding.** The guide's own dismiss listener (the `useEffect` ~112 that runs `if (e.key !== "Escape") return; onClose()`) must resolve the live binding, not the literal key — otherwise a remapped `escape` can't close the guide. Change the guard to `if (!matches(e, "escape")) return;`.
 
-- [ ] **Step 4: Commit** — `git commit -m "feat(shortcuts): guide footer entry + live shortcut tables"`.
+- [ ] **Step 4: Verify in the browser.** After a remap (Task 4), reopen the guide and confirm the remapped command shows its new keycap, the fixed rows are unchanged, and the remapped `escape` key still closes the guide.
+
+- [ ] **Step 5: Commit** — `git commit -m "feat(shortcuts): guide footer entry + live shortcut tables"`.
 
 ---
 
@@ -568,7 +574,7 @@ export function useKeymap() {
 
 - [ ] **Step 1: `shortcutsOpen` state + load gate.** Near `const [guideOpen, setGuideOpen] = useState(false)`, add `const [shortcutsOpen, setShortcutsOpen] = useState(false)`. In the app-startup effect that hydrates browser-global libraries (search for the existing `loadTemplates`/stamp-library hydrate pattern), add `loadKeybindOverrides()` — fire-and-forget; defaults apply until it resolves.
 
-- [ ] **Step 2: The Select floor.** In the escape ladder (the edit effect's `else { clearPoly(); …; hlPathRef… }` final rung), arm Select **only when nothing was cleared**. Wrap the final rung so it first tests whether anything is in progress; if so, clear and return (tool unchanged); if not, `setTool("select")`. Concretely, before the final `else`, capture `const hadSomething = poly.length > 0 || ocSel || selVert != null || calib.length > 0 || check.length > 0 || selectedId || selectedMarkupId || markupDraft || proposal || armedStamp || scheduleAnchor || symbolAnchor || alignPt || zoneCheck;` and at the end of the final rung: `if (!hadSomething) setTool("select");`. Keep `agentOfferFnsRef.current?.pending()` / `ocSel` / `selVert` rungs exactly as-is (they already return without reaching the final rung).
+- [ ] **Step 2: The Select floor.** In the escape ladder (the edit effect's `else { clearPoly(); …; hlPathRef… }` final rung), arm Select **only when nothing was cleared**. Wrap the final rung so it first tests whether anything is in progress; if so, clear and return (tool unchanged); if not, `setTool("select")`. Concretely, before the final `else`, capture a `hadSomething` flag that is the disjunction of **every** piece of state that rung resets — one term per `clearPoly`/`setCalib`/`setCheck`/`setCheckStated`/`setScaleGuide`/`selectShape`/`setMarkupDraft`/`setProposal`/`setArmedStamp`/`setScheduleAnchor`/`setSymbolAnchor`/`setAlignPt`/`resetZone`/`hlRef` call: `const hadSomething = poly.length > 0 || ocSel || selVert != null || calib.length > 0 || check.length > 0 || checkStated !== "" || scaleGuide || selectedId || selectedMarkupId || markupDraft || proposal || armedStamp || scheduleAnchor || symbolAnchor || alignPt || zoneCheck || hlRef.current;` — **do not forget `scaleGuide`, `checkStated`, and `hlRef.current`** (a stray Esc with only a guide bar, a typed check length, or an in-progress highlighter stroke must clear and stay put, not arm Select). Then at the end of the final rung: `if (!hadSomething) setTool("select");`. Keep `agentOfferFnsRef.current?.pending()` / `ocSel` / `selVert` rungs exactly as-is (they already return without reaching the final rung).
 
 - [ ] **Step 3: Merge the letter + edit effects into one keymap dispatch.** Replace the single-letter effect's body (after the target guard and the `?`/Enter special-cases) AND the edit/escape effect with ONE handler whose priority ladder is (spec §7):
 
@@ -595,14 +601,19 @@ export function useKeymap() {
 
 - [ ] **Step 5: Mount the modal.** Where `{guideOpen && <UserGuide … />}` renders, also pass `onOpenShortcuts={() => { setGuideOpen(false); setShortcutsOpen(true); }}`, and render `{shortcutsOpen && <ShortcutConfig onClose={() => setShortcutsOpen(false)} />}` after the guide (last in the tree, above panels/docks).
 
-- [ ] **Step 6: Verify in the browser — the critical pass.** `npm run dev`, sample plan loaded:
+- [ ] **Step 6: Label surfaces read the live keymap (railTile + menu labels).** The tool-id ⇄ command-id mapping is 1:1 for the tool commands. Make the two surfaces in *this file* derive their shortcut display from `useKeymap()` + `chordToKeys` instead of the literal `shortcut` from `canvasConstants`:
+  - `railTile(id, iconName, label, shortcut, onArm, …)` (~6843): have it read `useKeymap()` and render the effective binding's keycaps for tool commands, falling back to the passed `shortcut` for any non-command tile.
+  - The menu-item builders that carry `shortcut` (the `MEASURE_TOOLS`/`CUT_TOOLS`/`MARKUP_TOOLS`-driven menus and `sheetMenuItems`/`scaleItems`): replace the literal `shortcut` string with `chordToKeys(useKeymap()[commandId]).join("")` for command-backed entries; leave non-command labels alone.
+  Both update automatically — `useKeymap()` re-renders on override change (spec §8).
+
+- [ ] **Step 7: Verify in the browser — the critical pass.** `npm run dev`, sample plan loaded:
   1. Every default key still works: `O A R L S C D ⇧D H K N V Y Q G F ?`, `⌘Z ⇧⌘Z ⌘C ⌘V ⌘D`, `Esc`/`Enter`/`Backspace`/`Delete`, `1–9`, Space-pan, hold-`M`.
   2. Remap `escape` to `Q` in the modal, then confirm **every** consumer follows: canvas ladder (trace → Esc-then-Q), sweep cancel, dictation discard, guide close, gallery close, menu close, navigator back. Confirm the Select floor: a stray `Q` arms Select; `Q` over a live trace clears it and stays in Area.
   3. `menuDepthRef` fidelity: with a toolbar menu open, a tool letter does nothing but `⌘Z` still undoes.
   4. With the config modal open, type letters/digits/⌘Z — nothing leaks to the canvas.
   5. `npm run check` still green (run once at the end).
 
-- [ ] **Step 7: Commit** — `git commit -m "feat(shortcuts): keymap dispatch, Select floor, modal mount"`.
+- [ ] **Step 8: Commit** — `git commit -m "feat(shortcuts): keymap dispatch, Select floor, modal mount"`.
 
 ---
 
