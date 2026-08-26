@@ -137,6 +137,7 @@ Persisted on the condition; unknown-fields-pass-through is established
 convention for condition/template records (`templates.js` sanitizeTemplates —
 the `scale_source` precedent), so this is a comment-level schema addition, no
 migration.
+**Do not overload `height_ft`** — its single-purpose contract
 ("default for NEW wall traces, SF = LF × H") is copy-pinned in
 `TakeoffsPanel.jsx:473` and MCP-exposed; a second consumer makes all of that
 documentation false.
