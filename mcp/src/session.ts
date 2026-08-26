@@ -57,6 +57,7 @@ import { applyRuleToProject, type Rule, type RuleShape, type SheetRuleData } fro
 import { sanitizeApprovals as sanitizeApprovalsJs, applyApprovalCommand as applyApprovalCommandJs } from "../../web/src/lib/approvals.js";
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
+import { hasTileSetup, mintTileSetup } from "../../web/src/lib/tileSetup.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
 // Copied from the canvas (web/src/pages/TakeoffCanvas.jsx) so conditions and
@@ -116,6 +117,10 @@ export interface Condition {
    * condition roll goods — material class + the packing engine's spec fields,
    * exactly the object the canvas persists (web/src/lib/rollTakeoff.js). */
   roll_setup?: Record<string, unknown>;
+  /** Tile-patterning opt-in (#tile): presence of a usable setup is what makes the
+   * condition tile-patterned — the same object the canvas persists
+   * (web/src/lib/tileSetup.ts). */
+  tile_setup?: Record<string, unknown>;
   materials: MaterialRow[];
 }
 
@@ -473,7 +478,7 @@ export type JournalPayload =
   | { op: "delete"; tool: string; removed: { shape: Shape; index: number }[] }
   | { op: "materials"; tool: string; condition_id: string; before: MaterialRow[]; dropped_before?: string[];
       family?: { condition_id: string; before: MaterialRow[]; dropped_before?: string[] }[] }
-  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number; height_ft?: number; roll_setup?: Record<string, unknown> } }
+  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number; height_ft?: number; roll_setup?: Record<string, unknown>; tile_setup?: Record<string, unknown> } }
   | { op: "duplicate_condition"; tool: string; condition_id: string; parent_id: string; parent_had_family: boolean }
   | { op: "split_condition"; tool: string; condition_id: string; before: { variant_of?: string; materials?: unknown; materials_dropped?: string[] } }
   | { op: "approval"; tool: string; inverse: ApprovalCommand }
@@ -3227,9 +3232,9 @@ export class Session {
     return { seamByShape: seamLfByShape(byCond) as Map<string, number> };
   }
 
-  editCondition(tag: string, opts: { waste_pct?: number; multiplier?: number; height_ft?: number; roll_setup?: Record<string, unknown> | null }) {
-    if (opts.waste_pct === undefined && opts.multiplier === undefined && opts.height_ft === undefined && opts.roll_setup === undefined) {
-      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier, height_ft, roll_setup.");
+  editCondition(tag: string, opts: { waste_pct?: number; multiplier?: number; height_ft?: number; roll_setup?: Record<string, unknown> | null; tile_setup?: Record<string, unknown> | null }) {
+    if (opts.waste_pct === undefined && opts.multiplier === undefined && opts.height_ft === undefined && opts.roll_setup === undefined && opts.tile_setup === undefined) {
+      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier, height_ft, roll_setup, tile_setup.");
     }
     const c = this.conditions.find((x) => x.finish_tag === tag);
     if (!c) {
@@ -3239,6 +3244,7 @@ export class Session {
     const before = {
       waste_pct: c.waste_pct, multiplier: c.multiplier, height_ft: c.height_ft,
       roll_setup: c.roll_setup ? structuredClone(c.roll_setup) : undefined,
+      tile_setup: c.tile_setup ? structuredClone(c.tile_setup) : undefined,
     };
     if (opts.waste_pct !== undefined) c.waste_pct = opts.waste_pct;
     if (opts.multiplier !== undefined) c.multiplier = opts.multiplier;
@@ -3255,6 +3261,15 @@ export class Session {
         // a same-material partial edit patches the existing setup
         const base = hasRollSetup(c) && material === prevMaterial ? (c.roll_setup as object) : (mintRollSetup(material) as object);
         c.roll_setup = { ...base, ...given, material };
+      }
+    }
+    if (opts.tile_setup !== undefined) {
+      if (opts.tile_setup === null) {
+        delete c.tile_setup; // opt out — trade-agnostic again
+      } else {
+        const given = Object.fromEntries(Object.entries(opts.tile_setup).filter(([, v]) => v !== undefined));
+        const base = hasTileSetup(c) ? (c.tile_setup as object) : (mintTileSetup() as object);
+        c.tile_setup = { ...base, ...given };
       }
     }
     this.record({ op: "condition", tool: "edit_condition", condition_id: c.id, before });
@@ -3274,6 +3289,7 @@ export class Session {
       ...(c.height_ft !== undefined ? { height_ft: c.height_ft } : {}),
       ...(c.roll_setup ? { roll_setup: c.roll_setup } : {}),
       ...(roll ? { roll } : {}),
+      ...(c.tile_setup ? { tile_setup: c.tile_setup } : {}),
     };
   }
 
@@ -3414,6 +3430,8 @@ export class Session {
           else c.height_ft = e.before.height_ft;
           if (e.before.roll_setup === undefined) delete c.roll_setup;
           else c.roll_setup = e.before.roll_setup;
+          if (e.before.tile_setup === undefined) delete c.tile_setup;
+          else c.tile_setup = e.before.tile_setup;
         }
         undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: 0 });
       } else if (e.op === "duplicate_condition") {

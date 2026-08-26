@@ -654,6 +654,7 @@ export const editConditionOutput = {
   multiplier: z.number().describe("The condition's quantity multiplier after this write"),
   height_ft: z.number().optional().describe("The condition's wall height after this write — present once set (measure_surface multiplies traced LF by it)"),
   roll_setup: z.object({}).passthrough().optional().describe("The condition's roll-goods setup after this write — present while opted in"),
+  tile_setup: z.object({}).passthrough().optional().describe("The condition's tile-patterning setup after this write — present while opted in"),
   roll: z.object({
     condition_id: z.string(), finish_tag: z.string(), material: z.string(),
     roll_width_ft: z.number(), roll_length_ft: z.number(),

@@ -321,3 +321,37 @@ test("assignmentDisclosure: null for all-human, mixed counts, and the pointInPol
   );
   assert.match(assignmentDisclosure(mixed, [otherSheet])!, / · 1 room withheld/);
 });
+
+// Task 4 (M1 tile-patterning) — mirrors the roll_setup round-trip test above
+// (tools.test.ts:1018) at the session layer: opt in, patch preserves prior
+// fields, opt out, undo restores the last opted-in state verbatim.
+test("editCondition: round-trips tile_setup (opt in, patch, opt out, undo)", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+
+  // opt in
+  let out = s.editCondition("CT-1", { tile_setup: { pattern: "herringbone" } });
+  assert.ok(out.tile_setup);
+  assert.equal(out.tile_setup.pattern, "herringbone");
+  const skus = out.tile_setup.skus;
+  assert.ok(Array.isArray(skus) && skus.length >= 1, "minted defaults filled in");
+
+  // patch keeps prior fields
+  out = s.editCondition("CT-1", { tile_setup: { rotation_deg: 45 } });
+  assert.ok(out.tile_setup);
+  assert.equal(out.tile_setup.pattern, "herringbone", "preserved");
+  assert.equal(out.tile_setup.rotation_deg, 45);
+
+  // opt out
+  out = s.editCondition("CT-1", { tile_setup: null });
+  assert.equal(out.tile_setup, undefined);
+
+  // undo restores the last opted-in state
+  s.undoLast(1);
+  const c = s.conditions.find((x) => x.finish_tag === "CT-1");
+  assert.ok(c?.tile_setup);
+  assert.equal(c.tile_setup.rotation_deg, 45);
+  assert.equal(c.tile_setup.pattern, "herringbone");
+});
