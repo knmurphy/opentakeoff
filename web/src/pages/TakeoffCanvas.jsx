@@ -36,6 +36,7 @@ import RevisionsPanel from "../components/RevisionsPanel.jsx";
 import UserGuide from "../components/UserGuide.jsx";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
+import { shapeFill as glyphFill, renderShapeGlyph } from "../components/shapeGlyphs.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
 import { serializeSplitView, normalizeSplitView } from "../lib/splitView"; // SPLIT_MAX_TOTAL_SHEETS lands with Task 8's tile-pool budget
@@ -1085,6 +1086,18 @@ export default function TakeoffCanvas() {
   // bottom-to-top paint order (see ROLE_TIER) — the renderer maps this
   // ascending; the click and hover pickers scan it reversed.
   const stackedShapes = useMemo(() => [...visibleShapes].sort((a, b) => tierOf(a) - tierOf(b)), [visibleShapes]);
+  // Reference-pane shapes (split screen, Task 5): deliberately NOT filtered
+  // through `visibleShapes` — the reference pane can frame a sheet the
+  // primary's sheetGroup doesn't include at all (the tab-drop gesture from
+  // Task 4 hands it any sheet), and `stackedShapes` above would silently
+  // render nothing for that case. Same live `shapes` state and paint-order
+  // convention (tierOf) as the primary, just scoped to the referenced sheet
+  // instead of the primary's group — so a shape measured/edited in the
+  // primary still mirrors live into the reference pane.
+  const refStackedShapes = useMemo(
+    () => (effectiveRefKey ? shapes.filter((s) => s.sheet_id === effectiveRefKey).sort((a, b) => tierOf(a) - tierOf(b)) : []),
+    [shapes, effectiveRefKey]
+  );
   const visibleMarkups = useMemo(() => {
     const keys = new Set(sheetGroup.length ? sheetGroup : [sheetKey]);
     return markups.filter((m) => keys.has(m.sheet_id));
@@ -6629,21 +6642,17 @@ export default function TakeoffCanvas() {
   const activeColor = aCond?.color || "#c96442";
   // Pattern id encodes the appearance so a hatch/color change yields a NEW paint
   // server — otherwise browsers keep painting the cached old pattern (the "it
-  // reverted" bug). Shapes and <defs> use the same id.
-  const patId = (c) => `hx-${c.id}-${c.hatch || "solid"}-${String(c.color).slice(1)}-${String(c.fill || "n").slice(1)}${darkMode ? "-d" : ""}`;
-  // Fill for a committed shape. Hatch tiles are 10 stage-units — once the zoom
-  // puts a tile under ~4 screen px the pattern aliases into subpixel mush
-  // (worst over the inverted dark sheet), so overview zoom swaps to a solid
-  // tint and every condition still reads as a clear color block. Dark mode gets
-  // its legibility from brighter alphas here, NOT from a CSS filter on the
-  // overlay — filtering that whole layer re-rasterizes it on every sync.
-  const shapeFill = (cond) => {
-    if (!cond) return "none";
-    const solid = cond.fill && cond.fill !== NO_FILL ? cond.fill : null;
-    if (tf.scale < 0.35) return (solid || cond.color) + (darkMode ? "59" : "40");
-    if (cond.hatch && cond.hatch !== "solid") return `url(#${patId(cond)})`;
-    return solid ? solid + (darkMode ? "4d" : "33") : "none";
-  };
+  // reverted" bug). Shapes and <defs> use the same id. `prefix` namespaces a
+  // second <defs> block (the split-screen reference pane's read-only mirror,
+  // "ref-") so its pattern ids can never collide with the primary's — a
+  // collision would make url(#…) resolution document-order-dependent and
+  // corrupt one pane's fills. The default keeps every existing call site
+  // (this file's own <defs>/shapeFill) byte-identical.
+  const patId = (c, prefix = "") => `hx-${prefix}${c.id}-${c.hatch || "solid"}-${String(c.color).slice(1)}-${String(c.fill || "n").slice(1)}${darkMode ? "-d" : ""}`;
+  // Fill for a committed shape — delegates to the shared glyph module (also
+  // used read-only by the reference pane) so the two panes' fill rules can't
+  // drift apart.
+  const shapeFill = (cond) => glyphFill(cond, { scale: tf.scale, darkMode, patId });
   // The in-progress ring/rect fill, per the theme's draft.fillMode: "condition"
   // wears the active condition's own fill (drafting — today's look), "tint" a
   // wash of the theme accent, "none" a hollow draft. Defined here (not with the
@@ -7413,59 +7422,15 @@ export default function TakeoffCanvas() {
                 return (
                   <g key={p.key} transform={`translate(${p.xOffset},0)`}>
                     {panels.length > 1 && <text x={0} y={-26} fontSize={64} fontWeight={700} fill={darkMode ? "#9a917f" : "#6b6256"}>{label}</text>}
-                    {pShapes.map((s) => {
-                      const cond = condById[s.condition_id];
-                      const col = cond?.color || "#888";
-                      const sel = s.id === selectedId;
-                      const pts = dn(s.verts_norm);
-                      // Screen-constant strokes: zoom is a CSS transform on the
-                      // stage div, which never enters this SVG's CTM — so
-                      // vector-effect can't help and raw widths go subpixel at
-                      // overview zoom (invisible conditions). Divide by scale
-                      // like every other screen-relative size here.
-                      const z = tf.scale;
-                      const sw = (sel ? DS.selection.width : 2) / z;
-                      // Committed-but-unreviewed machine shapes (an imported MCP
-                      // takeoff) render dashed pencil — same invariant as the
-                      // ephemeral agent proposals, until Accept flips reviewed.
-                      const pending = s.origin?.reviewed === false;
-                      const pDash = `${4 / z} ${3 / z}`;
-                      if (s.measure_role === "count") {
-                        const [cx, cy] = pts[0], r = 7 / z;
-                        return <rect key={s.id} x={cx - r} y={cy - r} width={r * 2} height={r * 2} rx={2 / z} fill={col + (pending ? "55" : "cc")} stroke={sel ? DS.selection.color : "#fff"} strokeWidth={(sel ? 3 : 1.5) / z} strokeDasharray={pending ? `${3 / z} ${2.5 / z}` : undefined} />;
-                      }
-                      if (s.measure_role === "surface_area") {
-                        return <polyline key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.85 : undefined} strokeWidth={(sel ? 4.5 : 3.5) / z} strokeDasharray={pending ? pDash : `${10 / z} ${3 / z} ${2 / z} ${3 / z}`} strokeLinecap="round" strokeLinejoin="round" />;
-                      }
-                      if (s.measure_role === "linear") {
-                        // line_style governs linear outlines (surface_area keeps its dash-dot identity above)
-                        const lpts = s.curved ? flattenCurve(pts) : pts;
-                        return <polyline key={s.id} points={lpts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.85 : undefined} strokeWidth={(sel ? 4 : 3) / z} strokeDasharray={pending ? pDash : dashArrayFor(cond?.line_style || "solid", z)} strokeLinecap="round" strokeLinejoin="round" />;
-                      }
-                      const ded = s.measure_role === "deduct";
-                      // #137 — a RECONCILED deduct (cuts_shape_id) renders as a
-                      // dashed outline only: its geometry is already excised
-                      // from its parent's fill below (fill-rule evenodd), so a
-                      // solid overlay here would reintroduce the exact
-                      // "decal on top" bug the real subtract fixes.
-                      if (ded && s.cuts_shape_id) {
-                        return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")} fill="none" stroke={sel ? DS.selection.color : "#b03a26"} strokeWidth={(sel ? 3 : 1.5) / z} strokeDasharray={`${5 / z} ${3 / z}`} />;
-                      }
-                      // #137 — a parent carrying real hole ring(s): ONE compound
-                      // path, outer ring + every hole ring, fill-rule evenodd so
-                      // the hole is an actual excision from the fill rather than
-                      // a shape sitting on top of it.
-                      if (!ded && s.verts_norm_holes?.length) {
-                        const ringD = (ring) => `M${dn(ring).map((q) => q.join(",")).join("L")}Z`;
-                        const d = ringD(s.verts_norm) + s.verts_norm_holes.map(ringD).join("");
-                        return <path key={s.id} d={d} fillRule="evenodd" fill={pending ? col + "14" : shapeFill(cond)} stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw} strokeDasharray={pending ? pDash : dashArrayFor(cond?.line_style || "solid", z)} />;
-                      }
-                      // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
-                      return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")}
-                        fill={ded ? (pending ? "rgba(176,58,38,.10)" : "rgba(176,58,38,.28)") : pending ? col + "14" : shapeFill(cond)}
-                        stroke={ded ? "#b03a26" : (sel ? DS.selection.color : col)} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw}
-                        strokeDasharray={pending ? pDash : ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
-                    })}
+                    {/* Fill/stroke logic for one shape lives in shapeGlyphs.jsx,
+                        shared byte-for-byte with the reference pane's read-only
+                        mirror (ReferencePane.jsx) — see that module for the full
+                        measure_role switch. `sel`/`DS.selection` only matter when
+                        `sel` is true, which never happens on the reference side. */}
+                    {pShapes.map((s) => renderShapeGlyph(s, {
+                      dn, cond: condById[s.condition_id], sel: s.id === selectedId,
+                      z: tf.scale, darkMode, selection: DS.selection, patId,
+                    }))}
                     {/* vertex handles for the selected shape (drag to reshape) */}
                     {selectedId && (() => {
                       const sel = pShapes.find((s) => s.id === selectedId);
@@ -9084,7 +9049,8 @@ export default function TakeoffCanvas() {
          onCollapse={() => setSplitView(null)}
          primary={primaryViewport}
          reference={splitView ? (
-           <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} epoch={refEpoch} />
+           <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} epoch={refEpoch}
+             shapes={refStackedShapes} conditions={conditions} condById={condById} darkMode={darkMode} patId={patId} />
          ) : null}
        />
 
