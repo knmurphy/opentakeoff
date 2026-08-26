@@ -52,3 +52,6 @@ web/public/models/
 
 # Coverage output (npm run test:coverage)
 **/coverage/
+
+# superpowers SDD scratch (ledger, task reports, review packages, screenshots)
+.superpowers/
