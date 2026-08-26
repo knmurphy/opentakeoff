@@ -127,6 +127,10 @@ second use is not a side effect; see [the data layer](#the-data-layer--why-this-
 - **Voice takeoff**—hold `M` and say `carpet one, waste seven`; recognition is
   whisper-tiny.en in WebAssembly on your machine, audio never leaves the browser
   ([docs/VOICE.md](docs/VOICE.md))
+- **3D view**—press `W` (or the **3D** toolbar button) on a scaled sheet to extrude the
+  committed takeoff into a schematic, feet-true three.js scene: floors, walls, and base
+  as their real heights, legend toggles, explode, section cut, and a PNG export with a
+  scale/date footer
 
 Full history: [CHANGELOG.md](CHANGELOG.md) · every capability mapped to its code:
 [FEATURES.md](FEATURES.md)

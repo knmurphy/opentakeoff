@@ -25,7 +25,8 @@ In a hurry, or already in the app? Press **`?`** (or the **?** button in the top
 15. [Keyboard reference](#15-keyboard-reference)
 16. [Troubleshooting](#16-troubleshooting)
 17. [Voice and the Command box](#17-voice-and-the-command-box)
-18. [Glossary—what the words mean here](#18-glossary--what-the-words-mean-here)
+18. [3D view](#18-3d-view)
+19. [Glossary—what the words mean here](#19-glossary--what-the-words-mean-here)
 
 ---
 
@@ -861,6 +862,7 @@ Every shortcut in the app, verified against the code. Letter keys are suppressed
 | `K` | Check a dimension |
 | `V` | Select |
 | `G` | Sheet gallery |
+| `W` | 3D view—this sheet's takeoff extruded (needs scale; see [§18](#18-3d-view)) |
 | Hold `M` | Push-to-talk dictation—release runs the command, `Esc` discards (see [§17](#17-voice-and-the-command-box)) |
 | `?` | The in-app quick reference—the five-minute path and every shortcut (`Esc` closes) |
 
@@ -987,7 +989,59 @@ the model, the feature says so plainly; details in
 
 ---
 
-## 18. Glossary — what the words mean here
+## 18. 3D view
+
+Press **`W`** (or the **3D** toolbar button) on a scaled sheet to open a schematic,
+feet-true three.js render of the committed takeoff on that sheet. Unscaled sheet: the
+button routes to the same scale-gate toast as an unscaled measuring tool—"Set the sheet
+scale first — 3D is feet-true or nothing"—and the overlay never mounts. In a side-by-side
+group, 3D opens on the *focused* panel's sheet (the one you last clicked); it never
+stitches sheets together.
+
+**What you're looking at.** Floors extrude as flat slabs at their condition's height (or
+a thin, translucent placeholder when no height is set—so an unmeasured extrusion never
+reads as a real wall). Base and other linear runs extrude as ribbon walls at their
+condition's H; count items place as unit posts at their point, scaled to height. Deducts
+(cutouts) render as a faint red translucent volume so what's missing from the bid is as
+visible as what's in it. Every condition gets its own **legend chip**—click one to hide or
+show that condition's geometry, refitting the camera to what's left visible. Scene notes
+(openings deducted, nominal-thickness fallbacks, and similar caveats already surfaced in
+2D) reappear here as in-scene captions and legend entries.
+
+**Isolating a room.** Select a shape on the 2D sheet first (Select tool, `V`), then open
+3D: the scene highlights that shape's room—itself, anything derived from it (base run,
+transitions), and any other shape sharing its room label—and hides shapes linked to a
+*different* room. A shape with no room linkage at all (most hand-traced walls and
+surfaces) stays visible either way; it can't be attributed to a room, so hiding it would
+silently shrink the scene rather than honestly scope it.
+
+**Controls.** Drag to orbit, scroll to zoom. **Explode** separates every condition's
+geometry vertically so overlapping layers (floor, base, transitions) are readable at a
+glance. **Section cut** slices the scene with a single movable plane—explode and section
+cut are mutually exclusive; picking one disables the other. A **reset view** button
+reframes on the current visible content. **Export** renders the current view to a PNG
+with a footer—sheet label, the sheet's scale, today's date, and a caveat line ("schematic
+— not as-built; openings deducted, not shown; verify in field").
+
+**Limitations, always on screen.** A persistent, non-dismissible label states what this
+view is not: no wall thickness, no door frames, no casework, flat single-elevation
+floors, a generic base profile, and openings deducted from quantities but not modeled as
+gaps. This is a schematic quantity check, not a BIM model or a construction drawing.
+
+**A known rendering artifact.** Where a traced boundary makes a sharp near-reversal
+turn—a tight jog back on itself—the ribbon/base geometry at that corner bevels rather
+than mitering cleanly, and can show a thin seam at the joint. It's a rendering artifact
+at that one corner, not a quantity error: the traced length and area behind it are
+unaffected.
+
+**Per-shape height override.** A condition sets a default extrude height, but an
+individual shape can carry its own override (set from the shape's edit panel on the 2D
+canvas)—useful for the one wall that's actually 10 ft when the rest of the base run is 4
+in.
+
+---
+
+## 19. Glossary — what the words mean here
 
 Most of these are ordinary estimating words. A few are specific to how OpenTakeoff works, and
 those are the ones worth pinning down before you rely on a number.
