@@ -63,6 +63,15 @@
 //             gesture, not a parent edit — and nothing counts. `restore`
 //             (undo of a draw, or an explicit delete of the reconciled
 //             deduct) unmints the deduct and puts the parent back verbatim.
+//   tileLayout M5 — shape.tile_layout carries a room's per-shape tile
+//             override (origin/rotation/edge_overrides/cut_sides/wet_tags):
+//             layout metadata the tile engine re-solves against, not
+//             geometry and not provenance, so — like rollcut — NO stamp.
+//             Forward apply shallow-merges `patch` over the shape's existing
+//             tile_layout (or mints it fresh). `restore` (presence-aware,
+//             `{tile_layout: value}` or `{}`) is the undo path: it sets the
+//             EXACT prior value back, or deletes the key entirely when the
+//             shape never carried one.
 // ─────────────────────────────────────────────────────────────────────────────
 import { mintUuid, nowIso, stampEdit, authorName } from "./provenance.js";
 import { assignShapeLabel } from "./shapeLabels.js";
@@ -87,6 +96,7 @@ export const PROVENANCE_POLICY = {
   ruleApply: "add semantics (created_at + id mint per shape, ONE undo entry per batch); caller-built rule_v1 origin carries rule_id + seed_shape_id",
   cutout: "#137 — mints the deduct (id + created_at) AND patches its parent's verts_norm/verts_norm_holes/computed as ONE undo entry; parent patch stamps nothing, nothing counts; restore unmints the deduct and reverts the parent verbatim. `runs` carries the OPEN-RUN half of the same ring — wall tile and base are polylines, so the deduct CLIPS them (patch + mint the far side of a middle cut + delete a run swallowed whole) inside this one entry, and a ring that crosses only runs mints no deduct at all",
   rollcut: "#136 — NO stamp: a manual roll-cut override (slide/resize/reorder/reset) writes LAYOUT metadata (shape.roll_layout) over the shape, never its geometry or provenance; a row without roll_layout clears the key; `prev` (grab-time rows) builds the inverse when a live preview already wrote the final state",
+  tileLayout: "M5 — no stamp: shallow-merges `patch` over shape.tile_layout (or mints it); `restore` (presence-aware `{tile_layout: value}` or `{}`) sets the exact prior value back, or deletes the key when the shape never had one",
 };
 
 // Undo depth — one bounded gesture history, not an archive (revisions are).
@@ -397,6 +407,38 @@ export function applyShapeCommand(shapes, cmd) {
         return rest;
       });
       return { shapes: next, inverse: { type: "rollcut", rows: prevRows } };
+    }
+    case "tileLayout": {
+      // M5 — per-shape tile-layout override (§2.C/§2.I): shape.tile_layout
+      // carries the panel's origin/rotation/edge_overrides/cut_sides/wet_tags
+      // knobs the tile engine re-solves against. Layout metadata, not
+      // geometry and not provenance — NO stamp, same non-edit rule as
+      // label/rollcut. `cmd.restore` (presence-aware, `{tile_layout: value}`
+      // or `{}`) is the undo path: it SETS the exact prior value back, or
+      // DELETES the key when the shape never carried one. Forward apply
+      // (no `restore`) shallow-merges `cmd.patch` over the shape's existing
+      // tile_layout, minting it when absent — merge, not replace, because a
+      // panel edit (e.g. `{rotation}`) must not clobber sibling fields
+      // (`origin`, `edge_overrides`, …) it didn't touch.
+      if (cmd.restore) {
+        const s = shapes.find((sh) => sh.id === cmd.id);
+        const redo = s && "tile_layout" in s ? { tile_layout: s.tile_layout } : {};
+        const next = shapes.map((sh) => {
+          if (sh.id !== cmd.id) return sh;
+          if ("tile_layout" in cmd.restore) return { ...sh, tile_layout: cmd.restore.tile_layout };
+          if (!("tile_layout" in sh)) return sh;
+          const { tile_layout: _tl, ...rest } = sh;   // restore-to-absent = key gone, never undefined
+          return rest;
+        });
+        return { shapes: next, inverse: { type: "tileLayout", id: cmd.id, restore: redo } };
+      }
+      let prior = {};
+      const next = shapes.map((sh) => {
+        if (sh.id !== cmd.id) return sh;
+        prior = "tile_layout" in sh ? { tile_layout: sh.tile_layout } : {};
+        return { ...sh, tile_layout: { ...(sh.tile_layout || {}), ...cmd.patch } };
+      });
+      return { shapes: next, inverse: { type: "tileLayout", id: cmd.id, restore: prior } };
     }
     case "review": {
       if (cmd.restore) {

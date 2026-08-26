@@ -58,7 +58,7 @@ function roundTrip(shapes: any[], cmd: any) {
 // ── policy completeness ──────────────────────────────────────────────────────
 
 test("every applied command type has a PROVENANCE_POLICY row; unknown types throw", () => {
-  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "cutout"]) {
+  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "cutout", "tileLayout"]) {
     assert.ok(t in PROVENANCE_POLICY, `policy row missing for ${t}`);
   }
   assert.throws(() => applyShapeCommand([], { type: "resize" } as any), /PROVENANCE_POLICY/);
@@ -535,6 +535,50 @@ test("rollcut: multi-row (a reorder) is ONE command with one exact inverse", () 
   const r = applyShapeCommand(shapes, cmd);
   assert.deepEqual(r.shapes[0].roll_layout.lanes[0], { runMin: 1, runMax: 9, seq: 0 });
   assert.deepEqual(applyShapeCommand(r.shapes, r.inverse).shapes, shapes);
+});
+
+// ── tileLayout (M5 — per-shape tile-layout override, presence-aware, no stamp)
+
+test("tileLayout: sets tile_layout on a shape with none; inverse removes the key entirely", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]] },
+  ];
+  const patch = { origin: [0.1, 0.1], rotation_deg: 15 };
+  const r = roundTrip(shapes, { type: "tileLayout", id: "a", patch });
+  assert.deepEqual(r.shapes[0].tile_layout, patch);
+  assert.equal(r.shapes[0].updated_at, undefined, "no stamp — a layout override is not a geometry edit");
+  assert.deepEqual(r.inverse, { type: "tileLayout", id: "a", restore: {} });
+  const undone = applyShapeCommand(r.shapes, r.inverse);
+  assert.equal("tile_layout" in undone.shapes[0], false, "undo must remove the key, not leave {} or undefined");
+  assert.deepEqual(undone.shapes, shapes);
+});
+
+test("tileLayout: merges patch onto an existing tile_layout; inverse restores the exact prior object", () => {
+  const shapes = [
+    {
+      id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]],
+      tile_layout: { origin: [0, 0], rotation_deg: 0, cut_sides: ["N"] },
+    },
+  ];
+  const patch = { rotation_deg: 45, edge_overrides: { 0: "trim" } };
+  const r = roundTrip(shapes, { type: "tileLayout", id: "a", patch });
+  assert.deepEqual(r.shapes[0].tile_layout, {
+    origin: [0, 0], rotation_deg: 45, cut_sides: ["N"], edge_overrides: { 0: "trim" },
+  }, "patch shallow-merges over the existing tile_layout — untouched fields survive");
+  assert.deepEqual(r.inverse, { type: "tileLayout", id: "a", restore: { tile_layout: shapes[0].tile_layout } });
+  const undone = applyShapeCommand(r.shapes, r.inverse);
+  assert.deepEqual(undone.shapes, shapes, "undo restores the exact prior tile_layout object");
+});
+
+test("tileLayout: input array and shape object are never mutated", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]], tile_layout: { origin: [0, 0] } },
+  ];
+  const before = clone(shapes);
+  const r = applyShapeCommand(shapes, { type: "tileLayout", id: "a", patch: { rotation_deg: 90 } });
+  assert.notEqual(r.shapes, shapes, "apply must return a new array");
+  assert.notEqual(r.shapes[0], shapes[0], "apply must return a new shape object for the touched shape");
+  assert.deepEqual(shapes, before, "the input array/shape must be untouched");
 });
 
 // ── author at mint (#314) ────────────────────────────────────────────────────
