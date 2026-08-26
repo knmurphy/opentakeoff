@@ -716,20 +716,13 @@ export default function TakeoffCanvas() {
   const importInputRef = useRef(null);                  // hidden <input type=file> for "Import takeoff…" (the agent-JSON handoff)
   const profileInputRef = useRef(null);                 // hidden <input type=file> for "Import profile…" (#299)
 
+  // The gesture/pointer viewport div. SplitLayout is ALWAYS mounted at this
+  // subtree's slot (see SplitLayout.jsx's header comment), so this node's
+  // identity is stable for the component's whole lifetime — no split
+  // enter/exit, flip, or ratio drag ever remounts it, and effects that
+  // addEventListener() on it once at setup (wheel, below) don't need to
+  // re-subscribe on a node-identity change that no longer happens.
   const containerRef = useRef(null);
-  // viewportEl mirrors containerRef.current into state, JUST for effects that
-  // need to re-subscribe when the node itself changes identity — e.g. wheel
-  // below, which addEventListener()s once at effect-setup and would silently
-  // go deaf on a node it no longer points to. Entering/leaving split swaps
-  // this div's parent type (bare wrapper <-> SplitLayout's pane div) at its
-  // JSX slot, so React unmounts/remounts the whole primary subtree and
-  // containerRef.current becomes a fresh node with no listener attached — a
-  // plain useRef update wouldn't tell a dependency array anything changed.
-  // Everything else here reads containerRef.current fresh per call (plain
-  // functions / React-dispatched handlers), so this is intentionally the
-  // one exception, not a wholesale ref-to-state migration.
-  const [viewportEl, setViewportEl] = useState(null);
-  const setContainerRef = useCallback((el) => { containerRef.current = el; setViewportEl(el); }, []);
   const stageRef = useRef(null);
   const panelCanvasRefs = useRef(new Map()); // sheetKey → <canvas> (base layer — small backing store, coarse pyramid placeholder)
   const pageObjsRef = useRef(new Map());     // sheetKey → pdf.js page object (getOperatorList/getTextContent only — painting moved to the tile worker pool)
@@ -1803,21 +1796,6 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [darkMode]);
 
-  // split-view mount/unmount: entering or leaving split swaps the viewport's
-  // parent element type at its slot (bare div <-> SplitLayout's pane div), so
-  // React unmounts and remounts the whole primary subtree — fresh <canvas>
-  // elements start blank (default 300x150 backing store) until repainted.
-  // Same repaint as the dark-mode toggle above; cheap, since tileCompositor
-  // caches the base bitmap and paintBase just redraws from it.
-  useEffect(() => {
-    if (status !== "ready") return;
-    for (const d of drawPanels) {
-      const cv = panelCanvasRefs.current.get(d.drawKey);
-      if (cv && d.w) getCompositor().paintBase(cv, d.drawKey, d.w, d.h, darkModeRef.current);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [Boolean(splitView)]);
-
   // ── render the sheet group (a single sheet is a group of one) ──────────────
   // Two phases: (A) resolve every panel's LOGICAL dimensions — page-points ×
   // RENDER_SCALE, fixed forever, never rastered directly (see tiles.ts's
@@ -2605,7 +2583,7 @@ export default function TakeoffCanvas() {
   // carried while events keep arriving <300ms apart, so momentum tails keep
   // panning and a fast spin keeps zooming.
   useEffect(() => {
-    const el = viewportEl; if (!el) return;
+    const el = containerRef.current; if (!el) return;
     let glide = 0, gx = 0, gy = 0, raf = 0;
     let kind = "", kindUntil = 0;   // per-burst wheel-device classification
     const wheelKind = (e) => {
@@ -2659,7 +2637,7 @@ export default function TakeoffCanvas() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => { el.removeEventListener("wheel", onWheel); if (raf) cancelAnimationFrame(raf); };
-  }, [applyTf, scheduleSync, zoomAround, promoteStage, viewportEl]);
+  }, [applyTf, scheduleSync, zoomAround, promoteStage]);
 
   // Space = temporary pan (any tool)
   useEffect(() => {
@@ -7216,15 +7194,15 @@ export default function TakeoffCanvas() {
     );
   }
 
-  // width/height:100% alongside flex:1 below — flex:1 sizes this div in the
-  // single-canvas path (parent is the row wrapper, display:flex), but inside
-  // SplitLayout's primary pane (a plain block, not a flex container) flex:1
-  // is inert and this div's only content is position:absolute (out of
-  // flow), so without an explicit height it collapses to 0. width/height:
-  // 100% make it self-sizing either way.
+  // This div always lives inside SplitLayout's primary pane (a plain block,
+  // not a flex container — SplitLayout itself is the flex item that claims
+  // the row's space), and its only content is position:absolute (out of
+  // flow), so without an explicit height it would collapse to 0. width/
+  // height:100% make it self-sizing off its parent's box (percent-flex or
+  // full-bleed, whichever SplitLayout gave that pane).
   const primaryViewport = (
-       <div style={{ flex: 1, width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-        <div ref={setContainerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
+       <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
+        <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={leaveCanvas} onContextMenu={(e) => e.preventDefault()}
           onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "select" ? "default" : "none", touchAction: "none" }}>
@@ -8952,17 +8930,27 @@ export default function TakeoffCanvas() {
            </div>
          </div>
        )}
-       {splitView ? (
-         <SplitLayout
-           orientation={splitView.orientation}
-           ratio={splitView.ratio}
-           onRatioChange={(r) => setSplitView((s) => s && { ...s, ratio: r })}
-           onFlip={() => setSplitView((s) => s && { ...s, orientation: s.orientation === "v" ? "h" : "v" })}
-           onCollapse={() => setSplitView(null)}
-           primary={primaryViewport}
-           reference={<div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div>}
-         />
-       ) : primaryViewport}
+       {/* ALWAYS mounted — reference={null} is how "no split" renders (see
+           SplitLayout.jsx). This is what keeps primaryViewport's element type
+           and tree position stable across every split toggle, so the primary
+           canvas subtree never unmounts/remounts on enter/exit/flip/drag. */}
+       <SplitLayout
+         orientation={splitView?.orientation ?? "v"}
+         ratio={splitView?.ratio ?? 1}
+         onRatioChange={(r) => {
+           // hold the gesture window open for every drag tick, same idiom as
+           // wheel-zoom/panel-resize — the detail-tile resync effect depends
+           // on splitView (ratio changes its identity every tick) and would
+           // otherwise re-fire paintDetail worker requests on every pointermove;
+           // this defers the real resync to one shot on drag settle.
+           gestureUntilRef.current = performance.now() + GESTURE_MS;
+           setSplitView((s) => s && { ...s, ratio: r });
+         }}
+         onFlip={() => setSplitView((s) => s && { ...s, orientation: s.orientation === "v" ? "h" : "v" })}
+         onCollapse={() => setSplitView(null)}
+         primary={primaryViewport}
+         reference={splitView ? <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div> : null}
+       />
 
         {/* Agent panel — DOCKED right-rail sibling (reflows the canvas like the
             Takeoffs panel). Honest empty state until the BYO-AI seam is
