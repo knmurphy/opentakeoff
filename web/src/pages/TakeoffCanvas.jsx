@@ -40,6 +40,7 @@ import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
 import { serializeSplitView, normalizeSplitView } from "../lib/splitView"; // SPLIT_MAX_TOTAL_SHEETS lands with Task 8's tile-pool budget
 import SplitLayout from "../components/SplitLayout.jsx";
+import ReferencePane from "../components/ReferencePane.jsx";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isStitchKey, mintStitchId, sanitizeStitches, autoButt, stitchExtent, alignMembers, seamClips, mergePoints, mergeSegs, stitchAlive, stitchLayoutSig } from "../lib/stitches";
 import { isCanvasBusy } from "../lib/canvasBusy";
@@ -361,6 +362,18 @@ export default function TakeoffCanvas() {
   useEffect(() => {
     if (import.meta.env.DEV) { window.__otSetSplit = setSplitView; return () => { delete window.__otSetSplit; }; }
   }, []);
+  // ── reference pane resolution (Task 3) — independent of panelImgs/groupKeys ──
+  // panelImgs is fully REPLACED on every group render (see setPanelImgs in the
+  // group effect below), so a referenced sheet outside the primary group needs
+  // its own dims + open/paint lifecycle, never borrowed from that map.
+  const [refPanelImg, setRefPanelImg] = useState(null);   // {w,h} for splitView.refKey once resolved; null while unresolved/loading
+  const [refInvalid, setRefInvalid] = useState(null);      // the refKey string that's currently known unresolvable, or null
+  const [refEpoch, setRefEpoch] = useState(0);              // bumped every time this refKey's compositor entry is (re)opened — repaint signal independent of panelImg's identity
+  // Dangling refKey (a stale key from a removed sheet, a bad debug-hook call,
+  // an out-of-range page): never frame the wrong sheet — suppress refKey down
+  // to null the moment it's known bad, same as "no split reference" at all.
+  const rawRefKey = splitView?.refKey || null;
+  const effectiveRefKey = rawRefKey && refInvalid === rawRefKey ? null : rawRefKey;
 
   const [scales, setScales] = useState({});
   const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
@@ -741,6 +754,7 @@ export default function TakeoffCanvas() {
   // recreates it.
   const compositorRef = useRef(null);
   const getCompositor = () => (compositorRef.current ??= createTileCompositor());
+  const refDimsRef = useRef(null); // { key: refKey, w, h } for the CURRENTLY resolved reference sheet, or null — read by paintReferenceBase
   const detailCanvasRefs = useRef(new Map()); // sheetKey → <canvas> (one detail/viewport layer PER PANEL now, not one shared global — every group-mode panel gets independent sharpness)
   const detailKeysRef = useRef(new Map());    // sheetKey → last requested crop key (per-panel render-key dedup, generalizing the old single detailKeyRef)
   const detailCancelsRef = useRef(new Map()); // sheetKey → disposer for the in-flight paintDetail call
@@ -1780,6 +1794,72 @@ export default function TakeoffCanvas() {
       pdfDocsRef.current.set(file, t);
     }
     return t.then((task) => task.promise);
+  }, []);
+
+  // ── reference pane: resolve refKey → dims, open + base-paint it (Task 3) ───
+  // Independent of the group render effect below: the referenced sheet may not
+  // be (and usually isn't) a member of the primary group. Runs the same
+  // doc→page→viewport resolution resolveSource does, but never clamps an
+  // out-of-range page — a dangling refKey must show the empty state, never a
+  // silently-substituted page (see effectiveRefKey above).
+  //
+  // Keyed on groupSig too: the group effect's resetAll() wipes EVERY
+  // compositor entry (base+detail, this pane's `ref::`-prefixed one included)
+  // on every primary sheet/group change, so this must re-open+repaint in step
+  // or a primary tab switch would silently blank an active reference pane.
+  // resetAll() runs synchronously in that effect's body; this effect's actual
+  // openSheet call only ever lands after an await, so it always lands after
+  // resetAll() regardless of hook declaration order.
+  useEffect(() => {
+    const refKey = rawRefKey;
+    // Only clear the CURRENT dims/paint state when refKey itself changed —
+    // a groupSig-only resync (the primary's resetAll() case, same refKey)
+    // must reopen+repaint the compositor entry WITHOUT wiping refPanelImg,
+    // or ReferencePane's fit-to-view effect (keyed on panelImg's identity)
+    // would re-fit and silently undo the user's own pan/zoom on this pane
+    // every time they switch the primary's sheet.
+    const sameKey = refKey && refDimsRef.current?.key === refKey;
+    if (!sameKey) { setRefPanelImg(null); refDimsRef.current = null; }
+    if (!refKey) return;
+    if (isStitchKey(refKey)) { setRefInvalid(refKey); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { file, page: pn } = parseSheetKey(refKey);
+        const pdf = await docFor(file);
+        if (cancelled) return;
+        if (pn < 1 || pn > (pdf.numPages || 1)) throw new Error("page out of range");
+        const pageObj = await pdf.getPage(pn);
+        if (cancelled) return;
+        const viewport = pageObj.getViewport({ scale: RENDER_SCALE });
+        const w = Math.ceil(viewport.width), h = Math.ceil(viewport.height);
+        getCompositor().openSheet(`ref::${refKey}`, pn, store.loadPdfData(file), w, h);
+        refDimsRef.current = { key: refKey, w, h };
+        // preserve object identity when dims didn't actually change (the
+        // common groupSig-resync case) — see the sameKey comment above
+        setRefPanelImg((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+        setRefInvalid((prev) => (prev === refKey ? null : prev));
+        setRefEpoch((e) => e + 1);
+      } catch {
+        if (cancelled) return;
+        refDimsRef.current = null;
+        setRefPanelImg(null);
+        setRefInvalid(refKey);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- docFor/getCompositor are stable; groupSig is the resetAll()-invalidation signal, same idiom as the group effect below
+  }, [rawRefKey, groupSig]);
+
+  // Stable identity (empty deps, reads refs only) so ReferencePane's paint
+  // effect doesn't refire on every TakeoffCanvas render (e.g. a primary pan
+  // tick) — only on a real refKey/epoch change. Guards against a stale call
+  // for a since-changed refKey (drawKey no longer matches the latest resolve).
+  const paintReferenceBase = useCallback((drawKey, canvasEl) => {
+    if (!canvasEl) return;
+    const d = refDimsRef.current;
+    if (!d || `ref::${d.key}` !== drawKey) return;
+    getCompositor().paintBase(canvasEl, drawKey, d.w, d.h, darkModeRef.current);
   }, []);
 
   // dark toggle: repaint the base layer of every already-loaded panel at the
@@ -8949,7 +9029,9 @@ export default function TakeoffCanvas() {
          onFlip={() => setSplitView((s) => s && { ...s, orientation: s.orientation === "v" ? "h" : "v" })}
          onCollapse={() => setSplitView(null)}
          primary={primaryViewport}
-         reference={splitView ? <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div> : null}
+         reference={splitView ? (
+           <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} epoch={refEpoch} />
+         ) : null}
        />
 
         {/* Agent panel — DOCKED right-rail sibling (reflows the canvas like the
