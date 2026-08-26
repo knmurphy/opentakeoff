@@ -97,3 +97,24 @@ pre-existing parser suite unchanged.
   row still emits under the misread tag. The harness now reports fuzzy-tag
   recall to separate this from parser behavior; recovering the tag in
   production (so `normalizeScanRows` doesn't drop it) is future parser work.
+
+### Non-blocking residuals (recorded, adversarial review round 2)
+
+Known limits of the fixes above, none affecting the shipped vector path or the
+acceptance criteria:
+
+1. **The `filled < 2` junk gate drops a code-ONLY row.** A row where the engine
+   read only the CODE cell (or whose other cells all banded into CODE) is
+   dropped — the deliberate recall/precision trade that suppresses lone-token
+   junk. A row with just a tag carries no takeoff value anyway.
+2. **A bare, unsuffixed section-word code is still absorbed as a section.**
+   `BASE`/`WALL`/`TRIM`/`FLOOR` as a lone first cell (no dash-suffix) is read as
+   a section header, so no row. Real finish tags almost always carry a suffix
+   (`RB-1`), so exposure is low; the dash guard only rescues suffixed codes.
+3. **A multi-word note that bands across ≥ 2 columns can still emit a row**
+   (`GC TO VERIFY ALL` → a `GC` row). The `filled ≥ 2` gate stops lone notes,
+   not prose that spreads across the table; it surfaces in `rowPrecision`.
+4. **`clusterRows` tolerance keys off the incoming token's height**
+   (`tol = max(h·0.6, 4)`), so an unusually tall cell box (a wrapped multi-line
+   remark) that sorts first in a row could merge it upward. Not observed on the
+   test layouts; a latent PaddleOCR cell-box hazard.

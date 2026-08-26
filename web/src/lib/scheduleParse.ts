@@ -244,8 +244,10 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const r = rows[i];
     // A repeated header (a second stacked table) is a separator, never data —
-    // its "CODE" cell is code-shaped and would otherwise leak a row.
-    if (isHeaderRow(r)) continue;
+    // its "CODE" cell is code-shaped and would otherwise leak a row. It also
+    // starts a NEW table, so clear the section (table 1's last section must not
+    // bleed into table 2's rows).
+    if (isHeaderRow(r)) { section = ""; sectionCat = null; continue; }
     // A section label updates the current category and is not itself a row.
     const s = asSectionRow(r);
     if (s) { section = s.key; sectionCat = s.cat; continue; }

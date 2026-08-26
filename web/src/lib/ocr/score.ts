@@ -143,20 +143,29 @@ export function scoreRows(gt: ScheduleRow[], pred: ScheduleRow[], opts: ScoreOpt
     const k = normField(p.finish_tag);
     pool.set(k, [...(pool.get(k) ?? []), p]);
   }
-  const take = (want: string): ScheduleRow | undefined => {
-    const exact = pool.get(want);
-    if (exact?.length) return exact.shift();
-    if (tagEdits > 0) {
-      for (const [k, q] of pool) {
-        if (q.length && k.length && levenshtein(want, k) <= tagEdits) return q.shift();
-      }
-    }
-    return undefined;
-  };
+  // Two-pass matching so a fuzzy match can't steal a tag an exact match needs
+  // (near-collision tags like CT-2 / CT-3): reserve ALL exact matches first,
+  // then assign the remainder to the NEAREST unused tag within `tagEdits`.
   const pairs: [ScheduleRow, ScheduleRow][] = [];
+  const unmatched: ScheduleRow[] = [];
   for (const g of gt) {
-    const p = take(normField(g.finish_tag));
+    const q = pool.get(normField(g.finish_tag));
+    const p = q?.length ? q.shift() : undefined;
     if (p) pairs.push([g, p]);
+    else unmatched.push(g);
+  }
+  if (tagEdits > 0) {
+    for (const g of unmatched) {
+      const want = normField(g.finish_tag);
+      let best: ScheduleRow[] | null = null;
+      let bestD = Infinity;
+      for (const [k, q] of pool) {
+        if (!q.length || !k.length) continue;
+        const d = levenshtein(want, k);
+        if (d <= tagEdits && d < bestD) { bestD = d; best = q; }
+      }
+      if (best) pairs.push([g, best.shift()!]);
+    }
   }
   const tagCounts = new Map<string, number>();
   for (const p of pred) tagCounts.set(normField(p.finish_tag), (tagCounts.get(normField(p.finish_tag)) ?? 0) + 1);
