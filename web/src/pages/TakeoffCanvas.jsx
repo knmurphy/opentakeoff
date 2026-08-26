@@ -196,10 +196,17 @@ const ROLE_TIER = { floor_area: 0, deduct: 1, linear: 2, surface_area: 2, count:
 const tierOf = (s) => ROLE_TIER[s.measure_role] ?? 0;
 
 // True while a vertex/edge/body gesture is dragging a real shape (dragRef.kind).
-// The whole-project recompute memos freeze on these — one ring is moving, the
-// rest of the takeoff holds its pre-drag figure and snaps fresh on release.
-// markupMove is excluded: it commits through setMarkups and never touches
-// `shapes`. (Matches perf/drag-gate-roll-recompute's helper verbatim.)
+// The whole-project totals + roll layout freeze on these — one ring is moving,
+// the rest of the takeoff can hold its pre-drag figure and snap fresh on
+// release. markupMove is deliberately NOT included: it commits through
+// setMarkups and never changes `shapes`, so it neither needs the freeze nor
+// would ever reopen the gated memos (which would leave them stale).
+//
+// Each gated memo below (rollTakeoff / visRows / projRows / zoneRows) caches its
+// last computed value into a useRef DURING render — a deliberate escape hatch,
+// not an oversight. It is safe because the cached value is a pure function of the
+// memo's deps: a discarded or StrictMode-doubled render writes the identical
+// value the committed render would, so the freeze can never observe a torn one.
 const isGeomDrag = (d) => d?.kind === "vertex" || d?.kind === "edge" || d?.kind === "move";
 
 // The tools whose boundary can bend mid-measure (#284): the same click, the
@@ -1146,8 +1153,19 @@ export default function TakeoffCanvas() {
   // speak feet. Memoized off geometry/config, never the transform: pan/zoom
   // must not re-figure a roll. uppFor reads `scales` (a dep) plus a ref pinned
   // to RENDER_SCALE, so the dep list is honest.
+  // A geometry drag replaces `shapes` every pointermove; re-figuring every roll
+  // room in the open group per frame is the drag-jank source. The gesture moves
+  // ONE ring, so hold the last figured layout while it's live and recompute
+  // canonically on release: onPointerUp clears dragRef BEFORE the commit
+  // replaces `shapes`, so the very next render runs this memo fresh.
+  const lastRollRef = useRef(null);
   const rollTakeoff = useMemo(
-    () => computeRollTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k)),
+    () => {
+      if (isGeomDrag(dragRef.current) && lastRollRef.current) return lastRollRef.current;
+      const r = computeRollTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k));
+      lastRollRef.current = r;
+      return r;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor reads scales (listed) + renderScalesRef pinned to RENDER_SCALE; listing it would re-figure rolls on every render
     [conditions, shapes, panelImgs, scales]   // uppFor: scales + a pinned ref
   );
@@ -6817,7 +6835,19 @@ export default function TakeoffCanvas() {
   // VISIBLE shapes through the same conditionTotals rules the Report uses —
   // one source of role math, two scopes. Memoized: visRowById is a prop of the
   // memoized panel, so its identity must only change when the totals can.
-  const visRows = useMemo(() => conditionTotals(conditions, visibleShapes, seamCtx), [conditions, visibleShapes, seamCtx]);
+  // Frozen during a geometry drag alongside rollTakeoff (approved contract: the
+  // side-panel totals hold still, then snap on release) — conditionTotals over
+  // the whole project runs per pointermove otherwise. These feed only display
+  // (visRowById/projRowById → the memoized panel + condRow), never an effect,
+  // persist, or export, so a one-frame-stale read has no blast radius past the
+  // numbers on screen; the commit replaces shapes/visibleShapes and recomputes.
+  const lastVisRef = useRef(null);
+  const visRows = useMemo(() => {
+    if (isGeomDrag(dragRef.current) && lastVisRef.current) return lastVisRef.current;
+    const r = conditionTotals(conditions, visibleShapes, seamCtx);
+    lastVisRef.current = r;
+    return r;
+  }, [conditions, visibleShapes, seamCtx]);
   const visRowById = useMemo(() => new Map(visRows.map((r) => [r.id, r])), [visRows]);
   // Whole-project per-condition totals — the number the bid is built on. The
   // panel's rows lead with the visible-sheet slice (what you're looking at);
@@ -6825,7 +6855,13 @@ export default function TakeoffCanvas() {
   // open sheets show, so a condition whose takeoffs live on closed sheets
   // reads "Σ 412 SF" instead of a dead "—" (the whole-project number used to
   // exist only in the Report/exports). Same conditionTotals rules, no filter.
-  const projRows = useMemo(() => conditionTotals(conditions, shapes, seamCtx), [conditions, shapes, seamCtx]);
+  const lastProjRef = useRef(null);
+  const projRows = useMemo(() => {
+    if (isGeomDrag(dragRef.current) && lastProjRef.current) return lastProjRef.current;
+    const r = conditionTotals(conditions, shapes, seamCtx);
+    lastProjRef.current = r;
+    return r;
+  }, [conditions, shapes, seamCtx]);
   const projRowById = useMemo(() => new Map(projRows.map((r) => [r.id, r])), [projRows]);
   // ── load-time quantity heal (#137) ─────────────────────────────────────────
   // A shape can ARRIVE without the numbers its role requires (an import that
@@ -6870,6 +6906,11 @@ export default function TakeoffCanvas() {
   // Zone check: the SAME conditionTotals rules on the shapes whose center point
   // sits inside the traced zone (lib/zone.js) — third scope of the one role math.
   const zoneShapes = useMemo(() => (zoneCheck ? shapesInZone(shapes, zoneCheck) : null), [shapes, zoneCheck]);
+  // Deliberately NOT drag-frozen (unlike visRows/projRows): the [tool] effect
+  // clears zoneCheck the instant you leave the zone tool (`if (tool !== "zone")
+  // resetZone()`), and a shape geometry drag only ever arms in the Select tool —
+  // so an active zone and a geom drag are mutually exclusive. zoneShapes is
+  // always null during a drag, so there is nothing here to hold still.
   const zoneRows = useMemo(
     () => (zoneShapes ? conditionTotals(conditions, zoneShapes, seamCtx).filter((r) => r.shape_count > 0) : null),
     [conditions, zoneShapes, seamCtx]
