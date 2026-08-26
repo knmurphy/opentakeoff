@@ -25,6 +25,7 @@ import Coordinate from "jsts/org/locationtech/jts/geom/Coordinate.js";
 import OverlayOp from "jsts/org/locationtech/jts/operation/overlay/OverlayOp.js";
 import { installedFace } from "../tilePitch.ts";
 import type { TileQuad } from "../tilePatterns/types.ts";
+import { inToFt, ftToIn } from "../tileUnits.ts";
 
 export type CellClass = "full" | "cut" | "corner" | "hole" | "out";
 export type Classified = {
@@ -259,7 +260,7 @@ export function classifyLayout(
   // This codebase's `_in` suffix always means inches (tileSetup.ts's
   // TileJoint.width_in); tilePitch.ts's `j` is feet, matching TileQuad's
   // own units, so the joint is converted once here at the module boundary.
-  const jointFt = joint_in / 12;
+  const jointFt = inToFt(joint_in);
   const outerClosed = closeRing(roomRing);
   const edges = roomEdges(outerClosed);
   const shell: JstsGeometry = gf.createPolygon(ring(gf, windAs(outerClosed, true)));
@@ -287,8 +288,8 @@ export function classifyLayout(
     let w_in = 0, h_in = 0;
     if (bbox) {
       const halfW = face.w / 2, halfH = face.h / 2;
-      w_in = Math.max(0, Math.min(bbox.maxX, halfW) - Math.max(bbox.minX, -halfW)) * 12;
-      h_in = Math.max(0, Math.min(bbox.maxY, halfH) - Math.max(bbox.minY, -halfH)) * 12;
+      w_in = ftToIn(Math.max(0, Math.min(bbox.maxX, halfW) - Math.max(bbox.minX, -halfW)));
+      h_in = ftToIn(Math.max(0, Math.min(bbox.maxY, halfH) - Math.max(bbox.minY, -halfH)));
     }
     const largest = largestPolygonPart(kept);
     const keptRing = largest ? exteriorRingPts(largest) : null;

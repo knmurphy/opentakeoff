@@ -2,6 +2,7 @@
 import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
 import { gridGenerator } from "./grid.ts";
 import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
+import { degToRad } from "../tileUnits.ts";
 
 export const diagonalGenerator: PatternGenerator = {
   name: "diagonal",
@@ -12,7 +13,7 @@ export const diagonalGenerator: PatternGenerator = {
     // explicit rotation_deg now overrides that default like every other
     // generator.
     const rotDeg = input.rotation_deg || 45;
-    const angle = rotDeg * Math.PI / 180;
+    const angle = degToRad(rotDeg);
     // generate over the rotation-correct generation bounds (pattern.ts) so
     // the rotated lattice still fully covers the room from any origin
     const big = genBoundsForRotation(input.bounds, input.origin, angle);

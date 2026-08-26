@@ -21,6 +21,7 @@ import type { TileConfig } from "./tileSetup.ts";
 import type { TileLayout } from "./tileSolve.ts";
 import type { CellClass } from "./tileGeometry/classify.ts";
 import { TILE_OVERLAY_MIN_CELL_PX } from "./canvasConstants.js";
+import { inToFt } from "./tileUnits.ts";
 
 export { TILE_OVERLAY_MIN_CELL_PX };
 
@@ -49,7 +50,7 @@ export function tileOverlayPrimitives(
   upp: number,
   skuColor: (skuId: string) => string,
 ): TileOverlayResult {
-  const joint_ft = layout.config.joint_in / 12;
+  const joint_ft = inToFt(layout.config.joint_in);
   const tiles: TileOverlayTile[] = [];
   for (const c of layout.classified) {
     if (c.cls === "out") continue;
@@ -72,9 +73,9 @@ export function tileOverlayPrimitives(
 // On-screen px of the smaller installed-cell dimension, at panel px-per-ft
 // `upp` and stage `scale`. The #6 hatch<->grid LOD switch reads this.
 export function overlayCellPx(config: TileConfig, upp: number, scale: number): number {
-  const w = config.w_in / 12;
-  const h = config.h_in / 12;
-  const j = config.joint_in / 12;
+  const w = inToFt(config.w_in);
+  const h = inToFt(config.h_in);
+  const j = inToFt(config.joint_in);
   const face = installedFace(w, h, j);
   return (Math.min(face.w, face.h) / upp) * scale;
 }

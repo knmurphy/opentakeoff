@@ -59,7 +59,6 @@ import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
 import { computeTileTakeoff, tileReportRows } from "../../web/src/lib/tileTakeoff.js";
 import { hasTileSetup, mintTileSetup, type TileSetup, type TileConfig } from "../../web/src/lib/tileSetup.ts";
-import type { TileCounts } from "../../web/src/lib/tileCalc/tiles.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
 // Copied from the canvas (web/src/pages/TakeoffCanvas.jsx) so conditions and
@@ -272,7 +271,7 @@ export interface Shape {
    * the hole), and delete restores the parent it cut. */
   cuts_shape_id?: string;
   /** Tile-patterning per-room override (M5, #tile) — origin/rotation/
-   * cut_sides/edge_overrides/wet_tags that override the condition's
+   * edge_overrides/wet_tags that override the condition's
    * tile_setup defaults for THIS room, written by the canvas's undoable
    * tileLayout shape command (web/src/lib/shapeCommands.js). Opaque here,
    * same posture as Condition.tile_setup — this server never solves against
@@ -3826,7 +3825,7 @@ export class Session {
     // exportReport's tile_goods reads (session.ts:3843) — never re-solved, so
     // a headless snapshot and the report block can never disagree about a
     // shape's classified counts.
-    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byShape: Map<string, { counts: TileCounts; layout: { config: TileConfig } }> };
+    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor);
     if (!byShape.size) return [];
     const condById = new Map(this.conditions.map((c) => [c.id, c]));
     const out: TileLayoutSnapshot[] = [];
@@ -3904,7 +3903,7 @@ export class Session {
     // tile goods (Task 8): the same pure seam the canvas report will use —
     // figured off the SAME dimsFor/uppFor rollInputs() already resolved, so a
     // tile condition and a roll condition on the same sheet agree on scale.
-    const { byCond: tileByCond } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byCond: Map<string, unknown> };
+    const { byCond: tileByCond } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor);
     return reportJson({
       projectName,
       rows,

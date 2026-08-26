@@ -110,18 +110,6 @@ test("tileLayoutSig: shape.tile_layout.edge_overrides changes flip the sig", () 
   assert.notEqual(b, c);
 });
 
-test("tileLayoutSig: shape.tile_layout.cut_sides changes flip the sig, order-independent", () => {
-  const ts = mintTileSetup();
-  const a = tileLayoutSig(shape({ tile_layout: { cut_sides: [0, 2] } }), ts);
-  const b = tileLayoutSig(shape({ tile_layout: { cut_sides: [0, 1] } }), ts);
-  assert.notEqual(a, b);
-
-  // Same set, different insertion order, must hash identically — cut_sides
-  // is an unordered index set, not a sequence.
-  const c = tileLayoutSig(shape({ tile_layout: { cut_sides: [2, 0] } }), ts);
-  assert.equal(a, c);
-});
-
 test("tileLayoutSig: scale/zoom is not an input — no scale parameter exists, so identical shape+tile_setup always match regardless of any on-screen zoom/scale the caller happens to be at", () => {
   const s = shape();
   const ts = mintTileSetup();

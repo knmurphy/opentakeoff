@@ -103,7 +103,7 @@ test("instantiateTemplate deep-copies tile_setup (no shared reference)", () => {
   const cond = { finish_tag: "CT-1", color: "#9333ea", waste_pct: 10, materials: [],
     tile_setup: { pattern: "grid", origin: [0, 0], rotation_deg: 0, edge_strategy: "balanced",
       skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
-      joint: { width_in: 0.125 }, grout: {} } };
+      joint: { width_in: 0.125 } } };
   const tpl = instantiateTemplate(cond);             // canvasUtil.js's condition-template constructor (roll_setup precedent at line ~66)
   assert.deepEqual(tpl.tile_setup, cond.tile_setup);
   tpl.tile_setup.joint.width_in = 0.25;              // mutate the copy
@@ -118,7 +118,7 @@ test("condToTemplate copies tile_setup (deep, no shared reference)", () => {
   const cond = { finish_tag: "CT-1", color: "#9333ea", fill: "#9333ea", hatch: "solid", waste_pct: 10, materials: [],
     tile_setup: { pattern: "grid", origin: [0, 0], rotation_deg: 0, edge_strategy: "balanced",
       skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
-      joint: { width_in: 0.125 }, grout: {} } };
+      joint: { width_in: 0.125 } } };
   const tpl = condToTemplate(cond);
   assert.deepEqual(tpl.tile_setup, cond.tile_setup);
   tpl.tile_setup.joint.width_in = 0.25;               // mutate the copy
@@ -129,7 +129,7 @@ test("condToTemplate -> instantiateTemplate round-trip preserves tile_setup", ()
   const cond = { finish_tag: "CT-1", color: "#9333ea", fill: "#9333ea", hatch: "solid", waste_pct: 10, materials: [],
     tile_setup: { pattern: "herringbone", origin: [0, 0], rotation_deg: 45, edge_strategy: "balanced",
       skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
-      joint: { width_in: 0.125 }, grout: {} } };
+      joint: { width_in: 0.125 } } };
   const tpl = condToTemplate(cond);
   const inst = instantiateTemplate(tpl);
   assert.deepEqual(inst.tile_setup, cond.tile_setup);

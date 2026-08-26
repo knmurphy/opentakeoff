@@ -6,7 +6,7 @@
 // same conversion, the same condition-by-id grouping, and the same ×N
 // multiplier convention (applied at the report seam, not on measured
 // geometry). Keep pure — no React or DOM.
-import { hasTileSetup } from "./tileSetup.ts";
+import { hasTileSetup, primaryUsableSku } from "./tileSetup.ts";
 import { solveTileLayout } from "./tileSolve.ts";
 import { tileCounts, countsBySku } from "./tileCalc/tiles.ts";
 import { tileGroutBags } from "./tileCalc/grout.ts";
@@ -16,6 +16,7 @@ import { reusePlan } from "./tileCalc/reuse.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 import { fieldRingForBand, ringCornerCount } from "./tileEdges/band.ts";
+import { inToFt } from "./tileUnits.ts";
 
 export { hasTileSetup, reusePlanForCondition };
 
@@ -53,11 +54,6 @@ function consolidateCutRows(rows) {
   });
 }
 
-function primarySku(tile_setup) {
-  const usable = (s) => s && Number(s.w_in) > 0 && Number(s.h_in) > 0;
-  return (tile_setup.skus || []).find(usable) ?? tile_setup.skus?.[0];
-}
-
 // With-reuse condition-level pooling (design §3.3, M6 Task 6.2/Invariants):
 // grain-locked reuse pools each SKU's offcuts separately (a directional
 // tile's grain runs one way, so one SKU never donates an offcut to another's
@@ -80,7 +76,7 @@ function reusePlanForCondition(tile_setup, classified, reuseOpts) {
   const reuseMap = [];
   let downgraded;
   for (const [id, cells] of bySkuId) {
-    const sku = skuById.get(id) ?? primarySku(tile_setup);
+    const sku = skuById.get(id) ?? primaryUsableSku(tile_setup);
     const plan = reusePlan({
       classified: cells,
       sku,
@@ -123,7 +119,7 @@ function reusePlanForCondition(tile_setup, classified, reuseOpts) {
 // count, miter corners) is a SEPARATE concern layered on top: it needs a
 // real SKU with a positive tile size, resolved by `sku_id` (falling back
 // to the condition's primary SKU on a bad/missing id, the same fallback
-// `primarySku` uses elsewhere) — `summary.band.sku_id` is always the
+// `primaryUsableSku` uses elsewhere) — `summary.band.sku_id` is always the
 // RESOLVED sku's id, never the raw (possibly invalid) config id, so a bad
 // `sku_id` can never silently aggregate a PO line under a phantom
 // material. A geometry collapse (room too small) or a resolved SKU with no
@@ -141,11 +137,11 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   } else if (resolvedBand) {
     if (rings) {
       const foundSku = (tile_setup.skus || []).find((s) => s.id === resolvedBand.sku_id);
-      const bandSku = foundSku ?? primarySku(tile_setup);
+      const bandSku = foundSku ?? primaryUsableSku(tile_setup);
       if (!foundSku && bandSku) {
         warnings.push(`Band SKU "${resolvedBand.sku_id}" not on this condition — figured from ${bandSku.name || bandSku.id}.`);
       }
-      const bandTileLen_ft = Math.max(Number(bandSku?.w_in) || 0, Number(bandSku?.h_in) || 0) / 12;
+      const bandTileLen_ft = inToFt(Math.max(Number(bandSku?.w_in) || 0, Number(bandSku?.h_in) || 0));
       if (bandSku && bandTileLen_ft > 0) {
         const lf = ringPerimeterFt(rings.outer);
         band = {
@@ -172,7 +168,7 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   const cutsheet = cutSheet(classified);
   const order = orderTiles({
     safeCount: counts.safe,
-    sku: primarySku(tile_setup),
+    sku: primaryUsableSku(tile_setup),
     breakage_pct: tile_setup.purchase?.breakage_pct,
     attic_pct: tile_setup.purchase?.attic_pct,
   });
@@ -182,7 +178,7 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   if (reuseOpts?.enabled) {
     summary.reuse = reusePlan({
       classified,
-      sku: primarySku(tile_setup),
+      sku: primaryUsableSku(tile_setup),
       pattern: layout.config.pattern,
       sliver_threshold_in: reuseOpts.sliver_threshold_in,
       kerf_in: reuseOpts.kerf_in,
@@ -303,7 +299,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
     agg.warnings = Array.from(agg.warnings);
     agg.order = orderTiles({
       safeCount: agg.counts.safe,
-      sku: primarySku(agg.tile_setup),
+      sku: primaryUsableSku(agg.tile_setup),
       breakage_pct: agg.tile_setup.purchase?.breakage_pct,
       attic_pct: agg.tile_setup.purchase?.attic_pct,
     });
@@ -317,7 +313,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
       agg.reuse = reusePlanForCondition(agg.tile_setup, agg.classified, reuseOpts);
       agg.reuseOrder = orderTiles({
         safeCount: agg.reuse.wholeTiles,
-        sku: primarySku(agg.tile_setup),
+        sku: primaryUsableSku(agg.tile_setup),
         breakage_pct: agg.tile_setup.purchase?.breakage_pct,
         attic_pct: agg.tile_setup.purchase?.attic_pct,
       });

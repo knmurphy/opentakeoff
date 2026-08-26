@@ -1,6 +1,7 @@
 // web/src/lib/tilePatterns/herringbone.ts
 import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
 import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
+import { degToRad } from "../tileUnits.ts";
 
 // Herringbone is interlock-derived (design §3.1): a repeating period cell of
 // 2 vertical planks (long axis along y) plus a stacked pair of horizontal
@@ -32,8 +33,8 @@ import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
 export const herringboneGenerator: PatternGenerator = {
   name: "herringbone",
   generate(input: GenInput): TileQuad[] {
-    const { w, h, joint, origin, skuId } = input;
-    const angle = (input.rotation_deg || 0) * Math.PI / 180;
+    const { w_ft, h_ft, joint_ft, origin, skuId } = input;
+    const angle = degToRad(input.rotation_deg || 0);
     const bounds = angle === 0 ? input.bounds : genBoundsForRotation(input.bounds, origin, angle);
     // GenInput makes no promise about which of (w, h) names the long side
     // (a 12x24in SKU can arrive as w=1ft/h=2ft just as easily as
@@ -43,8 +44,8 @@ export const herringboneGenerator: PatternGenerator = {
     // on the way out: a long x short box at rot=θ is the same physical
     // rectangle as the real w x h box at rot=θ+π/2 whenever w is actually
     // the short side.
-    const long = Math.max(w, h), short = Math.min(w, h);
-    const orientAdjust = w >= h ? 0 : Math.PI / 2;
+    const long = Math.max(w_ft, h_ft), short = Math.min(w_ft, h_ft);
+    const orientAdjust = w_ft >= h_ft ? 0 : Math.PI / 2;
 
     // Pitch: one plank-width "module" including its joint margin. A period
     // cell is 2 modules wide (the two vertical planks) plus one long-plank
@@ -58,8 +59,8 @@ export const herringboneGenerator: PatternGenerator = {
     // counted the way naively pitching the two stacked planks by their own
     // independent (short+joint) slots would (that double-counts the joint
     // between them, inflating the internal grout loss to ~2x grid's own).
-    const pShort = short + joint;
-    const pLong = long + joint;
+    const pShort = short + joint_ft;
+    const pLong = long + joint_ft;
     const bandH = pLong;
     const periodX = 2 * pShort + pLong;
 
@@ -81,15 +82,15 @@ export const herringboneGenerator: PatternGenerator = {
       for (let ci = colStart; ci <= colEnd; ci++) {
         const x0 = ci * periodX + shift;
         // leading vertical plank
-        out.push({ cx: x0 + pShort / 2, cy: bandY0 + bandH / 2, w, h, rot: rotV, skuId });
+        out.push({ cx: x0 + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId });
         // stacked horizontal pair, one joint gap between them, joint/2
         // margin against the band's own top/bottom (matching the vertical
         // planks' own symmetric margin within their band)
         const hhCx = x0 + pShort + pLong / 2;
-        out.push({ cx: hhCx, cy: bandY0 + joint / 2 + short / 2, w, h, rot: rotH, skuId });
-        out.push({ cx: hhCx, cy: bandY0 + pLong - joint / 2 - short / 2, w, h, rot: rotH, skuId });
+        out.push({ cx: hhCx, cy: bandY0 + joint_ft / 2 + short / 2, w: w_ft, h: h_ft, rot: rotH, skuId });
+        out.push({ cx: hhCx, cy: bandY0 + pLong - joint_ft / 2 - short / 2, w: w_ft, h: h_ft, rot: rotH, skuId });
         // trailing vertical plank
-        out.push({ cx: x0 + pShort + pLong + pShort / 2, cy: bandY0 + bandH / 2, w, h, rot: rotV, skuId });
+        out.push({ cx: x0 + pShort + pLong + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId });
       }
     }
     out.sort((a, b) => a.cy - b.cy || a.cx - b.cx || a.rot - b.rot);

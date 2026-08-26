@@ -57,7 +57,7 @@ for (const pat of ["grid", "brick_50", "brick_33", "diagonal"]) {
     // NOMINAL footprints), so this is the clean invariant check. Units
     // still matter in principle — generate()'s joint is feet, classifyLayout's
     // joint_in is inches — but 0 is 0 in either unit.
-    const input = { bounds: bigBounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s" };
+    const input = { bounds: bigBounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s" };
     const a = classifyLayout(g.generate(input), bigRoom, [], 0);
     const b = classifyLayout(g.generate(input), bigRoom, [], 0);
     assert.deepEqual(a, b, `${pat} is not deterministic`);
@@ -76,7 +76,7 @@ test("grid: a nonzero joint produces a sensible, joint-inset cut dimension, with
   const jointFt = jointIn / 12;
   const input = {
     bounds: { minX: 0, minY: 0, maxX: 1.5, maxY: 2 },
-    w: 1, h: 1, joint: jointFt,
+    w_ft: 1, h_ft: 1, joint_ft: jointFt,
     origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s",
   };
   const quads = g.generate(input);

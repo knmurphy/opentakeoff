@@ -1,6 +1,7 @@
 // web/src/lib/tilePatterns/basketweave.ts
 import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
 import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
+import { degToRad } from "../tileUnits.ts";
 
 // Basketweave is interlock-derived (design §3.1). It lays a checkerboard of
 // square-ish blocks, alternating a horizontal pair (two rot-0 planks
@@ -17,8 +18,8 @@ import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
 export const basketweaveGenerator: PatternGenerator = {
   name: "basketweave",
   generate(input: GenInput): TileQuad[] {
-    const { w, h, joint, origin, skuId } = input;
-    const angle = (input.rotation_deg || 0) * Math.PI / 180;
+    const { w_ft, h_ft, joint_ft, origin, skuId } = input;
+    const angle = degToRad(input.rotation_deg || 0);
     const bounds = angle === 0 ? input.bounds : genBoundsForRotation(input.bounds, origin, angle);
     // Same (w, h)-order hazard as herringbone.ts: a block's footprint is
     // long x long (two short-side members, each long, paired side by side
@@ -34,10 +35,10 @@ export const basketweaveGenerator: PatternGenerator = {
     // the emitted rot by the same +90° adjustment as herringbone whenever
     // w is actually the short side (a long x short box at rot=θ is the
     // same rectangle as the real w x h box at rot=θ+π/2 in that case).
-    const long = Math.max(w, h), short = Math.min(w, h);
-    const orientAdjust = w >= h ? 0 : Math.PI / 2;
+    const long = Math.max(w_ft, h_ft), short = Math.min(w_ft, h_ft);
+    const orientAdjust = w_ft >= h_ft ? 0 : Math.PI / 2;
     const block = long;
-    const pairGap = short + joint;
+    const pairGap = short + joint_ft;
     const startI = Math.floor(bounds.minX / block) - 1;
     const endI = Math.ceil(bounds.maxX / block) + 1;
     const startJ = Math.floor(bounds.minY / block) - 1;
@@ -49,12 +50,12 @@ export const basketweaveGenerator: PatternGenerator = {
         const horizontal = ((i + j) % 2 + 2) % 2 === 0;
         if (horizontal) {
           const rot = orientAdjust;
-          out.push({ cx: bx, cy: by - pairGap / 2, w, h, rot, skuId });
-          out.push({ cx: bx, cy: by + pairGap / 2, w, h, rot, skuId });
+          out.push({ cx: bx, cy: by - pairGap / 2, w: w_ft, h: h_ft, rot, skuId });
+          out.push({ cx: bx, cy: by + pairGap / 2, w: w_ft, h: h_ft, rot, skuId });
         } else {
           const rot = Math.PI / 2 + orientAdjust;
-          out.push({ cx: bx - pairGap / 2, cy: by, w, h, rot, skuId });
-          out.push({ cx: bx + pairGap / 2, cy: by, w, h, rot, skuId });
+          out.push({ cx: bx - pairGap / 2, cy: by, w: w_ft, h: h_ft, rot, skuId });
+          out.push({ cx: bx + pairGap / 2, cy: by, w: w_ft, h: h_ft, rot, skuId });
         }
       }
     }

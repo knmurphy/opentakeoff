@@ -13,7 +13,7 @@ test("grid is registered", () => {
 
 test("grid tiles cover the bounds on a pitch lattice, deterministically", () => {
   const g = getPattern("grid");
-  const input = { bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const input = { bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
   const a = g.generate(input);
   const b = g.generate(input);
   assert.deepEqual(a, b);                       // deterministic
@@ -28,8 +28,8 @@ test("grid tiles cover the bounds on a pitch lattice, deterministically", () => 
 
 test("origin shift moves the whole lattice by the offset", () => {
   const g = getPattern("grid");
-  const base = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
-  const shifted = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0.5, 0], rotation_deg: 0, skuId: "s1" });
+  const base = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const shifted = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0.5, 0], rotation_deg: 0, skuId: "s1" });
   const minBase = Math.min(...base.map((q) => q.cx));
   const minShift = Math.min(...shifted.map((q) => q.cx));
   assert.ok(Math.abs((minShift - minBase) - 0.5) < 1e-9 || Math.abs((minShift - minBase) + 0.5) < 1e-9);
@@ -37,7 +37,7 @@ test("origin shift moves the whole lattice by the offset", () => {
 
 test("brick_50 offsets every other row by half a pitch", () => {
   const g = getPattern("brick_50");
-  const a = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const a = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
   // group by row (cy); adjacent rows' cx sets differ by ~0.5 pitch
   const byRow = new Map<number, number[]>();
   for (const q of a) { const k = Math.round(q.cy * 1e6); (byRow.get(k) ?? byRow.set(k, []).get(k)!).push(q.cx); }
@@ -47,14 +47,14 @@ test("brick_50 offsets every other row by half a pitch", () => {
 
 test("diagonal quads are rotated 45°", () => {
   const g = getPattern("diagonal");
-  const a = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const a = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
   assert.ok(a.length > 0);
   assert.ok(a.every((q) => Math.abs(q.rot - Math.PI / 4) < 1e-9));
 });
 
 test("grid honors rotation_deg: every quad's rot is the angle in radians", () => {
   const g = getPattern("grid");
-  const input = { bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" };
+  const input = { bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" };
   const a = g.generate(input);
   assert.ok(a.length > 0);
   const expected = 30 * Math.PI / 180;
@@ -63,7 +63,7 @@ test("grid honors rotation_deg: every quad's rot is the angle in radians", () =>
 
 test("grid rotation_deg:0 stays byte-identical to the unrotated lattice", () => {
   const g = getPattern("grid");
-  const input = { bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const input = { bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
   const a = g.generate(input);
   assert.ok(a.every((q) => q.rot === 0));
   // pin two known quad centers computed directly from the (unrotated) lattice formula
@@ -73,8 +73,8 @@ test("grid rotation_deg:0 stays byte-identical to the unrotated lattice", () => 
 
 test("grid rotation still covers every corner of the room ring", () => {
   const g = getPattern("grid");
-  const unrotated = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" });
-  const rotated = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" });
+  const unrotated = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" });
+  const rotated = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" });
   assert.ok(rotated.length >= unrotated.length, "expanded/rotated lattice must not shrink the coverage");
   const corners: [number, number][] = [[0, 0], [10, 0], [0, 10], [10, 10]];
   for (const [px, py] of corners) {
@@ -85,7 +85,7 @@ test("grid rotation still covers every corner of the room ring", () => {
 
 test("brick_50 honors rotation_deg", () => {
   const g = getPattern("brick_50");
-  const a = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" });
+  const a = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" });
   assert.ok(a.length > 0);
   const expected = 30 * Math.PI / 180;
   assert.ok(a.every((q) => Math.abs(q.rot - expected) < 1e-9));
@@ -93,14 +93,14 @@ test("brick_50 honors rotation_deg", () => {
 
 test("brick_50 rotation_deg:0 stays byte-identical to the unrotated offset lattice", () => {
   const g = getPattern("brick_50");
-  const input = { bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const input = { bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
   const a = g.generate(input);
   assert.ok(a.every((q) => q.rot === 0));
 });
 
 test("diagonal honors an explicit rotation_deg override", () => {
   const g = getPattern("diagonal");
-  const a = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" });
+  const a = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 30, skuId: "s1" });
   assert.ok(a.length > 0);
   const expected = 30 * Math.PI / 180;
   assert.ok(a.every((q) => Math.abs(q.rot - expected) < 1e-9));
@@ -108,7 +108,7 @@ test("diagonal honors an explicit rotation_deg override", () => {
 
 test("herringbone places interlocking rotated pairs covering the bounds", () => {
   const g = getPattern("herringbone");
-  const input = { bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const input = { bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
   const a = g.generate(input);
   const b = g.generate(input);
   assert.deepEqual(a, b);                       // deterministic
@@ -120,15 +120,15 @@ test("herringbone places interlocking rotated pairs covering the bounds", () => 
 
 test("herringbone ignores origin translation when rotation_deg is 0 (interlock-derived, §3.1)", () => {
   const g = getPattern("herringbone");
-  const base = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
-  const shifted = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [5, 5], rotation_deg: 0, skuId: "s1" });
+  const base = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const shifted = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [5, 5], rotation_deg: 0, skuId: "s1" });
   assert.deepEqual(base, shifted);
 });
 
 test("herringbone honors rotation_deg via whole-pattern rotation about origin", () => {
   const g = getPattern("herringbone");
-  const base = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" });
-  const rotated = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 90, skuId: "s1" });
+  const base = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" });
+  const rotated = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 90, skuId: "s1" });
   assert.ok(rotated.length > 0);
   assert.notDeepEqual(base, rotated);
   // base carries {0, pi/2}; rotating the whole pattern by 90deg shifts both by pi/2
@@ -138,7 +138,7 @@ test("herringbone honors rotation_deg via whole-pattern rotation about origin", 
 
 test("basketweave alternates horizontal/vertical pairs", () => {
   const g = getPattern("basketweave");
-  const input = { bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const input = { bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
   const a = g.generate(input);
   const b = g.generate(input);
   assert.deepEqual(a, b);                       // deterministic
@@ -149,15 +149,15 @@ test("basketweave alternates horizontal/vertical pairs", () => {
 
 test("basketweave ignores origin translation when rotation_deg is 0 (interlock-derived, §3.1)", () => {
   const g = getPattern("basketweave");
-  const base = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
-  const shifted = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [5, 5], rotation_deg: 0, skuId: "s1" });
+  const base = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const shifted = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [5, 5], rotation_deg: 0, skuId: "s1" });
   assert.deepEqual(base, shifted);
 });
 
 test("basketweave honors rotation_deg via whole-pattern rotation about origin", () => {
   const g = getPattern("basketweave");
-  const base = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" });
-  const rotated = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 90, skuId: "s1" });
+  const base = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" });
+  const rotated = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0] as [number, number], rotation_deg: 90, skuId: "s1" });
   assert.ok(rotated.length > 0);
   assert.notDeepEqual(base, rotated);
   const rots = [...new Set(rotated.map((q) => Math.round(q.rot * 1e6)))].sort((p, n) => p - n);

@@ -15,6 +15,7 @@
 import { tileConfig, type TileSetup } from "../tileSetup.ts";
 import { solveTileLayout } from "../tileSolve.ts";
 import type { Classified } from "./classify.ts";
+import { inToFt, ftToIn } from "../tileUnits.ts";
 
 const EDGE_EPS_FT = 1e-3;
 const ORIGIN_HONORING: Record<string, true> = { grid: true, brick_50: true, brick_33: true, diagonal: true };
@@ -45,8 +46,8 @@ function countSlivers(classified: Classified[]): number {
   for (const c of classified) {
     if (c.cls !== "cut" && c.cls !== "corner") continue;
     if (!c.cut) continue;
-    const wq = c.quad.w * 12;
-    const hq = c.quad.h * 12;
+    const wq = ftToIn(c.quad.w);
+    const hq = ftToIn(c.quad.h);
     if (
       (c.cut.w_in > 0.1 && c.cut.w_in < 0.5 * wq) ||
       (c.cut.h_in > 0.1 && c.cut.h_in < 0.5 * hq)
@@ -134,8 +135,8 @@ export function optimizeOrigin(args: {
     return { origin: tile_setup.origin, score, slivers };
   }
 
-  const pitchW = (config.w_in + config.joint_in) / 12;
-  const pitchH = (config.h_in + config.joint_in) / 12;
+  const pitchW = inToFt(config.w_in + config.joint_in);
+  const pitchH = inToFt(config.h_in + config.joint_in);
   const { minX, minY, maxX, maxY } = ringBoundsXY(ring_ft);
 
   const xCandidates = dedupe([

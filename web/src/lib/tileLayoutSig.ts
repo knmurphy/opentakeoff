@@ -18,7 +18,6 @@ import type { EdgeExposureKind } from "./tileEdges/expose.js";
 export type TileLayoutOverride = {
   origin?: [number, number];
   rotation?: number;
-  cut_sides?: number[];
   edge_overrides?: Record<number, { exposure: EdgeExposureKind; confirmed: boolean }>;
   band?: { sku_id: string; width_ft: number; offset_ft: number };
 };
@@ -53,7 +52,7 @@ const roundRing = (ring: [number, number][]): [number, number][] => (ring || [])
  *     every sku's own `w_in`/`h_in` (an id/name/color edit does not change
  *     the drawn grid, so those are left out)
  *   - `shape.tile_layout`'s geometry-affecting overrides: `origin`,
- *     `rotation`, `edge_overrides`, `cut_sides`, `band`
+ *     `rotation`, `edge_overrides`, `band`
  *
  * Same inputs always produce the same string; any of the above changing
  * flips it. Not a cryptographic hash — a normalized JSON tuple is sufficient
@@ -85,7 +84,6 @@ export function tileLayoutSig(shape: TileLayoutShape, tile_setup: TileSetup): st
     tile_layout: {
       origin: tl?.origin ? roundPt(tl.origin) : null,
       rotation: tl?.rotation !== undefined ? round(tl.rotation) : null,
-      cut_sides: tl?.cut_sides ? [...tl.cut_sides].sort((a, b) => a - b) : null,
       edge_overrides: edgeOverrides,
       band: tl?.band
         ? { sku_id: tl.band.sku_id, width_ft: round(tl.band.width_ft), offset_ft: round(tl.band.offset_ft) }

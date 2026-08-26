@@ -64,7 +64,7 @@ export const instantiateTemplate = (t) => ({
   ...(t.laborType != null ? { laborType: t.laborType } : {}),
   ...(t.subfloorType != null ? { subfloorType: t.subfloorType } : {}),
   ...(t.roll_setup ? { roll_setup: { ...t.roll_setup } } : {}),   // #136 — deep-copied like grout: a template's roll spec must never be shared by reference
-  ...(t.tile_setup ? { tile_setup: structuredClone(t.tile_setup) } : {}), // nested skus/joint/grout — deep copy, never share
+  ...(t.tile_setup ? { tile_setup: structuredClone(t.tile_setup) } : {}), // nested skus/joint — deep copy, never share
   // instantiateMaterial (lib/materials.js) deep-copies the nested grout
   // geometry — a shallow spread here aliased the CT-1 seed's one grout object
   // into every fresh-workspace condition across every project in the session
@@ -87,6 +87,6 @@ export const condToTemplate = (c) => ({
   ...(c.laborType != null ? { laborType: c.laborType } : {}),
   ...(c.subfloorType != null ? { subfloorType: c.subfloorType } : {}),
   ...(c.roll_setup ? { roll_setup: { ...c.roll_setup } } : {}),   // #136 — the roll spec is part of what makes a CPT-1 template CPT-1
-  ...(c.tile_setup ? { tile_setup: structuredClone(c.tile_setup) } : {}),   // nested skus/joint/grout — deep copy, never share (mirrors instantiateTemplate above)
+  ...(c.tile_setup ? { tile_setup: structuredClone(c.tile_setup) } : {}),   // nested skus/joint — deep copy, never share (mirrors instantiateTemplate above)
   materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
 });

@@ -108,8 +108,10 @@ test("computeTileTakeoff wires tile_setup.purchase breakage/attic margins into b
   const { byCond: byCondDefault } = computeTileTakeoff([condDefault], [shapeDefault], dimsFor, uppFor);
   const { byCond: byCondCustom } = computeTileTakeoff([condCustom], [shapeCustom], dimsFor, uppFor);
 
-  const orderDefault = byCondDefault.get(condDefault.id).order;
+  const defaultSummary = byCondDefault.get(condDefault.id);
   const custom = byCondCustom.get(condCustom.id);
+  assert.ok(defaultSummary && custom, "expected byCond summaries for both conditions");
+  const orderDefault = defaultSummary.order;
 
   // Default margins (5%/0%) must NOT match the custom 10%/10% figure.
   assert.ok(custom.order.withMargin > orderDefault.withMargin);
@@ -145,6 +147,7 @@ test("computeTileTakeoff figures purchase boxes once per condition, not summed p
   assert.equal(perShapeBoxesSum, 2);
 
   const condSummary = byCond.get(cond.id);
+  assert.ok(condSummary, "expected a byCond summary for the condition");
   assert.equal(condSummary.counts.safe, 6);
   // Condition-level: 6 tiles figured together round to a single box on one
   // dye lot (design §3.3) — NOT the sum of per-shape ceils.
@@ -156,6 +159,7 @@ test("computeTileTakeoff honors a per-room tile_layout origin override (M5 §4.1
   const cond = makeTileCondition();   // balanced, 12in tile, 4x4ft room → 16 full
   const base = makeShape(cond.id);
   const baseOut = computeTileTakeoff([cond], [base], dimsFor, uppFor).byShape.get(base.id);
+  assert.ok(baseOut, "expected a byShape summary for the base room");
   assert.equal(baseOut.counts.full, 16);
   assert.equal(baseOut.counts.cut, 0);
 
@@ -166,6 +170,7 @@ test("computeTileTakeoff honors a per-room tile_layout origin override (M5 §4.1
   // would disagree (the M5 estimator-review must-fix).
   const shifted = { ...base, tile_layout: { origin: [0.5, 0] } };
   const shiftedOut = computeTileTakeoff([cond], [shifted], dimsFor, uppFor).byShape.get(shifted.id);
+  assert.ok(shiftedOut, "expected a byShape summary for the shifted room");
   assert.notEqual(shiftedOut.counts.full, 16);
   assert.ok(shiftedOut.counts.cut > 0, "a per-room origin override changes the figured layout");
 
@@ -256,6 +261,7 @@ test("computeTileTakeoff: With-reuse never perturbs the Safe order (byte-identic
 
   const offSummary = computeTileTakeoff([condOff], [shapeOff], dimsFor2, uppFor2).byCond.get(condOff.id);
   const onSummary = computeTileTakeoff([condOn], [shapeOn], dimsFor2, uppFor2).byCond.get(condOn.id);
+  assert.ok(offSummary && onSummary, "expected byCond summaries for both reuse conditions");
 
   assert.deepEqual(onSummary.order, offSummary.order);
   assert.deepEqual(onSummary.counts, offSummary.counts);
@@ -268,6 +274,8 @@ test("tileReportRows: reuse_enabled/reuse_whole/reuse_with_margin/reuse_boxes/re
 
   const { byCond } = computeTileTakeoff([cond], [shape], dimsFor2, uppFor2);
   const summary = byCond.get(cond.id);
+  assert.ok(summary, "expected a byCond summary");
+  assert.ok(summary.reuseOrder, "expected a condition-level reuse order");
 
   const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 3 }];
   const out = tileReportRows(byCond, rows);
@@ -307,7 +315,7 @@ test("tileReportRows: reuse disabled reports reuse_enabled:false, reuse_whole:0,
 test("reusePlanForCondition: two SKUs on one condition never share offcuts", () => {
   const skuA = { id: "skuA", name: "A", w_in: 24, h_in: 24, color: "#111" };
   const skuB = { id: "skuB", name: "B", w_in: 12, h_in: 12, color: "#222" };
-  const tile_setup = { pattern: "grid", skus: [skuA, skuB] };
+  const tile_setup = { ...mintTileSetup(), skus: [skuA, skuB] };
 
   // Each SKU gets two identical straight cuts — classic same-SKU reuse: the
   // first cut opens a tile and leaves an offcut sized to satisfy the second.
@@ -370,6 +378,7 @@ test("computeTileTakeoff: With-reuse pools offcuts across shapes on one conditio
   const agg = byCond.get(cond.id);
   const s1 = byShape.get("room1");
   const s2 = byShape.get("room2");
+  assert.ok(agg && s1 && s2, "expected condition- and shape-level summaries");
   assert.ok(agg.reuse && s1.reuse && s2.reuse, "expected condition- and shape-level reuse plans");
 
   const perShapeSum = s1.reuse.wholeTiles + s2.reuse.wholeTiles;
@@ -434,6 +443,7 @@ test("summarizeShape: no tile_layout.band => no summary.band key and field count
 
   const outNoOverride = computeTileTakeoff([condNoOverride], [shapeNoOverride], dimsFor, uppFor).byShape.get(shapeNoOverride.id);
   const outEmptyOverride = computeTileTakeoff([condEmptyOverride], [shapeEmptyOverride], dimsFor, uppFor).byShape.get(shapeEmptyOverride.id);
+  assert.ok(outNoOverride && outEmptyOverride, "expected both per-shape summaries");
 
   assert.equal("band" in outNoOverride, false);
   assert.equal("band" in outEmptyOverride, false);
@@ -486,6 +496,7 @@ test("computeTileTakeoff: byCond.band aggregates per sku_id across two banded sh
   const agg = byCond.get(cond.id);
   const s1 = byShape.get("bandRoomA");
   const s2 = byShape.get("bandRoomB");
+  assert.ok(agg && s1 && s2, "expected condition- and shape-level band summaries");
   assert.ok(s1.band && s2.band, "expected both shapes to figure a band");
 
   assert.ok(Array.isArray(agg.band), "expected a condition-level band array");
