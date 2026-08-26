@@ -144,15 +144,29 @@ function fitToContent(camera, controls, root) {
 
 function makeCaptionSprite(text) {
   const canvas = document.createElement("canvas");
-  canvas.width = 320; canvas.height = 56;
   const ctx = canvas.getContext("2d");
+  const font = "26px monospace";
+  const padX = 12;
+  // Size to the text (plus padding) instead of a fixed 320×56 — a longer
+  // note (e.g. "excluded area — see plan") was silently clipped at the old
+  // fixed width. measureText needs a font set on the context BEFORE sizing;
+  // resizing the canvas afterward resets all context state, so font/fill
+  // are re-applied below.
+  ctx.font = font;
+  const textW = Math.ceil(ctx.measureText(text).width);
+  canvas.width = Math.max(textW + padX * 2, 80);
+  canvas.height = 56;
+  ctx.font = font;
   ctx.fillStyle = "rgba(13,21,38,.85)"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#e8eef8"; ctx.font = "26px monospace"; ctx.textBaseline = "middle";
-  ctx.fillText(text, 12, canvas.height / 2);
+  ctx.fillStyle = "#e8eef8"; ctx.textBaseline = "middle";
+  ctx.fillText(text, padX, canvas.height / 2);
   const texture = new THREE.CanvasTexture(canvas);
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(2.4, 0.42, 1);
+  // World scale stays pinned to the original 320×56 → 2.4×0.42 ratio (both
+  // axes work out to 0.0075 world units per canvas px), so a wider canvas
+  // grows the caption's width in-scene without distorting glyph size.
+  sprite.scale.set(canvas.width * (2.4 / 320), 0.42, 1);
   return sprite;
 }
 

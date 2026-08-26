@@ -998,9 +998,9 @@ scale first — 3D is feet-true or nothing"—and the overlay never mounts. In a
 group, 3D opens on the *focused* panel's sheet (the one you last clicked); it never
 stitches sheets together.
 
-**What you're looking at.** Floors extrude as flat slabs at their condition's height (or
-a thin, translucent placeholder when no height is set—so an unmeasured extrusion never
-reads as a real wall). Base and other linear runs extrude as ribbon walls at their
+**What you're looking at.** Floors extrude as flat, opaque slabs at their condition's
+thickness (a nominal-thin placeholder plus a legend note when no thickness is set—so an
+unmeasured extrusion never reads as a real floor). Base and other linear runs extrude as ribbon walls at their
 condition's H; count items place as unit posts at their point, scaled to height. Deducts
 (cutouts) render as a faint red translucent volume so what's missing from the bid is as
 visible as what's in it. Every condition gets its own **legend chip**—click one to hide or

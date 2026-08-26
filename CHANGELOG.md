@@ -8,7 +8,7 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 - **3D view.** Press `W` (or the **3D** toolbar button) on a scaled sheet to extrude the
   committed takeoff into a schematic, feet-true three.js scene — a lazy overlay so the
   cost only loads for the estimators who open it. Floors extrude at their condition's
-  height (translucent placeholder when unset); base and other linear runs extrude as
+  thickness (opaque, nominal-thin placeholder + legend note when unset); base and other linear runs extrude as
   ribbon walls; counts place as unit posts; deducts render as a faint red translucent
   volume. Per-condition legend chips toggle visibility, explode separates layers
   vertically, a section-cut plane slices the scene, and export writes a PNG with a

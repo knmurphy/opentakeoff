@@ -166,6 +166,21 @@ import { isolate3D } from "../lib/scene3dScope.js";
 // 3D takeoff view — lazy: three.js + its addons only load once a user opens it.
 const View3D = React.lazy(() => import("../components/View3D.jsx"));
 
+// Error boundary for the lazy View3D chunk (finding #3, final review): a
+// React.lazy() import that rejects — a stale deploy's chunk 404ing after a
+// release, a flaky network — throws during render with no boundary above it,
+// which React treats as fatal and unmounts the WHOLE app to a white screen.
+// This is the one place in the file a class component is warranted (render
+// error boundaries have no hook equivalent). It renders nothing on error and
+// reports back through onError so the parent can close the overlay and tell
+// the estimator what happened, same as any other failure in this file.
+class View3DErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error) { this.props.onError(error); }
+  render() { return this.state.hasError ? null : this.props.children; }
+}
+
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
 const CARPET_ROLL_FT = 12;
@@ -1072,10 +1087,6 @@ export default function TakeoffCanvas() {
   // active3dKey === focusPanel.key by construction — use focusPanel directly
   // for img dims below rather than a re-lookup.
   const active3dKey = focusPanel.key;
-  // gate the 2D letter tools through the toolbar menu-depth counter while
-  // the overlay is open — symmetric with every onOpenChange={onMenuDepth}
-  // call site: open bumps it here, onClose (below) drops it back.
-  useEffect(() => { if (show3d) onMenuDepth(true); }, [show3d, onMenuDepth]);
   const labelFor = (p) => stitchById[p.key]?.name || (p.file === active && pageLabels[p.page]) || (p.page > 1 ? `Sheet ${p.page}` : p.file);
   // Scale semantics (why geometry divides by factorFor and calibration
   // multiplies back to baseline) are documented on the pure functions in
@@ -1087,6 +1098,35 @@ export default function TakeoffCanvas() {
   // unchanged so none of factorFor/uppFor's ~20 call sites needed to move.
   const factorFor = (key) => panelGeom.factorFor(renderScalesRef.current, key);
   const uppFor = (key) => panelGeom.uppFor(scales, renderScalesRef.current, key);
+  // gate the 2D letter tools through the toolbar menu-depth counter while
+  // the overlay is open — symmetric with every onOpenChange={onMenuDepth}
+  // call site, but as CLEANUP rather than a paired open/close call: the
+  // effect itself drops the count on every unmount path (onClose, the
+  // scale-loss reset below, or a stray parent unmount), so there is exactly
+  // one place that bumps it and it can never strand the counter positive.
+  useEffect(() => {
+    if (!show3d) return;
+    onMenuDepth(true);
+    return () => onMenuDepth(false);
+  }, [show3d, onMenuDepth]);
+  // If the sheet loses its scale while the overlay is open, the render guard
+  // below (`show3d && uppFor(active3dKey)`) unmounts View3D directly and
+  // onClose never runs — reset show3d here too so state doesn't strand as
+  // "open" with nothing rendered (and the menu-depth effect above still
+  // fires its cleanup once this flips false).
+  useEffect(() => {
+    if (show3d && !uppFor(active3dKey)) setShow3d(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor reads scales (listed) + renderScalesRef pinned to RENDER_SCALE
+  }, [show3d, active3dKey, scales]);
+  // Stable per-render props for View3D — filtering visibleShapes inline in
+  // JSX built a fresh array every render, so an unrelated parent re-render
+  // (a mousemove-driven state update, a panel resize) looked to View3D like
+  // a new `shapes`/`focusIds` identity and rebuilt the whole scene + reset
+  // the camera underneath the user mid-orbit. Memoized here so the overlay
+  // only rebuilds when the actual inputs (shapes, the active sheet, or the
+  // selection) change.
+  const shapes3d = useMemo(() => visibleShapes.filter((s) => s.sheet_id === active3dKey), [visibleShapes, active3dKey]);
+  const focusIds3d = useMemo(() => isolate3D(selectedId, shapes3d), [selectedId, shapes3d]);
   // keep the agent's capability closures reading LIVE state across their awaits
   useEffect(() => {
     agentStateRef.current = { panels, scales, scaleSources, detectedScales, conditions, status };
@@ -9086,16 +9126,18 @@ export default function TakeoffCanvas() {
       )}
 
       {show3d && uppFor(active3dKey) && (
-        <React.Suspense fallback={null}>
-          <View3D
-            shapes={visibleShapes.filter((s) => s.sheet_id === active3dKey)}
-            conditions={conditions}
-            sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
-            focusIds={isolate3D(selectedId, visibleShapes.filter((s) => s.sheet_id === active3dKey))}
-            sheetLabel={tabLabel(active3dKey)}
-            onClose={() => { onMenuDepth(false); setShow3d(false); }}
-          />
-        </React.Suspense>
+        <View3DErrorBoundary onError={() => { setShow3d(false); setCommitMsg("3D view failed to load — refresh and try again"); }}>
+          <React.Suspense fallback={null}>
+            <View3D
+              shapes={shapes3d}
+              conditions={conditions}
+              sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
+              focusIds={focusIds3d}
+              sheetLabel={tabLabel(active3dKey)}
+              onClose={() => setShow3d(false)}
+            />
+          </React.Suspense>
+        </View3DErrorBoundary>
       )}
 
       {showReport && (

@@ -66,7 +66,7 @@ export function buildScene({ shapes, conditions, sheet }) {
     }
     if (s.measure_role === "surface_area") {
       const h = Number(s.height_ft) > 0 ? Number(s.height_ft) : Number(c.height_ft) || 0;
-      ribbons.push({ path_ft: nudgePath(toWorldFt(s.verts_norm, sheet), -RIBBON_HALF_FT / 2), z0: 0, z1: h, side: "center",
+      ribbons.push({ path_ft: nudgePath(toWorldFt(s.verts_norm, sheet), -RIBBON_HALF_FT / 2), z0: 0, z1: h > 0 ? h : NOMINAL_HEIGHT_FT, side: "center",
         color: c.color, tag: c.finish_tag, mode: "vertical", shapeId: s.id,
         derived: false, translucent: !(h > 0) });
       if (!(h > 0)) note("unset-height", c.finish_tag, `${c.finish_tag} has no height set — shown at nominal`);
