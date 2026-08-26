@@ -142,6 +142,15 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
         order {ti.order.withMargin} tile{ti.order.withMargin === 1 ? "" : "s"} · {ti.order.boxes} box{ti.order.boxes === 1 ? "" : "es"} · {ti.grout.bags} grout bag{ti.grout.bags === 1 ? "" : "s"}
       </div>
 
+      {Array.isArray(ti.band) && ti.band.length > 0 && ti.band.map((b) => {
+        const bandSku = (ts.skus || []).find((sk) => sk.id === b.sku_id);
+        return (
+          <div key={b.sku_id} style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-secondary)", marginBottom: 4 }}>
+            band {bandSku?.name || b.sku_id}: {b.tiles} tile{b.tiles === 1 ? "" : "s"} · {b.corner} corner cut{b.corner === 1 ? "" : "s"} · {Math.round(b.lf * 100) / 100} LF
+          </div>
+        );
+      })}
+
       {ti.reuse && (
         ti.reuse.downgraded ? (
           <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, color: "var(--ink-muted)", marginBottom: 4 }}>

@@ -13,8 +13,9 @@ import { hasTileSetup, type TileSetup } from "./tileSetup.ts";
 import { solveTileLayout } from "./tileSolve.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
+import { fieldRingForBand } from "./tileEdges/band.ts";
 
-export type WarningKind = "sliver" | "layout" | "hole_cut" | "unscaled" | "seam_crossing";
+export type WarningKind = "sliver" | "layout" | "hole_cut" | "unscaled" | "seam_crossing" | "band_skipped";
 
 export type Warning = {
   condition_id: string;
@@ -41,7 +42,7 @@ type Shape = {
   verts_norm_holes?: [number, number][][];
   // Per-room layout override (origin/rotation); honored via effectiveTileSetup
   // so the audited grid matches the drawn and counted grid (§4.1).
-  tile_layout?: { origin?: [number, number]; rotation?: number } | null;
+  tile_layout?: { origin?: [number, number]; rotation?: number; band?: { sku_id?: string; width_ft?: number; offset_ft?: number } } | null;
   // Set by the canvas (Task 6) when it knows a room is part of a stitched
   // group crossing a sheet boundary — this module has no way to detect
   // stitch membership from (conditions, shapes) alone, so it never
@@ -52,6 +53,14 @@ type Shape = {
 type SheetDims = { w: number; h: number };
 type DimsFor = (sheetId: string | undefined) => SheetDims | null;
 type UppFor = (sheetId: string | undefined) => number | null;
+
+// Average of a room's normalized vertices — a simple, deterministic focus
+// target for a room-level (not per-cell) warning like `band_skipped`.
+function centroidNorm(verts: readonly [number, number][]): [number, number] {
+  let sx = 0, sy = 0;
+  for (const [nx, ny] of verts) { sx += nx; sy += ny; }
+  return [sx / verts.length, sy / verts.length];
+}
 
 // tileWarnings(conditions, shapes, dimsFor, uppFor) → Warning[]
 //
@@ -126,6 +135,28 @@ export function tileWarnings(
     const holes_ft: [number, number][][] = (s.verts_norm_holes || []).map((hole) =>
       hole.map(([nx, ny]): [number, number] => [nx * dims.w * upp, ny * dims.h * upp]),
     );
+
+    // Mirrors summarizeShape's (tileTakeoff.js) band gate via the SAME
+    // shared helper: a configured band whose geometry collapses (room too
+    // small) figures no `summary.band` there and pushes a warning that
+    // never leaves the condition card — surface it here too, so a batch
+    // audit catches it without opening every room's panel.
+    const bandCfg = s.tile_layout?.band;
+    if (bandCfg?.sku_id && Number(bandCfg.width_ft) > 0) {
+      const { rings } = fieldRingForBand({ ring_ft, holes_ft, band: bandCfg });
+      if (!rings) {
+        warnings.push({
+          condition_id: cond.id,
+          shape_id: s.id,
+          finish_tag,
+          sheet_id,
+          kind: "band_skipped",
+          detail: `Band skipped: room too small for a ${bandCfg.width_ft}ft band at ${Number(bandCfg.offset_ft) || 0}ft offset.`,
+          at_norm: centroidNorm(s.verts_norm),
+        });
+      }
+    }
+
     const solveSetup = effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft, holes_ft });
     const { config, classified } = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
     const halfW_in = config.w_in / 2;

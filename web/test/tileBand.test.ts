@@ -1,7 +1,7 @@
 // web/test/tileBand.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bandRings } from "../src/lib/tileEdges/band.ts";
+import { bandRings, ringCornerCount, fieldRingForBand } from "../src/lib/tileEdges/band.ts";
 
 // bbox extents (width/height) of an OPEN [x,y][] ring, for comparing
 // buffered rectangles without depending on exact vertex count/order (a
@@ -88,4 +88,50 @@ test("a room with a hole: the hole is folded into the buffer (inner ring shrinks
   // outer (offset_ft=0, no erosion) is unaffected by the hole either way.
   const outerDims = bboxDims(withHole!.outer);
   assert.ok(Math.abs(outerDims.w - 20) < TOL && Math.abs(outerDims.h - 12) < TOL, "outer unaffected by a hole at distance 0");
+});
+
+// ── ringCornerCount ────────────────────────────────────────────────────────
+
+test("ringCornerCount: a rectangle has 4 corners", () => {
+  assert.equal(ringCornerCount(room20x12), 4);
+});
+
+test("ringCornerCount: an L-shaped ring has 6 corners", () => {
+  const lShape: [number, number][] = [[0, 0], [10, 0], [10, 6], [6, 6], [6, 10], [0, 10]];
+  assert.equal(ringCornerCount(lShape), 6);
+});
+
+test("ringCornerCount: a redundant collinear point on a straight edge is not a corner", () => {
+  // Same rectangle as room20x12, but the bottom edge carries an extra point
+  // sitting exactly on the 0,0 -> 20,0 chord — a mitre-joined buffer op
+  // routinely re-nodes edges like this (see classify.ts's own
+  // simplifyCollinear rationale); it must not inflate the corner count.
+  const withCollinearPoint: [number, number][] = [[0, 0], [10, 0], [20, 0], [20, 12], [0, 12]];
+  assert.equal(ringCornerCount(withCollinearPoint), 4);
+});
+
+// ── fieldRingForBand ───────────────────────────────────────────────────────
+
+test("fieldRingForBand: a usable band re-scopes the field to the inner ring", () => {
+  const band = { sku_id: "sku-1", width_ft: 0.5, offset_ft: 0 };
+  const direct = bandRings({ ring_ft: room20x12, offset_ft: 0, width_ft: 0.5 });
+  const { fieldRing_ft, rings } = fieldRingForBand({ ring_ft: room20x12, band });
+  assert.ok(rings, "expected a band rings result");
+  assert.deepEqual(rings, direct);
+  assert.deepEqual(fieldRing_ft, direct!.inner);
+});
+
+test("fieldRingForBand: no band config passes the room ring through unchanged", () => {
+  for (const band of [undefined, null, {}, { sku_id: "", width_ft: 0.5, offset_ft: 0 }, { sku_id: "sku-1", width_ft: 0, offset_ft: 0 }]) {
+    const { fieldRing_ft, rings } = fieldRingForBand({ ring_ft: room20x12, band });
+    assert.deepEqual(fieldRing_ft, room20x12);
+    assert.equal(rings, null);
+  }
+});
+
+test("fieldRingForBand: a band whose geometry collapses passes the room ring through and reports rings:null", () => {
+  const band = { sku_id: "sku-1", width_ft: 7, offset_ft: 0 };
+  const { fieldRing_ft, rings } = fieldRingForBand({ ring_ft: room20x12, band });
+  assert.equal(rings, null);
+  assert.deepEqual(fieldRing_ft, room20x12);
 });

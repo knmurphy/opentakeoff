@@ -505,3 +505,63 @@ test("computeTileTakeoff: byCond.band is absent when no shape on the condition c
   assert.ok(agg);
   assert.equal("band" in agg, false);
 });
+
+// L-shaped room: a 4ft x 4ft bounding box with the top-right quadrant
+// bitten out — a genuine 6-corner ring, not a rectangle. verts_norm are
+// normalized against the same sheet1 100x100px/upp=0.04 fixture as
+// makeShape (=> 4ft x 4ft bitmap).
+function makeLShape(condId: string) {
+  return {
+    id: "shapeL",
+    sheet_id: "sheet1",
+    condition_id: condId,
+    measure_role: "floor_area",
+    verts_norm: [[0, 0], [1, 0], [1, 0.5], [0.5, 0.5], [0.5, 1], [0, 1]],
+  };
+}
+
+test("summarizeShape: an L-shaped banded room reports corner > 4 (not the old hardcoded 4)", () => {
+  const cond = makeBandCondition();
+  const skuId = cond.tile_setup.skus[0].id;
+  const banded = { ...makeLShape(cond.id), tile_layout: { band: { sku_id: skuId, width_ft: 0.25, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [banded], dimsFor, uppFor);
+  const summary = byShape.get(banded.id);
+  assert.ok(summary?.band, "expected a band figure for the L-shaped room");
+  assert.ok(summary.band.corner > 4, `expected the L-shape's real corner count (>4), got ${summary.band.corner}`);
+  assert.equal(summary.band.corner, 6, "an L-shape's outer ring has exactly 6 real corners");
+});
+
+test("summarizeShape: an invalid band sku_id resolves to the fallback SKU's own id, not the bad id", () => {
+  const cond = makeBandCondition();
+  const validSkuId = cond.tile_setup.skus[0].id;
+  const banded = { ...makeShape(cond.id), tile_layout: { band: { sku_id: "does-not-exist", width_ft: 1, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [banded], dimsFor, uppFor);
+  const summary = byShape.get(banded.id);
+  assert.ok(summary?.band, "expected a band figure sized off the fallback SKU");
+  assert.equal(
+    summary.band.sku_id,
+    validSkuId,
+    "the PO line must aggregate under the SKU that actually sized the band, not the invalid requested id",
+  );
+});
+
+test("summarizeShape: a resolved band SKU with no positive tile size skips the band with a warning (never Infinity/NaN tiles)", () => {
+  const cond = makeBandCondition();
+  cond.tile_setup.skus.push({ id: "zero-sku", name: "Zero", w_in: 0, h_in: 0, color: "#000000" });
+  const banded = { ...makeShape(cond.id), tile_layout: { band: { sku_id: "zero-sku", width_ft: 1, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [banded], dimsFor, uppFor);
+  const summary = byShape.get(banded.id);
+  assert.ok(summary);
+  assert.equal(summary.band, undefined, "a zero-size SKU can't figure a tile count, so no band figure is emitted");
+  assert.ok(
+    summary.warnings.some((w: string) => typeof w === "string" && w.includes("usable tile size")),
+    `expected a no-usable-tile-size warning, got ${JSON.stringify(summary.warnings)}`,
+  );
+  // The band's GEOMETRY is still valid (the room isn't too small) — only
+  // sizing the band material failed — so the field still re-scopes to the
+  // band's inner ring, same as the healthy-SKU band test above.
+  assert.equal(summary.counts.full, 4, "field re-scope is independent of band SKU validity");
+});

@@ -122,3 +122,51 @@ test("tileWarnings: relays a canvas-set stitch_crossing flag as a seam_crossing 
   assert.equal(seam.length, 1);
   assert.equal(seam[0].shape_id, "s1");
 });
+
+test("tileWarnings: a band too small for the room emits a band_skipped warning with an at_norm focus target", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const cond = makeCondition("c1", ts);
+  const skuId = ts.skus[0].id;
+  // ROOM_VERTS is a 4.25ft x 4ft room; min dimension 4ft, half is 2ft. A
+  // 3ft-wide band at 0ft offset erodes 3ft off every side of the inner
+  // ring — past the collapse threshold, same posture as tileBand.test.ts's
+  // own "collapses to null" case.
+  const shape = { ...makeShape("s1", "c1"), tile_layout: { band: { sku_id: skuId, width_ft: 3, offset_ft: 0 } } };
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  const skipped = warnings.filter((w) => w.kind === "band_skipped");
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].shape_id, "s1");
+  assert.equal(skipped[0].condition_id, "c1");
+  assert.equal(skipped[0].finish_tag, "CT-1");
+  assert.match(skipped[0].detail, /too small/i);
+  assert.ok(skipped[0].at_norm, "band_skipped warning carries an at_norm focus target");
+  const [nx, ny] = skipped[0].at_norm as [number, number];
+  assert.ok(nx >= 0 && nx <= 1, `at_norm.x ${nx} inside [0,1]`);
+  assert.ok(ny >= 0 && ny <= 1, `at_norm.y ${ny} inside [0,1]`);
+});
+
+test("tileWarnings: a band that fits the room emits no band_skipped warning", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const cond = makeCondition("c1", ts);
+  const skuId = ts.skus[0].id;
+  const shape = { ...makeShape("s1", "c1"), tile_layout: { band: { sku_id: skuId, width_ft: 0.5, offset_ft: 0 } } };
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  assert.equal(warnings.filter((w) => w.kind === "band_skipped").length, 0);
+});
+
+test("tileWarnings: no tile_layout.band → no band_skipped warning", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const cond = makeCondition("c1", ts);
+  const shape = makeShape("s1", "c1");
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  assert.equal(warnings.filter((w) => w.kind === "band_skipped").length, 0);
+});

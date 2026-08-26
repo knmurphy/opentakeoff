@@ -124,7 +124,7 @@ import { tileOverlayPrimitives, bandOverlayPrimitives, shouldShowGrid } from "..
 import { tileWarnings } from "../lib/tileQA.ts";
 import { tileLayoutSig } from "../lib/tileLayoutSig.ts";
 import { edgeExposures } from "../lib/tileEdges/expose.ts";
-import { bandRings } from "../lib/tileEdges/band.ts";
+import { fieldRingForBand } from "../lib/tileEdges/band.ts";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -281,9 +281,9 @@ const TOOL_VERB = {
 // for byte (verts_norm -> feet via the shape's bitmap dims + upp) — the
 // two modules must never disagree about where a room's ring sits. A band
 // (M7 Task 7.3, `tl.band`) re-scopes the FIELD solve to the band's inner
-// ring, mirroring tileTakeoff.js's `summarizeShape` byte for byte — this
-// duplicate solve must never disagree with the engine about where the
-// field starts. `edges`/the returned `ring_ft` stay keyed to the ROOM's
+// ring via `fieldRingForBand` — the SAME shared helper tileTakeoff.js's
+// `summarizeShape` calls, so the two field-solve paths stay byte-identical
+// by construction. `edges`/the returned `ring_ft` stay keyed to the ROOM's
 // own ring (edge exposures are the room's walls, unaffected by a band).
 function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverride) {
   if (!cond || !dims || !(dims.w > 0) || !(upp > 0)) return null;
@@ -292,12 +292,7 @@ function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverrid
   const ring_ft = ringFt(s.verts_norm);
   const holes_ft = (s.verts_norm_holes || []).map(ringFt);
   const tl = s.tile_layout || {};
-  const bandCfg = tl.band;
-  let fieldRing_ft = ring_ft;
-  if (bandCfg && bandCfg.sku_id && Number(bandCfg.width_ft) > 0) {
-    const rings = bandRings({ ring_ft, holes_ft, offset_ft: Number(bandCfg.offset_ft) || 0, width_ft: bandCfg.width_ft });
-    if (rings) fieldRing_ft = rings.inner;
-  }
+  const { fieldRing_ft } = fieldRingForBand({ ring_ft, holes_ft, band: tl.band });
   const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft: fieldRing_ft, holes_ft, originOverride, rotationOverride });
   const layout = solveTileLayout({ tile_setup: effective, ring_ft: fieldRing_ft, holes_ft });
   const skus = cond.tile_setup?.skus || [];

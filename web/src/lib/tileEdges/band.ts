@@ -168,3 +168,61 @@ export function bandRings({
   if (!inner) return null;
   return { outer, inner };
 }
+
+// ── corner counting (band miter allowance) ────────────────────────────────
+
+const CORNER_EPS_FT = 1e-4; // ft — collinearity tolerance, matches classify.ts's simplifyCollinear
+
+// Genuine corner count of an OPEN ring: vertices whose prev→next chord they
+// sit off of by more than CORNER_EPS_FT (mirrors classify.ts's
+// simplifyCollinear perpendicular-distance test, cyclic over the ring — a
+// mitre-joined buffer routinely renodes a straight edge with extra
+// collinear points, so this counts REAL corners only, never a redundant
+// vertex). A rectangle -> 4; an L-shaped room -> 6. Feeds the band's
+// miter-cut allowance instead of a hardcoded 4 — a non-rectangular room's
+// band needs a miter cut at every real corner, not just four.
+export function ringCornerCount(ring: readonly Pt[]): number {
+  const n = ring.length;
+  if (n < 3) return n;
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const prev = ring[(i - 1 + n) % n];
+    const cur = ring[i];
+    const next = ring[(i + 1) % n];
+    const dx = next[0] - prev[0], dy = next[1] - prev[1];
+    const len = Math.hypot(dx, dy);
+    const dist = len < CORNER_EPS_FT
+      ? Math.hypot(cur[0] - prev[0], cur[1] - prev[1])
+      : Math.abs((cur[0] - prev[0]) * dy - (cur[1] - prev[1]) * dx) / len;
+    if (dist > CORNER_EPS_FT) count++;
+  }
+  return count;
+}
+
+// ── shared field-ring re-scope (the band gate) ────────────────────────────
+
+export type BandConfig = { sku_id?: string; width_ft?: number; offset_ft?: number };
+
+// The single re-scope both `tileTakeoff.js`'s `summarizeShape` and
+// `TakeoffCanvas.jsx`'s `tileOverlayForShape` need: gate on a usable band
+// config, run `bandRings`, and hand back the ring the FIELD solve should
+// classify against. Both call sites used to duplicate this gate+re-scope
+// inline (parity enforced only by a comment saying "mirror the other
+// file"); factoring it here makes the parity structural — the two
+// field-solve paths stay byte-identical by construction, not by two authors
+// independently reading the same comment correctly.
+export function fieldRingForBand({
+  ring_ft,
+  holes_ft = [],
+  band,
+}: {
+  ring_ft: [number, number][];
+  holes_ft?: [number, number][][];
+  band: BandConfig | null | undefined;
+}): { fieldRing_ft: [number, number][]; rings: BandRings | null } {
+  if (band?.sku_id && Number(band.width_ft) > 0) {
+    const rings = bandRings({ ring_ft, holes_ft, offset_ft: Number(band.offset_ft) || 0, width_ft: Number(band.width_ft) });
+    if (rings) return { fieldRing_ft: rings.inner, rings };
+  }
+  return { fieldRing_ft: ring_ft, rings: null };
+}

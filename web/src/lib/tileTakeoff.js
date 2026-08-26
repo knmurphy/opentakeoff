@@ -15,7 +15,7 @@ import { orderTiles } from "./tileCalc/order.ts";
 import { reusePlan } from "./tileCalc/reuse.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
-import { bandRings } from "./tileEdges/band.ts";
+import { fieldRingForBand, ringCornerCount } from "./tileEdges/band.ts";
 
 export { hasTileSetup, reusePlanForCondition };
 
@@ -112,32 +112,49 @@ function reusePlanForCondition(tile_setup, classified, reuseOpts) {
 // figure; the condition-level `reuse`/`reuseOrder` figured once in
 // computeTileTakeoff's byCond finalize (Invariants) is the purchase figure.
 // `tile_layout.band` (M7 Task 7.2) is figured FIRST, before the field solve:
-// when present with a usable sku_id/width_ft, `bandRings` (tileEdges/band.ts,
-// pure) offsets the room ring inward. A non-null result re-scopes the FIELD
-// to the band's inner ring (both `effectiveTileSetup`'s origin search and
-// `solveTileLayout`'s classify pass take `rings.inner`, not the room ring —
-// the band consumes that perimeter area, so the field must stop there,
-// design §3.4) and the band itself is figured as a single-course linear run
-// (perimeter LF ÷ longest tile face, 4 miter corners) into `summary.band`. A
-// null result (room too small for the band) leaves the field solve untouched
-// against the original `ring_ft` and pushes an honest warning instead of
-// silently dropping the band. No `tile_layout.band` at all is byte-identical
-// to the pre-M7 behavior — no `band` key, field solves against `ring_ft`.
+// `fieldRingForBand` (tileEdges/band.ts, pure — the SAME helper
+// TakeoffCanvas.jsx's `tileOverlayForShape` calls, so the two field-solve
+// paths stay byte-identical by construction, not by two authors reading
+// the same comment) re-scopes the field ring to the band's inner ring
+// whenever the band config is geometrically usable (both
+// `effectiveTileSetup`'s origin search and `solveTileLayout`'s classify
+// pass take the re-scoped ring — the band consumes that perimeter area, so
+// the field must stop there, design §3.4). Sizing the band itself (tile
+// count, miter corners) is a SEPARATE concern layered on top: it needs a
+// real SKU with a positive tile size, resolved by `sku_id` (falling back
+// to the condition's primary SKU on a bad/missing id, the same fallback
+// `primarySku` uses elsewhere) — `summary.band.sku_id` is always the
+// RESOLVED sku's id, never the raw (possibly invalid) config id, so a bad
+// `sku_id` can never silently aggregate a PO line under a phantom
+// material. A geometry collapse (room too small) or a resolved SKU with no
+// usable size each withhold `summary.band` and push an honest warning
+// instead of guessing (never a tiles: Infinity/NaN). No `tile_layout.band`
+// at all is byte-identical to the pre-M7 behavior — no `band` key, field
+// solves against `ring_ft`.
 function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   const warnings = [layoutWarning(tile_setup)].filter(Boolean);
   const bandCfg = tile_layout?.band;
-  let fieldRing_ft = ring_ft;
+  const { fieldRing_ft, rings } = fieldRingForBand({ ring_ft, holes_ft, band: bandCfg });
   let band;
   if (bandCfg && bandCfg.sku_id && Number(bandCfg.width_ft) > 0) {
-    const offset_ft = Number(bandCfg.offset_ft) || 0;
-    const rings = bandRings({ ring_ft, holes_ft, offset_ft, width_ft: bandCfg.width_ft });
     if (rings) {
-      fieldRing_ft = rings.inner;
       const bandSku = (tile_setup.skus || []).find((s) => s.id === bandCfg.sku_id) ?? primarySku(tile_setup);
-      const lf = ringPerimeterFt(rings.outer);
-      const bandTileLen_ft = Math.max(bandSku.w_in, bandSku.h_in) / 12;
-      band = { sku_id: bandCfg.sku_id, tiles: Math.ceil(lf / bandTileLen_ft), corner: 4, lf, outer: rings.outer, inner: rings.inner };
+      const bandTileLen_ft = Math.max(Number(bandSku?.w_in) || 0, Number(bandSku?.h_in) || 0) / 12;
+      if (bandSku && bandTileLen_ft > 0) {
+        const lf = ringPerimeterFt(rings.outer);
+        band = {
+          sku_id: bandSku.id,
+          tiles: Math.ceil(lf / bandTileLen_ft),
+          corner: ringCornerCount(rings.outer),
+          lf,
+          outer: rings.outer,
+          inner: rings.inner,
+        };
+      } else {
+        warnings.push(`Band skipped: SKU "${bandCfg.sku_id}" has no usable tile size for a band.`);
+      }
     } else {
+      const offset_ft = Number(bandCfg.offset_ft) || 0;
       warnings.push(`Band skipped: room too small for a ${bandCfg.width_ft}ft band at ${offset_ft}ft offset.`);
     }
   }
