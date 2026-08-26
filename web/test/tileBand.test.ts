@@ -129,6 +129,17 @@ test("fieldRingForBand: no band config passes the room ring through unchanged", 
   }
 });
 
+test("fieldRingForBand: a band with sku_id but width_ft<=0 reports invalidWidth and no band", () => {
+  const { fieldRing_ft, rings, band, invalidWidth } = fieldRingForBand({
+    ring_ft: room20x12,
+    band: { sku_id: "sku-1", width_ft: 0, offset_ft: 0 },
+  });
+  assert.equal(invalidWidth, true, "sku present + width<=0 is the distinct invalid-width case");
+  assert.equal(band, null, "an invalid-width band is not usable");
+  assert.equal(rings, null);
+  assert.deepEqual(fieldRing_ft, room20x12, "field falls back to the full room ring");
+});
+
 test("fieldRingForBand: a band whose geometry collapses passes the room ring through and reports rings:null", () => {
   const band = { sku_id: "sku-1", width_ft: 7, offset_ft: 0 };
   const { fieldRing_ft, rings } = fieldRingForBand({ ring_ft: room20x12, band });

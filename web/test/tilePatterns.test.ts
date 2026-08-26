@@ -239,3 +239,11 @@ test("rotated brick_50 conserves room area with origin far from the room", () =>
 test("rotated diagonal conserves room area with origin far from the room", () => {
   areaConservationCheck("diagonal", farRoomRing, [0, 0], "diagonal far-origin");
 });
+
+test("rotated herringbone conserves room area with origin far from the room", () => {
+  areaConservationCheck("herringbone", farRoomRing, [0, 0], "herringbone far-origin");
+});
+
+test("rotated basketweave conserves room area with origin far from the room", () => {
+  areaConservationCheck("basketweave", farRoomRing, [0, 0], "basketweave far-origin");
+});
