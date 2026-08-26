@@ -10,7 +10,7 @@
 // warning instead: an unscaled room is exactly the kind of thing a batch
 // audit exists to catch.
 import { hasTileSetup, type TileSetup } from "./tileSetup.ts";
-import { solveTileLayout } from "./tileSolve.ts";
+import { solveTileLayout, type TileLayout } from "./tileSolve.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 import { fieldRingForBand } from "./tileEdges/band.ts";
@@ -76,6 +76,7 @@ export function tileWarnings(
   shapes: readonly Shape[] | null | undefined,
   dimsFor: DimsFor,
   uppFor: UppFor,
+  layoutFor?: (shapeId: string) => TileLayout | undefined,
 ): Warning[] {
   const warnings: Warning[] = [];
   const tileConds = (conditions || []).filter(hasTileSetup);
@@ -171,8 +172,17 @@ export function tileWarnings(
       });
     }
 
-    const solveSetup = effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft: fieldRing_ft, holes_ft });
-    const { config, classified } = solveTileLayout({ tile_setup: solveSetup, ring_ft: fieldRing_ft, holes_ft });
+    // Reuse the takeoff's already-solved layout (byShape.layout) when the
+    // caller supplies it: the SAME effectiveTileSetup + solveTileLayout the
+    // counts came from, so the audited grid stays byte-identical AND the
+    // O(V^2) balanced-origin search runs ONCE per render, not again here. A
+    // standalone caller (tests) omits layoutFor and this solves as before.
+    const pre = layoutFor?.(s.id ?? "");
+    const { config, classified } = pre ?? solveTileLayout({
+      tile_setup: effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft: fieldRing_ft, holes_ft }),
+      ring_ft: fieldRing_ft,
+      holes_ft,
+    });
     const halfW_in = config.w_in / 2;
     const halfH_in = config.h_in / 2;
 

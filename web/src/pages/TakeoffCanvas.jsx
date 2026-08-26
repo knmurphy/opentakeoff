@@ -1284,10 +1284,12 @@ export default function TakeoffCanvas() {
         const crosses = (mem.left && minX <= 0.01) || (mem.right && maxX >= 0.99);
         return crosses ? { ...s, stitch_crossing: true } : s;
       });
-      return tileWarnings(conditions, shapesForQA, (k) => panelImgs[k] || null, (k) => uppFor(k));
+      // layoutFor reuses the takeoff's already-solved byShape.layout so QA
+      // doesn't re-run the O(V²) balanced-origin solve a third time per render.
+      return tileWarnings(conditions, shapesForQA, (k) => panelImgs[k] || null, (k) => uppFor(k), (id) => tileTakeoff.byShape.get(id)?.layout);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff/tileTakeoff above
-    [conditions, shapes, stitches, panelImgs, scales]
+    [conditions, shapes, stitches, panelImgs, scales, tileTakeoff]
   );
 
   // Origin drag (M5 Task 6) — mirrors the roll cut-drag pattern (#136) below,
