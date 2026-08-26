@@ -12,6 +12,7 @@ import { tileCounts, countsBySku } from "./tileCalc/tiles.ts";
 import { tileGroutBags } from "./tileCalc/grout.ts";
 import { cutSheet } from "./tileCalc/cutsheet.ts";
 import { orderTiles } from "./tileCalc/order.ts";
+import { reusePlan } from "./tileCalc/reuse.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 
@@ -43,6 +44,47 @@ function primarySku(tile_setup) {
   return (tile_setup.skus || []).find(usable) ?? tile_setup.skus?.[0];
 }
 
+// With-reuse condition-level pooling (design §3.3, M6 Task 6.2/Invariants):
+// grain-locked reuse pools each SKU's offcuts separately (a directional
+// tile's grain runs one way, so one SKU never donates an offcut to another's
+// cut), so classified cells are bucketed by `quad.skuId` and `reusePlan` runs
+// once per bucket; whole-tile figures sum across SKUs into one condition-
+// level plan. `downgraded` is pattern-driven (AABB-approximate patterns),
+// so every bucket agrees on it — the first bucket to report one carries it.
+function reusePlanForCondition(tile_setup, classified, reuseOpts) {
+  const skuById = new Map((tile_setup.skus || []).map((s) => [s.id, s]));
+  const bySkuId = new Map();
+  for (const c of classified) {
+    const id = c.quad.skuId;
+    const bucket = bySkuId.get(id);
+    if (bucket) bucket.push(c);
+    else bySkuId.set(id, [c]);
+  }
+  let wholeTiles = 0;
+  let offcutsUsed = 0;
+  let scrapped = 0;
+  const reuseMap = [];
+  let downgraded;
+  for (const [id, cells] of bySkuId) {
+    const sku = skuById.get(id) ?? primarySku(tile_setup);
+    const plan = reusePlan({
+      classified: cells,
+      sku,
+      pattern: tile_setup.pattern,
+      sliver_threshold_in: reuseOpts.sliver_threshold_in,
+      kerf_in: reuseOpts.kerf_in,
+    });
+    wholeTiles += plan.wholeTiles;
+    offcutsUsed += plan.offcutsUsed;
+    scrapped += plan.scrapped;
+    reuseMap.push(...plan.reuseMap);
+    if (plan.downgraded && !downgraded) downgraded = plan.downgraded;
+  }
+  const result = { wholeTiles, offcutsUsed, scrapped, reuseMap };
+  if (downgraded) result.downgraded = downgraded;
+  return result;
+}
+
 // One shape's figured tile summary — the classify+count+grout+order+cutsheet
 // bundle every downstream consumer (report row, per-sheet overlay, QA, MCP
 // snapshot) reads. `tile_layout` is the shape's per-room override
@@ -50,7 +92,11 @@ function primarySku(tile_setup) {
 // rotation resolver, so the counts figured here match the grid the canvas
 // draws and the layout the MCP snapshot exports byte for byte. The solved
 // `layout` (config + quads + classified) and `ring_ft` ride the summary so a
-// consumer never has to re-solve — and therefore can never diverge.
+// consumer never has to re-solve — and therefore can never diverge. `reuse`
+// (With-reuse offcut pool, M6) is additive and present only when the
+// condition opted in (`purchase.reuse.enabled`) — a per-shape informational
+// figure; the condition-level `reuse`/`reuseOrder` figured once in
+// computeTileTakeoff's byCond finalize (Invariants) is the purchase figure.
 function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   const solveSetup = effectiveTileSetup({ tile_setup, tile_layout, ring_ft, holes_ft });
   const layout = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
@@ -66,7 +112,18 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
     attic_pct: tile_setup.purchase?.attic_pct,
   });
   const warnings = [layoutWarning(tile_setup)].filter(Boolean);
-  return { counts, bySku, grout, cutsheet, order, warnings, layout, ring_ft };
+  const summary = { counts, bySku, grout, cutsheet, order, warnings, layout, ring_ft };
+  const reuseOpts = tile_setup.purchase?.reuse;
+  if (reuseOpts?.enabled) {
+    summary.reuse = reusePlan({
+      classified,
+      sku: primarySku(tile_setup),
+      pattern: layout.config.pattern,
+      sliver_threshold_in: reuseOpts.sliver_threshold_in,
+      kerf_in: reuseOpts.kerf_in,
+    });
+  }
+  return summary;
 }
 
 // ── the whole takeoff, figured ──────────────────────────────────────────────
@@ -117,6 +174,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
         tile_setup: cond.tile_setup,
         counts: { full: 0, cut: 0, corner: 0, hole: 0, safe: 0, keptArea_sf: 0 },
         cutRows: [],
+        classified: [],
         warnings: new Set(),
         shapeIds: [],
       };
@@ -129,6 +187,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
     agg.counts.safe += summary.counts.safe;
     agg.counts.keptArea_sf += summary.counts.keptArea_sf;
     agg.cutRows.push(...summary.cutsheet);
+    agg.classified.push(...summary.layout.classified);
     for (const w of summary.warnings) agg.warnings.add(w);
     agg.shapeIds.push(s.id);
   }
@@ -144,6 +203,21 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
       attic_pct: agg.tile_setup.purchase?.attic_pct,
     });
     agg.grout = tileGroutBags({ tile_setup: agg.tile_setup, keptArea_sf: agg.counts.keptArea_sf });
+    // With-reuse (M6, Invariants): figured ONCE per condition, over every
+    // contributing shape's classified cells pooled together — never summed
+    // from byShape reuse figures. Strictly additive: `agg.order` (Safe)
+    // above is untouched either way.
+    const reuseOpts = agg.tile_setup.purchase?.reuse;
+    if (reuseOpts?.enabled) {
+      agg.reuse = reusePlanForCondition(agg.tile_setup, agg.classified, reuseOpts);
+      agg.reuseOrder = orderTiles({
+        safeCount: agg.reuse.wholeTiles,
+        sku: primarySku(agg.tile_setup),
+        breakage_pct: agg.tile_setup.purchase?.breakage_pct,
+        attic_pct: agg.tile_setup.purchase?.attic_pct,
+      });
+    }
+    delete agg.classified;
   }
 
   return { byCond, byShape };
@@ -158,7 +232,11 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
 // purchase quantities (safe, boxes, grout bags, order figures) scale by
 // multiplier; measured geometry (full/cut/corner/keptArea_sf) is reported
 // as-measured per unit, matching roll's orderFt-is-per-unit / ×N-at-report
-// posture.
+// posture. `reuse_enabled`/`reuse_whole`/`reuse_boxes` (M6) are additive:
+// present with real figures only when the condition's `purchase.reuse`
+// opted in (byCond carries `reuseOrder` in that case — Task 6.2); absent
+// reuse reports `reuse_enabled: false, reuse_whole: 0, reuse_boxes: 0`, and
+// `reuse_whole`/`reuse_boxes` scale by the same ×N multiplier as Safe boxes.
 export function tileReportRows(tileByCond, rows) {
   if (!tileByCond || !tileByCond.size || !Array.isArray(rows)) return [];
   const out = [];
@@ -169,6 +247,7 @@ export function tileReportRows(tileByCond, rows) {
     const ti = tileByCond.get(r.id);
     if (!ti) continue;
     const mult = r.multiplier || 1;
+    const reuseEnabled = Boolean(ti.reuse && ti.reuseOrder);
     out.push({
       condition_id: r.id,
       finish_tag: r.finish_tag,
@@ -183,6 +262,9 @@ export function tileReportRows(tileByCond, rows) {
       figured: ti.order.figured * mult,
       with_margin: ti.order.withMargin * mult,
       grout_bags: ti.grout.bags * mult,
+      reuse_enabled: reuseEnabled,
+      reuse_whole: reuseEnabled ? ti.reuseOrder.figured * mult : 0,
+      reuse_boxes: reuseEnabled ? ti.reuseOrder.boxes * mult : 0,
       cutsheet: ti.cutsheet,
       warnings: ti.warnings,
     });

@@ -172,3 +172,118 @@ test("computeTileTakeoff honors a per-room tile_layout origin override (M5 §4.1
   assert.ok(shiftedOut.layout && Array.isArray(shiftedOut.layout.classified));
   assert.equal(shiftedOut.layout.classified.filter((c: { cls: string }) => c.cls === "full").length, shiftedOut.counts.full);
 });
+
+// M6 Task 6.2/6.3 — With-reuse offcut pool wired into the takeoff bridge.
+// A 4.25ft x 4.25ft room in 24x24in tile (no joint, pinned origin via
+// "start_full") classifies to 2 full columns/rows, a trailing 3in cut
+// column, a trailing 3in cut row, and a 3x3in corner: the two right-edge
+// cuts (3x24in) share dims, and the two bottom-edge cuts (24x3in) share
+// dims, so the offcut left behind opening the first of each identical pair
+// packs the second (design §3.3) — a real, deterministic reuse saving.
+function makeReuseCondition() {
+  const tile_setup = mintTileSetup();
+  tile_setup.skus[0].w_in = 24;
+  tile_setup.skus[0].h_in = 24;
+  tile_setup.skus[0].per_box = 4;
+  tile_setup.joint.width_in = 0;
+  tile_setup.edge_strategy = "start_full";
+  return { id: "condReuse", finish_tag: "CT-2", multiplier: 1, tile_setup };
+}
+
+const dimsFor2 = (sheetId: string) => (sheetId === "sheet2" ? { w: 100, h: 100 } : null);
+const uppFor2 = (sheetId: string) => (sheetId === "sheet2" ? 0.0425 : null);
+
+function makeReuseShape(id: string, condId: string) {
+  return {
+    id,
+    sheet_id: "sheet2",
+    condition_id: condId,
+    measure_role: "floor_area",
+    verts_norm: [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ],
+  };
+}
+
+test("computeTileTakeoff: reuse enabled exposes byCond reuse.wholeTiles <= safe plus a reuseOrder", () => {
+  const cond = makeReuseCondition();
+  cond.tile_setup.purchase = { reuse: { enabled: true } };
+  const shape = makeReuseShape("reuseShape", cond.id);
+
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor2, uppFor2);
+  const summary = byCond.get(cond.id);
+  assert.ok(summary, "expected a byCond summary for the reuse condition");
+  assert.equal(summary.counts.safe, 9);
+  assert.ok(summary.reuse, "expected a condition-level reuse plan");
+  assert.equal(summary.reuse.wholeTiles, 7, "two identical-dim cut pairs each pack one offcut");
+  assert.ok(summary.reuse.wholeTiles <= summary.counts.safe, "With-reuse never exceeds Safe");
+  assert.equal(summary.reuse.offcutsUsed, 2);
+  assert.equal(summary.reuse.downgraded, undefined, "grid is not an AABB-approximate pattern");
+
+  const expectedReuseOrder = orderTiles({
+    safeCount: summary.reuse.wholeTiles,
+    sku: cond.tile_setup.skus[0],
+    breakage_pct: cond.tile_setup.purchase.breakage_pct,
+    attic_pct: cond.tile_setup.purchase.attic_pct,
+  });
+  assert.deepEqual(summary.reuseOrder, expectedReuseOrder);
+});
+
+test("computeTileTakeoff: reuse disabled exposes neither reuse nor reuseOrder", () => {
+  const cond = makeReuseCondition();
+  const shape = makeReuseShape("reuseShapeOff", cond.id);
+
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor2, uppFor2);
+  const summary = byCond.get(cond.id);
+  assert.ok(summary);
+  assert.equal(summary.reuse, undefined);
+  assert.equal(summary.reuseOrder, undefined);
+});
+
+test("computeTileTakeoff: With-reuse never perturbs the Safe order (byte-identical enabled vs disabled)", () => {
+  const condOff = makeReuseCondition();
+  const condOn = makeReuseCondition();
+  condOn.id = "condReuseOn";
+  condOn.tile_setup.purchase = { reuse: { enabled: true } };
+
+  const shapeOff = makeReuseShape("reuseShapeSafeOff", condOff.id);
+  const shapeOn = makeReuseShape("reuseShapeSafeOn", condOn.id);
+
+  const offSummary = computeTileTakeoff([condOff], [shapeOff], dimsFor2, uppFor2).byCond.get(condOff.id);
+  const onSummary = computeTileTakeoff([condOn], [shapeOn], dimsFor2, uppFor2).byCond.get(condOn.id);
+
+  assert.deepEqual(onSummary.order, offSummary.order);
+  assert.deepEqual(onSummary.counts, offSummary.counts);
+});
+
+test("tileReportRows: reuse_enabled/reuse_whole/reuse_boxes are additive and scale by the condition multiplier", () => {
+  const cond = makeReuseCondition();
+  cond.tile_setup.purchase = { reuse: { enabled: true } };
+  const shape = makeReuseShape("reuseShapeReport", cond.id);
+
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor2, uppFor2);
+  const summary = byCond.get(cond.id);
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 3 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reuse_enabled, true);
+  assert.equal(out[0].reuse_whole, summary.reuseOrder.figured * 3);
+  assert.equal(out[0].reuse_boxes, summary.reuseOrder.boxes * 3);
+});
+
+test("tileReportRows: reuse disabled reports reuse_enabled:false, reuse_whole:0, reuse_boxes:0", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reuse_enabled, false);
+  assert.equal(out[0].reuse_whole, 0);
+  assert.equal(out[0].reuse_boxes, 0);
+});

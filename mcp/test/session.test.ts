@@ -377,8 +377,12 @@ test("exportReport: a tile_setup condition with a floor shape figures tile_goods
   assert.deepEqual(Object.keys(row), [
     "condition_id", "finish_tag", "multiplier", "full", "cut", "corner", "hole",
     "kept_area_sf", "safe", "boxes", "figured", "with_margin", "grout_bags",
+    "reuse_enabled", "reuse_whole", "reuse_boxes",
     "cutsheet", "warnings",
   ]);
+  assert.equal(row.reuse_enabled, false, "reuse is opt-in — absent purchase.reuse reports disabled");
+  assert.equal(row.reuse_whole, 0);
+  assert.equal(row.reuse_boxes, 0);
   assert.equal(row.finish_tag, "CT-1");
   assert.ok(row.safe > 0, "the committed room figures a purchase quantity");
   assert.ok(row.boxes > 0);

@@ -20,7 +20,11 @@ export type TileSetup = {
   skus: TileSku[];
   joint: TileJoint;
   grout: Record<string, unknown>;
-  purchase?: { breakage_pct?: number; attic_pct?: number };
+  purchase?: {
+    breakage_pct?: number;
+    attic_pct?: number;
+    reuse?: { enabled: boolean; sliver_threshold_in?: number; kerf_in?: number };
+  };
 };
 
 const usableSku = (s: unknown): boolean => {

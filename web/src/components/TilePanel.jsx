@@ -120,12 +120,39 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
           style={{ marginTop: 3, padding: "2px 7px", border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>+ add SKU</button>
       </div>
 
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 10.5, color: "var(--ink-muted)" }}>
+          <input type="checkbox" name="tile-reuse-enabled" checked={!!ts.purchase?.reuse?.enabled}
+            onChange={(e) => patch({ purchase: { ...(ts.purchase || {}), reuse: { ...(ts.purchase?.reuse || {}), enabled: e.target.checked } } })} />
+          Reuse offcuts
+        </label>
+        {ts.purchase?.reuse?.enabled && (
+          <label style={fld}>Sliver threshold (in)
+            <input type="number" min="0" step="0.25" value={ts.purchase?.reuse?.sliver_threshold_in ?? 2}
+              onChange={(e) => patch({ purchase: { ...(ts.purchase || {}), reuse: { ...(ts.purchase?.reuse || {}), sliver_threshold_in: parseFloat(e.target.value) || 0 } } })}
+              style={{ ...ip, width: 56 }} />
+          </label>
+        )}
+      </div>
+
       <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink)", marginBottom: 4 }}>
         {ti.counts.full} full · {ti.counts.cut} cut · {ti.counts.corner} corner{ti.counts.hole ? ` · ${ti.counts.hole} hole` : ""} · {Math.round(ti.counts.keptArea_sf * 100) / 100} SF
       </div>
       <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-secondary)", marginBottom: 4 }}>
         order {ti.order.withMargin} tile{ti.order.withMargin === 1 ? "" : "s"} · {ti.order.boxes} box{ti.order.boxes === 1 ? "" : "es"} · {ti.grout.bags} grout bag{ti.grout.bags === 1 ? "" : "s"}
       </div>
+
+      {ti.reuse && (
+        ti.reuse.downgraded ? (
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, color: "var(--ink-muted)", marginBottom: 4 }}>
+            reuse n/a for {ts.pattern} — grain ambiguous
+          </div>
+        ) : (
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-secondary)", marginBottom: 4 }}>
+            with reuse {ti.reuseOrder.withMargin} tile{ti.reuseOrder.withMargin === 1 ? "" : "s"} · {ti.reuseOrder.boxes} box{ti.reuseOrder.boxes === 1 ? "" : "es"}
+          </div>
+        )
+      )}
 
       {ti.cutsheet.length > 0 && (
         <div style={{ marginTop: 4 }}>
