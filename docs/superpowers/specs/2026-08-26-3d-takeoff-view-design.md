@@ -134,8 +134,9 @@ visibility on, and the H/T precedent is exactly this: T already renders for
 every condition and is inert where irrelevant. extrude_h_ft is likewise inert
 for conditions that never render vertical-linear or post geometry.
 Persisted on the condition; unknown-fields-pass-through is established
-convention (`materials.js:14-18`), so this is a comment-level schema addition,
-no migration. **Do not overload `height_ft`** — its single-purpose contract
+convention for condition/template records (`templates.js` sanitizeTemplates —
+the `scale_source` precedent), so this is a comment-level schema addition, no
+migration.
 ("default for NEW wall traces, SF = LF × H") is copy-pinned in
 `TakeoffsPanel.jsx:473` and MCP-exposed; a second consumer makes all of that
 documentation false.
@@ -173,11 +174,19 @@ modal, and it re-shows on later commits while still unset, hence the name):
 commits. This closes the corner-guard day-one gap for user-created conditions
 beyond the seeds.
 
-**Mixed heights per spec section:** `extrude_h_ft` is per condition. A job
-with 4'0" corridor guards and 8'0" loading-dock guards under one finish tag
-requires splitting into two conditions (CG-1a/CG-1b) — the same pattern the
-app already forces for mixed wall heights today. Stated so an implementer
-does not assume one height fits a spec section.
+**Mixed heights per spec section — per-shape snapshot + override, mirroring
+`height_override`:** `extrude_h_ft` defaults per condition and SNAPSHOTS onto
+each shape at commit (`shape.extrude_h_ft`, like `shape.height_ft` on
+surface_area shapes). A per-shape override — `extrude_h_ft: v,
+extrude_override: true` on the selected shape, set/cleared through the shape
+inspector exactly like `setShapeHeight`/`clearShapeHeight`
+(`TakeoffCanvas.jsx:6661-6676`, inspector field at `8782-8790`, consumed at
+`shapeMetrics.js:24-28`) — lets one CG-1 condition hold 4'0" corridor guards
+AND 8'0" loading-dock guards without fragmenting Report/materials/legend into
+duplicate line items for the same product. The builder reads the shape-level
+value, condition default only as fallback. This is the app's existing pattern
+for mixed wall heights; extrude_h_ft adopts it rather than inventing a
+stricter condition-splitting requirement.
 
 Unset `extrude_h_ft` → translucent nominal post/ribbon + legend note
 (refusal-over-guessing carried into visuals). With seeds plus the nudge this
@@ -203,7 +212,8 @@ Renderer contract (all from the Web3D review):
   per-condition parenting keeps explode and legend toggles working through
   ordinary visibility/transform (a shared scene-wide batch would orphan the
   red marker mid-explode and can't be condition-toggled without a rebuild);
-  (2) count posts get **one InstancedMesh per count-role condition**,
+  (2) count posts get **one InstancedMesh per condition that owns count
+  shapes**,
   parented under that condition's Group, with an instanceId→shapeId array
   kept alongside for future consumers (no raycast/picking in v1 — selection
   isolation is 2D-selection-driven). Worst case ≈ #conditions +
@@ -219,21 +229,27 @@ Renderer contract (all from the Web3D review):
   not shown; verify in field" — a NEW convention (current exports carry only
   a "Generated {date}" footer) extending the house refusal-over-guessing
   philosophy to the app's most exportable artifact.
-- **Section cut:** horizontal clipping plane, no stencil caps in v1 (thin-shell
-  geometry makes an open cut edge acceptable at schematic fidelity). Documented
-  scope: this is a near-floor audit affordance (base-ring closure, guard
-  placement), NOT a wainscot-height-difference audit — that needs a vertical
-  section the data does not support. **Section cut and explode are mutually
-  exclusive in the UI** (a world-space plane does not track per-condition Δz;
-  coupling them is undefined physics).
+- **Section cut:** horizontal clipping plane (`renderer.localClippingEnabled =
+  true` — per-material clipping planes are inert without it), no stencil caps
+  in v1 (thin-shell geometry makes an open cut edge acceptable at schematic
+  fidelity). Documented scope: this is a near-floor audit affordance
+  (base-ring closure, guard placement), NOT a wainscot-height-difference
+  audit — that needs a vertical section the data does not support. **Section
+  cut and explode are mutually exclusive in the UI** (a world-space plane does
+  not track per-condition Δz; coupling them is undefined physics).
 - **Lifecycle:** on unmount — `renderer.dispose()`, `renderer.forceContextLoss()`,
   dispose every geometry/material, null refs. WebGL context-lost → overlay +
   re-init. If open/close profiling shows hitches, keep one renderer alive
   hidden instead of remounting.
-- **DPI/resize:** `ResizeObserver` → `camera.aspect` + `renderer.setSize()`;
-  `setPixelRatio(min(devicePixelRatio, 2))`.
+- **DPI/resize:** `ResizeObserver` → `camera.aspect` +
+  `camera.updateProjectionMatrix()` (mutating `.aspect` alone is a no-op) +
+  `renderer.setSize()`; `setPixelRatio(min(devicePixelRatio, 2))`.
+- **Materials/lighting:** unlit `MeshBasicMaterial` with per-condition flat
+  color — no light rig, consistent with schematic fidelity; DoubleSide as
+  stated above.
 - **Framing:** fit-to-content from bounding sphere + FOV, recomputed on legend
-  toggle (visible content changes).
+  toggle (visible content changes). Explode deliberately leaves framing
+  static (exploded groups may exit the fitted sphere; the user re-frames).
 
 ### 4. TakeoffCanvas integration (monolith preserved — trigger only)
 
