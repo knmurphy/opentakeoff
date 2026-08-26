@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { optimizeOrigin } from "../src/lib/tileGeometry/optimize.ts";
+import { optimizeOrigin, effectiveTileSetup } from "../src/lib/tileGeometry/optimize.ts";
 import type { Classified } from "../src/lib/tileGeometry/classify.ts";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
@@ -33,4 +33,30 @@ test("optimizeOrigin: deterministic (same input → same origin)", () => {
   const ts = mintTileSetup(); ts.skus[0].w_in = 12; ts.skus[0].h_in = 12; ts.joint.width_in = 0;
   const ring: [number,number][] = [[0,0],[4.25,0],[4.25,4.1],[0,4.1]];
   assert.deepEqual(optimizeOrigin({ tile_setup: ts, ring_ft: ring }).origin, optimizeOrigin({ tile_setup: ts, ring_ft: ring }).origin);
+});
+
+// effectiveTileSetup — the ONE origin/rotation resolver shared by the figuring
+// path, the canvas overlay, the QA aggregator, and the MCP snapshot (§4.1).
+test("effectiveTileSetup: balanced strategy optimizes the origin (no explicit override)", () => {
+  const ts = mintTileSetup(); ts.skus[0].w_in = 12; ts.skus[0].h_in = 12; ts.joint.width_in = 0;
+  ts.edge_strategy = "balanced"; ts.origin = [0, 0];
+  const ring: [number, number][] = [[0, 0], [4.25, 0], [4.25, 4], [0, 4]];
+  const eff = effectiveTileSetup({ tile_setup: ts, ring_ft: ring });
+  assert.deepEqual(eff.origin, optimizeOrigin({ tile_setup: ts, ring_ft: ring }).origin);
+});
+
+test("effectiveTileSetup: an explicit per-room origin PINS the grid (skips the optimizer)", () => {
+  const ts = mintTileSetup(); ts.skus[0].w_in = 12; ts.skus[0].h_in = 12; ts.joint.width_in = 0;
+  ts.edge_strategy = "balanced"; ts.origin = [0, 0];
+  const ring: [number, number][] = [[0, 0], [4.25, 0], [4.25, 4], [0, 4]];
+  const eff = effectiveTileSetup({ tile_setup: ts, tile_layout: { origin: [0.5, 0] }, ring_ft: ring });
+  assert.deepEqual(eff.origin, [0.5, 0]);   // the estimator placed it — never re-optimized away
+});
+
+test("effectiveTileSetup: a live drag override wins over the per-room override and default", () => {
+  const ts = mintTileSetup(); ts.skus[0].w_in = 12; ts.skus[0].h_in = 12; ts.edge_strategy = "balanced";
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const eff = effectiveTileSetup({ tile_setup: ts, tile_layout: { origin: [0.5, 0], rotation: 15 }, ring_ft: ring, originOverride: [0.9, 0.9], rotationOverride: 30 });
+  assert.deepEqual(eff.origin, [0.9, 0.9]);
+  assert.equal(eff.rotation_deg, 30);
 });

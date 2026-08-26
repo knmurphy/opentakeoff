@@ -149,3 +149,26 @@ test("computeTileTakeoff figures purchase boxes once per condition, not summed p
   assert.equal(condSummary.order.boxes, 1);
   assert.notEqual(condSummary.order.boxes, perShapeBoxesSum);
 });
+
+test("computeTileTakeoff honors a per-room tile_layout origin override (M5 §4.1)", () => {
+  const cond = makeTileCondition();   // balanced, 12in tile, 4x4ft room → 16 full
+  const base = makeShape(cond.id);
+  const baseOut = computeTileTakeoff([cond], [base], dimsFor, uppFor).byShape.get(base.id);
+  assert.equal(baseOut.counts.full, 16);
+  assert.equal(baseOut.counts.cut, 0);
+
+  // A per-room origin override PINS the grid (effectiveTileSetup skips the
+  // balanced optimizer for an explicit override), shifting it half a tile so
+  // both x-walls strand cut columns — the figured counts must follow the
+  // override, not the condition default, or the drawn grid and the counts
+  // would disagree (the M5 estimator-review must-fix).
+  const shifted = { ...base, tile_layout: { origin: [0.5, 0] } };
+  const shiftedOut = computeTileTakeoff([cond], [shifted], dimsFor, uppFor).byShape.get(shifted.id);
+  assert.notEqual(shiftedOut.counts.full, 16);
+  assert.ok(shiftedOut.counts.cut > 0, "a per-room origin override changes the figured layout");
+
+  // The solved layout rides the summary so the canvas overlay reads the SAME
+  // classify pass the counts came from (no independent re-solve → no drift).
+  assert.ok(shiftedOut.layout && Array.isArray(shiftedOut.layout.classified));
+  assert.equal(shiftedOut.layout.classified.filter((c: { cls: string }) => c.cls === "full").length, shiftedOut.counts.full);
+});

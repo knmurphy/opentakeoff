@@ -119,6 +119,7 @@ import TilePanel from "../components/TilePanel.jsx";
 import { computeTileTakeoff } from "../lib/tileTakeoff.js";
 import { hasTileSetup, tileConfig } from "../lib/tileSetup.ts";
 import { solveTileLayout } from "../lib/tileSolve.ts";
+import { effectiveTileSetup } from "../lib/tileGeometry/optimize.ts";
 import { tileOverlayPrimitives, shouldShowGrid } from "../lib/tileOverlay.ts";
 import { tileWarnings } from "../lib/tileQA.ts";
 import { tileLayoutSig } from "../lib/tileLayoutSig.ts";
@@ -284,11 +285,8 @@ function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverrid
   const ringFt = (verts) => verts.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
   const ring_ft = ringFt(s.verts_norm);
   const holes_ft = (s.verts_norm_holes || []).map(ringFt);
-  const base = tileConfig(cond.tile_setup);
   const tl = s.tile_layout || {};
-  const origin = originOverride !== undefined ? originOverride : (Array.isArray(tl.origin) ? tl.origin : base.origin);
-  const rotation_deg = rotationOverride !== undefined ? rotationOverride : (tl.rotation != null ? tl.rotation : base.rotation_deg);
-  const effective = { ...cond.tile_setup, origin, rotation_deg };
+  const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft, holes_ft, originOverride, rotationOverride });
   const layout = solveTileLayout({ tile_setup: effective, ring_ft, holes_ft });
   const skus = cond.tile_setup?.skus || [];
   const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond.color || "#888";
@@ -1203,9 +1201,31 @@ export default function TakeoffCanvas() {
   // Cross-room QA (Task 4) — a 40-room job audited once, not one zoom at a
   // time. Same dimsFor/uppFor contract as computeTileTakeoff.
   const tileWarningsList = useMemo(
-    () => tileWarnings(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k)),
+    () => {
+      // §2.I/§5: a room whose ring reaches the shared butt edge of a
+      // multi-sheet stitch is a seam-crossing candidate — flag it for a
+      // HUMAN seam (tiling stops at a sheet boundary; never auto-joined).
+      // This is the only place stitch membership is known, so the flag is
+      // set here and tileQA merely relays it.
+      const shapesForQA = shapes.map((s) => {
+        if (s.measure_role !== "floor_area" || !Array.isArray(s.verts_norm) || s.verts_norm.length < 3) return s;
+        let mem = null;
+        for (const st of stitches) {
+          const members = st.members || [];
+          if (members.length < 2) continue;
+          const i = members.findIndex((mm) => mm.key === s.sheet_id);
+          if (i >= 0) { mem = { left: i > 0, right: i < members.length - 1 }; break; }
+        }
+        if (!mem) return s;
+        let minX = 1, maxX = 0;
+        for (const [nx] of s.verts_norm) { if (nx < minX) minX = nx; if (nx > maxX) maxX = nx; }
+        const crosses = (mem.left && minX <= 0.01) || (mem.right && maxX >= 0.99);
+        return crosses ? { ...s, stitch_crossing: true } : s;
+      });
+      return tileWarnings(conditions, shapesForQA, (k) => panelImgs[k] || null, (k) => uppFor(k));
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff/tileTakeoff above
-    [conditions, shapes, panelImgs, scales]
+    [conditions, shapes, stitches, panelImgs, scales]
   );
 
   // Origin drag (M5 Task 6) — mirrors the roll cut-drag pattern (#136) below,

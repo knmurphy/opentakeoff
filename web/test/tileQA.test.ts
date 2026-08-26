@@ -41,6 +41,10 @@ test("tileWarnings: origin [0,0] on a 4.25ft-wide room strands a hairline sliver
   ts.skus[0].h_in = 12;
   ts.joint.width_in = 0;
   ts.origin = [0, 0];
+  // start_full HONORS the origin — a balanced setup would let effectiveTileSetup's
+  // optimizer rescue this origin (see the balanced test below), so the sliver
+  // only stands under a strategy that keeps the origin the user/engine set.
+  ts.edge_strategy = "start_full";
   const cond = makeCondition("c1", ts);
   const shape = makeShape("s1", "c1");
 
@@ -102,4 +106,19 @@ test("tileWarnings: a tile_setup whose layoutWarning is non-null surfaces a 'lay
   const layout = warnings.filter((w) => w.kind === "layout");
   assert.equal(layout.length, 1);
   assert.match(layout[0].detail, /herringbone/i);
+});
+
+test("tileWarnings: relays a canvas-set stitch_crossing flag as a seam_crossing warning", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const cond = makeCondition("c1", ts);
+  // The canvas sets stitch_crossing on a room reaching a stitch's shared butt
+  // edge (§5 doctrine: flagged for a HUMAN seam, never auto-joined). QA relays
+  // it — it never infers stitch geometry itself.
+  const shape = { ...makeShape("s1", "c1"), stitch_crossing: true };
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  const seam = warnings.filter((w) => w.kind === "seam_crossing");
+  assert.equal(seam.length, 1);
+  assert.equal(seam[0].shape_id, "s1");
 });

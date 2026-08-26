@@ -12,6 +12,7 @@
 import { hasTileSetup, type TileSetup } from "./tileSetup.ts";
 import { solveTileLayout } from "./tileSolve.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
+import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 
 export type WarningKind = "sliver" | "layout" | "hole_cut" | "unscaled" | "seam_crossing";
 
@@ -38,6 +39,9 @@ type Shape = {
   measure_role?: string;
   verts_norm?: [number, number][];
   verts_norm_holes?: [number, number][][];
+  // Per-room layout override (origin/rotation); honored via effectiveTileSetup
+  // so the audited grid matches the drawn and counted grid (§4.1).
+  tile_layout?: { origin?: [number, number]; rotation?: number } | null;
   // Set by the canvas (Task 6) when it knows a room is part of a stitched
   // group crossing a sheet boundary — this module has no way to detect
   // stitch membership from (conditions, shapes) alone, so it never
@@ -122,7 +126,8 @@ export function tileWarnings(
     const holes_ft: [number, number][][] = (s.verts_norm_holes || []).map((hole) =>
       hole.map(([nx, ny]): [number, number] => [nx * dims.w * upp, ny * dims.h * upp]),
     );
-    const { config, classified } = solveTileLayout({ tile_setup, ring_ft, holes_ft });
+    const solveSetup = effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft, holes_ft });
+    const { config, classified } = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
     const halfW_in = config.w_in / 2;
     const halfH_in = config.h_in / 2;
 

@@ -416,7 +416,7 @@ test("exportPayload: a tiled floor shape carries a solved tile_layouts snapshot"
   assert.equal("tile_layouts" in (s.exportPayload() as Record<string, unknown>), false);
 
   const cond = s.editCondition("CT-1", { tile_setup: { pattern: "grid", rotation_deg: 15 } });
-  const p = s.exportPayload() as { tile_layouts: Array<{ shape_id: string; condition_id: string; finish_tag: string; config: unknown; classified_summary: { full: number; cut: number; corner: number; hole: number } }> };
+  const p = s.exportPayload() as { tile_layouts: Array<{ shape_id: string; condition_id: string; finish_tag: string; config: { w_in: number; h_in: number; joint_in: number; pattern: string; origin: number[]; rotation_deg: number }; classified_summary: { full: number; cut: number; corner: number; hole: number } }> };
   assert.equal(p.tile_layouts.length, 1);
   const snap = p.tile_layouts[0];
   assert.deepEqual(Object.keys(snap).sort(), ["classified_summary", "condition_id", "config", "finish_tag", "shape_id"]);
@@ -424,11 +424,16 @@ test("exportPayload: a tiled floor shape carries a solved tile_layouts snapshot"
   assert.equal(snap.condition_id, cond.condition_id);
   assert.equal(snap.finish_tag, "CT-1");
 
-  // config matches the condition's own tile_setup, resolved (tileConfig)
-  assert.deepEqual(snap.config, {
-    w_in: 12, h_in: 24, joint_in: 0.125,
-    pattern: "grid", origin: [0, 0], rotation_deg: 15,
-  });
+  // config is the EFFECTIVE resolved setup (§4.1) — a balanced condition's
+  // origin is the optimizer's sliver-avoidance choice, i.e. exactly what the
+  // canvas draws and the report counts, not the raw [0,0] default.
+  assert.equal(snap.config.w_in, 12);
+  assert.equal(snap.config.h_in, 24);
+  assert.equal(snap.config.joint_in, 0.125);
+  assert.equal(snap.config.pattern, "grid");
+  assert.equal(snap.config.rotation_deg, 15);
+  assert.ok(Array.isArray(snap.config.origin) && snap.config.origin.length === 2
+    && snap.config.origin.every((n) => typeof n === "number"), "effective origin is a resolved [x,y] in feet");
 
   // classified_summary matches the SAME figures exportReport's tile_goods reads
   const row = s.exportReport().tile_goods[0];

@@ -58,7 +58,7 @@ import { sanitizeApprovals as sanitizeApprovalsJs, applyApprovalCommand as apply
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
 import { computeTileTakeoff, tileReportRows } from "../../web/src/lib/tileTakeoff.js";
-import { hasTileSetup, mintTileSetup, tileConfig, type TileSetup, type TileConfig } from "../../web/src/lib/tileSetup.ts";
+import { hasTileSetup, mintTileSetup, type TileSetup, type TileConfig } from "../../web/src/lib/tileSetup.ts";
 import type { TileCounts } from "../../web/src/lib/tileCalc/tiles.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
@@ -3826,7 +3826,7 @@ export class Session {
     // exportReport's tile_goods reads (session.ts:3843) — never re-solved, so
     // a headless snapshot and the report block can never disagree about a
     // shape's classified counts.
-    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byShape: Map<string, { counts: TileCounts }> };
+    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byShape: Map<string, { counts: TileCounts; layout: { config: TileConfig } }> };
     if (!byShape.size) return [];
     const condById = new Map(this.conditions.map((c) => [c.id, c]));
     const out: TileLayoutSnapshot[] = [];
@@ -3839,7 +3839,7 @@ export class Session {
         shape_id: s.id,
         condition_id: s.condition_id,
         finish_tag: cond.finish_tag,
-        config: tileConfig(cond.tile_setup as TileSetup),
+        config: summary.layout.config,
         classified_summary: {
           full: summary.counts.full,
           cut: summary.counts.cut,

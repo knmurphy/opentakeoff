@@ -161,3 +161,35 @@ export function optimizeOrigin(args: {
   // xCandidates/yCandidates always include 0, so best is never null.
   return best as { origin: [number, number]; score: number; slivers: number };
 }
+
+// The ONE place a shape's effective solve-setup is resolved — shared by the
+// figuring path (tileTakeoff.summarizeShape), the canvas overlay, the QA
+// aggregator, and the MCP snapshot, so the DRAWN grid, the COUNTED grid, the
+// audited grid, and the exported grid can never disagree (design §4.1/§3.7).
+// Precedence: an explicit per-room origin (shape.tile_layout.origin) or a live
+// drag override PINS the grid — the estimator placed it, so it is never
+// re-optimized away; otherwise a `balanced` condition auto-optimizes the
+// origin (sliver avoidance), and any other strategy keeps the condition
+// default. Rotation follows the same per-room-override-then-default rule.
+export function effectiveTileSetup(args: {
+  tile_setup: TileSetup;
+  tile_layout?: { origin?: [number, number]; rotation?: number } | null;
+  ring_ft: [number, number][];
+  holes_ft?: [number, number][][];
+  originOverride?: [number, number];
+  rotationOverride?: number;
+}): TileSetup {
+  const { tile_setup, tile_layout, ring_ft, holes_ft, originOverride, rotationOverride } = args;
+  const tl = tile_layout || {};
+  const rotation_deg = rotationOverride !== undefined
+    ? rotationOverride
+    : (tl.rotation != null ? tl.rotation : tile_setup.rotation_deg);
+  const pinned = originOverride !== undefined
+    ? originOverride
+    : (Array.isArray(tl.origin) ? tl.origin : null);
+  let origin = pinned ?? tile_setup.origin;
+  if (pinned === null && tile_setup.edge_strategy === "balanced") {
+    origin = optimizeOrigin({ tile_setup, ring_ft, holes_ft }).origin;
+  }
+  return { ...tile_setup, origin, rotation_deg };
+}

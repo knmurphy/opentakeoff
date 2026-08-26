@@ -13,7 +13,7 @@ import { tileGroutBags } from "./tileCalc/grout.ts";
 import { cutSheet } from "./tileCalc/cutsheet.ts";
 import { orderTiles } from "./tileCalc/order.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
-import { optimizeOrigin } from "./tileGeometry/optimize.ts";
+import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 
 export { hasTileSetup };
 
@@ -44,14 +44,17 @@ function primarySku(tile_setup) {
 }
 
 // One shape's figured tile summary — the classify+count+grout+order+cutsheet
-// bundle every downstream consumer (report row, per-sheet overlay) reads.
-function summarizeShape(tile_setup, ring_ft, holes_ft) {
-  let solveSetup = tile_setup;
-  if (tile_setup.edge_strategy === "balanced") {
-    const { origin } = optimizeOrigin({ tile_setup, ring_ft, holes_ft });
-    solveSetup = { ...tile_setup, origin };
-  }
-  const { classified } = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
+// bundle every downstream consumer (report row, per-sheet overlay, QA, MCP
+// snapshot) reads. `tile_layout` is the shape's per-room override
+// (origin/rotation); effectiveTileSetup (optimize.ts) is the SOLE origin/
+// rotation resolver, so the counts figured here match the grid the canvas
+// draws and the layout the MCP snapshot exports byte for byte. The solved
+// `layout` (config + quads + classified) and `ring_ft` ride the summary so a
+// consumer never has to re-solve — and therefore can never diverge.
+function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
+  const solveSetup = effectiveTileSetup({ tile_setup, tile_layout, ring_ft, holes_ft });
+  const layout = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
+  const { classified } = layout;
   const counts = tileCounts(classified);
   const bySku = countsBySku(classified);
   const grout = tileGroutBags({ tile_setup, keptArea_sf: counts.keptArea_sf });
@@ -63,7 +66,7 @@ function summarizeShape(tile_setup, ring_ft, holes_ft) {
     attic_pct: tile_setup.purchase?.attic_pct,
   });
   const warnings = [layoutWarning(tile_setup)].filter(Boolean);
-  return { counts, bySku, grout, cutsheet, order, warnings };
+  return { counts, bySku, grout, cutsheet, order, warnings, layout, ring_ft };
 }
 
 // ── the whole takeoff, figured ──────────────────────────────────────────────
@@ -105,7 +108,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
 
     const ring_ft = ringFt(s.verts_norm, dims, upp);
     const holes_ft = (s.verts_norm_holes || []).map((ring) => ringFt(ring, dims, upp));
-    const summary = summarizeShape(cond.tile_setup, ring_ft, holes_ft);
+    const summary = summarizeShape(cond.tile_setup, ring_ft, holes_ft, s.tile_layout);
     byShape.set(s.id, summary);
 
     let agg = byCond.get(cond.id);
