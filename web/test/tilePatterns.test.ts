@@ -1,7 +1,7 @@
 // web/test/tilePatterns.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getPattern, registry } from "../src/lib/tilePatterns/index.ts";
+import { getPattern, registry, layoutWarning } from "../src/lib/tilePatterns/index.ts";
 
 const bounds = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
 
@@ -48,4 +48,27 @@ test("diagonal quads are rotated 45°", () => {
   const a = g.generate({ bounds, w: 1, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
   assert.ok(a.length > 0);
   assert.ok(a.every((q) => Math.abs(q.rot - Math.PI / 4) < 1e-9));
+});
+
+test("herringbone places interlocking rotated pairs covering the bounds", () => {
+  const g = getPattern("herringbone");
+  const a = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  assert.ok(a.length > 0);
+  // both +45° and -45° orientations present
+  const rots = new Set(a.map((q) => Math.round(q.rot * 1e6)));
+  assert.equal(rots.size, 2);
+});
+
+test("basketweave alternates horizontal/vertical pairs", () => {
+  const g = getPattern("basketweave");
+  const a = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  assert.ok(a.length > 0);
+  const rots = new Set(a.map((q) => Math.round(q.rot * 1e6)));
+  assert.equal(rots.size, 2); // 0 and π/2
+});
+
+test("herringbone warns for non-2:1 tiles", () => {
+  assert.ok(layoutWarning({ pattern: "herringbone", skus: [{ w_in: 12, h_in: 12 }] }));
+  assert.equal(layoutWarning({ pattern: "herringbone", skus: [{ w_in: 24, h_in: 12 }] }), null);
+  assert.equal(layoutWarning({ pattern: "grid", skus: [{ w_in: 12, h_in: 12 }] }), null);
 });

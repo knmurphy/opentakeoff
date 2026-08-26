@@ -1,0 +1,36 @@
+// web/src/lib/tilePatterns/basketweave.ts
+import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
+
+// Basketweave is interlock-derived (design §3.1): it ignores the free
+// `origin`/`rotation_deg`. It lays a checkerboard of square-ish blocks,
+// alternating a horizontal pair (two rot-0 planks stacked) and a vertical
+// pair (two rot-90 planks side by side) — the classic subway/parquet
+// basketweave look. Each block's footprint is nominal w x w (the plank's
+// long dimension), which tiles cleanly for the common 2:1 plank ratio;
+// other ratios still produce a deterministic alternating weave.
+export const basketweaveGenerator: PatternGenerator = {
+  name: "basketweave",
+  generate({ bounds, w, h, joint, skuId }: GenInput): TileQuad[] {
+    const block = w;
+    const pairGap = h + joint;
+    const startI = Math.floor(bounds.minX / block) - 1;
+    const endI = Math.ceil(bounds.maxX / block) + 1;
+    const startJ = Math.floor(bounds.minY / block) - 1;
+    const endJ = Math.ceil(bounds.maxY / block) + 1;
+    const out: TileQuad[] = [];
+    for (let i = startI; i <= endI; i++) {
+      for (let j = startJ; j <= endJ; j++) {
+        const bx = (i + 0.5) * block, by = (j + 0.5) * block;
+        const horizontal = ((i + j) % 2 + 2) % 2 === 0;
+        if (horizontal) {
+          out.push({ cx: bx, cy: by - pairGap / 2, w, h, rot: 0, skuId });
+          out.push({ cx: bx, cy: by + pairGap / 2, w, h, rot: 0, skuId });
+        } else {
+          out.push({ cx: bx - pairGap / 2, cy: by, w, h, rot: Math.PI / 2, skuId });
+          out.push({ cx: bx + pairGap / 2, cy: by, w, h, rot: Math.PI / 2, skuId });
+        }
+      }
+    }
+    return out;
+  },
+};
