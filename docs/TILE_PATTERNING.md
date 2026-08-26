@@ -188,6 +188,36 @@ Tile Pro (Laurel Creek), the names that map onto this feature:
 - **Quote generation** — exact tile count + SF + labor + thinset/grout. This is
   OpenTakeoff's existing Report; the tile feature just has to feed it real counts.
 
+### 2.4 `gaaaron/TileSim` — a 3D tiling planner with a clean pattern-engine seam
+
+TypeScript, React + three.js, zustand, IndexedDB; bilingual (hu/en). A real-scale
+3D tiling planner: draw rooms (height → floor/walls/ceiling derived), place
+boxes/models, and edit tile patterns *per surface* on a flattened 2D view. Its
+value to us is not the 3D — it is three concrete architectural answers that were
+open questions here:
+
+- **Pattern engine = interface + registry.** `patterns/` defines a shared
+  `PatternGenerator` interface with `grid` / `offset` / `herringbone` generators
+  and a `registry.ts`; a new pattern is a new file + registration. This is the
+  concrete shape of the "three generators" the architect called for (§7.2), and
+  the right seam for modular/Versailles later.
+- **Grout is render-time, generators emit abutting tiles.** `generate(bounds, ctx)`
+  returns grout-free abutting tiles; the renderer insets each tile by grout/2.
+  This resolves the "joint included vs not" question cleanly: the *generator
+  never knows about grout*, so pitch math and face/area math can't drift. (My
+  mockup had to separate pitch from face by hand — TileSim does it by construction.)
+- **Herringbone is gap/overlap-free via derived grid vectors.** The exact
+  "angled-pattern fragment geometry" problem §7.3 flagged as the hard one —
+  TileSim already solves it by deriving the interlock from grid vectors rather
+  than placing planks by hand. (This is precisely where `tiletakeoff`'s
+  hand-placed herringbone under-covered, and where my mockup went negative.)
+
+Also relevant: **multi-image / mixed-laying tile types** (the multi-SKU + color
+ask), and the **surface editor on a flattened 2D view** (the wall-tile unwrap
+concept). What it does *not* have — and where OpenTakeoff still leads — is
+**waste % estimation is listed as future work**: no cut accounting, no offcut
+reuse, no trim/edge derivation. Its "materials" output is piece count + m² only.
+
 ---
 
 ## 3. Feature taxonomy — the "advanced options" decomposed
