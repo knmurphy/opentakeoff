@@ -225,7 +225,11 @@ Renderer contract (all from the Web3D review):
   default-centered [-0.5, 0.5] primitive** (a centered geometry under
   per-instance z-scale buries half of every post below the floor: an 8'0"
   guard renders 4' under grade, silently). Instance matrix = translate(x, y,
-  0) · scale(rx, ry, extrude_h_ft) with each shape's snapshotted
+  0) · scale(rx, ry, extrude_h_ft) — notation is conceptual (world axes; in
+  three's Y-up that maps to position (x, z-up-as-y, −y-as-z) per the line-57
+  world mapping) — with the unit post's cross-section baked into the base
+  geometry (uniform footprint, rx = ry = 1 in local space) and each shape's
+  snapshotted
   `extrude_h_ft` (condition default, or its per-shape override — per-shape
   heights must not break instancing), with an instanceId→shapeId array
   kept alongside for future consumers (no raycast/picking in v1 — selection
@@ -243,7 +247,9 @@ Renderer contract (all from the Web3D review):
   a "Generated {date}" footer) extending the house refusal-over-guessing
   philosophy to the app's most exportable artifact.
 - **Section cut:** horizontal clipping plane (`renderer.localClippingEnabled =
-  true` — per-material clipping planes are inert without it), no stencil caps
+  true` — per-material clipping planes are inert without it; the clippingPlanes
+  array goes on EVERY material — condition, excluded-volume, and post — not
+  just floor slabs), no stencil caps
   in v1 (thin-shell geometry makes an open cut edge acceptable at schematic
   fidelity). Documented scope: this is a near-floor audit affordance
   (base-ring closure, guard placement), NOT a wainscot-height-difference
