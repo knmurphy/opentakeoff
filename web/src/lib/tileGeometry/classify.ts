@@ -52,6 +52,8 @@ interface JstsGeometry {
   getNumGeometries(): number;
   getGeometryN(n: number): JstsGeometry;
   getExteriorRing?(): JstsGeometry;
+  isValid(): boolean;
+  buffer(distance: number): JstsGeometry;
 }
 
 const AREA_EPS = 1e-7; // sq ft — full/out area-ratio tolerance
@@ -109,6 +111,35 @@ function roomPolygon(gf: GeometryFactory, outerClosed: readonly Pt[], holes: rea
   const shell = ring(gf, windAs(outerClosed, true));
   const holeRings = holes.map((h) => ring(gf, windAs(closeRing(h), false)));
   return gf.createPolygon(shell, holeRings);
+}
+
+// jsts's OverlayOp throws a non-noded TopologyException on a self-intersecting
+// input polygon — reachable whenever the room ring is transiently invalid (a
+// mid-drag bowtie the canvas now also gates out) or a user commits a genuinely
+// self-touching room. buffer(0) is JTS's canonical make-valid: it re-nodes a
+// self-intersecting shell into a valid (possibly multi-)polygon of the same
+// footprint and leaves an already-valid polygon unchanged (so the common case
+// is untouched). Applied once per classify pass to the room + shell, so the
+// per-tile overlays below are never handed invalid input.
+function makeValid(g: JstsGeometry): JstsGeometry {
+  try {
+    return g.isValid() ? g : g.buffer(0);
+  } catch {
+    return g; // buffer(0) itself failed on pathological input — safeIntersection catches the fallout
+  }
+}
+
+// Last-resort guard: even a valid room can, on rare degenerate coordinates,
+// trip jsts's noder. A single tile that can't be intersected degrades to "no
+// overlap" rather than throwing and taking down the whole canvas — one cell
+// mis-figured beats the takeoff going down (and the drag gate + makeValid keep
+// this branch off the normal path).
+function safeIntersection(a: JstsGeometry, b: JstsGeometry): JstsGeometry | null {
+  try {
+    return OverlayOp.intersection(a, b);
+  } catch {
+    return null;
+  }
 }
 
 // Recurse to the polygonal part with the largest area — a hole can split a
@@ -263,18 +294,18 @@ export function classifyLayout(
   const jointFt = inToFt(joint_in);
   const outerClosed = closeRing(roomRing);
   const edges = roomEdges(outerClosed);
-  const shell: JstsGeometry = gf.createPolygon(ring(gf, windAs(outerClosed, true)));
-  const room = roomPolygon(gf, outerClosed, holes);
+  const shell: JstsGeometry = makeValid(gf.createPolygon(ring(gf, windAs(outerClosed, true))));
+  const room = makeValid(roomPolygon(gf, outerClosed, holes));
 
   return quads.map((quad): Classified => {
     const areaFull_sf = quad.w * quad.h;
     const tile: JstsGeometry = gf.createPolygon(ring(gf, closeRing(tileCorners(quad))));
-    const kept: JstsGeometry = OverlayOp.intersection(room, tile);
-    const areaKept_sf = Math.max(0, kept.getArea());
+    const kept = safeIntersection(room, tile);
+    const areaKept_sf = kept ? Math.max(0, kept.getArea()) : 0;
 
-    if (areaKept_sf < AREA_EPS) {
-      const shellKept: JstsGeometry = OverlayOp.intersection(shell, tile);
-      const cls: CellClass = shellKept.getArea() > AREA_EPS ? "hole" : "out";
+    if (!kept || areaKept_sf < AREA_EPS) {
+      const shellKept = safeIntersection(shell, tile);
+      const cls: CellClass = shellKept && shellKept.getArea() > AREA_EPS ? "hole" : "out";
       return { quad, cls, areaFull_sf, areaKept_sf: 0 };
     }
 

@@ -122,3 +122,17 @@ test("a hole bisecting a tile classifies as cut with a finite, positive kept are
   assert.ok(Number.isFinite(c[0].areaKept_sf));
   assert.ok(Math.abs(c[0].areaKept_sf - 3.6) < 1e-6, `expected ~3.6 sf kept, got ${c[0].areaKept_sf}`);
 });
+
+// Robustness: a self-intersecting (bowtie) room ring — the transient a
+// vertex/edge drag produces mid-gesture — used to throw a non-noded jsts
+// TopologyException out of classifyLayout and white-screen the whole canvas
+// (no error boundary). makeValid (buffer(0)) re-nodes it; classify must return
+// finite areas instead of throwing.
+test("a self-intersecting (bowtie) room ring classifies without throwing", () => {
+  // classic bowtie: the top edge crosses the bottom (2,0)->(0,2) then (2,2)
+  const bowtie: [number, number][] = [[0, 0], [2, 0], [0, 2], [2, 2]];
+  // a throw here (the old non-noded TopologyException) fails the test directly.
+  const out = classifyLayout(quads, bowtie, [], 0);
+  assert.equal(out.length, quads.length);
+  for (const c of out) assert.ok(Number.isFinite(c.areaKept_sf), `finite kept area, got ${c.areaKept_sf}`);
+});

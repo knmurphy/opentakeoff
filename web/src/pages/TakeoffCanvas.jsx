@@ -195,6 +195,13 @@ const CARPET_ROLL_FT = 12;
 const ROLE_TIER = { floor_area: 0, deduct: 1, linear: 2, surface_area: 2, count: 3 };
 const tierOf = (s) => ROLE_TIER[s.measure_role] ?? 0;
 
+// True while a vertex/edge/body gesture is dragging a real shape (dragRef.kind).
+// The whole-project recompute memos freeze on these — one ring is moving, the
+// rest of the takeoff holds its pre-drag figure and snaps fresh on release.
+// markupMove is excluded: it commits through setMarkups and never touches
+// `shapes`. (Matches perf/drag-gate-roll-recompute's helper verbatim.)
+const isGeomDrag = (d) => d?.kind === "vertex" || d?.kind === "edge" || d?.kind === "move";
+
 // The tools whose boundary can bend mid-measure (#284): the same click, the
 // same commit, the curve is just a property of the points you placed. Zone is
 // a query region, not a quantity, and One-Click traces its own ring.
@@ -1155,8 +1162,21 @@ export default function TakeoffCanvas() {
   // Tile takeoff (M5 Task 6) — mirrors rollTakeoff's own memo exactly: same
   // dimsFor/uppFor closures, same dep list (uppFor reads scales + a pinned
   // ref, never listed directly).
+  const lastTileRef = useRef(null);
   const tileTakeoff = useMemo(
-    () => computeTileTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k)),
+    () => {
+      // A geometry drag rewrites `shapes` every pointermove with a transient,
+      // often self-touching ring; running the jsts classify on that ring throws
+      // a non-noded TopologyException (classify.ts is made resilient too, but
+      // the gate is why the grid holds still and snaps on release rather than
+      // re-figuring per frame). Freeze the last figured takeoff while a drag is
+      // live — onPointerUp clears dragRef BEFORE the commit replaces `shapes`,
+      // so the very next render figures fresh on the released geometry.
+      if (isGeomDrag(dragRef.current) && lastTileRef.current) return lastTileRef.current;
+      const r = computeTileTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k));
+      lastTileRef.current = r;
+      return r;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff above
     [conditions, shapes, panelImgs, scales]
   );
