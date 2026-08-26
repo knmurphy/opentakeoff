@@ -191,8 +191,10 @@ ordered quantity cannot drift.
 
 ### 3.1 `lib/tilePatterns/` — pattern engine
 
-- `types.ts` — `TileSetup`, `TileSku`, `TileQuad {cx,cy,w,h,rot,sku}` where `w,h`
-  are `pitchCell` extents (face via `installedFace`, area via `nominalQuad`).
+- `types.ts` — `TileSetup`, `TileSku`, `TileQuad {cx,cy,w,h,rot,skuId}` where `w,h`
+  are the **nominal** tile face (area via `nominalQuad`, cut/render face via
+  `installedFace(w,h,j)`); the generator applies `pitchCell` spacing when placing.
+  `skuId` references a SKU by id (as implemented).
 - `pattern.ts` — `PatternGenerator` interface `generate(bounds, setup)→TileQuad[]`;
   `registry.ts` — a new pattern is a new file + registration.
 - Generators: `lattice`, `offset`, `diagonal`, `herringbone`, `basketweave`,
