@@ -73,26 +73,35 @@ Geometry rules (per role):
   is already baked into the parent's `verts_norm_holes`.
 - **`deduct` standalone** → red translucent "excluded area" volume with caption
   "excluded area — see plan" (the 2D renderer's red-decal dichotomy,
-  `TakeoffCanvas.jsx:7917-7939`, carried into 3D). NEVER a boolean subtract at
-  render time: standalone deducts are standalone because `findCutoutParent`
-  already refused at commit (`cutout.js:26-35`) — re-running it can only
-  double-process or re-refuse.
+  `TakeoffCanvas.jsx:7917-7939`, carried into 3D), extruded over the SAME
+  height range a floor_area slab of that condition would get (`thickness_in/12`
+  if set, else the nominal visual constant) — pinned, not left to the
+  implementer. NEVER a boolean subtract at render time: standalone deducts are
+  standalone because `findCutoutParent` already refused at commit
+  (`cutout.js:26-35`) — re-running it can only double-process or re-refuse.
 - **`surface_area`** → vertical ribbon along the trace, `z ∈ [0, shape.height_ft]`
   (the shape snapshot — walls keep the height they were drawn at; reviewers
   confirmed this doctrine is exactly right).
 - **`linear`, mode vertical** (wall base) → ribbon inset toward the room
   interior, `z ∈ [0, extrude_h_ft]`.
 - **`linear`, mode flush** (transition/reducer strip) → thin strip in the floor
-  plane, height = `thickness_in` as thickness, not as a standing wall. This
-  split is mandatory: RB-1 base and TR-1 transition share `measure_role` and
-  are physically opposite installs.
+  plane, `z ∈ [h_floor, h_floor + thickness_in/12]` — it sits ON the adjoining
+  floor surface (z0 = the adjacent slab's top, never 0, so it never coplanar-
+  overlaps the floor beside it). Height = `thickness_in` as thickness, not as
+  a standing wall. This split is mandatory: RB-1 base and TR-1 transition
+  share `measure_role` and are physically opposite installs.
 - **`count`** → vertical post at the exact point, `z ∈ [0, extrude_h_ft]`
   (corner guard: spec height, e.g. 4'0").
 
-Ribbon construction: quad strip per segment with miter at joints; near-duplicate
-consecutive points collapsed and zero-length segments skipped BEFORE normal
-computation (NaN propagates into bounding spheres and silently kills meshes —
-Web3D B10; reuse the minDist-filter pattern from `geometry.js` thinStroke).
+Ribbon construction: quad strip per segment with miter at joints, under a
+**miter-limit clamp**: when the miter offset length (1/sin(θ/2)) exceeds 4×
+the ribbon half-width — which happens at near-straight reflex joints and sharp
+acute corners, i.e. ordinary freehand-trace noise — the join falls back to a
+bevel. Near-duplicate consecutive points are collapsed and zero-length
+segments skipped BEFORE normal computation (NaN propagates into bounding
+spheres and silently kills meshes — Web3D B10; reuse the minDist-filter
+pattern from `geometry.js` thinStroke). Both guards get test fixtures (see
+Testing).
 
 Interior-side resolution: rings carrying `origin.derived.from_shape_id` are
 inset toward the source floor polygon's interior (signed winding). Hand-traced
@@ -103,22 +112,47 @@ no two ribbons share literal world coordinates (Web3D B9).
 ### 2. `web/src/lib/scene3dSchema.js` (or within canvasConstants) — new condition fields
 
 **`extrude_h_ft`** — display-only installed height for `linear`-vertical and
-`count` conditions, in internal feet. Entered once per condition in inches in
-the UI (estimators speak base/guard heights in inches). Persisted on the
-condition; unknown-fields-pass-through is established convention
-(`materials.js:14-18`), so this is a comment-level schema addition, no
-migration. **Do not overload `height_ft`** — its single-purpose contract
+`count` conditions, in internal feet. **UI entry point, pinned:** a third
+`DimParamInput` on the existing param row beside H and T
+(`TakeoffsPanel.jsx:474-481`), with the same inches affordance H/T use
+(`units.ts` thickVal/dimInputStr patterns), shown only for conditions whose
+`extrude_mode` is `vertical` (base) or for `count` conditions — never for
+`surface_area` conditions, whose H control already owns height semantics.
+Persisted on the condition; unknown-fields-pass-through is established
+convention (`materials.js:14-18`), so this is a comment-level schema addition,
+no migration. **Do not overload `height_ft`** — its single-purpose contract
 ("default for NEW wall traces, SF = LF × H") is copy-pinned in
 `TakeoffsPanel.jsx:473` and MCP-exposed; a second consumer makes all of that
 documentation false.
 
-**`extrude_mode`** — `'vertical' | 'flush' | 'post'`, defaulted by role and
-condition seed: RB-1 → vertical 4" nominal, TR-1 → flush, count conditions →
-post. Editable per condition.
+**`extrude_mode`** — `'vertical' | 'flush'` on linear conditions only (count
+shapes render as posts unconditionally — no `post` value exists until a
+consumer reads it). Defaulted by condition seed: RB-1 → `vertical`, TR-1 →
+`flush`. Editable per condition.
+
+**Seeds are part of this work, not already present:** `canvasConstants.js`
+FLOORING_DEFAULTS has no base/guard values today — the implementation ADDS
+`extrude_mode: "vertical"`, `extrude_h_ft: 0.333` (4") to RB-1,
+`extrude_mode: "flush"` to TR-1, and **a new `CG-1` Corner guard seed**
+(count role, `extrude_h_ft: 4` — 4'0" corridor default). Without CG-1, every
+guard condition is user-created and starts as a translucent placeholder — the
+exact round-2 failure.
+
+**First-use nudge:** committing a `count` (or vertical-linear) shape while
+the active condition has no `extrude_h_ft` shows a one-line dismissible
+prompt (the existing toast pattern, not a modal): "Set installed height for
+{tag} — the 3D view renders it." The shape still commits. This closes the
+corner-guard day-one gap for user-created conditions beyond the seeds.
+
+**Mixed heights per spec section:** `extrude_h_ft` is per condition. A job
+with 4'0" corridor guards and 8'0" loading-dock guards under one finish tag
+requires splitting into two conditions (CG-1a/CG-1b) — the same pattern the
+app already forces for mixed wall heights today. Stated so an implementer
+does not assume one height fits a spec section.
 
 Unset `extrude_h_ft` → translucent nominal post/ribbon + legend note
-(refusal-over-guessing carried into visuals). With per-condition seeds this is
-the rare case, not the day-one default.
+(refusal-over-guessing carried into visuals). With seeds plus the nudge this
+is the rare case, not the day-one default.
 
 ### 3. `web/src/components/View3D.jsx` — lazy renderer + overlay
 
@@ -130,15 +164,18 @@ imports; verify against a real build before asserting in docs).
 Renderer contract (all from the Web3D review):
 
 - **Draw calls:** merge geometry per condition into one BufferGeometry (one
-  draw call per visible condition); `InstancedMesh` for count posts
-  (instanceId decodes to shape). Explode is then a per-condition
+  draw call per visible condition — worst case ~#conditions, tens, plus one
+  InstancedMesh); `InstancedMesh` for count posts, with an instanceId→shapeId
+  array kept alongside for future consumers (no raycast/picking in v1 —
+  selection isolation is 2D-selection-driven). Explode is then a per-condition
   `Group.position` update per drag tick — never a rebuild.
 - **Export:** export handler calls `renderer.render(scene, camera)` then reads
   `canvas.toDataURL()` synchronously in the same call stack (or constructs
   with `preserveDrawingBuffer: true`). The PNG is composited with a footer
   strip: sheet id, scale, date, "schematic — not as-built; openings deducted,
-  not shown; verify in field" — the app's export-honesty convention applied to
-  its most exportable artifact.
+  not shown; verify in field" — a NEW convention (current exports carry only
+  a "Generated {date}" footer) extending the house refusal-over-guessing
+  philosophy to the app's most exportable artifact.
 - **Section cut:** horizontal clipping plane, no stencil caps in v1 (thin-shell
   geometry makes an open cut edge acceptable at schematic fidelity). Documented
   scope: this is a near-floor audit affordance (base-ring closure, guard
@@ -211,7 +248,11 @@ math philosophy; no new infrastructure):
 - interior-side inset for derived rings; centered fallback for hand-traced;
 - degenerate-segment filtering;
 - unset-height / nominal-thickness / openings / ×N note generation;
-- extrude_mode defaults per condition seed.
+- extrude_mode defaults per condition seed (RB-1 vertical, TR-1 flush, CG-1 post).
+- miter-limit clamp: near-180° reflex and sharp-acute fixtures assert the
+  ribbon stays within bounded width (no spike vertices);
+- flush-strip z-baseline: a flush ribbon's [z0, z1] never coplanar-overlaps
+  the adjoining floor slab's nominal range.
 
 Canvas/renderer verified by hand per house practice (sample plan, trace, open
 the view, export).
