@@ -1381,6 +1381,7 @@ export default function TakeoffCanvas() {
   // pack FIRST, in that order — the engine's skyline re-packs, so a manual
   // order can never overlap) — ONE rollcut command, one undo entry.
   const onReorderRollCuts = (condId, orderedIds) => {
+    if (dragRef.current) return;   // rollByCond is frozen mid-geometry-drag; a concurrent-pointer reorder off the stale strips could persist a wrong laneCount — wait for release
     const ri = rollByCond.get(condId); if (!ri) return;
     const laneCountBySrc = new Map(ri.strips.map((s) => [s.srcId, s.laneCount]));
     const bySrc = new Map();
@@ -1404,6 +1405,7 @@ export default function TakeoffCanvas() {
   // strip only the seq keys — a floor-position edit (runMin/runMax) survives a
   // cutting-order reset; that's a different decision than double-click reset
   const onResetRollOrder = (condId) => {
+    if (dragRef.current) return;   // rollByCond is frozen mid-geometry-drag — reorder edits wait for release (see onReorderRollCuts)
     const ri = rollByCond.get(condId); if (!ri) return;
     const srcIds = new Set(ri.strips.map((s) => s.srcId));
     const rows = [];
