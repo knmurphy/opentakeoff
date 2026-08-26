@@ -348,12 +348,15 @@ tile_setup: {
   needs an explicit "detach from tile_setup" flag. Storing geometry in one place
   alone does not stop a hand edit from diverging (`coverage.js` `groutRateStale`
   covers base-height only).
-- **Layout supersedes `waste_pct`.** When `tile_setup` is present, the Safe /
-  With-reuse counts ARE the order quantity; the condition's generic `waste_pct`
-  multiplier (`totals.js`) is **not** applied on top — that would double-count.
-  `waste_pct` remains the order basis only for opted-out tile conditions and all
-  non-tile conditions. (Same principle as grout-derived / seam_lf: a figured
-  quantity supersedes the heuristic.)
+- **Layout refines the margin, it does not remove it.** When `tile_setup` is
+  present the figured Safe / With-reuse counts replace the *pattern-heuristic*
+  `waste_pct` (no double-count of layout waste) — but a **residual contingency
+  still applies on top**: breakage in transit and on the saw, warped/rejected
+  pieces, dye-lot reorder risk, plus attic stock. Order qty = figured count ×
+  (1 + breakage%) + attic stock, rounded up to whole boxes/cartons on one dye
+  lot (`calc/order.ts`, §8). Stripping all margin because the cut count is exact
+  is *more precise but less safe* than a real PO. `waste_pct` is the sole basis
+  only for opted-out tile conditions and non-tile conditions.
 - **Per-room layout state** lives on the shape as a versioned `shape.tile_layout`
   sub-object (parallel to `roll_layout`): `{ origin?, rotation?, cut_sides?,
   edge_overrides? }`. Invalidated on `verts_norm` hash, `tile_setup` hash, or
@@ -488,5 +491,62 @@ path is not smaller in ambition.
    interaction is open.
 6. **Hatch ↔ overlay LOD threshold** — at what zoom the hatch gives way to the
    tile grid, and whether the Marked Set always draws the grid at scale.
-7. **Order-unit / box rounding** — which SKU drives the order when modular, and
-   the EA-vs-SF rounding rule downstream of tile count.
+7. **Bid-scope ownership** — does the tile feature own the full wet-area
+   *assembly* bid (waterproofing membrane, slope-to-drain, prefab pans) and
+   *labor* estimating, or just the tile plus its direct sundries? The estimator
+   review (§8) argues the assembly and labor are where the money and liability
+   sit — a product call, not a hedge. (Order-unit / box rounding, previously
+   listed here, is now core — §8.1.)
+
+---
+
+## 8. Estimator review — bid-completeness (folded in)
+
+An adversarial review by a veteran tile estimator/installer judged the *bid*,
+not the geometry. Verdict: the geometry / cut / trim engine is more rigorous
+than the prior art, but the design "stops where the money and the liability
+are." The must-address items below are now core; two are genuine product-scope
+calls (§6.7).
+
+### 8.1 Folding in as core
+
+- **Order in purchase units, with a real margin.** Tile is bought by the box /
+  carton on a single dye lot, never as loose tiles. Order qty = figured count ×
+  (1 + breakage%) + attic stock, rounded up to whole boxes. `calc/order.ts`,
+  milestone 3 (moved out of the §6 "open decisions"). §4.1 is corrected: the
+  layout replaces the *heuristic* waste, not the breakage/contingency margin.
+- **Dye-lot / attic-stock** — order to one lot; add an explicit attic-stock
+  buffer for future repair. `calc/order.ts`, milestone 3.
+- **Movement / expansion joints (TCNA EJ171)** — code-required soft joints at
+  perimeters, ~every 20–25 ft of field, and at material transitions. A derived
+  LF item, same computation shape as trim/grout derivation. `calc/joints.ts`,
+  milestone 4. (A callback/liability risk if omitted, not just an under-bid.)
+- **Setting & backing sundries ride the existing per-condition materials model.**
+  Thinset/mortar, uncoupling/waterproofing membrane, backer board / SLU, sealer,
+  leveling clips, caulk/silicone are coverage-rate lines → order qty, which
+  OpenTakeoff conditions already carry (the `CT-1` seed already has thinset +
+  grout). The feature seeds the tile-specific ones; no new engine — but the buy
+  list must not silently omit them.
+- **Material/size-aware waste, not pattern-only.** Natural stone and large-format
+  routinely need 15–20%+ regardless of pattern; the waste model gains a
+  material/size multiplier beside the pattern table. Milestone 3.
+- **Optimizer objective is sliver-avoidance / balance, not min-cut** (§2.C/§3.2
+  corrected). The edge-aligned search minimizes sub-½-tile slivers and balances
+  opposing cuts — two layouts can tie on cut count while one leaves an ugly
+  sliver on a sight-line wall.
+- **Labor hook.** The exact cut/corner counts are a strong labor-complexity
+  proxy; feed a pattern/size rate multiplier (diagonal +15–25%, herringbone/
+  chevron +40–100%, large-format back-butter/clips) into the report's labor
+  line. Milestone 8.
+- **Multi-room batch QA.** A cross-room sliver/warning list so a 40-room job is
+  not audited one zoom at a time. Milestone 5.
+
+### 8.2 Scope decisions (yours — §6.7)
+
+- **Wet-area assembly ownership** — waterproofing membrane SF, slope-to-drain /
+  pre-slope mud bed, and prefab pan/curb systems (Wedi/Kerdi-Board) are 20–30% of
+  a shower's material dollars and its top leak-failure liability. Does the tile
+  feature own the *assembly* bid, or just the tile + direct sundries?
+- **Labor estimating depth** — the rate hook above, vs a fuller labor model.
+
+Both are named here, not silently absent.
