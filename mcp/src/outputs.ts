@@ -367,6 +367,21 @@ export const exportTakeoffOutput = {
   }).passthrough()),
   markups: z.array(z.unknown()),
   approvals: z.array(z.unknown()).optional().describe("Approval-family records (#176) — the estimator's APPROVED seals and the agent's verdict marks {id, actor, ts, sheet_id, at:[nx,ny], shape_id?, text?}. Present only when any exist (the canvas payload's own convention), so a verdict-free export stays byte-identical"),
+  tile_layouts: z.array(z.object({
+    shape_id: z.string(),
+    condition_id: z.string(),
+    finish_tag: z.string(),
+    config: z.object({
+      w_in: z.number(), h_in: z.number(), joint_in: z.number(),
+      pattern: z.enum(["grid", "brick_50", "brick_33", "diagonal", "herringbone", "basketweave"]),
+      origin: point,
+      rotation_deg: z.number(),
+    }).describe("The condition's tile_setup resolved to a solve config — SKU face size, joint width, pattern, and the condition-default origin/rotation this shape solved against"),
+    classified_summary: z.object({
+      full: z.number().int(), cut: z.number().int(), corner: z.number().int(), hole: z.number().int(),
+    }).describe("Cell counts from the SAME classify pass exportReport's tile_goods figures from (computeTileTakeoff byShape) — never re-solved, so the two can never disagree"),
+    tile_layout: z.record(z.unknown()).optional().describe("This shape's own per-room override (origin/rotation/cut_sides/edge_overrides/wet_tags) if it carries one — absent means it inherits the condition defaults in config"),
+  })).optional().describe("Task 7 (M5) — per-shape solved tile layout snapshot for every floor_area shape under a tile_setup condition, so a headless agent can read what the canvas would draw without re-solving the engine itself. Present only when the session carries a tile_setup condition with a scaled floor shape; a tile-less export omits this key entirely (byte-identical to a pre-M5 export)"),
   sheet_group: z.array(z.unknown()),
   last_group: z.array(z.unknown()),
   sheet_tabs: z.array(z.unknown()),

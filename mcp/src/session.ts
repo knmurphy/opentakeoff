@@ -58,7 +58,8 @@ import { sanitizeApprovals as sanitizeApprovalsJs, applyApprovalCommand as apply
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
 import { computeTileTakeoff, tileReportRows } from "../../web/src/lib/tileTakeoff.js";
-import { hasTileSetup, mintTileSetup } from "../../web/src/lib/tileSetup.ts";
+import { hasTileSetup, mintTileSetup, tileConfig, type TileSetup, type TileConfig } from "../../web/src/lib/tileSetup.ts";
+import type { TileCounts } from "../../web/src/lib/tileCalc/tiles.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
 // Copied from the canvas (web/src/pages/TakeoffCanvas.jsx) so conditions and
@@ -270,6 +271,14 @@ export interface Shape {
    * as a real hole — totals.js skips it (the parent's computed already nets
    * the hole), and delete restores the parent it cut. */
   cuts_shape_id?: string;
+  /** Tile-patterning per-room override (M5, #tile) — origin/rotation/
+   * cut_sides/edge_overrides/wet_tags that override the condition's
+   * tile_setup defaults for THIS room, written by the canvas's undoable
+   * tileLayout shape command (web/src/lib/shapeCommands.js). Opaque here,
+   * same posture as Condition.tile_setup — this server never solves against
+   * it directly, it only carries it through export_takeoff's tile_layouts
+   * snapshot for a headless reader. Absent = inherits the condition default. */
+  tile_layout?: Record<string, unknown>;
   origin?: ShapeOrigin;
 }
 
@@ -279,6 +288,21 @@ export interface CutoutParentPrev {
   verts_norm: [number, number][];
   verts_norm_holes?: [number, number][][];
   computed?: Shape["computed"];
+}
+
+/** Task 7 (M5) — export_takeoff's additive per-shape tile layout snapshot.
+ * One entry per floor_area shape sitting under a tile_setup condition:
+ * config is that condition's tile_setup resolved to a solve config,
+ * classified_summary is the SAME classify pass exportReport's tile_goods
+ * figures from (never re-solved), and tile_layout is the shape's own
+ * per-room override, carried through verbatim when present. */
+export interface TileLayoutSnapshot {
+  shape_id: string;
+  condition_id: string;
+  finish_tag: string;
+  config: TileConfig;
+  classified_summary: { full: number; cut: number; corner: number; hole: number };
+  tile_layout?: Record<string, unknown>;
 }
 
 /** An annotation — a note ABOUT the work, never a measurement of it.
@@ -3793,8 +3817,44 @@ export class Session {
     return { sheet: s, build };
   }
 
+  /** Task 7 (M5) — one floor_area shape's solved tile layout snapshot for
+   * export_takeoff, so a headless agent can read what the canvas would draw
+   * without re-solving the engine itself. */
+  private tileLayoutSnapshots(): TileLayoutSnapshot[] {
+    const { dimsFor, uppFor } = this.rollInputs();
+    // Reuses computeTileTakeoff's byShape figures — the SAME classify pass
+    // exportReport's tile_goods reads (session.ts:3843) — never re-solved, so
+    // a headless snapshot and the report block can never disagree about a
+    // shape's classified counts.
+    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byShape: Map<string, { counts: TileCounts }> };
+    if (!byShape.size) return [];
+    const condById = new Map(this.conditions.map((c) => [c.id, c]));
+    const out: TileLayoutSnapshot[] = [];
+    for (const s of this.shapes) {
+      const summary = byShape.get(s.id);
+      if (!summary) continue;
+      const cond = condById.get(s.condition_id);
+      if (!cond?.tile_setup) continue;
+      out.push({
+        shape_id: s.id,
+        condition_id: s.condition_id,
+        finish_tag: cond.finish_tag,
+        config: tileConfig(cond.tile_setup as TileSetup),
+        classified_summary: {
+          full: summary.counts.full,
+          cut: summary.counts.cut,
+          corner: summary.counts.corner,
+          hole: summary.counts.hole,
+        },
+        ...(s.tile_layout ? { tile_layout: s.tile_layout } : {}),
+      });
+    }
+    return out;
+  }
+
   exportPayload() {
     if (!this.docs.size) throw new UserError("No plan loaded — call load_plan first.");
+    const tileLayouts = this.tileLayoutSnapshots();
     return {
       schema: ANN_SCHEMA,
       project_name: "",
@@ -3818,6 +3878,10 @@ export class Session {
       last_group: [],
       sheet_tabs: [],
       sheet_levels: {},
+      // tile layout snapshots ride the payload additively (Task 7/M5) — the
+      // same absent-when-empty convention as approvals, so a tile-less
+      // session's export stays byte-identical to a pre-M5 one
+      ...(tileLayouts.length ? { tile_layouts: tileLayouts } : {}),
     };
   }
 

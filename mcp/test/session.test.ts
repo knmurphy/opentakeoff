@@ -388,3 +388,68 @@ test("exportReport: a tile_setup condition with a floor shape figures tile_goods
   s.editCondition("CT-1", { tile_setup: null });
   assert.deepEqual(s.exportReport().tile_goods, []);
 });
+
+// Task 7 (M5) — export_takeoff's additive tile_layouts snapshot. Additive
+// ONLY: a tile-less session's exportPayload carries no tile_layouts key at
+// all (mirrors the approvals precedent's byte-identical guarantee), and once
+// a shape sits under a tile_setup condition, the snapshot carries the SAME
+// classified counts exportReport's tile_goods figures from (computeTileTakeoff
+// byShape — never re-solved).
+test("exportPayload: no tile_setup anywhere in the session — tile_layouts key absent", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+
+  const p = s.exportPayload() as Record<string, unknown>;
+  assert.equal("tile_layouts" in p, false, "tile-less export stays byte-identical to a pre-M5 one");
+});
+
+test("exportPayload: a tiled floor shape carries a solved tile_layouts snapshot", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+  const shapeId = s.shapes[0].id;
+
+  // not tiled yet — no snapshot
+  assert.equal("tile_layouts" in (s.exportPayload() as Record<string, unknown>), false);
+
+  const cond = s.editCondition("CT-1", { tile_setup: { pattern: "grid", rotation_deg: 15 } });
+  const p = s.exportPayload() as { tile_layouts: Array<{ shape_id: string; condition_id: string; finish_tag: string; config: unknown; classified_summary: { full: number; cut: number; corner: number; hole: number } }> };
+  assert.equal(p.tile_layouts.length, 1);
+  const snap = p.tile_layouts[0];
+  assert.deepEqual(Object.keys(snap).sort(), ["classified_summary", "condition_id", "config", "finish_tag", "shape_id"]);
+  assert.equal(snap.shape_id, shapeId);
+  assert.equal(snap.condition_id, cond.condition_id);
+  assert.equal(snap.finish_tag, "CT-1");
+
+  // config matches the condition's own tile_setup, resolved (tileConfig)
+  assert.deepEqual(snap.config, {
+    w_in: 12, h_in: 24, joint_in: 0.125,
+    pattern: "grid", origin: [0, 0], rotation_deg: 15,
+  });
+
+  // classified_summary matches the SAME figures exportReport's tile_goods reads
+  const row = s.exportReport().tile_goods[0];
+  assert.deepEqual(snap.classified_summary, { full: row.full, cut: row.cut, corner: row.corner, hole: row.hole });
+  assert.ok(snap.classified_summary.full > 0, "the committed room classifies real tiles");
+
+  // opting back out empties the snapshot, same as the report block
+  s.editCondition("CT-1", { tile_setup: null });
+  assert.equal("tile_layouts" in (s.exportPayload() as Record<string, unknown>), false);
+});
+
+test("exportPayload: a shape's own tile_layout override rides the snapshot verbatim", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+  s.editCondition("CT-1", { tile_setup: { pattern: "grid" } });
+
+  const target = s.shapes[0];
+  target.tile_layout = { origin: [0.3, 0.1], rotation_deg: 90 };
+
+  const p = s.exportPayload() as { tile_layouts: Array<{ tile_layout?: unknown }> };
+  assert.deepEqual(p.tile_layouts[0].tile_layout, { origin: [0.3, 0.1], rotation_deg: 90 });
+});

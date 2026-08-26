@@ -183,7 +183,9 @@ Forty tools, in the order an agent tends to reach for them:
   agent path can mint or lift the human's ink. A verdict touches no quantity)
 - **Report**—`takeoff_summary` (quantities only—materials stripped),
   `export_takeoff` (the raw `opentakeoff.takeoff_canvas.v1` canvas payload—materials
-  as config rows, importable by the app), `export_report` (the
+  as config rows, importable by the app, plus a per-shape solved tile layout
+  snapshot—config, classified counts, per-room override—for any `tile_setup`
+  condition), `export_report` (the
   computed `opentakeoff.report.v1` Report document—waste-adjusted nets, the
   materials buy list as order quantities—including per-condition `roll_goods`
   (seams figured, cuts packed, rolls ordered) and `tile_goods` (Safe counts,
