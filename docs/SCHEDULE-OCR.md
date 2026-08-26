@@ -202,10 +202,20 @@ single-thread-WASM / WebGPU envelope is Experiment 4.
    the *parser's spatial model* now bounds row recall, not the recognizer.
    (`ocrs` / Rust→WASM remains a future adapter — the harness takes any engine
    that emits `OcrWord[]`.)
-4. **Parser spatial hardening (new critical path)** — robust header anchoring
-   and column assignment for CELL-level detections, so PaddleOCR's near-perfect
-   text converts to complete rows; re-run Experiment 3 as the before/after.
-   This subsumes the old remarks→SIZE geometry item.
+4. ~~**Parser spatial hardening (new critical path)** — robust row emission for
+   CELL-level detections, so PaddleOCR's near-perfect text converts to complete
+   rows.~~ Done (spec: `docs/SCHEDULE-CELL-PARSING-SPEC.md`). Root cause: the
+   parser *gated row emission on a detected section header*, the single most
+   droppable token on the sheet — at 216 DPI PaddleOCR missed every section
+   word above `MISC. FINISHES`, so 22 correctly-read rows were dropped. Fix:
+   emit a row on a code-shaped first cell regardless of section (section still
+   drives category when present; else a conservative code-prefix inference; else
+   `"other"`). **Result: 216 DPI row recall 17.9% → 92.9%** (perfect rows 3→8),
+   PaddleOCR row recall now stable 78.6 / 92.9 / 92.9% across 144/216/288 —
+   bounded by the engine's code-cell read rate, not section-detection luck.
+   Tesseract unchanged (96.4%); clean vector path byte-for-byte unchanged. The
+   remaining gap to 100% is misread finish tags (engine CER on the code cell) —
+   a scoring/fuzzy-tag concern, and the still-pinned remarks→SIZE banding.
 5. **Browser deployability** — PaddleOCR inside a worker under the real
    constraint envelope (single-thread WASM SIMD / WebGPU, no COOP/COEP),
    measuring seconds-per-schedule, memory, bundle + model weight. ppu-paddle-ocr

@@ -245,3 +245,75 @@ test("hardening is conservative: a lone number is never mistaken for a code", ()
   assert.ok(!rows.some((r) => r.finish_tag === "51839"));
   assert.equal(rows.length, 28); // nothing invented
 });
+
+// ── cell-level / section-independent parsing (docs/SCHEDULE-CELL-PARSING-SPEC.md)
+// A row's existence must NOT depend on a section header — the single most
+// droppable token on the sheet. These score REAL PaddleOCR output captured at
+// three DPIs (material-schedule.paddle-<dpi>.json), where section-header
+// detection is erratic but the data rows are all present.
+
+const PADDLE_DPIS = [144, 216, 288] as const;
+const paddleWords = (dpi: number): OcrWord[] =>
+  (JSON.parse(readFileSync(join(fixDir, `material-schedule.paddle-${dpi}.json`), "utf8")) as { words: OcrWord[] }).words;
+
+for (const dpi of PADDLE_DPIS) {
+  test(`PaddleOCR @ ${dpi}dpi: row recall holds ≥ 75% (no section-header collapse)`, () => {
+    const rows = parseSchedule(wordsToTokens(paddleWords(dpi)));
+    const recall = scoreRows(golden, rows).rowRecall;
+    // Pre-fix, 216dpi collapsed to 17.9% because PaddleOCR missed every section
+    // header above MISC. FINISHES and the parser gated rows on `section`. Recall
+    // is now bounded only by the engine's code-cell read rate, not by which
+    // isolated header words happened to survive detection.
+    assert.ok(recall >= 0.75, `${dpi}dpi row recall ${(recall * 100).toFixed(1)}% < 75%`);
+  });
+}
+
+test("a data row with NO section header above it is still emitted", () => {
+  // header + two data rows, but no FLOORING/BASE/... line at all
+  const H = 14;
+  const words: OcrWord[] = [
+    // header row
+    { str: "CODE", x: 40, y: 40, w: 40, h: H }, { str: "MANUFACTURER", x: 360, y: 40, w: 120, h: H }, { str: "COLOR", x: 960, y: 40, w: 60, h: H },
+    // data rows, no section header anywhere
+    { str: "CPT-1", x: 40, y: 90, w: 48, h: H }, { str: "SHAW", x: 360, y: 90, w: 60, h: H }, { str: "GREY 12", x: 960, y: 90, w: 70, h: H },
+    { str: "RB-1", x: 40, y: 140, w: 44, h: H }, { str: "JOHNSONITE", x: 360, y: 140, w: 90, h: H }, { str: "BLACK", x: 960, y: 140, w: 50, h: H },
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.deepEqual(rows.map((r) => r.finish_tag), ["CPT-1", "RB-1"]);
+  // conservative prefix inference fills category when no section is active
+  assert.equal(rows.find((r) => r.finish_tag === "CPT-1")?.category, "floor");
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "base");
+});
+
+test("prefix inference is conservative: ambiguous prefixes fall back to 'other'", () => {
+  const H = 14;
+  const words: OcrWord[] = [
+    { str: "CODE", x: 40, y: 40, w: 40, h: H }, { str: "MANUFACTURER", x: 360, y: 40, w: 120, h: H }, { str: "COLOR", x: 960, y: 40, w: 60, h: H },
+    // PT (porcelain — floor OR wall) and P (paint — wall) are ambiguous; no guess
+    { str: "PT-9", x: 40, y: 90, w: 44, h: H }, { str: "DALTILE", x: 360, y: 90, w: 70, h: H }, { str: "TAN", x: 960, y: 90, w: 40, h: H },
+  ];
+  const pt = parseSchedule(wordsToTokens(words)).find((r) => r.finish_tag === "PT-9");
+  assert.equal(pt?.category, "other");
+  assert.equal(pt?.suggested, false);
+});
+
+test("prefix inference never overrides a detected section (clean-path safety)", () => {
+  // A BASE section over a CT code: prefix CT is ambiguous, but even a confident
+  // prefix must never beat the section. CT-3 under BASE must be `base`.
+  const H = 14;
+  const words: OcrWord[] = [
+    { str: "CODE", x: 40, y: 40, w: 40, h: H }, { str: "MANUFACTURER", x: 360, y: 40, w: 120, h: H }, { str: "COLOR", x: 960, y: 40, w: 60, h: H },
+    { str: "BASE", x: 40, y: 90, w: 40, h: H },
+    { str: "CPT-9", x: 40, y: 140, w: 48, h: H }, { str: "SHAW", x: 360, y: 140, w: 60, h: H }, { str: "RED", x: 960, y: 140, w: 40, h: H },
+  ];
+  // CPT prefix says floor, but the BASE section is authoritative
+  assert.equal(parseSchedule(wordsToTokens(words)).find((r) => r.finish_tag === "CPT-9")?.category, "base");
+});
+
+test("the header row is never emitted as a data row", () => {
+  // "CODE" is code-shaped (4 caps); with the section gate gone it must still be
+  // skipped as the header, not turned into a finish_tag.
+  const rows = parseSchedule(wordsToTokens(fixture.words));
+  assert.ok(!rows.some((r) => r.finish_tag === "CODE"));
+  assert.equal(rows.length, 28); // clean path unchanged
+});

@@ -115,6 +115,23 @@ function sectionCategory(key: string): Category | null {
   return null;
 }
 
+// Conservative finish-code prefix → category, consulted ONLY when no section
+// header is active (docs/SCHEDULE-CELL-PARSING-SPEC.md): an OCR engine drops the
+// isolated section words unpredictably, so a rescued row still gets a sensible
+// category. ONLY unambiguous flooring-trade prefixes are listed — a prefix that
+// spans categories in real schedules (PT porcelain floor-or-wall, CT ceramic
+// wall-or-base, P paint) is deliberately ABSENT so it falls back to "other"
+// instead of guessing wrong. Never overrides a detected section (see parseSchedule).
+const CODE_PREFIX_CATEGORY: Record<string, Category> = {
+  CPT: "floor", VCT: "floor", LVT: "floor", LVP: "floor", RF: "floor",
+  WSF: "floor", RES: "floor", SDT: "floor", TER: "floor", EPX: "floor",
+  RB: "base", CBT: "base", WB: "base", VB: "base", SB: "base", RBB: "base",
+  ACT: "ceiling", ACP: "ceiling",
+};
+// The alpha prefix of a finish code: the leading A–Z run before any digit/dash.
+const prefixCategory = (code: string): Category | null =>
+  CODE_PREFIX_CATEGORY[/^[A-Z]+/.exec(code)?.[0] ?? ""] ?? null;
+
 // Cluster tokens into visual rows by y, then order each row left→right. A row's
 // y is the running average so a tall cell doesn't split. tolFrac scales the gap
 // test to the text height so it works at any raster/zoom.
@@ -136,10 +153,14 @@ function clusterRows(tokens: Token[]): Token[][] {
 const cx = (t: Token) => t.x + 0; // x is the left edge; header cells left-align, so left edge anchors best
 
 // Find the header row and return its column anchors (x of each found header
-// token, sorted). Requires CODE plus one of MANUFACTURER/COLOR so we don't
+// token, sorted) plus its INDEX in `rows` (so the caller processes only rows
+// below it — the header's own first cell "CODE" is code-shaped and must never
+// be read as data). Requires CODE plus one of MANUFACTURER/COLOR so we don't
 // mistake a data row for the header.
-function findAnchors(rows: Token[][]): { col: Column; x: number }[] | null {
-  for (const r of rows) {
+interface HeaderMatch { anchors: { col: Column; x: number }[]; headerIdx: number }
+function findAnchors(rows: Token[][]): HeaderMatch | null {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     const ups = r.map((t) => norm(t.str).replace(/[^A-Z]/g, ""));
     // Header words tolerate noise: CODE within 1 edit, MANUFACTURER within 2
     // (it's long), COLOR within 1 — so a single glyph confusion in a header
@@ -155,7 +176,7 @@ function findAnchors(rows: Token[][]): { col: Column; x: number }[] | null {
     // de-dupe (a wrapped header can repeat) keeping the leftmost, need ≥3 to band
     const seen = new Set<string>();
     const uniq = anchors.filter((a) => (seen.has(a.col) ? false : (seen.add(a.col), true))).sort((a, b) => a.x - b.x);
-    if (uniq.length >= 3) return uniq;
+    if (uniq.length >= 3) return { anchors: uniq, headerIdx: i };
   }
   return null;
 }
@@ -174,13 +195,17 @@ function columnFor(x: number, anchors: { col: Column; x: number }[]): Column {
  */
 export function parseSchedule(tokens: Token[]): ScheduleRow[] {
   const rows = clusterRows(tokens);
-  const anchors = findAnchors(rows);
-  if (!anchors) return [];
+  const found = findAnchors(rows);
+  if (!found) return [];
+  const { anchors, headerIdx } = found;
 
-  let section: string | null = null;
+  let section = "";
   let sectionCat: Category | null = null;
   const out: ScheduleRow[] = [];
-  for (const r of rows) {
+  // Only rows BELOW the header are data. The header row itself (first cell
+  // "CODE", code-shaped) and any title/page text above it are never rows.
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
     const first = r[0];
     const key = sectionKey(first.str);
     const joined = r.map((t) => t.str).join(" ").trim();
@@ -189,14 +214,20 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
     // read as a section, so fuzzier section lookup is safe here)
     const cat = joined.length < 24 ? sectionCategory(key) : null;
     if (cat) { section = key; sectionCat = cat; continue; }
-    // data rows need a section and a code-shaped first cell (fuzzy code shape
-    // so a confused glyph — CPT-1 → CP7-1 — doesn't silently drop the row)
+    // A code-shaped first cell IS a row — NOT gated on a preceding section
+    // header, which an OCR engine drops unpredictably and would take every row
+    // beneath it down with it (docs/SCHEDULE-CELL-PARSING-SPEC.md). Fuzzy code
+    // shape so a confused glyph (CPT-1 → CP7-1) doesn't silently drop the row.
     const codeTok = norm(first.str).replace(/[^A-Z0-9-]/g, "");
-    if (!section || !looksLikeCode(codeTok)) continue;
+    if (!looksLikeCode(codeTok)) continue;
 
     const cells: Record<Column, string[]> = { CODE: [], MATERIAL: [], MANUFACTURER: [], STYLE: [], COLOR: [], SIZE: [], REMARKS: [] };
     for (const t of r) cells[columnFor(cx(t), anchors)].push(t.str.trim());
-    const category = sectionCat ?? "other";
+    // A detected section is authoritative; with none active, infer category
+    // from the code prefix (conservative, unambiguous only); else "other".
+    // Inference NEVER overrides a section — the vector path always has sections
+    // in order, so this branch only fires on OCR-missed-section rows.
+    const category = sectionCat ?? prefixCategory(codeTok) ?? "other";
     out.push({
       finish_tag: codeTok,
       section,
