@@ -120,22 +120,47 @@ export interface RowScore {
   fieldCer: number;
   /** matched rows with every scored field exact */
   perfectRows: number;
+  /** predicted rows carrying a finish_tag that appears more than once */
+  duplicateTags: number;
+}
+
+export interface ScoreOpts {
+  /** max edit distance for a fuzzy tag match. 0 (default) = exact only. With
+   * 1, a misread tag (CT-2 → C-2) still pairs to its golden row — separating
+   * "was the row emitted?" from "was its tag read perfectly?" (adversarial
+   * review: exact-tag recall double-charges the parser for the engine's CER). */
+  tagEdits?: number;
 }
 
 /** Score predicted rows against reference rows. Tags are matched as a multiset
- * (two rows sharing a tag consume two predictions) in reference order. */
-export function scoreRows(gt: ScheduleRow[], pred: ScheduleRow[]): RowScore {
+ * (two rows sharing a tag consume two predictions) in reference order; with
+ * `tagEdits > 0`, an exact-tag miss falls back to the nearest unused predicted
+ * tag within that edit distance. */
+export function scoreRows(gt: ScheduleRow[], pred: ScheduleRow[], opts: ScoreOpts = {}): RowScore {
+  const tagEdits = opts.tagEdits ?? 0;
   const pool = new Map<string, ScheduleRow[]>();
   for (const p of pred) {
     const k = normField(p.finish_tag);
     pool.set(k, [...(pool.get(k) ?? []), p]);
   }
+  const take = (want: string): ScheduleRow | undefined => {
+    const exact = pool.get(want);
+    if (exact?.length) return exact.shift();
+    if (tagEdits > 0) {
+      for (const [k, q] of pool) {
+        if (q.length && k.length && levenshtein(want, k) <= tagEdits) return q.shift();
+      }
+    }
+    return undefined;
+  };
   const pairs: [ScheduleRow, ScheduleRow][] = [];
   for (const g of gt) {
-    const q = pool.get(normField(g.finish_tag));
-    const p = q?.shift();
+    const p = take(normField(g.finish_tag));
     if (p) pairs.push([g, p]);
   }
+  const tagCounts = new Map<string, number>();
+  for (const p of pred) tagCounts.set(normField(p.finish_tag), (tagCounts.get(normField(p.finish_tag)) ?? 0) + 1);
+  const duplicateTags = pred.filter((p) => (tagCounts.get(normField(p.finish_tag)) ?? 0) > 1).length;
   const fieldAcc = {} as Record<ScoredField, number>;
   const cerPairs: [string, string][] = [];
   let perfectRows = 0;
@@ -163,5 +188,6 @@ export function scoreRows(gt: ScheduleRow[], pred: ScheduleRow[]): RowScore {
     fieldAccOverall: vals.reduce((a, b) => a + b, 0) / vals.length,
     fieldCer: corpusCer(cerPairs),
     perfectRows,
+    duplicateTags,
   };
 }

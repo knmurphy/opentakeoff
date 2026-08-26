@@ -80,8 +80,15 @@ for (const name of ENGINES) {
     const doc = await openDoc(src.pdf);
 
     console.log(`## ${id} — ${truthWords.length} truth words, ${golden.length} golden rows\n`);
-    console.log(`| DPI | px | det. recall (word) | det. prec | matched CER | row recall (vs golden) | field acc | perfect | time |`);
-    console.log(`|---|---|---|---|---|---|---|---|---|`);
+    // Row-level metrics are the honest cross-engine comparison. rows-emitted +
+    // fuzzy-tag recall separate "did the parser produce the row" from "did the
+    // engine read its tag perfectly"; category is broken out because a blended
+    // field-acc average hides it (it's the OCR path's weak field). matched CER
+    // is text quality of what WAS detected; detection recall is IoU≥0.5 against
+    // the (cell-level) vector boxes — understated by a box-convention mismatch
+    // (baseline/capheight vs full glyph extent), so read it only WITHIN an engine.
+    console.log(`| DPI | px | emitted | recall exact / fuzzy | precision | matched CER | category | dupTags | det.rec (caveat) | time |`);
+    console.log(`|---|---|---|---|---|---|---|---|---|---|`);
     const rows = [];
     for (const dpi of DPIS) {
       const zoom = dpi / (72 * baseline); // baseline RENDER_SCALE=2 → 144 DPI at zoom 1
@@ -97,14 +104,16 @@ for (const name of ENGINES) {
       const wm = matchWords(truthWords, words);
       const parsed = parseSchedule(wordsToTokens(words));
       const vsGolden = scoreRows(golden, parsed);
+      const fuzzy = scoreRows(golden, parsed, { tagEdits: 1 });
       const row = {
-        dpi, px: `${rendered.width}×${rendered.height}`, words: words.length,
-        detectionRecall: wm.detectionRecall, detectionPrecision: wm.detectionPrecision, matchedCer: wm.matchedCer,
-        rowRecall: vsGolden.rowRecall, fieldAcc: vsGolden.fieldAccOverall, perfect: vsGolden.perfectRows, gtCount: vsGolden.gtCount, ms,
+        dpi, px: `${rendered.width}×${rendered.height}`, emitted: parsed.length, gtCount: vsGolden.gtCount,
+        rowRecall: vsGolden.rowRecall, rowRecallFuzzy: fuzzy.rowRecall, rowPrecision: vsGolden.rowPrecision,
+        matchedCer: wm.matchedCer, category: vsGolden.fieldAcc.category, duplicateTags: vsGolden.duplicateTags,
+        detectionRecall: wm.detectionRecall, fieldAcc: vsGolden.fieldAccOverall, perfect: vsGolden.perfectRows, ms,
       };
       rows.push(row);
-      console.log(`| ${dpi} | ${row.px} | ${pct(row.detectionRecall)} | ${pct(row.detectionPrecision)} | ${pct(row.matchedCer)} | ` +
-        `${pct(row.rowRecall)} | ${pct(row.fieldAcc)} | ${row.perfect}/${row.gtCount} | ${(ms / 1000).toFixed(1)}s |`);
+      console.log(`| ${dpi} | ${row.px} | ${row.emitted}/${row.gtCount} | ${pct(row.rowRecall)} / ${pct(row.rowRecallFuzzy)} | ${pct(row.rowPrecision)} | ` +
+        `${pct(row.matchedCer)} | ${pct(row.category)} | ${row.duplicateTags} | ${pct(row.detectionRecall)} | ${(ms / 1000).toFixed(1)}s |`);
     }
     (report.cases[id] ??= {})[engine.id] = rows;
     await doc.destroy();

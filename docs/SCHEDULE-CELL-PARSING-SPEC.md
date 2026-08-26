@@ -45,33 +45,55 @@ on the single most-droppable token on the sheet is the wrong dependency.
 
 ## Invariants (must not regress)
 
-- **The clean vector text-layer path is byte-for-byte unchanged.** On a vector
-  schedule every section header is present and in order, so `section` is always
-  set before each data row → category comes from the section, prefix inference
-  is never consulted, and the header row is skipped as before. The existing
-  `scheduleParse.test.ts` suite and the golden-28 fixture test stay green
-  untouched.
-- **Nothing is invented.** No table header (anchors) → `[]`. Junk stays `[]`.
-  A lone number is still never a code. The header-structure gate is the only
-  thing that authorizes rows; that gate is unchanged.
+- **The golden vector fixture is unchanged (verified), and the clean vector path
+  is preserved for the real layouts we test.** On a vector schedule every
+  section header is present and in order, so `section` is set before each data
+  row → category comes from the section, prefix inference is never consulted,
+  and the header row is skipped. The golden-28 test still yields 28 rows, 100%
+  recall, 100% category, 20 perfect, 0 duplicate tags — identical to pre-change.
+  A section label sitting *above* the column header is explicitly handled (the
+  parser seeds the section from rows above the header index), pinned by a test,
+  so that layout does not silently fall to prefix inference.
+- **Nothing is invented.** No table header → `[]`. A repeated header (a second
+  stacked table) never emits a `CODE` row. A code-shaped cell only becomes a row
+  if it fills the CODE column PLUS at least one other (a lone revision bubble
+  `A` or a stray `GC` note fills one column and is rejected). A lone number is
+  never a code. A finish code whose alpha prefix is a section word (`BASE-1`) is
+  NOT eaten as a section — it carries a dash-suffix that a bare section label
+  never has. Each of these is pinned by a negative test.
 
 ## Acceptance criteria (encoded as tests)
 
-- On the captured PaddleOCR fixtures, **row recall ≥ 75% at ALL of 144/216/288
-  DPI**, and the 216 case specifically rises from 17.9% to ≥ 75% — i.e. the
-  section-header collapse is gone and recall is bounded only by the engine's
-  code-cell read rate, not by section-detection luck.
-- A synthetic schedule whose first section header is missing still yields every
-  data row (the minimal regression test for the gate removal), with pre-section
-  rows categorized by prefix inference or `"other"`.
-- All pre-existing parser tests pass unchanged.
+Not a single exact-tag recall number (it double-charges the parser for the
+engine's code-cell CER). On the captured PaddleOCR fixtures at 144/216/288 DPI:
+- **rows emitted ≥ 24/28** — the gate removal keeps producing rows;
+- **fuzzy-tag recall (edit ≤ 1) ≥ 87%** — rows are emitted and matchable modulo
+  the engine's tag CER;
+- **row precision ≥ 85%** — the gate removal did not open the floodgates to junk;
+- **category ≥ 35%, pinned as a documented-BAD characterization** — so the known
+  gap (below) is visible in the suite and cannot silently regress to zero or be
+  hidden behind a blended average;
+- **the collapse is gone**: min exact recall ≥ 78% and the across-DPI spread
+  ≤ 20 pts (was 75 pts, 17.9%→92.9%).
 
-## Explicitly out of scope
+Plus: negative tests for every "nothing is invented" clause above, a
+missing-first-section synthetic, a section-above-header synthetic, and the full
+pre-existing parser suite unchanged.
 
-- **Stale-section categories.** When a middle section header is missed, rows
-  inherit the previous section's category (a base row can read as `floor`).
-  Fixing this needs section-*boundary* signal the OCR output doesn't provide;
-  it is pre-existing, unchanged here, and category is editable in the dialog.
+## Explicitly out of scope (but honestly named)
+
+- **Stale-section categories — and note this change *reshapes* the failure, it
+  does not leave it untouched.** Before, a missed mid-table section header
+  *dropped* every row beneath it (silent data loss). Now those rows are
+  *emitted* but inherit the previous section's category (a base row reads as
+  `floor`) and come back `suggested:true`, so they are default-checked in the
+  import dialog with the wrong color/hatch/waste. That is a strictly better
+  failure (a visible, editable row beats a missing one) but it is a NEW
+  population of miscategorized rows, not an unchanged one. Measured category on
+  the OCR path is 38–58%. Fixing it needs section-*boundary* signal the OCR
+  output doesn't provide (e.g. clearing the section at a blank band, or a
+  confidence flag on inferred categories surfaced in the dialog).
 - **Misread finish tags.** `CT-2` read as `C-2` is an engine CER problem; the
-  row still emits under the misread tag. Recovering it is a scoring/fuzzy-tag
-  concern, not this parser change.
+  row still emits under the misread tag. The harness now reports fuzzy-tag
+  recall to separate this from parser behavior; recovering the tag in
+  production (so `normalizeScanRows` doesn't drop it) is future parser work.

@@ -256,17 +256,38 @@ const PADDLE_DPIS = [144, 216, 288] as const;
 const paddleWords = (dpi: number): OcrWord[] =>
   (JSON.parse(readFileSync(join(fixDir, `material-schedule.paddle-${dpi}.json`), "utf8")) as { words: OcrWord[] }).words;
 
+// The acceptance bars the adversarial review insisted on: NOT a single exact-tag
+// recall number (which double-charges the parser for the engine's code-cell
+// CER), but rows-emitted + fuzzy-tag recall + precision, PLUS category pinned as
+// a documented-bad characterization so it can't silently worsen or be hidden
+// behind a blended average. All figures are the demo material schedule only.
 for (const dpi of PADDLE_DPIS) {
-  test(`PaddleOCR @ ${dpi}dpi: row recall holds ≥ 75% (no section-header collapse)`, () => {
+  test(`PaddleOCR @ ${dpi}dpi: rows survive the engine (emitted + fuzzy recall + precision)`, () => {
     const rows = parseSchedule(wordsToTokens(paddleWords(dpi)));
-    const recall = scoreRows(golden, rows).rowRecall;
-    // Pre-fix, 216dpi collapsed to 17.9% because PaddleOCR missed every section
-    // header above MISC. FINISHES and the parser gated rows on `section`. Recall
-    // is now bounded only by the engine's code-cell read rate, not by which
-    // isolated header words happened to survive detection.
-    assert.ok(recall >= 0.75, `${dpi}dpi row recall ${(recall * 100).toFixed(1)}% < 75%`);
+    const exact = scoreRows(golden, rows);
+    const fuzzy = scoreRows(golden, rows, { tagEdits: 1 });
+    // rows emitted: the gate removal must keep producing rows (24/28 floor).
+    assert.ok(rows.length >= 24, `${dpi}dpi emitted only ${rows.length}/28 rows`);
+    // fuzzy-tag recall isolates "row emitted & matchable" from the engine's
+    // tag CER (a misread CT-2→C-2 is the engine's error, not the parser's).
+    assert.ok(fuzzy.rowRecall >= 0.87, `${dpi}dpi fuzzy recall ${(fuzzy.rowRecall * 100).toFixed(1)}% < 87%`);
+    // precision guards against invented rows now the section gate is gone.
+    assert.ok(exact.rowPrecision >= 0.85, `${dpi}dpi precision ${(exact.rowPrecision * 100).toFixed(1)}% < 85%`);
+    // KNOWN GAP, pinned so it's visible and can't regress to 0: category on the
+    // OCR path is 38–58% (a stale section latches when a mid-table header is
+    // missed; docs/SCHEDULE-CELL-PARSING-SPEC.md scopes this out). NOT solved.
+    assert.ok(exact.fieldAcc.category >= 0.35, `${dpi}dpi category ${(exact.fieldAcc.category * 100).toFixed(1)}% < 35%`);
   });
 }
+
+test("the section-header collapse is gone: exact recall no longer craters at any DPI", () => {
+  // Pre-fix spread was 75 points (17.9% at 216 → 92.9% at 288). The claim of
+  // step 4 is that the spread collapses — recall is bounded by the engine's
+  // read rate, not by which isolated section words survived detection.
+  const recalls = PADDLE_DPIS.map((d) => scoreRows(golden, parseSchedule(wordsToTokens(paddleWords(d)))).rowRecall);
+  assert.ok(Math.min(...recalls) >= 0.78, `min recall ${(Math.min(...recalls) * 100).toFixed(1)}% — a DPI collapsed`);
+  assert.ok(Math.max(...recalls) - Math.min(...recalls) <= 0.2, `recall spread ${((Math.max(...recalls) - Math.min(...recalls)) * 100).toFixed(1)}pts still wide`);
+});
 
 test("a data row with NO section header above it is still emitted", () => {
   // header + two data rows, but no FLOORING/BASE/... line at all
@@ -316,4 +337,63 @@ test("the header row is never emitted as a data row", () => {
   const rows = parseSchedule(wordsToTokens(fixture.words));
   assert.ok(!rows.some((r) => r.finish_tag === "CODE"));
   assert.equal(rows.length, 28); // clean path unchanged
+});
+
+// ── adversarial-review hardening (junk suppression after the section gate went)
+// Removing the section gate broadened what emits as a row; these pin the
+// spec's "nothing is invented" invariant on the inputs that actually stress it.
+
+const hdrRow = (y: number): OcrWord[] => [
+  { str: "CODE", x: 40, y, w: 40, h: 14 }, { str: "MANUFACTURER", x: 360, y, w: 120, h: 14 }, { str: "COLOR", x: 960, y, w: 60, h: 14 },
+];
+const dataRow = (tag: string, y: number): OcrWord[] => [
+  { str: tag, x: 40, y, w: 48, h: 14 }, { str: "ACME", x: 360, y, w: 60, h: 14 }, { str: "GREY", x: 960, y, w: 50, h: 14 },
+];
+
+test("multi-table marquee: a second table's header never emits a CODE row", () => {
+  const words = [
+    ...hdrRow(40), ...dataRow("CPT-1", 90), ...dataRow("VCT-1", 140),
+    ...hdrRow(300), ...dataRow("RB-1", 350), // a second stacked table
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.ok(!rows.some((r) => ["CODE", "MANUFACTURER", "COLOR"].includes(r.finish_tag)), "header words leaked as rows");
+  assert.deepEqual(rows.map((r) => r.finish_tag).sort(), ["CPT-1", "RB-1", "VCT-1"]);
+});
+
+test("a finish code whose prefix is a section word still emits and does not latch a section", () => {
+  // "BASE-1" folds to section key BASE — but the "-1" makes it a CODE, not a
+  // section header. It must emit, and must NOT set the current section (which
+  // would mis-categorize the row beneath it).
+  const words = [...hdrRow(40), ...dataRow("BASE-1", 90), ...dataRow("VCT-1", 140)];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.deepEqual(rows.map((r) => r.finish_tag), ["BASE-1", "VCT-1"]);
+  // VCT-1 must not have inherited a "base" section from BASE-1
+  assert.equal(rows.find((r) => r.finish_tag === "VCT-1")?.category, "floor");
+});
+
+test("a stray lone letter / short note below the header does not emit a row", () => {
+  // a revision bubble "A" and a two-letter note "GC", each alone on their line
+  const words = [
+    ...hdrRow(40), ...dataRow("CPT-1", 90),
+    { str: "A", x: 40, y: 140, w: 20, h: 14 },   // revision bubble, no other cells
+    { str: "GC", x: 40, y: 190, w: 24, h: 14 },  // stray note, no other cells
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.deepEqual(rows.map((r) => r.finish_tag), ["CPT-1"]);
+});
+
+test("no valid header anywhere → [] (body-only text invents nothing)", () => {
+  const words = [...dataRow("CPT-1", 40), ...dataRow("RB-1", 90)]; // data shapes, no header row
+  assert.deepEqual(parseSchedule(wordsToTokens(words)), []);
+});
+
+test("a section label ABOVE the column header still drives category (layout invariance)", () => {
+  // FLOORING sits above the CODE/... header row; PT-1's category must come from
+  // it, not fall to prefix inference (which deliberately returns "other" for PT).
+  const words = [
+    { str: "FLOORING", x: 40, y: 20, w: 120, h: 14 },
+    ...hdrRow(60), ...dataRow("PT-1", 110),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.equal(rows.find((r) => r.finish_tag === "PT-1")?.category, "floor");
 });

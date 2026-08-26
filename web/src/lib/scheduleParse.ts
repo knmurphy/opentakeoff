@@ -122,15 +122,44 @@ function sectionCategory(key: string): Category | null {
 // spans categories in real schedules (PT porcelain floor-or-wall, CT ceramic
 // wall-or-base, P paint) is deliberately ABSENT so it falls back to "other"
 // instead of guessing wrong. Never overrides a detected section (see parseSchedule).
+// Kept deliberately SMALL and defensible — every prefix here is an unambiguous
+// flooring-trade convention (carpet/vinyl/resilient → floor; resilient/carpet
+// base → base; acoustic ceiling → ceiling). Prefixes that span categories in
+// real schedules are omitted (PT/CT/P) as are weaker two-letter guesses
+// (WB/VB/SB). Inference is a best-effort gap-filler, never authoritative.
 const CODE_PREFIX_CATEGORY: Record<string, Category> = {
-  CPT: "floor", VCT: "floor", LVT: "floor", LVP: "floor", RF: "floor",
-  WSF: "floor", RES: "floor", SDT: "floor", TER: "floor", EPX: "floor",
-  RB: "base", CBT: "base", WB: "base", VB: "base", SB: "base", RBB: "base",
+  CPT: "floor", VCT: "floor", LVT: "floor", LVP: "floor", RF: "floor", WSF: "floor", RES: "floor",
+  RB: "base", CBT: "base",
   ACT: "ceiling", ACP: "ceiling",
 };
 // The alpha prefix of a finish code: the leading A–Z run before any digit/dash.
 const prefixCategory = (code: string): Category | null =>
   CODE_PREFIX_CATEGORY[/^[A-Z]+/.exec(code)?.[0] ?? ""] ?? null;
+
+// A clustered row that is a column-HEADER (not data): the header signature is
+// CODE + a MANUFACTURER/COLOR anchor. Used to skip the header AND any repeated
+// header (a second stacked table's header row) so neither leaks a "CODE" row.
+function isHeaderRow(r: Token[]): boolean {
+  const ups = r.map((t) => norm(t.str).replace(/[^A-Z]/g, ""));
+  return fuzzyIncludes(ups, "CODE", 1) && (fuzzyIncludes(ups, "MANUFACTURER", 2) || fuzzyIncludes(ups, "COLOR", 1));
+}
+
+// A clustered row that is a SECTION label, else null. A section label is a BARE
+// discipline word (no dash/digit): "BASE-1" is a finish code, NOT the BASE
+// section — without this guard the fuzzy resolver eats the code AND its whole
+// data row, then mis-categorizes every row beneath it (adversarial review M4).
+function asSectionRow(r: Token[]): { key: string; cat: Category } | null {
+  const first = r[0];
+  // A finish code carries a dash-suffix ("BASE-1", "FLOOR-2"); a section label
+  // does not. Keying on the dash (not on digits) still lets a digit-CONFUSED
+  // section word through — "FL0ORING" has no dash and resolves to FLOORING.
+  if (first.str.includes("-")) return null;
+  const joined = r.map((t) => t.str).join(" ").trim();
+  if (joined.length >= 24) return null;
+  const key = sectionKey(first.str);
+  const cat = sectionCategory(key);
+  return cat ? { key, cat } : null;
+}
 
 // Cluster tokens into visual rows by y, then order each row left→right. A row's
 // y is the running average so a tall cell doesn't split. tolFrac scales the gap
@@ -201,28 +230,41 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
 
   let section = "";
   let sectionCat: Category | null = null;
+  // Seed the section from a discipline label sitting ABOVE the column header
+  // (some layouts put "FLOORING" over the header row). Without this the section
+  // would be lost when we start reading below the header (adversarial review M3).
+  for (let i = 0; i < headerIdx; i++) {
+    const s = asSectionRow(rows[i]);
+    if (s) { section = s.key; sectionCat = s.cat; }
+  }
+
   const out: ScheduleRow[] = [];
   // Only rows BELOW the header are data. The header row itself (first cell
   // "CODE", code-shaped) and any title/page text above it are never rows.
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const r = rows[i];
-    const first = r[0];
-    const key = sectionKey(first.str);
-    const joined = r.map((t) => t.str).join(" ").trim();
-    // a lone-ish section header row — resolve its category OCR-tolerantly (the
-    // length guard, not the vocabulary, is what keeps a data row from being
-    // read as a section, so fuzzier section lookup is safe here)
-    const cat = joined.length < 24 ? sectionCategory(key) : null;
-    if (cat) { section = key; sectionCat = cat; continue; }
+    // A repeated header (a second stacked table) is a separator, never data —
+    // its "CODE" cell is code-shaped and would otherwise leak a row.
+    if (isHeaderRow(r)) continue;
+    // A section label updates the current category and is not itself a row.
+    const s = asSectionRow(r);
+    if (s) { section = s.key; sectionCat = s.cat; continue; }
     // A code-shaped first cell IS a row — NOT gated on a preceding section
     // header, which an OCR engine drops unpredictably and would take every row
     // beneath it down with it (docs/SCHEDULE-CELL-PARSING-SPEC.md). Fuzzy code
     // shape so a confused glyph (CPT-1 → CP7-1) doesn't silently drop the row.
+    const first = r[0];
     const codeTok = norm(first.str).replace(/[^A-Z0-9-]/g, "");
     if (!looksLikeCode(codeTok)) continue;
 
     const cells: Record<Column, string[]> = { CODE: [], MATERIAL: [], MANUFACTURER: [], STYLE: [], COLOR: [], SIZE: [], REMARKS: [] };
     for (const t of r) cells[columnFor(cx(t), anchors)].push(t.str.trim());
+    // Junk guard (the section gate used to suppress this, and it's gone): a real
+    // data row fills the CODE column PLUS at least one other. A lone token — a
+    // revision bubble "A", a stray "GC" note — fills only one column and is not
+    // a row. Keeps the spec's "nothing is invented" invariant (review M1).
+    const filled = (Object.keys(cells) as Column[]).filter((c) => cells[c].length).length;
+    if (filled < 2) continue;
     // A detected section is authoritative; with none active, infer category
     // from the code prefix (conservative, unambiguous only); else "other".
     // Inference NEVER overrides a section — the vector path always has sections

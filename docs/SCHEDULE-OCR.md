@@ -149,42 +149,60 @@ engine is an adapter under `scripts/lib/` emitting `OcrWord[]`.
 **Two engines, on the demo material schedule (Node, PP-OCRv5 mobile / tesseract
 PSM 3):**
 
-| engine | DPI | det. recall (word) | det. prec | matched CER | row recall | field acc | perfect | time |
-|---|---|---|---|---|---|---|---|---|
-| tesseract (floor) | 144 | 48.6% | 24.9% | 7.2% | **96.4%** | 79.6% | 9/28 | 7.8s |
-| tesseract | 288 | 46.9% | 23.7% | 5.5% | **96.4%** | 80.9% | 10/28 | 11.3s |
-| PaddleOCR (ceiling) | 144 | 69.5% | 74.5% | **0.8%** | 78.6% | 78.0% | 3/28 | 5.1s |
-| PaddleOCR | 216 | 67.2% | 70.0% | **0.7%** | 17.9% | 93.3% | 3/28 | 6.0s |
-| PaddleOCR | 288 | 56.5% | 61.0% | **0.9%** | 92.9% | 73.7% | 3/28 | 6.7s |
+Numbers below are the demo material schedule **only** (n=1) — read every
+conclusion as "on this sheet" until the corpus has breadth (see the roadmap's
+closing note). Row-level results, **after** the step-4 parser fix:
 
-(Detection recall is WORD granularity; PaddleOCR emits CELL-level boxes, so its
-recall is understated by construction — read row recall for the cross-engine
-comparison.)
+| engine | DPI | rows emitted | recall exact / fuzzy | precision | matched CER | category | perfect |
+|---|---|---|---|---|---|---|---|
+| tesseract (floor) | 144 | 25/28 | 96.4% / — | high | 7.2% | ~80%† | 9/28 |
+| tesseract | 288 | — | **96.4%** | high | 5.5% | ~80%† | 10/28 |
+| PaddleOCR (ceiling) | 144 | 25/28 | 78.6% / **89.3%** | 88.0% | **0.8%** | **50.0%** | 3/28 |
+| PaddleOCR | 216 | 27/28 | 92.9% / **96.4%** | 96.3% | **0.7%** | **57.7%** | 8/28 |
+| PaddleOCR | 288 | 27/28 | 92.9% / **96.4%** | 96.3% | **0.9%** | **38.5%** | 3/28 |
+
+- **exact vs fuzzy recall**: exact-tag recall matches golden rows on `finish_tag`
+  as an exact key, so a misread tag (`CT-2` → `C-2`) is charged *twice* (miss +
+  spurious) even though the row and its fields are emitted correctly. Fuzzy
+  recall (edit-distance ≤ 1 on the tag) isolates "row emitted & matchable" from
+  the engine's tag CER — the parser's job is to emit the row, and it does.
+- **category is 38–58% on the OCR path** — the pipeline's weak field, called out
+  here rather than blended into a single "field acc." A stale section latches
+  when a mid-table header is missed, so base/wall rows inherit the previous
+  section's category. This is a *known, unsolved* gap (see step 4); it is
+  editable in the approval dialog, but it is not the "100%" the clean vector
+  path reports.
+- **perfect rows swing 3 → 8 → 3** across DPI on the same sheet — volatile;
+  don't read the peak as the result.
+- **det. recall** (in the benchmark output, not shown here) is IoU ≥ 0.5 against
+  the *cell-level* vector boxes. It is understated by a BOX-CONVENTION mismatch
+  (ground truth uses baseline + cap-height; PaddleOCR reports full glyph
+  extent), *not* by word-vs-cell granularity — so it is only meaningful WITHIN
+  one engine, never as a cross-engine ranking.
+
+† tesseract category is comparable-to-worse than PaddleOCR's and equally
+subject to the stale-section gap; its higher exact-recall comes from word-level
+over-segmentation happening to feed the column banding, while its 5–8% CER lands
+as editable field typos.
 
 ### The finding that redirects the roadmap again
 
 **PaddleOCR reads characters ~10× more accurately than tesseract (0.8% vs 5.5–8%
-CER) — yet gets FEWER complete rows through the current parser, and erratically
-so** (row recall 17.9%–92.9% across DPI; only 3/28 perfect rows vs tesseract's
-stable 96% / 10-perfect). The bottleneck has moved. It is no longer character
-error — Experiment 1 hardened the parser against that, and PaddleOCR's CER is
-already far under budget. It is now **detection GEOMETRY**: PaddleOCR returns
-one box per *cell*, and the parser's header-anchor detection + nearest-anchor
-column banding — tuned for the text layer's *word* tokens — is fragile to how
-those cell boxes land, and that landing shifts with DPI (the 216 collapse is a
-header-anchor miss, reproducible, not noise). Tesseract "wins" row recall only
-because its word-level over-segmentation happens to feed the banding the shape
-it expects, while its terrible CER lands as editable field typos (field acc
-~80%).
+CER).** The first run of this experiment (before step 4) showed PaddleOCR's
+complete-row recall *collapsing erratically* — 17.9% at 216 DPI — which I
+initially misattributed to cell-box detection geometry. Step 4 found the true
+cause: the parser **gated every row on a detected section header**, and PaddleOCR
+drops those isolated words unpredictably (details in
+`docs/SCHEDULE-CELL-PARSING-SPEC.md`). Decoupling row emission from section
+detection fixed it — 216 DPI recall 17.9% → 92.9%, now stable across DPI.
 
-So the next parser work is exactly the geometry item deferred from Experiment 2
-— robust anchoring and column assignment — and it now clearly matters MORE for
-a good engine than the character-noise tolerance did. PaddleOCR is the engine
-to build on (its CER headroom is decisive and its precision is 3× tesseract's);
-the work to unlock it is in the parser's spatial model, not the recognizer.
+What remains, and is genuinely PaddleOCR's ceiling to build on: its CER headroom
+is decisive and its precision is ~3× tesseract's. The open parser work is
+**category correctness** (the stale-section latch above) and the still-pinned
+remarks→SIZE banding — not row survival, which step 4 settled *on this sheet*.
 
 These are Node timings (~5–12 s/schedule). Browser-worker timing under the real
-single-thread-WASM / WebGPU envelope is Experiment 4.
+single-thread-WASM / WebGPU envelope is Experiment 4/5.
 
 ## Roadmap (the experiment ladder)
 
@@ -210,12 +228,16 @@ single-thread-WASM / WebGPU envelope is Experiment 4.
    word above `MISC. FINISHES`, so 22 correctly-read rows were dropped. Fix:
    emit a row on a code-shaped first cell regardless of section (section still
    drives category when present; else a conservative code-prefix inference; else
-   `"other"`). **Result: 216 DPI row recall 17.9% → 92.9%** (perfect rows 3→8),
-   PaddleOCR row recall now stable 78.6 / 92.9 / 92.9% across 144/216/288 —
-   bounded by the engine's code-cell read rate, not section-detection luck.
-   Tesseract unchanged (96.4%); clean vector path byte-for-byte unchanged. The
-   remaining gap to 100% is misread finish tags (engine CER on the code cell) —
-   a scoring/fuzzy-tag concern, and the still-pinned remarks→SIZE banding.
+   `"other"`), with negative guards so the wider gate invents nothing (a second
+   table's header, stray notes, and section-word-shaped codes like `BASE-1` are
+   all handled — pinned by tests). **Result: 216 DPI exact recall 17.9% → 92.9%**;
+   PaddleOCR now stable across DPI (exact 78.6/92.9/92.9, fuzzy-tag
+   89.3/96.4/96.4). Tesseract unchanged (96.4%); golden vector fixture unchanged
+   (verified 28 rows / 100% / 20 perfect). **What step 4 did NOT solve: category
+   on the OCR path is 38–58%** (a stale section latches when a mid-table header
+   is missed — the change converts dropped rows into emitted-but-miscategorized,
+   default-checked rows; a strictly better failure, but a real open gap), plus
+   the still-pinned remarks→SIZE banding. All numbers are the demo sheet only.
 5. **Browser deployability** — PaddleOCR inside a worker under the real
    constraint envelope (single-thread WASM SIMD / WebGPU, no COOP/COEP),
    measuring seconds-per-schedule, memory, bundle + model weight. ppu-paddle-ocr
