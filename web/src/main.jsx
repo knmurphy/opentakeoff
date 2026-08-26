@@ -4,7 +4,6 @@ import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from "react
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/print.css";   // OT-only print block — kept out of app.css so tokens/app stay byte-synced with Spline
-import TakeoffCanvas from "./pages/TakeoffCanvas.jsx";
 import ProjectHome from "./components/ProjectHome.jsx";
 import { GoogleAuthProvider, useGoogleAuth } from "./lib/google/AuthContext.jsx";
 import { projectIdFromUrl, setActiveStore, metaGet, metaDelete } from "./lib/store.js";
@@ -16,6 +15,17 @@ import { projectHomeFolderId } from "./lib/projectHome.js";
 import { initTheme } from "./lib/theme.js";
 import { initDrawStyle } from "./lib/drawStyles.js";
 import { initDraftOutline } from "./lib/draftOutline.js";
+// The takeoff engine — jsts geometry, pdf.js, the ~9600-line canvas — is the
+// largest JS chunk (~520KB gzip). Lazy-load it so the pre-project gate screens
+// (folder picker, Drive/M365 sign-in) don't parse+eval it before a plan is
+// ever opened. The Suspense fallback is null to match the gates' own
+// status==="checking"/"building" → null (no plan is open here, so no loading
+// UI is warranted); the wrapper keeps all render sites and their `key`
+// remount-on-project-switch behavior unchanged.
+const TakeoffCanvasLazy = React.lazy(() => import("./pages/TakeoffCanvas.jsx"));
+function TakeoffCanvas(props) {
+  return <React.Suspense fallback={null}><TakeoffCanvasLazy {...props} /></React.Suspense>;
+}
 
 initTheme();   // index.html set data-theme pre-paint; this keeps it live
 initDrawStyle();   // syncs a draw-style choice made in another tab
