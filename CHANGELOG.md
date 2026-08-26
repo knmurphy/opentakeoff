@@ -2,6 +2,14 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-08-26 — tile comes to the canvas: the grid, the panel, the gestures
+
+### Added
+- **Tile patterning gets a canvas surface (M5).** A tiled floor shape — any `floor_area` under a `tile_setup` condition, the seeded `CT-1` included — now draws its solved layout to scale over the room instead of staying a headless number: full tiles solid, cut tiles lighter and dashed, corner tiles corner-marked, a straddled hole flagged red, a draggable **origin crosshair**, and the room's **edge exposures** (trim, bullnose, cove, threshold) inked when confirmed and ghosted dashed while only suggested. Past a content-aware zoom floor the grid gives way to the condition's ordinary hatch fill — the per-tile detail turns to noise below it, so a zoomed-out or small-tile sheet still reads clean, and it swaps back the moment you're close enough for the grid to mean something.
+- **A docked Tile panel**, toolbar-badged with the tiled-condition count like the Roll panel: pattern, tile size, joint, edge strategy, and a per-condition default origin/rotation live on one card per tiled condition, alongside a SKU list (color swatch for now, product images deferred); a selected room grows a **This room** section with its own origin/rotation override and a one-click reset back to the condition default; and a **multi-room QA list** — sliver, unsolved layout, straddled hole, unscaled sheet, seam-crossing room — click-to-focuses the flagged room instead of making you zoom a 40-room job one tile at a time.
+- **Tile edit mode**, armed from the panel's toolbar, turns the grid interactive: drag the origin crosshair and the whole pattern re-solves live under the cursor, or click an edge to step its exposure trim → threshold → bullnose → cove → plain field, confirming whichever kind you land on. Each gesture — one drag, one click — is a single undoable command, so `⌘Z` reverts an origin move or an edge confirmation exactly like any other takeoff edit.
+- **`export_takeoff` carries the figured layout.** The MCP export's per-shape payload gains an additive tile-layout snapshot — solved config, classified full/cut/corner/hole counts, and any per-room origin/rotation/edge override — for every shape on a `tile_setup` condition, importable back through `import_takeoff` unchanged. No new MCP tool: the surface stays forty.
+
 ## 2026-08-26 — tile learns to buy: patterns, cuts, boxes, and joints
 
 ### Added

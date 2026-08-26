@@ -349,6 +349,44 @@ cut edits on shapes are kept but go inert.
 Agents get the same thing headlessly—`roll_setup` is a field on the MCP server's
 `edit_condition`, and the reply echoes the figured order ([§14](#14-ai-settings-and-driving-opentakeoff-from-an-agent)).
 
+### Tile patterning — the grid, cuts, and per-room origin
+
+Ceramic, porcelain, and other unit tile carry their own opt-in the same way roll goods do: a
+condition with a `tile_setup`—the seeded **CT-1**, or one built the same way—gets every one of
+its floor areas figured into a real tile layout (pattern, cuts, boxes, joints) instead of a flat
+SF number.
+
+**On the canvas.** Select a tiled room and zoom in, and its measured SF gives way to a **tile
+grid drawn to scale**: full tiles solid, cut tiles lighter and dashed, corner tiles carry a small
+corner mark, and any hole in the floor is flagged red. A blue **origin crosshair** marks where
+the pattern starts, and each edge that isn't plain field ink shows its **exposure**—trim,
+bullnose, cove, or a threshold where the room meets a different finish—dashed and pale while it's
+only *suggested*, solid and bright once **confirmed**. Zoom back out, or work in small tile on a
+big room, and the grid gives way to the condition's ordinary hatch fill again—the per-tile detail
+turns to noise past a point, so the canvas reads the room the same way the print will.
+
+**The Tile panel.** The toolbar's **Tile — the grid layout, cuts, and per-room origin/rotation**
+button (badged with how many conditions are tiled) docks a panel with one card per tiled
+condition—**Pattern** (grid, brick at 50% or 33% offset, diagonal, herringbone, basketweave),
+**Edge strategy** (balanced auto-centering, or start full at the origin), **Joint** width, the
+condition's default **Origin** and **Rotation**, and a **SKU** list (name, size, color—swatch
+only, no product photo yet) for a layout that mixes tile sizes. Select a room and the panel grows
+a **This room** section: an origin and rotation override for that one shape, with a **follow
+default** link next to each field to drop the override and fall back to the condition again.
+
+**Tile edit.** Once the panel is open, **Tile edit — drag a room's origin crosshair to relocate
+its grid; click an edge to cycle/confirm its trim/threshold exposure** arms the grid for editing.
+Drag the crosshair and the whole pattern re-solves live under the cursor; release and it commits.
+Click an edge and its exposure steps trim → threshold → bullnose → cove → back to plain field,
+confirming whichever kind you land on. Both gestures are one command each—`⌘Z` undoes an origin
+drag or an edge click exactly like any other takeoff edit.
+
+**QA, across every room at once.** The same panel lists every tiled room with something worth a
+second look—a sliver too thin to hold at a wall, a layout the engine couldn't solve cleanly, a
+hole straddling a joint, an unscaled sheet, a room whose pattern crosses a seam it can't reason
+about—so a 40-room tile job is audited in one pass instead of one zoom at a time. Click a row to
+pan straight to the room it's about.
+
 ### Import from schedule
 
 <img src="img/verify-import-schedule-dialog.png" alt="The Import from schedule verify dialog — parsed finishes grouped by category, checked for approval" width="640"/>
