@@ -1871,7 +1871,22 @@ export default function TakeoffCanvas() {
     // every time they switch the primary's sheet.
     const sameKey = refKey && refDimsRef.current?.key === refKey;
     if (!sameKey) { setRefPanelImg(null); refDimsRef.current = null; }
-    if (!refKey) return;
+    if (!refKey) {
+      // Collapse (splitView→null ⇒ refKey→null): cancel any in-flight
+      // reference-detail compositor work and clear its dedup key, the same
+      // shape as the resetAll() and visibilitychange clears below. The
+      // panelImg reset just above (setRefPanelImg(null)) already forces a
+      // fresh fit-to-view (and therefore a fresh renderKey) on the next
+      // reopen of this refKey in the common case, but that path depends on
+      // ReferencePane's own effect ordering; this clear makes the parent's
+      // OWN bookkeeping correct independent of that, matches the other two
+      // sites exactly, and stops a genuinely in-flight compositor request
+      // from completing against a canvas this pane has already unmounted.
+      try { refDetailCancelRef.current?.cancel(); } catch { /* done */ }
+      refDetailCancelRef.current = null;
+      refDetailKeyRef.current = null;
+      return;
+    }
     if (isStitchKey(refKey)) { setRefInvalid(refKey); return; }
     let cancelled = false;
     (async () => {
@@ -1926,6 +1941,14 @@ export default function TakeoffCanvas() {
   // detailKeysRef/detailCancelsRef's per-drawKey entries. Stable modulo
   // `darkMode` for the same reason paintReferenceBase is: it's the reference
   // pane's only dark-mode repaint signal for this layer too.
+  //
+  // No DETAIL_ENGAGE gate, matching syncTilePanelsRef above (see its comment):
+  // tiles are the only raster path now, active at every zoom level. Without
+  // this the primary and reference could visibly diverge on the SAME sheet at
+  // the SAME zoom — the primary painting crisp tiles while this pane fell
+  // back to its CSS-stretched base raster in the ~0.9-1.15 scale*dpr band
+  // below the old threshold. The only reason left to hide the canvas is the
+  // crop itself reporting the source is off-screen.
   const refDetailKeyRef = useRef(null);
   const refDetailCancelRef = useRef(null);
   const paintReferenceDetail = useCallback((drawKey, canvasEl, t, r) => {
@@ -1933,11 +1956,6 @@ export default function TakeoffCanvas() {
     const dims = refDimsRef.current;
     if (!dims || `ref::${dims.key}` !== drawKey) return;
     const dpr = window.devicePixelRatio || 1;
-    if (t.scale * dpr <= DETAIL_ENGAGE) {
-      canvasEl.style.display = "none";
-      refDetailKeyRef.current = null;
-      return;
-    }
     const d = { x: 0, y: 0, w: dims.w, h: dims.h, clip: null, drawKey };
     const crop = detailCropFor(t, r, d);
     if (!crop) { canvasEl.style.display = "none"; refDetailKeyRef.current = null; return; }
