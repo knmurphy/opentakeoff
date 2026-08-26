@@ -109,7 +109,7 @@ computation lands.
 | Capability | Module | Surfaces | Milestone |
 |---|---|---|---|
 | Surface-area ring → elevation strip (unwrap) | `wall` (strip) | overlay, panel | 10 |
-| Openings / niches as holes in the strip | `wall` (elevation) | overlay | 11 |
+| Openings as holes; **niche interior faces are an addition (§3.6), not just a deduction** | `wall` (elevation) | overlay | 11 |
 | Multi-course base (cove/bullnose courses) | `wall` + `coverage.js` | panel, report | 11 |
 | Wall panels / stacked bands | `wall` (elevation) | overlay, panel | 11 |
 
@@ -128,6 +128,8 @@ computation lands.
 | **Slope-to-drain / pre-slope mud bed** (volume; §3.6 slope model) | `wetArea` | overlay, report | 13 |
 | Prefab pan / curb / bench (Wedi/Kerdi) as EA alternative | `wetArea` (`count` role) | panel, report | 13 |
 | Prefab niche (EA) vs field-built | `wetArea` (`count` role) | panel, report | 13 |
+| **Field-built bench** (top + front + side faces + own membrane, mud-set) | `curb` / `wetArea` | cut sheet, report | 13 |
+| **Niche interior faces** (top/bottom/sides/back → added tile SF + inside-corner seam LF + membrane) | `wetArea` | panel, report | 11 |
 
 ### H. Quantities & export — the deliverable
 
@@ -139,7 +141,7 @@ computation lands.
 | Waste-from-layout (**refines**, does not remove, the margin — §4.1) | `calc/order` + `totals.js` | report | 3 |
 | **Scale-accurate tile layout sheet** (grid + dimensioned cuts + trim + corners, true scale) | `markedset.js` (PDF); `export_dxf` (DXF, post-rebase) | PDF now / DXF after rebase | 8 |
 | Install phasing (group rooms into phases; per-phase quantities) | report grouping (existing) | report | 8 |
-| **Labor ROM as a *quantity*** (weighted labor SF + driver counts; no $) — via a new `labor:*` column set on the `ctx.rollByCond`/`ROLL_FIELDS` pattern, gated on `tile_setup` | `calc/labor` + `reportColumns` | report | 8 |
+| **Labor ROM as a *quantity*** (weighted labor SF + driver counts; no $) — new `laborRom:*` columns on the `ctx.rollByCond`/`ROLL_FIELDS` pattern, gated on `tile_setup` (distinct prefix from the existing free-text `labor:*` columns) | `calc/labor` + `reportColumns` | report | 8 |
 
 ### I. Interaction
 
@@ -278,6 +280,14 @@ ordered quantity cannot drift.
   membrane/tile by plan SF; the sloped surface is marginally larger — noted, not
   modeled). Drain body/flange is an EA fitting. Prefab pan/curb/bench/niche are
   EA alternatives (the `count` role, `totals.js`).
+- **Field-built bench** (not prefab): a mud-set bench is its own small wrapped
+  solid — top + front + one/two side faces, its own membrane and mud volume.
+  Modeled like a curb (linear feature + cross-section / rectangular top+face
+  treatment), not as an EA-only alternative. M13.
+- **Niches are a deduction AND an addition.** A recessed niche subtracts its
+  opening from the wall field (a hole) but ADDS 4–5 interior faces
+  (top/bottom/sides/back): tile SF, inside-corner seam LF, and interior membrane.
+  The model must add the box back, not only cut the hole. M11.
 
 ### 3.7 Layout lifecycle — recompute & invalidation
 
@@ -299,7 +309,7 @@ Reads committed polygons, `height_ft`, `tile_setup`, and the figured
 lazy chunk, like TileSim/tiletakeoff). The 2D plan stays authoritative for every
 quantity; 3D originates nothing. Value: client presentation and wrap validation.
 
-### 3.9 `lib/tileLabor/` (`calc/labor.ts`) — labor ROM as a *quantity*
+### 3.9 `calc/labor.ts` (in `lib/tileCalc/`) — labor ROM as a *quantity*
 
 OpenTakeoff keeps cost/pricing out; labor surfaces as a **quantity**, priced
 externally. `calc/labor.ts` emits per condition:
@@ -316,10 +326,13 @@ externally. `calc/labor.ts` emits per condition:
   mobilization/setup are out of the geometry-derived family and must be added
   outside. The report says so.
 
-Wiring: a `ctx.laborRomByCond` Map + `labor:*` columns emitted through the
+Wiring: a `ctx.laborRomByCond` Map + **`laborRom:*` columns** emitted through the
 **`ROLL_FIELDS`/`rollColProfile` precedent** (`reportColumns.js`), gated on
-`tile_setup` presence — **not** the free-text `laborType` field or the "Labor
-view" visibility preset (whose `laborValue()` is string-only and computes nothing).
+`tile_setup`. The distinct `laborRom:*` prefix keeps them clear of the existing
+free-text `labor:*` columns (`laborColProfile`, `laborType`/`subfloorType`) —
+separate, non-colliding families. This is **not** the free-text `laborType`
+field or the "Labor view" visibility preset (whose `laborValue()` is string-only
+and computes nothing).
 
 ---
 
