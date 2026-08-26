@@ -149,6 +149,15 @@ is where the computation lands.
 | Headless layout + cut sheet + trim for agents | engine (pure) | `export_report`, `export_takeoff` | 3 / 5 |
 | Agent audit (withheld/refusal parity) | engine + MCP | — | 14 |
 
+### K. 3D visualization — client preview & wrap validation
+
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| 3D scene: extrude committed rooms → floor / walls / ceiling from polygon + `height_ft` | `tile3d` (`three/`) | 3D view | 15 |
+| Tiled surfaces: drape the figured `tile_layout` as textures on floor/wall/curb faces | `tile3d` | 3D view | 15 |
+| Orbit / zoom / pan; same scene as the plan (read-only consumer of 2D truth) | `tile3d` | 3D view | 15 |
+| Client-presentation still / image export | `tile3d` | 3D view / image | 15 |
+
 ---
 
 ## 3. Engine decomposition (pure, no React/DOM)
@@ -295,6 +304,18 @@ stitch placement)`. Triggers and persistence:
   sheet by default; a stitch carries an explicit origin offset; a seam-crossing
   room is flagged for the estimator.
 
+### 3.8 `lib/tile3d/` + `three/` — 3D visualization (read-only consumer)
+
+- A **visualization layer, not a source of truth.** It reads committed room
+  polygons, `height_ft`, `tile_setup`, and the figured `tile_layout`, extrudes
+  the rooms (floor/walls/ceiling) and drapes the layout as textures — exactly
+  TileSim's and tiletakeoff's approach (three.js / react-three-fiber). The 2D
+  plan stays authoritative for every quantity, scale, and cut; the 3D view never
+  originates geometry or counts.
+- Value: client presentation, and validating wrap geometry (curbs, niches, wall
+  coursing) that is hard to judge from an unwrapped 2D elevation.
+- Lazy-loaded chunk (three.js is heavy), like TileSim's lazy 3D scene.
+
 ---
 
 ## 4. Integration into OpenTakeoff
@@ -435,10 +456,15 @@ reuse math and band geometry are trusted. MCP is staged through the path.
 12. **Straight curb.** `tileCurb` profile faces + end cuts.
 13. **Developed curb nets.** L-plan/radius (`tileCurb/develop.ts`).
 14. **MCP agent audit parity.** Withheld/refusal parity, layout audit workflow.
+15. **3D visualization (read-only).** `lib/tile3d/` + a lazy `three/` view:
+    extrude committed rooms, drape the figured layout as textures on floor /
+    wall / curb faces, orbit/zoom/pan, still export. Reads the 2D layout;
+    originates nothing.
 
 Milestones 1–8 make a tiler productive on floor tile with cuts, trim, reuse, and
-a scale-accurate layout sheet; 9–14 reach the complete set. No milestone is "out
-of scope" — later in the path is not smaller in ambition.
+a scale-accurate layout sheet; 9–15 reach the complete set (patterns, wall, curb,
+MCP audit, and 3D visualization). No milestone is "out of scope" — later in the
+path is not smaller in ambition.
 
 ---
 
@@ -450,9 +476,11 @@ of scope" — later in the path is not smaller in ambition.
 2. **Randomized layout + determinism** — `madum-ts`-class percentage packing
    breaks "same input → same layout" unless it takes a seeded PRNG. Core, or a
    later seeded delight?
-3. **Curb representation** — 2D linear-feature + profile (canvas stays the single
-   source of truth) vs a true 3D surface editor (TileSim has one). The design
-   assumes the former; confirm.
+3. **3D fidelity / scope** — the 2D plan stays the takeoff source of truth
+   (quantities, scale, cuts); a **read-only 3D visualization is in the path**
+   (§2.K, milestone 15). Open: how far it goes — client-preview textures only,
+   vs an editable 3D surface like TileSim's — and whether curb/niche authoring
+   ever moves into it. (What is settled: 3D does not originate takeoff geometry.)
 4. **Exposure auto-suggest aggressiveness** — how far auto-suggestion goes
    (exterior-hull coincidence only, vs more) before the estimator confirms.
 5. **Match-line origin-offset UX** — the policy is set (layout stops at sheet
