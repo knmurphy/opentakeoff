@@ -319,11 +319,10 @@ Ordered roughly by dependency.
 4. **Trim depth.** Edge *derivation* alone is a substantial feature. How much of
    axis B in v1 — trim tile + edge profiles + thresholds first, curbs last?
 
-5. **Interaction model.** Grid designer as a separate modal, or inline docked
-   panel like Roll? How does the estimator set origin/rotation — drag on canvas
-   (a drag gesture committing one undo command) vs numeric fields? How do they
-   mark "this edge gets bullnose" — click edges, or auto-derive from exposure? ("Tile scrolling" from
-   PTP is a concrete answer to the origin question.)
+5. **Interaction model — settled: not a modal.** The grid designer is a
+   focus/zoom mode on an already-selected shape (see §6), with a docked setup
+   panel. Residual sub-decisions: origin by drag vs fields (the prototype does
+   both), trim tagging by edge-click vs auto-derive from exposure.
 
 6. **Relationship to the hatch.** Does a tile layout *replace* the visual hatch
    for tile conditions (the drawn grid *is* the appearance), or complement it
@@ -340,27 +339,29 @@ Ordered roughly by dependency.
 
 ---
 
-## 6. Tool ergonomics — the grid-designer sketch
+## 6. Tool ergonomics — the interaction flow
 
-Not a spec, a direction to pressure-test. Tile layout is a **new engine** — it
-borrows only the codebase-wide convention (condition opt-in config → pure engine
-→ drawn overlay → report seam), not roll goods specifically.
+The flow is settled: the grid designer is a **focus mode on an already-measured
+shape**, not a separate surface or modal.
 
-- A condition opts into a **tile setup**: tile spec, pattern, origin, rotation,
-  edge-cut strategy.
-- The engine figures the layout; the canvas draws full tiles solid and cut tiles
-  hatched/tinted, grout-true, over the committed rooms.
-- A docked **Tile panel** shows full/cut/corner counts, the cut list, trim LF,
-  and corner-piece counts, numbered in install order.
-- **Edit mode** drags the origin / rotates the field, committing one undoable
-  command per gesture.
-- Edge trim is assigned by selecting a room edge and tagging it (bullnose / cove /
-  profile / threshold), or by accepting an auto-derivation the estimator corrects.
+1. **Select a shape** — the estimator picks a committed room (floor polygon)
+   already traced on the plan.
+2. **Enlarge into it** — zoom to tile scale. This is the existing detail view
+   (`DETAIL_ENGAGE = 1.15`, `web/src/lib/canvasConstants.js`), which already
+   re-renders the visible region crisp at current zoom — no new rendering path.
+   Individual tiles become visible.
+3. **The tile grid materializes on that shape** — a new SVG overlay (exactly how
+   roll cuts draw over committed rooms today) renders the layout at tile scale:
+   full tiles solid, cut tiles tinted, hole-cuts flagged.
+4. **Set it up** — a docked panel (the Roll-panel pattern) carries the controls:
+   pattern, tile size, joint presets, colors, multi-SKU, origin (drag on canvas),
+   rotation. Each change re-figures the layout live.
+5. **Quantities fall out** — full/cut/corner counts, the cut list, trim LF,
+   corner EA, grout — through the same report `ctx` seam as seam-LF, into the
+   Report/CSV/XLSX/`report.v1`.
 
-The open question is whether the grid designer deserves a full-screen modal (the
-way the Report is) for the pattern/origin/rotation playground, or stays a docked
-panel. That is an ergonomics decision the mockup phase should settle with a
-prototype, not an argument.
+So the feature is three layers on the existing canvas — a tile-grid overlay, a
+docked setup panel, and layout-derived quantities — not a new design surface.
 
 ---
 
