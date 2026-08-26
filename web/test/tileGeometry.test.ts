@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifyLayout } from "../src/lib/tileGeometry/classify.ts";
+import { getPattern } from "../src/lib/tilePatterns/index.ts";
 
 // a 2ft × 2ft room, 1ft tiles, no joint → 4 full tiles, none cut
 const room: [number, number][] = [[0, 0], [2, 0], [2, 2], [0, 2]];
@@ -38,4 +39,65 @@ test("a corner tile touches two room edges", () => {
   const narrow: [number, number][] = [[0, 0], [1.5, 0], [1.5, 1.5], [0, 1.5]];
   const c = classifyLayout(quads, narrow, [], 0);
   assert.ok(c.some((x) => x.cls === "corner"));
+});
+
+// ── Task 11: cross-engine integration guard (determinism + kept-area = room-area) ──
+
+// A 4ft × 3ft room (12 sf), tiled edge-to-edge (joint=0) by each gap-free
+// M2 pattern. herringbone/basketweave are excluded here — they're only
+// gap-free for their specific tile-ratio contract (see layoutWarning),
+// not for an arbitrary 1×1 tile.
+const bigBounds = { minX: 0, minY: 0, maxX: 4, maxY: 3 };
+const bigRoom: [number, number][] = [[0, 0], [4, 0], [4, 3], [0, 3]];
+
+for (const pat of ["grid", "brick_50", "brick_33", "diagonal"]) {
+  test(`${pat}: kept area sums to the room area (no drift) and is deterministic`, () => {
+    const g = getPattern(pat);
+    // joint=0 in BOTH calls: kept-area is joint-insensitive (it intersects
+    // NOMINAL footprints), so this is the clean invariant check. Units
+    // still matter in principle — generate()'s joint is feet, classifyLayout's
+    // joint_in is inches — but 0 is 0 in either unit.
+    const input = { bounds: bigBounds, w: 1, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s" };
+    const a = classifyLayout(g.generate(input), bigRoom, [], 0);
+    const b = classifyLayout(g.generate(input), bigRoom, [], 0);
+    assert.deepEqual(a, b, `${pat} is not deterministic`);
+    const kept = a.reduce((sum, x) => sum + x.areaKept_sf, 0);
+    assert.ok(Math.abs(kept - 12) < 0.05, `${pat} kept ${kept} sf vs room's 12 sf`);
+  });
+}
+
+// Nonzero-joint cut-dimension test: generate() takes joint in FEET,
+// classifyLayout takes joint_in in INCHES — this pins the correct unit
+// conversion between the two call sites (Task 10 review finding). A
+// 1/4in joint is 0.25/12 ft to generate() and 0.25 to classifyLayout().
+test("grid: a nonzero joint produces a sensible, joint-inset cut dimension", () => {
+  const g = getPattern("grid");
+  const jointIn = 0.25;
+  const input = {
+    bounds: { minX: 0, minY: 0, maxX: 1.5, maxY: 2 },
+    w: 1, h: 1, joint: jointIn / 12,
+    origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s",
+  };
+  const narrow: [number, number][] = [[0, 0], [1.5, 0], [1.5, 2], [0, 2]];
+  const c = classifyLayout(g.generate(input), narrow, [], jointIn);
+  const cut = c.find((x) => x.cls === "cut" || x.cls === "corner");
+  assert.ok(cut, "a cut/corner tile exists in a 1.5ft-wide room of 1ft tiles");
+  const w_in = cut!.cut!.w_in;
+  assert.ok(Number.isFinite(w_in), "cut.w_in is finite");
+  assert.ok(w_in > 0, `cut.w_in (${w_in}) should be a positive kept width`);
+  assert.ok(w_in < 12, `cut.w_in (${w_in}) should be less than the 12in nominal face`);
+});
+
+// Optional Task 10 coverage gap: a hole that bisects a tile into two
+// disjoint kept fragments, exercising jsts's MultiPolygon overlay result
+// (largestPolygonPart / localBBox over a multi-part kept geometry).
+test("a hole bisecting a tile classifies as cut with a finite, positive kept area", () => {
+  const wholeRoomTile = [{ cx: 1, cy: 1, w: 2, h: 2, rot: 0, skuId: "s" }];
+  // a full-width horizontal strip through the middle of the 2x2 room/tile
+  const bisectingHole: [number, number][] = [[0, 0.9], [2, 0.9], [2, 1.1], [0, 1.1]];
+  const c = classifyLayout(wholeRoomTile, room, [bisectingHole], 0);
+  assert.equal(c.length, 1);
+  assert.ok(c[0].cls === "cut" || c[0].cls === "hole", `expected cut/hole, got ${c[0].cls}`);
+  assert.ok(Number.isFinite(c[0].areaKept_sf));
+  assert.ok(Math.abs(c[0].areaKept_sf - 3.6) < 1e-6, `expected ~3.6 sf kept, got ${c[0].areaKept_sf}`);
 });
