@@ -2610,7 +2610,6 @@ export default function TakeoffCanvas() {
     if (!bridge) return;
     bridge.getSheet = () => presenceSheetRef.current || null;
     return () => { bridge.getSheet = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Idle-drain. When the canvas goes idle, drain BOTH defer paths:
