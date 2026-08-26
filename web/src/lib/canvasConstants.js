@@ -49,6 +49,11 @@ export const GESTURE_MS = 140;      // wheel/pinch quiet window before the detai
 export const DETAIL_STALL_MS = 25000;
 
 export const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
+// Tile-overlay LOD floor (design §4.4 / M5 #6): below this on-screen px for
+// the smaller installed tile-cell dimension, the per-tile grid overlay
+// reads as noise, so the canvas swaps it for a coarser hatch fill instead.
+export const TILE_OVERLAY_MIN_CELL_PX = 6;
+
 
 // toolbar menus — STACK-style: the menu face shows the armed tool
 export const MEASURE_TOOLS = [
