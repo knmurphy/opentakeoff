@@ -19,6 +19,7 @@ import { parseSchedule, type ScheduleRow } from "../src/lib/scheduleParse.js";
 import { wordsToTokens, wordBbox, type OcrWord } from "../src/lib/ocr/types.js";
 import { degradeWords, mulberry32 } from "../src/lib/ocr/noise.js";
 import { levenshtein, cer, corpusCer, normField, matchWords, scoreRows } from "../src/lib/ocr/score.js";
+import { renderDims, cropBoxToWord, type RenderGeometry } from "../src/lib/ocr/raster.js";
 
 const fixDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "schedule-ocr");
 const fixture = JSON.parse(readFileSync(join(fixDir, "material-schedule.words.json"), "utf8")) as { words: OcrWord[] };
@@ -97,6 +98,38 @@ test("scoreRows matches duplicate tags as a multiset", () => {
   const one = scoreRows(gt, [a]);
   assert.equal(one.matched, 1);
   assert.equal(one.rowRecall, 0.5);
+});
+
+// ── rasterization geometry (crop-px ↔ image-px round trip) ───────────────────
+
+test("renderDims scales the rect by zoom", () => {
+  const g: RenderGeometry = { rect: { x0: 100, y0: 50, x1: 1100, y1: 550 }, zoom: 2 };
+  assert.deepEqual(renderDims(g), { width: 2000, height: 1000 });
+  assert.deepEqual(renderDims({ ...g, zoom: 1 }), { width: 1000, height: 500 });
+});
+
+test("cropBoxToWord inverts the render transform (a truth word survives a round trip)", () => {
+  const g: RenderGeometry = { rect: { x0: 2300, y0: 250, x1: 5050, y1: 2000 }, zoom: 2 };
+  // a truth word in image-px @ RENDER_SCALE (x left, y baseline, h cap height)
+  const truth: OcrWord = { str: "CPT-1", x: 2986, y: 469, w: 48, h: 17 };
+  // forward: image-px → crop-px (what a renderer + engine would report)
+  const box = {
+    x0: (truth.x - g.rect.x0) * g.zoom,
+    y0: (truth.y - truth.h - g.rect.y0) * g.zoom, // box top = baseline − capheight
+    x1: (truth.x + truth.w - g.rect.x0) * g.zoom,
+    y1: (truth.y - g.rect.y0) * g.zoom,           // box bottom = baseline
+  };
+  const back = cropBoxToWord(truth.str, box, g);
+  assert.equal(back.str, "CPT-1");
+  for (const k of ["x", "y", "w", "h"] as const) {
+    assert.ok(Math.abs(back[k] - truth[k]) < 1e-6, `${k}: ${back[k]} vs ${truth[k]}`);
+  }
+});
+
+test("cropBoxToWord carries confidence when given", () => {
+  const g: RenderGeometry = { rect: { x0: 0, y0: 0, x1: 100, y1: 100 }, zoom: 1 };
+  assert.equal(cropBoxToWord("X", { x0: 0, y0: 0, x1: 10, y1: 10 }, g, 0.9).confidence, 0.9);
+  assert.equal(cropBoxToWord("X", { x0: 0, y0: 0, x1: 10, y1: 10 }, g).confidence, undefined);
 });
 
 // ── the noise oracle ─────────────────────────────────────────────────────────

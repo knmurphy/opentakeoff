@@ -127,6 +127,65 @@ into lost rows** up to ~8% CER, so an off-the-shelf engine in the 1–5% range
 should now yield a nearly complete row set, with residual errors landing as
 editable field typos rather than missing line items.
 
+## Experiment 3 — the off-the-shelf engine ceiling
+
+Where Experiment 1 fed the parser synthetic noise, Experiment 3 feeds it a REAL
+engine's output on the REAL rasterized region, swept across render DPI. Same
+scoring functions, so the numbers are comparable. The engines are opt-in dev
+tooling (not committed — models download to `~/.cache` on first use):
+
+```bash
+cd web
+npm i -D tesseract.js ppu-paddle-ocr
+node --import tsx scripts/schedule-ocr-engine-benchmark.mjs --dpi 144,216,288 --json out.json
+```
+
+The plumbing: `scripts/lib/renderRegion.mjs` rasterizes a fixture rect at a
+given DPI (the browser worker will do the same with OffscreenCanvas);
+`src/lib/ocr/raster.ts` is the pure, tested map from an engine's crop-pixel
+boxes back to the `{str,x,y,h}` space the parser and ground-truth share; each
+engine is an adapter under `scripts/lib/` emitting `OcrWord[]`.
+
+**Two engines, on the demo material schedule (Node, PP-OCRv5 mobile / tesseract
+PSM 3):**
+
+| engine | DPI | det. recall (word) | det. prec | matched CER | row recall | field acc | perfect | time |
+|---|---|---|---|---|---|---|---|---|
+| tesseract (floor) | 144 | 48.6% | 24.9% | 7.2% | **96.4%** | 79.6% | 9/28 | 7.8s |
+| tesseract | 288 | 46.9% | 23.7% | 5.5% | **96.4%** | 80.9% | 10/28 | 11.3s |
+| PaddleOCR (ceiling) | 144 | 69.5% | 74.5% | **0.8%** | 78.6% | 78.0% | 3/28 | 5.1s |
+| PaddleOCR | 216 | 67.2% | 70.0% | **0.7%** | 17.9% | 93.3% | 3/28 | 6.0s |
+| PaddleOCR | 288 | 56.5% | 61.0% | **0.9%** | 92.9% | 73.7% | 3/28 | 6.7s |
+
+(Detection recall is WORD granularity; PaddleOCR emits CELL-level boxes, so its
+recall is understated by construction — read row recall for the cross-engine
+comparison.)
+
+### The finding that redirects the roadmap again
+
+**PaddleOCR reads characters ~10× more accurately than tesseract (0.8% vs 5.5–8%
+CER) — yet gets FEWER complete rows through the current parser, and erratically
+so** (row recall 17.9%–92.9% across DPI; only 3/28 perfect rows vs tesseract's
+stable 96% / 10-perfect). The bottleneck has moved. It is no longer character
+error — Experiment 1 hardened the parser against that, and PaddleOCR's CER is
+already far under budget. It is now **detection GEOMETRY**: PaddleOCR returns
+one box per *cell*, and the parser's header-anchor detection + nearest-anchor
+column banding — tuned for the text layer's *word* tokens — is fragile to how
+those cell boxes land, and that landing shifts with DPI (the 216 collapse is a
+header-anchor miss, reproducible, not noise). Tesseract "wins" row recall only
+because its word-level over-segmentation happens to feed the banding the shape
+it expects, while its terrible CER lands as editable field typos (field acc
+~80%).
+
+So the next parser work is exactly the geometry item deferred from Experiment 2
+— robust anchoring and column assignment — and it now clearly matters MORE for
+a good engine than the character-noise tolerance did. PaddleOCR is the engine
+to build on (its CER headroom is decisive and its precision is 3× tesseract's);
+the work to unlock it is in the parser's spatial model, not the recognizer.
+
+These are Node timings (~5–12 s/schedule). Browser-worker timing under the real
+single-thread-WASM / WebGPU envelope is Experiment 4.
+
 ## Roadmap (the experiment ladder)
 
 1. ~~**Oracle sweep** — measure the CER budget.~~ Done, above.
@@ -137,19 +196,27 @@ editable field typos rather than missing line items.
    word is *dropped* (not just corrupted), and fixing the remarks→SIZE
    geometry — is deferred behind engine evaluation, since dropped-word
    robustness matters less once a real engine's detection recall is known.
-3. **Off-the-shelf ceiling** — PaddleOCR (official onnxruntime-web browser
-   SDK) and `ocrs` (Rust→WASM, RTen) as `OcrEngine` adapters over rasterized
-   fixture regions, scored by this same harness; include a DPI sweep
-   (144 → 288 → 384) — `rasterizeRegion` never upscales today and small
-   drafting text at 144 DPI is the likeliest failure mode.
-4. **Browser deployability** — the winning engine inside a worker under the
-   real constraint envelope (single-thread WASM SIMD / WebGPU), measuring
-   seconds-per-schedule, memory, bundle + model weight.
-5. **Only if a measured gap remains: fine-tune** a recognition model on
+3. ~~**Off-the-shelf ceiling** — real engines over rasterized regions, DPI
+   swept, scored by this harness.~~ Done, above: tesseract (floor) and
+   PaddleOCR/PP-OCRv5 (ceiling). Result: PaddleOCR's CER is decisive (0.8%) but
+   the *parser's spatial model* now bounds row recall, not the recognizer.
+   (`ocrs` / Rust→WASM remains a future adapter — the harness takes any engine
+   that emits `OcrWord[]`.)
+4. **Parser spatial hardening (new critical path)** — robust header anchoring
+   and column assignment for CELL-level detections, so PaddleOCR's near-perfect
+   text converts to complete rows; re-run Experiment 3 as the before/after.
+   This subsumes the old remarks→SIZE geometry item.
+5. **Browser deployability** — PaddleOCR inside a worker under the real
+   constraint envelope (single-thread WASM SIMD / WebGPU, no COOP/COEP),
+   measuring seconds-per-schedule, memory, bundle + model weight. ppu-paddle-ocr
+   ships for exactly this; the Node timings above (~5–12 s) are a loose upper
+   bound.
+6. **Only if a measured gap remains: fine-tune** a recognition model on
    synthetic schedule cells (mixed fonts/casings/sizes/degradations) and score
-   the delta on held-out real scans.
+   the delta on held-out real scans. Experiment 3 suggests this is unlikely to
+   be needed for text accuracy — PaddleOCR's CER is already excellent.
 
-The corpus needs breadth before step 3 means much: more vector schedules
-(every one is free ground truth via the fixture script) and a handful of
-genuinely scanned sets with hand-labeled golden rows — the only irreplaceable
-asset in this plan.
+The corpus needs breadth to generalize these single-schedule numbers: more
+vector schedules (every one is free ground truth via the fixture script) and a
+handful of genuinely scanned sets with hand-labeled golden rows — the only
+irreplaceable asset in this plan.
