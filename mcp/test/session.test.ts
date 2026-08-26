@@ -355,3 +355,36 @@ test("editCondition: round-trips tile_setup (opt in, patch, opt out, undo)", asy
   assert.equal(c.tile_setup.rotation_deg, 45);
   assert.equal(c.tile_setup.pattern, "herringbone");
 });
+
+// Task 8 (M3-M4 tile-patterning report seam) — mirrors the roll_setup →
+// report block test (tools.test.ts:1018) for tile: opt a condition into
+// tile_setup, commit a floor_area shape under it, and confirm
+// export_report's tile_goods carries the figured counts/order — the exact
+// field set tileReportRows emits (web/src/lib/tileTakeoff.js).
+test("exportReport: a tile_setup condition with a floor shape figures tile_goods", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+
+  // no tile_setup yet — the block stays empty
+  assert.deepEqual(s.exportReport().tile_goods, []);
+
+  s.editCondition("CT-1", { tile_setup: { pattern: "grid" } });
+  const rep = s.exportReport();
+  assert.equal(rep.tile_goods.length, 1);
+  const row = rep.tile_goods[0];
+  assert.deepEqual(Object.keys(row), [
+    "condition_id", "finish_tag", "multiplier", "full", "cut", "corner", "hole",
+    "kept_area_sf", "safe", "boxes", "figured", "with_margin", "grout_bags",
+    "cutsheet", "warnings",
+  ]);
+  assert.equal(row.finish_tag, "CT-1");
+  assert.ok(row.safe > 0, "the committed room figures a purchase quantity");
+  assert.ok(row.boxes > 0);
+  assert.ok(row.grout_bags >= 0);
+
+  // opting back out empties the block again
+  s.editCondition("CT-1", { tile_setup: null });
+  assert.deepEqual(s.exportReport().tile_goods, []);
+});

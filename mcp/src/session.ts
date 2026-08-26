@@ -57,6 +57,7 @@ import { applyRuleToProject, type Rule, type RuleShape, type SheetRuleData } fro
 import { sanitizeApprovals as sanitizeApprovalsJs, applyApprovalCommand as applyApprovalCommandJs } from "../../web/src/lib/approvals.js";
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
+import { computeTileTakeoff, tileReportRows } from "../../web/src/lib/tileTakeoff.js";
 import { hasTileSetup, mintTileSetup } from "../../web/src/lib/tileSetup.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
@@ -3836,6 +3837,10 @@ export class Session {
     const { dimsFor, uppFor } = this.rollInputs();
     const { byCond } = computeRollTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byCond: Map<string, unknown> };
     const rows = (conditionTotals(this.conditions, this.shapes, { seamByShape: seamLfByShape(byCond) }) as Record<string, unknown>[]).filter((r) => (r.shape_count as number) > 0);
+    // tile goods (Task 8): the same pure seam the canvas report will use —
+    // figured off the SAME dimsFor/uppFor rollInputs() already resolved, so a
+    // tile condition and a roll condition on the same sheet agree on scale.
+    const { byCond: tileByCond } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byCond: Map<string, unknown> };
     return reportJson({
       projectName,
       rows,
@@ -3844,6 +3849,7 @@ export class Session {
       markups: this.markups,
       rfis: [],
       rollGoods: rollReportRows(byCond, rows),
+      tileGoods: tileReportRows(tileByCond, rows),
     });
   }
 

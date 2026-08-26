@@ -63,7 +63,7 @@ test("tileReportRows echoes finish_tag/multiplier from rows and carries figured 
   const shape = makeShape(cond.id);
   const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
 
-  const rows = [{ finish_tag: "CT-1", condition_id: cond.id, multiplier: 1 }];
+  const rows = [{ id: cond.id, finish_tag: "CT-1", multiplier: 1 }];
   const out = tileReportRows(byCond, rows);
   assert.equal(out.length, 1);
   assert.equal(out[0].finish_tag, "CT-1");

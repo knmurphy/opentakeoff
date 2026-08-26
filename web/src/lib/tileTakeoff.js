@@ -143,11 +143,14 @@ export function tileReportRows(tileByCond, rows) {
   if (!tileByCond || !tileByCond.size || !Array.isArray(rows)) return [];
   const out = [];
   for (const r of rows) {
-    const ti = tileByCond.get(r.condition_id);
+    // rows carry the condition id under `.id` (conditionTotals' row shape —
+    // see rollReportRows, rollTakeoff.js:167,171, which this mirrors); never
+    // `.condition_id` (that key doesn't exist on a conditionTotals row).
+    const ti = tileByCond.get(r.id);
     if (!ti) continue;
     const mult = r.multiplier || 1;
     out.push({
-      condition_id: r.condition_id,
+      condition_id: r.id,
       finish_tag: r.finish_tag,
       multiplier: r.multiplier,
       full: ti.counts.full,
