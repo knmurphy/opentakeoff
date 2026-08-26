@@ -38,7 +38,8 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
-import { serializeSplitView, normalizeSplitView } from "../lib/splitView"; // clampRatio/SPLIT_MAX_TOTAL_SHEETS land with Task 2's usage (unused imports fail eslint no-unused-vars now)
+import { serializeSplitView, normalizeSplitView } from "../lib/splitView"; // SPLIT_MAX_TOTAL_SHEETS lands with Task 8's tile-pool budget
+import SplitLayout from "../components/SplitLayout.jsx";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isStitchKey, mintStitchId, sanitizeStitches, autoButt, stitchExtent, alignMembers, seamClips, mergePoints, mergeSegs, stitchAlive, stitchLayoutSig } from "../lib/stitches";
 import { isCanvasBusy } from "../lib/canvasBusy";
@@ -355,6 +356,11 @@ export default function TakeoffCanvas() {
   const [panelImgs, setPanelImgs] = useState({}); // { sheetKey: {w,h} } rendered bitmap dims per panel
   const [tf, setTf] = useState({ x: 0, y: 0, scale: 1 }); // render mirror of tfRef
   const [splitView, setSplitView] = useState(null); // null = single canvas; else { orientation, ratio, refKey }
+  // DEV-only escape hatch so Playwright/console can force a split before the
+  // real entry gesture (Task 4) exists. Removed once that gesture ships.
+  useEffect(() => {
+    if (import.meta.env.DEV) { window.__otSetSplit = setSplitView; return () => { delete window.__otSetSplit; }; }
+  }, []);
 
   const [scales, setScales] = useState({});
   const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
@@ -711,6 +717,19 @@ export default function TakeoffCanvas() {
   const profileInputRef = useRef(null);                 // hidden <input type=file> for "Import profile…" (#299)
 
   const containerRef = useRef(null);
+  // viewportEl mirrors containerRef.current into state, JUST for effects that
+  // need to re-subscribe when the node itself changes identity — e.g. wheel
+  // below, which addEventListener()s once at effect-setup and would silently
+  // go deaf on a node it no longer points to. Entering/leaving split swaps
+  // this div's parent type (bare wrapper <-> SplitLayout's pane div) at its
+  // JSX slot, so React unmounts/remounts the whole primary subtree and
+  // containerRef.current becomes a fresh node with no listener attached — a
+  // plain useRef update wouldn't tell a dependency array anything changed.
+  // Everything else here reads containerRef.current fresh per call (plain
+  // functions / React-dispatched handlers), so this is intentionally the
+  // one exception, not a wholesale ref-to-state migration.
+  const [viewportEl, setViewportEl] = useState(null);
+  const setContainerRef = useCallback((el) => { containerRef.current = el; setViewportEl(el); }, []);
   const stageRef = useRef(null);
   const panelCanvasRefs = useRef(new Map()); // sheetKey → <canvas> (base layer — small backing store, coarse pyramid placeholder)
   const pageObjsRef = useRef(new Map());     // sheetKey → pdf.js page object (getOperatorList/getTextContent only — painting moved to the tile worker pool)
@@ -1784,6 +1803,21 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [darkMode]);
 
+  // split-view mount/unmount: entering or leaving split swaps the viewport's
+  // parent element type at its slot (bare div <-> SplitLayout's pane div), so
+  // React unmounts and remounts the whole primary subtree — fresh <canvas>
+  // elements start blank (default 300x150 backing store) until repainted.
+  // Same repaint as the dark-mode toggle above; cheap, since tileCompositor
+  // caches the base bitmap and paintBase just redraws from it.
+  useEffect(() => {
+    if (status !== "ready") return;
+    for (const d of drawPanels) {
+      const cv = panelCanvasRefs.current.get(d.drawKey);
+      if (cv && d.w) getCompositor().paintBase(cv, d.drawKey, d.w, d.h, darkModeRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(splitView)]);
+
   // ── render the sheet group (a single sheet is a group of one) ──────────────
   // Two phases: (A) resolve every panel's LOGICAL dimensions — page-points ×
   // RENDER_SCALE, fixed forever, never rastered directly (see tiles.ts's
@@ -2111,7 +2145,7 @@ export default function TakeoffCanvas() {
   // panelW/takeoffsOpen: docking or resizing the Takeoffs panel changes the
   // container rect without a transform change. repaintTick: bumped by the
   // visibilitychange recovery below.
-  useEffect(() => { syncTilePanelsRef.current(); }, [tf, groupSig, status, panelW, takeoffsOpen, darkMode, repaintTick]);
+  useEffect(() => { syncTilePanelsRef.current(); }, [tf, groupSig, status, panelW, takeoffsOpen, darkMode, repaintTick, splitView]);
 
   // Primary recovery for a stalled tile fetch: a hidden tab can suspend
   // in-flight work indefinitely with no error (Chrome throttles rAF-gated
@@ -2572,7 +2606,7 @@ export default function TakeoffCanvas() {
   // carried while events keep arriving <300ms apart, so momentum tails keep
   // panning and a fast spin keeps zooming.
   useEffect(() => {
-    const el = containerRef.current; if (!el) return;
+    const el = viewportEl; if (!el) return;
     let glide = 0, gx = 0, gy = 0, raf = 0;
     let kind = "", kindUntil = 0;   // per-burst wheel-device classification
     const wheelKind = (e) => {
@@ -2626,7 +2660,7 @@ export default function TakeoffCanvas() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => { el.removeEventListener("wheel", onWheel); if (raf) cancelAnimationFrame(raf); };
-  }, [applyTf, scheduleSync, zoomAround, promoteStage]);
+  }, [applyTf, scheduleSync, zoomAround, promoteStage, viewportEl]);
 
   // Space = temporary pan (any tool)
   useEffect(() => {
@@ -7183,633 +7217,15 @@ export default function TakeoffCanvas() {
     );
   }
 
-  return (
-    // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
-    <div
-      className="app-shell"
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer?.files); }}
-      style={{ position: "relative", display: "flex", flexDirection: "column", height: "100vh" }}>
-      {/* file inputs — always mounted (drag-drop and the ⋯ import path need
-          the refs even while focus mode hides the bar) */}
-      <input name="sheet-file" ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed,.otk" multiple style={{ display: "none" }}
-        onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
-      <input name="profile-import" ref={profileInputRef} type="file" accept=".otprofile,application/json" style={{ display: "none" }}
-        onChange={(e) => { importProfileFile(e.target.files?.[0]); e.target.value = ""; }} />
-      <input name="takeoff-import" ref={importInputRef} type="file" accept=".json,application/json" style={{ display: "none" }}
-        onChange={(e) => { importTakeoffFile(e.target.files?.[0]); e.target.value = ""; }} />
-      {/* THE top bar — one row (the two decks of issue #61 merged once the
-          tool rail absorbed the draw menus). Project verbs left, work verbs
-          center, Report + the ⋯ overflow (guide, appearance — chrome theme and
-          drawing style —, schedule import, cloud moves) right. Cluster captions stay — they're the drafting
-          language. The row never wraps; rarely-used controls live in ⋯ so
-          nothing shifts position mid-work. Focus mode (F) hides the whole
-          bar — the rail and status bar carry the essentials.
-          Un-wrapped is not the same as unreachable, though: this row is
-          ~1550px of fixed-width controls, so on a 1440-class laptop Report and
-          the Action menu render past the right edge. The document can
-          technically scroll to them, but the canvas claims wheel and trackpad
-          gestures for zoom/pan, so that scroll never arrives and the app reads
-          as "Export is unclickable". The row therefore SCROLLS itself; its
-          menus open position:fixed off the trigger rect (ToolMenu) so this
-          overflow cannot clip them. */}
-      {!focusMode && (
-      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "16px 14px 6px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", whiteSpace: "nowrap", overflowX: "auto", overflowY: "visible", scrollbarWidth: "thin", overscrollBehaviorX: "contain" }}>
-        <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
-        <button type="button" onClick={() => fileInputRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set (or just drag them onto the canvas)"
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="plus" size={14} />Open</button>
-        <button type="button" onClick={() => setView("gallery")}
-          title={`Plan set — the visual gallery; open one or several sheets (G)${sheetGroup.length ? ` · ${sheetGroup.length} side-by-side now` : ""}`}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${sheetGroup.length ? "var(--cobalt)" : "var(--ink-faint)"}`, background: sheetGroup.length ? "var(--cobalt)" : "transparent", color: sheetGroup.length ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-          <Icon name="sheets" size={15} />Sheets
-        </button>
-        {sheets.length > 0 && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!!sheetGroup.length || page <= 1} title="Previous sheet"
-              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page <= 1) ? 0.4 : 1 }}><Icon name="chevronLeft" size={12} /></button>
-            <ToolMenu
-              title="Sheet — the sheets in this set, files, grouping, and the gallery"
-              onOpenChange={onMenuDepth}
-              face={<span style={{ display: "inline-block", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sheetChipLabel}</span>}
-              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 400, padding: "6px 8px" }}
-              menuStyle={{ minWidth: 260, maxHeight: "min(480px, 60vh)", overflowY: "auto" }}
-              items={sheetMenuItems}
-            />
-            <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={!!sheetGroup.length || page >= pageCount} title="Next sheet"
-              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page >= pageCount) ? 0.4 : 1 }}><Icon name="chevronRight" size={12} /></button>
-          </span>
-        )}
-        {vRule}
-        {cluster("Edit", <>
-          <ToolMenu
-            title="Edit takeoffs"
-            onOpenChange={onMenuDepth}
-            face={<span>Edit</span>}
-            items={[
-              { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
-              { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
-              { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
-              "divider",
-              { id: "flipH", label: "Flip Horizontal", disabled: !selectedId, onSelect: () => flipSelected("h") },
-              { id: "flipV", label: "Flip Vertical", disabled: !selectedId, onSelect: () => flipSelected("v") },
-              { id: "tidy", label: "Tidy shape", disabled: !selectedId, onSelect: tidySelected },
-              "divider",
-              { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
-              { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: dropLastPoint },
-              { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
-              { id: "redo", label: "Redo", shortcut: "⇧⌘Z", onSelect: redoShapeCommand },
-              "divider",
-              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
-            ]}
-          />
-        </>)}
-        {vRule}
-        {cluster("Aids", <>
-          {panels.length === 1 && isStitchKey(panels[0].key) && (
-            <button onClick={() => setTool((t) => (t === "stitch-align" ? "select" : "stitch-align"))}
-              title="Align the match line — click a point near the joint, then the SAME point where the other sheet draws it; that sheet slides so the two coincide. Do this before tracing (a stitch with takeoffs on it won't re-align)."
-              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "stitch-align" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "stitch-align" ? "var(--cobalt)" : "transparent", color: tool === "stitch-align" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-              <Icon name="calibrate" size={15} />Align
-            </button>
-          )}
-          <button onClick={() => setTool((t) => (t === "zone" ? "select" : "zone"))}
-            title="Zone check — trace a region (an apartment, a wing) to read every condition's quantities inside it, materials included. Nothing is saved; the outline clears when you leave the tool."
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "zone" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "zone" ? "var(--cobalt)" : "transparent", color: tool === "zone" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-            <Icon name="zone" size={15} />Zone
-          </button>
-          <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-            <Icon name="snap" size={15} />Snap
-          </button>
-          <button onClick={() => setAngleOn((v) => !v)} title="45°/90° angle guides — the next segment locks to the 45° family as you draw (hold ⇧ to force the lock at any angle)"
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${angleOn ? "var(--cobalt)" : "var(--ink-faint)"}`, background: angleOn ? "var(--cobalt)" : "transparent", color: angleOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
-            <Icon name="angle" size={15} />45°
-          </button>
-        </>)}
-        {/* The caption always shows the ACTIVE label (+ the cobalt highlight keyed
-            on it) so what a new trace will get is never hidden — even in Select
-            mode, where the dropdown VALUE instead shows the selected shape's label
-            so changing it reliably re-labels that shape (a value-always-active
-            select couldn't reassign to the already-active label — onChange wouldn't fire). */}
-        {shapeLabels.length > 0 && cluster(
-          tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape` : (activeLabel ? `Label · ${activeLabel}` : "Label"),
-          <select
-            value={tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
-            onChange={(e) => activateLabel(e.target.value || null)}
-            title="Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."
-            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel ? "var(--cobalt)" : "transparent", color: activeLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
-            <option value="">No label</option>
-            {shapeLabels.map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-        )}
-        {/* Typed voice command (RFC #59 slice 2): the same grammar push-to-talk
-            will feed — a keyboard command line meanwhile, and the accessibility
-            path. Focus suppresses canvas shortcuts via the existing INPUT guards.
-            Deixis: focus marks the utterance's start — "this room" then needs an
-            aim placed AFTER it (park the pointer on the room, type, Enter). */}
-        {cluster("Command",
-          <input
-            type="text"
-            placeholder="cpt 1 · waste 7 · this room"
-            title={'Command line (RFC #59): a condition tag ("CPT-1", "carpet one", "tile 2 waste 5"), "waste 7", "label Phase 1", "clear label", "author <your name>" (new marks sign it — the report can group by author), or "note …" — Enter runs it through the same actions the buttons use. End with "this room" / "here" while the pointer rests on a room to trace and commit it there ("carpet one, this room"). Push-to-talk dictation will feed this box.'}
-            onFocus={() => { voiceAimMarkRef.current = aimSeqRef.current; }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              const v = e.currentTarget.value.trim();
-              if (!v) return;
-              const el = e.currentTarget;   // capture: currentTarget nulls after dispatch, and deixis outcomes can resolve async (raster)
-              // router confirm (RFC #59 slice 5): the rejected text is still in
-              // the box (only success clears it) — a second ⏎ on the SAME text
-              // confirms the pending offer instead of re-rejecting in a loop
-              if (pendingAgentOfferRef.current && v === pendingAgentOfferRef.current.transcript) {
-                agentOfferFnsRef.current.confirm();
-                el.value = "";
-                return;
-              }
-              Promise.resolve(onVoiceCommand(v)).then((ok) => { if (ok) el.value = ""; });
-            }}
-            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", width: 150 }}
-          />
-        )}
-        {/* Push-to-talk (RFC #59 recognizer): hold the button (or M) to dictate
-            into the same grammar the Command box runs. Hidden entirely where
-            capture is unsupported — graceful feature-absence, never broken. */}
-        {captureSupported() && cluster("Voice",
-          <button
-            title={'Hold to talk (or hold M anywhere on the canvas): speak a command — "carpet one, waste seven", "label phase two", "note …", or end with "this room" to trace at the cursor. Release to run; Esc discards. Audio is processed on-device and never leaves the browser.'}
-            onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); voiceHoldRef.current = true; voiceFnsRef.current.start(); }}
-            onPointerUp={() => { if (voiceHoldRef.current) { voiceHoldRef.current = false; voiceFnsRef.current.end(true); } }}
-            onPointerCancel={() => { if (voiceHoldRef.current) { voiceHoldRef.current = false; voiceFnsRef.current.end(false); } }}
-            style={{ padding: "5px 10px", border: `1px solid ${voiceChip?.tone === "live" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: voiceChip?.tone === "live" ? "var(--cobalt)" : "transparent", color: voiceChip?.tone === "live" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, lineHeight: 1 }}>
-            {voiceChip?.tone === "live" ? "● talking" : "talk · M"}
-          </button>
-        )}
-        <div style={{ flex: 1 }} />
-        {cluster(`Scale — ${labelFor(focusPanel)}`,
-          <>
-            <button onClick={() => setUnits((u) => (u === "metric" ? "imperial" : "metric"))}
-              title={units === "metric" ? "Metric display (m² / m) — click for imperial. Calibrate in meters; 1:50-style scales in the list. Display only — stored takeoffs never change." : "Imperial display (SF / LF) — click for metric (m² / m, calibrate in meters, 1:50-style scales). Display only — stored takeoffs never change."}
-              style={{ padding: "6px 10px", border: `1px solid ${units === "metric" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: units === "metric" ? "var(--cobalt)" : "transparent", color: units === "metric" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, lineHeight: 1 }}>
-              {units === "metric" ? "m" : "ft"}
-            </button>
-            <ToolMenu
-              title={scaleTitle}
-              onOpenChange={onScaleMenuDepth}
-              face={<span>{scaleFace}</span>}
-              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 11.5, ...scaleFaceStyle }}
-              menuStyle={{ minWidth: 250 }}
-              items={scaleItems}
-            />
-          </>
-        )}
-        {cluster("Action",
-          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 150 }}>
-            {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight" || tool === "dimension") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : tool === "dimension" ? "other end" : "opposite corner"}…</span>}
-            {finishOk && (
-              <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
-            )}
-            {proposal?.regions.length > 0 && (
-              <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
-            )}
-          </span>
-        )}
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
-          style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
-        {/* ⋯ overflow — rarely-used project controls, so the row never wraps
-            and nothing shifts position mid-work (issue #61's contract). */}
-        <ToolMenu
-          title="More — guide, appearance, schedule import, project moves"
-          onOpenChange={onMenuDepth}
-          face={<span style={{ fontWeight: 700, letterSpacing: "0.08em" }}>⋯</span>}
-          items={[
-            { id: "guide", label: "How OpenTakeoff works", shortcut: "?", onSelect: () => setGuideOpen(true) },
-            { id: "theme", label: theme === "dark" ? "Light chrome" : "Dark chrome", onSelect: toggleTheme },
-            { section: "Drawing style" },
-            { id: "drawstyle", custom: drawStyleRow },
-            { id: "draftoutline", custom: draftOutlineRow },
-            "divider",
-            { id: "schedule", icon: "rectTool", label: "Import from schedule", active: tool === "schedule", onSelect: () => { setScheduleAnchor(null); setTool((t) => (t === "schedule" ? "select" : "schedule")); } },
-            ...(cloudMode ? [
-              "divider",
-              { id: "closeproj", label: "Close project", onSelect: closeProject },
-              ...(browseProjects ? [{ id: "projects", label: "Team projects", onSelect: browseProjects }] : []),
-            ] : []),
-            ...(!cloudMode && googleUser && isGoogleConfigured() && projectHomeFolderId() ? [
-              "divider",
-              { id: "browse", label: "Browse team projects", onSelect: () => navigate("/projects") },
-            ] : []),
-          ]}
-        />
-        <PresenceChip bridge={store.syncBridge} />
-        <AccountChip note={cloudMode ? "Synced to Google Drive" : "Local workspace"} onOpenChange={onMenuDepth} />
-      </div>
-      )}
-
-      {/* quick-access condition palette — its own slim band under the toolbar
-          (like the sheet-tabs / conditions-strip rows), not crammed into the
-          already-wrapping top bar. A curated ≤9 pinned conditions for one-click
-          activation without opening the panel: drag a condition here from the
-          Takeoffs panel (or the strip) to pin it, or use a row's pushpin. Each
-          chip carries its 1–9 hotkey badge (cobalt); single-click activates
-          (reassigning a selected shape, like every activation surface),
-          double-click opens the docked panel scrolled to that row, the pushpin
-          unpins, and dragging one chip onto another reorders (which renumbers
-          the hotkeys). Below the chips, the active condition's appearance editor
-          — the same one the docked panel row renders — so line/fill/hatch/height
-          are editable without opening the sidebar. Shown once there's a
-          condition to pin, so the drop zone is discoverable. */}
-      {!focusMode && conditions.length > 0 && (
-        <div
-          onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; } }}
-          onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(CONDITION_DND_MIME); if (id) pinToPalette(id); }}
-          style={{ padding: "5px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <span title="Quick-access conditions — drag a condition here (or use a row's pushpin) to pin it, up to 9. Press 1–9 to activate by this order; click a chip to activate; double-click to open the panel."
-              style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--ink-muted)" }}>Conditions</span>
-            {paletteConds.length === 0 ? (
-              <span style={{ fontSize: 11.5, color: "var(--ink-muted)", fontStyle: "italic", padding: "3px 8px", border: "1px dashed var(--ink-faint)" }}>drag conditions here (or pin a row) for 1-9 one-click access</span>
-            ) : paletteConds.map((c) => {
-              const on = c.id === activeCond;
-              const reassign = tool === "select" && selectedId;
-              const idx = palette.indexOf(c.id);   // palette position → the 1–9 hotkey number
-              return (
-                <span key={c.id} style={{ display: "inline-flex", alignItems: "center" }}
-                  onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"; } }}
-                  onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const dragId = e.dataTransfer.getData(CONDITION_DND_MIME); if (dragId) { if (palette.includes(dragId)) movePalette(dragId, idx); else pinToPalette(dragId); } }}>
-                  <button type="button" draggable
-                    onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copyMove"; }}
-                    onClick={() => activateCondition(c.id)}
-                    onDoubleClick={() => openConditionInPanel(c.id)}
-                    title={reassign ? `Reassign the selected takeoff to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
-                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 5px", border: on ? `2px solid ${c.color}` : (reassign ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5, lineHeight: 1 }}>
-                    {idx < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px" }}>{idx + 1}</span>}
-                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
-                  </button>
-                  <button type="button" onClick={() => unpinFromPalette(c.id)} title={`Unpin ${c.finish_tag} from the palette`}
-                    style={{ border: "none", background: "none", cursor: "pointer", color: "var(--cobalt)", padding: "0 3px", lineHeight: 0, display: "inline-flex" }}>
-                    <Icon name="pin" size={12} />
-                  </button>
-                </span>
-              );
-            })}
-            {paletteConds.length >= PALETTE_MAX && (
-              <span style={{ fontSize: 10.5, color: "var(--ink-muted)", fontStyle: "italic" }}>full ({PALETTE_MAX})</span>
-            )}
-            {/* add a condition without opening the (now-collapsed) sidebar */}
-            <button type="button" onClick={addCondition} title="Add a new condition"
-              style={{ padding: "3px 9px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--ink-muted)" }}>+ condition</button>
-          </div>
-          {/* the active condition's appearance editor, restored to the top bar —
-              same component the docked panel row renders (one source of truth) */}
-          {aCond && (
-            <div style={{ marginTop: 5, paddingTop: 5, borderTop: "1px solid var(--ink-faint)" }}>
-              <ConditionAppearanceEditor cond={aCond} onUpdateCond={updateCond} onSetCondParam={setCondParam} onAssignAttr={assignAttr} conditionColumns={conditionColumns} layout="row" units={units} />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* open-sheet tabs — what you opened from the gallery; click to view,
-          ⊞ to side-by-side, ✕ to close; the dropdown lists every open sheet */}
-      {!focusMode && openTabs.length > 0 && (
-        <div style={{ display: "flex", gap: 5, alignItems: "center", padding: "5px 14px", flexWrap: openTabs.length > MANY_TABS ? "nowrap" : "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", minWidth: 0 }}>
-          <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--ink-muted)", flexShrink: 0 }}>Sheets</span>
-          {openTabs.length > MANY_TABS && (
-            <button type="button" onClick={() => scrollTabStrip(-1)} title="Scroll sheets left" aria-label="Scroll sheets left" style={{ flexShrink: 0, padding: "4px 5px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", display: "inline-flex" }}><Icon name="chevronLeft" size={12} /></button>
-          )}
-          <div ref={tabStripRef} data-sheet-tab-strip style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: openTabs.length > MANY_TABS ? "nowrap" : "wrap", overflowX: openTabs.length > MANY_TABS ? "auto" : "visible", minWidth: 0, flex: openTabs.length > MANY_TABS ? 1 : "0 1 auto", scrollbarWidth: "none", overscrollBehaviorX: "contain" }}>
-          {openTabs.map((k) => {
-            const inGroup = sheetGroup.includes(k);
-            const on = sheetGroup.length ? inGroup : k === sheetKey;
-            const lbl = tabLabel(k);
-            return (
-              <span key={k} data-sheet-tab={on ? "active" : "idle"} style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, border: "1px solid var(--ink-faint)", borderBottom: on ? "2px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: on ? "var(--paper-cream)" : "transparent", padding: "3px 6px 2px 9px", maxWidth: 190 }}>
-                <button onClick={() => goToSheet(k)} title={k} style={{ border: "none", background: "none", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 11.5, color: "var(--ink)", fontFamily: "var(--f-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140, padding: 0 }}>{lbl}</button>
-                <button onClick={() => toggleInGroup(k)} title={inGroup ? "Remove from side-by-side" : "Side-by-side with the current sheet"} style={{ border: "none", background: "none", cursor: "pointer", color: inGroup ? "var(--cobalt)" : "var(--ink-faint)", padding: 0, display: "inline-flex" }}><Icon name="sideBySide" size={11} /></button>
-                <button onClick={() => closeTab(k)} title="Close tab" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0, display: "inline-flex" }}><Icon name="close" size={10} /></button>
-              </span>
-            );
-          })}
-          </div>
-          {openTabs.length > MANY_TABS && (
-            <button type="button" onClick={() => scrollTabStrip(1)} title="Scroll sheets right" aria-label="Scroll sheets right" style={{ flexShrink: 0, padding: "4px 5px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", display: "inline-flex" }}><Icon name="chevronRight" size={12} /></button>
-          )}
-          {openTabs.length > 1 && openTabs.length <= MANY_TABS && (
-            <ToolMenu
-              title="Jump to an open sheet"
-              onOpenChange={onMenuDepth}
-              face={<span style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>{openTabs.length} open</span>}
-              items={openTabs.map((k) => ({ id: k, icon: "document", label: tabLabel(k), active: sheetGroup.length ? sheetGroup.includes(k) : k === sheetKey, onSelect: () => goToSheet(k) }))}
-            />
-          )}
-        </div>
-      )}
-
-      {/* compact conditions strip — OPTIONAL small-project mode. The docked
-          Takeoffs panel is the primary conditions surface; the strip renders
-          the same state (activate/reassign, hotkey badges, + condition) for
-          users who want max panel-collapse and one-click switching. Toggled
-          from the panel header, persisted with the panel prefs. */}
-      {!focusMode && panelPrefs.strip && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
-          <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-muted)" }}>Conditions</span>
-          {conditions.map((c, i) => {
-            const on = c.id === activeCond;
-            // the 1–9 badge follows the same rule as the hotkeys: palette order
-            // when curated, condition order (fallback) when nothing is pinned
-            const pinnedPal = palette.length > 0;
-            const hIdx = pinnedPal ? palette.indexOf(c.id) : i;
-            const hot = hIdx >= 0 && hIdx < 9;
-            return (
-              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
-                {hot && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinnedPal ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinnedPal ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px" }}>{hIdx + 1}</span>}
-                <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
-              </button>
-            );
-          })}
-          <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
-        </div>
-      )}
-
-      {/* calibration prompt */}
-      {tool === "calibrate" && (
-        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
-          {calib.length < 2 ? <span>Custom scale: click two points along a known dimension ({calib.length}/2). Tip: use the longest dimension. (Or just pick a standard scale above.)</span> : (
-            <span>Real length:{" "}
-              <input name="calibration-length" type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder={units === "metric" ? "meters" : "feet"} autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
-              <button onClick={applyCalibration} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Apply</button>
-              <button onClick={() => setCalib([])} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* check-a-dimension prompt — read-only twin of calibrate: measure a printed
-          dimension at the current scale, compare with what the drawing says */}
-      {tool === "check" && (
-        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
-          {check.length < 2 ? (
-            <span>Check a dimension: click both ends of a printed dimension ({check.length}/2). The measured length shows here — compare it with what the drawing says.</span>
-          ) : checkCross ? (
-            <span style={{ color: "var(--c-danger)" }}>Check on one sheet — those two clicks landed on different sheets. <button onClick={() => { setCheck([]); setCheckStated(""); }} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button></span>
-          ) : !checkUpp ? (
-            <span style={{ color: "var(--c-danger)" }}>No scale set for {labelFor(checkPanel)} — pick a standard scale or calibrate first, then check it here.</span>
-          ) : checkPx <= 0 ? (
-            <span style={{ color: "var(--c-danger)" }}>Those two clicks landed on the same point — click the two <b>ends</b> of a printed dimension.</span>
-          ) : (
-            <span>
-              measures <b style={{ fontFamily: "var(--f-mono)" }}>{fmtCheckLen(checkFeet, units)}</b> at {stdValue || "custom scale"} · drawing says{" "}
-              <input name="check-stated-length" value={checkStated} onChange={(e) => setCheckStated(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} placeholder={units === "metric" ? "meters" : `feet (12'6, 6" ok)`} autoFocus style={{ width: 100, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
-              {checkErrPct != null && (() => {
-                // checkVerdict grades the ROUNDED value the chip displays (and
-                // normalizes -0), so color and number can never contradict —
-                // see units.ts for the ≤1/≤5 tie-break rationale
-                const v = checkVerdict(checkErrPct);
-                const pct = `${v.shown >= 0 ? "+" : ""}${v.shown.toFixed(1)}%`;
-                return (
-                  <b style={{ marginLeft: 8, color: v.grade === "match" ? "var(--c-positive)" : v.grade === "close" ? "var(--c-warning)" : "var(--c-danger)" }}>
-                    {v.grade === "match" ? `matches — scale checks out (${pct})`
-                      : v.grade === "close" ? `off by ${pct} — re-check or recalibrate`
-                      : `off by ${pct} — wrong scale; recalibrate`}
-                  </b>
-                );
-              })()}
-              {checkStatedFeet > 0 && (
-                <button onClick={recalibrateFromCheck} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Recalibrate to this</button>
-              )}
-              <button onClick={() => { setCheck([]); setCheckStated(""); }} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* canvas + issue desk */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0, position: "relative" /* anchors the narrow-screen panel overlay */ }}>
-       {/* tool rail — machined faces grouped by MCP module (the concept shell).
-           Individual tiles replace deck 2's Measure/Cut Out menus; Markup keeps
-           its variety flyout on one tile (five markup kinds don't earn five
-           faces). Lives in the canvas row so docked panels + canvas reflow
-           beside it; survives focus mode — it IS the tool access. */}
-       {view === "canvas" && (
-       <nav role="toolbar" aria-label="Tools" style={{ width: "var(--rail-w)", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-1)", paddingTop: "var(--sp-2)", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflowY: "auto", overflowX: "visible" }}>
-         {railLabel("SEL")}
-         {railTile("select", "select", "Select — pick a takeoff, drag points; drag open canvas to pan", "V")}
-         {railLabel("MEAS")}
-         {MEASURE_TOOLS.map((t) => railTile(t.id, t.icon, t.label, t.shortcut))}
-         {railLabel("CUT")}
-         {CUT_TOOLS.map((t) => railTile(t.id, t.icon, t.label, t.shortcut, null, { tint: "var(--c-danger)" }))}
-         {railLabel("MARK")}
-         <span ref={(el) => { if (el) markTileTopRef.current = el.getBoundingClientRect().top; }} style={{ position: "relative", display: "inline-flex" }}>
-           <ToolMenu
-             title="Markup — annotations, not measurements"
-             active={MARKUP_IDS.includes(tool)}
-             onOpenChange={onMenuDepth}
-             flyout="right"
-             face={<Icon name="markup" size={17} />}
-             items={[
-               { section: "Markup — notes on the plan, never measured" },
-               ...MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } })),
-             ]}
-           />
-           {/* highlighter style popover — fixed beside the rail while armed
-               (fixed, not absolute: the rail's scroll box would clip it) */}
-           {tool === "highlighter" && (
-             <div style={{ position: "fixed", left: "calc(var(--rail-w) + 8px)", top: markTileTopRef.current || 200, zIndex: Z.popover, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "var(--shadow-pop)", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 7 }}>
-               <div style={{ display: "flex", gap: 6 }} title="Ink">
-                 {HL_INKS.map((c) => (
-                   <button key={c} onClick={() => setHlStyle((st) => ({ ...st, color: c }))}
-                     style={{ width: 16, height: 16, padding: 0, background: c, border: hlStyle.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />
-                 ))}
-               </div>
-               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                 {HL_SIZES.map(([lbl, px]) => (
-                   <button key={lbl} onClick={() => setHlStyle((st) => ({ ...st, size: px }))} title={`${lbl === "F" ? "Fine" : lbl === "M" ? "Medium" : "Broad"} tip`}
-                     style={{ width: 22, height: 20, padding: 0, fontFamily: "var(--f-mono)", fontSize: 10, cursor: "pointer", border: hlStyle.size === px ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: hlStyle.size === px ? "var(--ink)" : "transparent", color: hlStyle.size === px ? "var(--paper-bright)" : "var(--ink)" }}>{lbl}</button>
-                 ))}
-                 <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)" }} />
-                 {[["chisel", "M4 16 L14 6 L18 10 L8 20 Z"], ["round", "M5 17 Q12 3 19 13"]].map(([tip, d]) => (
-                   <button key={tip} onClick={() => setHlStyle((st) => ({ ...st, tip }))} title={`${tip} tip`}
-                     style={{ width: 24, height: 20, padding: 1, cursor: "pointer", border: hlStyle.tip === tip ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: "transparent" }}>
-                     <svg viewBox="0 0 24 24" width="18" height="14">{tip === "chisel"
-                       ? <path d={d} fill="currentColor" stroke="none" />
-                       : <path d={d} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />}</svg>
-                   </button>
-                 ))}
-               </div>
-             </div>
-           )}
-         </span>
-         {/* Approval stamp — ink over pencil. Human-only by design: this tile
-             is the ONLY way an estimator seal is minted (no MCP tool, no agent
-             path), so the mark means a person looked. */}
-         {railTile("approve", "approve", "Approval stamp — the estimator's ink. Click a committed takeoff to approve it, or empty plan to approve the sheet; click a seal to lift it. ⌘Z undoes. Human-only.", null,
-           () => setTool((t) => (t === "approve" ? "select" : "approve")), { tint: tool === "approve" ? "var(--c-positive)" : undefined, armed: tool === "approve" })}
-         {railLabel("CAL")}
-         {railTile("calibrate", "calibrate", "Calibrate — click two points of a known dimension", null)}
-       </nav>
-       )}
-       {/* docked LEFT panel — one of Markups/Stamps/RFIs at a time. Reflows the
-           canvas (a flex sibling), mirroring the docked Takeoffs panel on the right. */}
-       {leftTab && (
-         <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflow: "hidden", minHeight: 0 }}>
-           {/* tab strip */}
-           <div style={{ display: "flex", alignItems: "stretch", background: "var(--cobalt)", color: "var(--accent-contrast)" }}>
-             {[{ id: "markup", label: "Markups", n: markupCount }, { id: "stamp", label: "Stamps", n: stampLib.stamps.length }, { id: "rfi", label: "RFIs", n: rfis.length }].map((t) => (
-               <button key={t.id} onClick={() => setLeftTab(t.id)} title={t.label}
-                 style={{ flex: 1, padding: "9px 6px", border: "none", borderBottom: leftTab === t.id ? "2px solid var(--accent-contrast)" : "2px solid transparent", background: leftTab === t.id ? "rgba(255,255,255,.18)" : "transparent", color: "var(--accent-contrast)", cursor: "pointer", fontWeight: leftTab === t.id ? 700 : 500, fontSize: 12 }}>
-                 {t.label}{t.n ? ` · ${t.n}` : ""}
-               </button>
-             ))}
-             <button onClick={() => setLeftTab(null)} title="Close panel" style={{ padding: "0 12px", border: "none", background: "transparent", color: "var(--accent-contrast)", fontSize: 16, cursor: "pointer" }}>×</button>
-           </div>
-           {/* body of the active tab */}
-           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-             {leftTab === "markup" && (
-               <div>
-                 {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
-                     (can't select/delete/fly-to an invisible markup); orthogonal to the
-                     marked-set export, which still includes markups. */}
-                 <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
-                   <button
-                     onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
-                     title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
-                     style={{ background: "transparent", border: "1px solid var(--ink-faint)", color: "var(--ink)", fontSize: 11, cursor: "pointer", padding: "2px 7px" }}>
-                     {showMarkups ? "Hide layer" : "Show layer"}
-                   </button>
-                 </div>
-                 <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
-                   Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, <b>T Text</b>, or <b>⟷ Dimension</b> above, then click the plan to annotate it.
-                 </div>
-                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
-                   <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
-                 )}
-                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
-                   <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
-                     <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                       <span style={{ fontSize: 10, fontWeight: 700, color: "var(--cobalt)", textTransform: "uppercase" }}>{m.type}</span>
-                       {/* inline edit — the panel's fallback for the canvas overlay, since a
-                           markup here may be off-screen or on another sheet (no click point).
-                           Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
-                       {panelEditId === m.id ? (
-                         <input name="markup-text" autoComplete="off" autoFocus defaultValue={m.text || ""}
-                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
-                           onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
-                           style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid var(--cobalt)", borderRadius: 0, outline: "none" }} />
-                       ) : (
-                         <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : ([m.type === "dimension" && Number(m.len_ft) > 0 ? dimLabel(m.len_ft) : "", m.text].filter(Boolean).join(" · ") || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
-                       )}
-                       {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
-                       <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--c-danger)" }}>🗑</button>
-                     </div>
-                     {/* appearance — per-markup color (reuse PALETTE) + line style; both
-                         additive: unset color falls back to the cobalt(linked)/amber default,
-                         unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
-                     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
-                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
-                       <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
-                       {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
-                       <select name="markup-line-style" value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
-                         {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
-                       </select>
-                       {/* line weight — a multiplier over the element's base stroke width (default
-                           ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
-                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
-                       <select name="markup-weight" value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
-                         {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
-                       </select>
-                       {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
-                       {m.type === "cloud" && (
-                         <>
-                           <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
-                           <input name="markup-rev" type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
-                             onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
-                             title="Revision number for the △ delta (blank = none)"
-                             style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
-                         </>
-                       )}
-                     </div>
-                     {/* Condition link — which scope this annotation is ABOUT.
-                         Same one-to-many shape as the RFI link below it. */}
-                     {(() => {
-                       const lc = m.condition_id ? condById[m.condition_id] : null;
-                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
-                       return (
-                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
-                           {lc ? (
-                             <>
-                               <span title={`Annotation is about ${lc.finish_tag}`}
-                                 style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700 }}>
-                                 <span style={{ width: 9, height: 9, background: lc.color, border: "1px solid var(--ink-faint)" }} />
-                                 {lc.finish_tag}
-                               </span>
-                               <button onClick={() => { setActiveCond(lc.id); }} style={{ ...ctrl, color: "var(--cobalt)" }} title="Make this the active condition">Select</button>
-                               <button onClick={() => unlinkCondition(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Detach this annotation from its condition">Detach</button>
-                             </>
-                           ) : conditions.length > 0 && (
-                             <select name="link-condition" value="" onChange={(e) => { if (e.target.value) linkCondition(m, e.target.value); }}
-                               title="Attach this annotation to a condition" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 170 }}>
-                               <option value="">Attach to condition…</option>
-                               {conditions.map((c) => <option key={c.id} value={c.id}>{c.finish_tag}</option>)}
-                             </select>
-                           )}
-                         </div>
-                       );
-                     })()}
-                     {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
-                     {(() => {
-                       const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
-                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
-                       return (
-                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
-                           {linked ? (
-                             <>
-                               <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "var(--cobalt)" }}>⬢ {String(linked.number ?? "")}</span>
-                               <button onClick={() => { setLeftTab("rfi"); }} style={{ ...ctrl, color: "var(--cobalt)" }} title="Open the RFI register">Open</button>
-                               <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
-                             </>
-                           ) : (
-                             <>
-                               <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "var(--cobalt)", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
-                               {rfis.length > 0 && (
-                                 <select name="link-rfi" value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
-                                   title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
-                                   <option value="">Link existing…</option>
-                                   {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
-                                 </select>
-                               )}
-                             </>
-                           )}
-                         </div>
-                       );
-                     })()}
-                   </div>
-                 ))}
-               </div>
-             )}
-             {leftTab === "stamp" && (
-               <StampPanel
-                 docked
-                 library={stampLib} armedStamp={armedStamp}
-                 selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
-                 onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
-                 onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setLeftTab(null)}
-               />
-             )}
-             {leftTab === "rfi" && (
-               <RfiPanel
-                 docked
-                 rfis={rfis} markups={markups}
-                 onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
-                 sheetLabel={(k) => tabLabel(k)} onClose={() => setLeftTab(null)}
-               />
-             )}
-           </div>
-         </div>
-       )}
-       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-        <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
+  // width/height:100% alongside flex:1 below — flex:1 sizes this div in the
+  // single-canvas path (parent is the row wrapper, display:flex), but inside
+  // SplitLayout's primary pane (a plain block, not a flex container) flex:1
+  // is inert and this div's only content is position:absolute (out of
+  // flow), so without an explicit height it collapses to 0. width/height:
+  // 100% make it self-sizing either way.
+  const primaryViewport = (
+       <div style={{ flex: 1, width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
+        <div ref={setContainerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={leaveCanvas} onContextMenu={(e) => e.preventDefault()}
           onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
           style={{ position: "absolute", inset: 0, background: darkMode ? "#0b0e14" : "var(--paper-cream)", cursor: tool === "select" ? "default" : "none", touchAction: "none" }}>
@@ -8910,6 +8326,644 @@ export default function TakeoffCanvas() {
         </div>
 
        </div>
+  );
+
+  return (
+    // .app-shell: the print stylesheet collapses this 100vh flex column while the report is open
+    <div
+      className="app-shell"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer?.files); }}
+      style={{ position: "relative", display: "flex", flexDirection: "column", height: "100vh" }}>
+      {/* file inputs — always mounted (drag-drop and the ⋯ import path need
+          the refs even while focus mode hides the bar) */}
+      <input name="sheet-file" ref={fileInputRef} type="file" accept=".pdf,application/pdf,image/*,.zip,application/zip,application/x-zip-compressed,.otk" multiple style={{ display: "none" }}
+        onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
+      <input name="profile-import" ref={profileInputRef} type="file" accept=".otprofile,application/json" style={{ display: "none" }}
+        onChange={(e) => { importProfileFile(e.target.files?.[0]); e.target.value = ""; }} />
+      <input name="takeoff-import" ref={importInputRef} type="file" accept=".json,application/json" style={{ display: "none" }}
+        onChange={(e) => { importTakeoffFile(e.target.files?.[0]); e.target.value = ""; }} />
+      {/* THE top bar — one row (the two decks of issue #61 merged once the
+          tool rail absorbed the draw menus). Project verbs left, work verbs
+          center, Report + the ⋯ overflow (guide, appearance — chrome theme and
+          drawing style —, schedule import, cloud moves) right. Cluster captions stay — they're the drafting
+          language. The row never wraps; rarely-used controls live in ⋯ so
+          nothing shifts position mid-work. Focus mode (F) hides the whole
+          bar — the rail and status bar carry the essentials.
+          Un-wrapped is not the same as unreachable, though: this row is
+          ~1550px of fixed-width controls, so on a 1440-class laptop Report and
+          the Action menu render past the right edge. The document can
+          technically scroll to them, but the canvas claims wheel and trackpad
+          gestures for zoom/pan, so that scroll never arrives and the app reads
+          as "Export is unclickable". The row therefore SCROLLS itself; its
+          menus open position:fixed off the trigger rect (ToolMenu) so this
+          overflow cannot clip them. */}
+      {!focusMode && (
+      <div style={{ display: "flex", gap: 7, alignItems: "center", padding: "16px 14px 6px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", whiteSpace: "nowrap", overflowX: "auto", overflowY: "visible", scrollbarWidth: "thin", overscrollBehaviorX: "contain" }}>
+        <strong style={{ fontFamily: "var(--f-display)", fontSize: 15, color: "var(--ink)", letterSpacing: "-0.02em" }}>open<span style={{ fontStyle: "italic", color: "var(--cobalt)" }}>takeoff</span></strong>
+        <button type="button" onClick={() => fileInputRef.current?.click()} title="Open plans — PDF, image, or a .zip plan set (or just drag them onto the canvas)"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+          <Icon name="plus" size={14} />Open</button>
+        <button type="button" onClick={() => setView("gallery")}
+          title={`Plan set — the visual gallery; open one or several sheets (G)${sheetGroup.length ? ` · ${sheetGroup.length} side-by-side now` : ""}`}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${sheetGroup.length ? "var(--cobalt)" : "var(--ink-faint)"}`, background: sheetGroup.length ? "var(--cobalt)" : "transparent", color: sheetGroup.length ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+          <Icon name="sheets" size={15} />Sheets
+        </button>
+        {sheets.length > 0 && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={!!sheetGroup.length || page <= 1} title="Previous sheet"
+              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page <= 1) ? 0.4 : 1 }}><Icon name="chevronLeft" size={12} /></button>
+            <ToolMenu
+              title="Sheet — the sheets in this set, files, grouping, and the gallery"
+              onOpenChange={onMenuDepth}
+              face={<span style={{ display: "inline-block", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sheetChipLabel}</span>}
+              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 400, padding: "6px 8px" }}
+              menuStyle={{ minWidth: 260, maxHeight: "min(480px, 60vh)", overflowY: "auto" }}
+              items={sheetMenuItems}
+            />
+            <button type="button" onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={!!sheetGroup.length || page >= pageCount} title="Next sheet"
+              style={{ padding: "5px 8px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", opacity: (!!sheetGroup.length || page >= pageCount) ? 0.4 : 1 }}><Icon name="chevronRight" size={12} /></button>
+          </span>
+        )}
+        {vRule}
+        {cluster("Edit", <>
+          <ToolMenu
+            title="Edit takeoffs"
+            onOpenChange={onMenuDepth}
+            face={<span>Edit</span>}
+            items={[
+              { id: "copy", icon: "copy", label: "Copy", shortcut: "⌘C", disabled: !selectedId, onSelect: copySelected },
+              { id: "paste", icon: "paste", label: "Paste", shortcut: "⌘V", disabled: !clipRef.current.length, onSelect: () => pasteClipboard() },
+              { id: "dup", icon: "duplicate", label: "Duplicate", shortcut: "⌘D", disabled: !selectedId, onSelect: duplicateSelected },
+              "divider",
+              { id: "flipH", label: "Flip Horizontal", disabled: !selectedId, onSelect: () => flipSelected("h") },
+              { id: "flipV", label: "Flip Vertical", disabled: !selectedId, onSelect: () => flipSelected("v") },
+              { id: "tidy", label: "Tidy shape", disabled: !selectedId, onSelect: tidySelected },
+              "divider",
+              { id: "finish", icon: "check", label: `Finish shape${poly.length ? ` (${poly.length} pts)` : ""}`, shortcut: "↵", disabled: !finishOk, onSelect: finishShape },
+              { id: "undopt", icon: "undo", label: "Undo last point", shortcut: "⌘Z", disabled: !poly.length, onSelect: dropLastPoint },
+              { id: "undoshape", icon: "undo", label: "Undo last shape", disabled: !visibleShapes.length, onSelect: undoLast },
+              { id: "redo", label: "Redo", shortcut: "⇧⌘Z", onSelect: redoShapeCommand },
+              "divider",
+              { id: "del", icon: "close", label: "Delete selected", shortcut: "⌫", disabled: !selectedId, tint: "var(--c-danger)", onSelect: deleteSelected },
+            ]}
+          />
+        </>)}
+        {vRule}
+        {cluster("Aids", <>
+          {panels.length === 1 && isStitchKey(panels[0].key) && (
+            <button onClick={() => setTool((t) => (t === "stitch-align" ? "select" : "stitch-align"))}
+              title="Align the match line — click a point near the joint, then the SAME point where the other sheet draws it; that sheet slides so the two coincide. Do this before tracing (a stitch with takeoffs on it won't re-align)."
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "stitch-align" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "stitch-align" ? "var(--cobalt)" : "transparent", color: tool === "stitch-align" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+              <Icon name="calibrate" size={15} />Align
+            </button>
+          )}
+          <button onClick={() => setTool((t) => (t === "zone" ? "select" : "zone"))}
+            title="Zone check — trace a region (an apartment, a wing) to read every condition's quantities inside it, materials included. Nothing is saved; the outline clears when you leave the tool."
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${tool === "zone" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: tool === "zone" ? "var(--cobalt)" : "transparent", color: tool === "zone" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="zone" size={15} />Zone
+          </button>
+          <button onClick={() => setSnapOn((v) => !v)} title="Snap to plan lines/corners (beta)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${snapOn ? "var(--c-positive)" : "var(--ink-faint)"}`, background: snapOn ? "var(--c-positive)" : "transparent", color: snapOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="snap" size={15} />Snap
+          </button>
+          <button onClick={() => setAngleOn((v) => !v)} title="45°/90° angle guides — the next segment locks to the 45° family as you draw (hold ⇧ to force the lock at any angle)"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", border: `1px solid ${angleOn ? "var(--cobalt)" : "var(--ink-faint)"}`, background: angleOn ? "var(--cobalt)" : "transparent", color: angleOn ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}>
+            <Icon name="angle" size={15} />45°
+          </button>
+        </>)}
+        {/* The caption always shows the ACTIVE label (+ the cobalt highlight keyed
+            on it) so what a new trace will get is never hidden — even in Select
+            mode, where the dropdown VALUE instead shows the selected shape's label
+            so changing it reliably re-labels that shape (a value-always-active
+            select couldn't reassign to the already-active label — onChange wouldn't fire). */}
+        {shapeLabels.length > 0 && cluster(
+          tool === "select" && selectedId ? `Label · ${activeLabel || "none"} → shape` : (activeLabel ? `Label · ${activeLabel}` : "Label"),
+          <select
+            value={tool === "select" && selectedId ? shapeLabelValue(shapes.find((s) => s.id === selectedId)) : (activeLabel || "")}
+            onChange={(e) => activateLabel(e.target.value || null)}
+            title="Phase/area label. The caption shows the ACTIVE label (what new takeoffs get). With a shape selected (Select tool), the dropdown shows and re-labels that shape. Manage the list in the Columns tab."
+            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: `1px solid ${activeLabel ? "var(--cobalt)" : "var(--ink-faint)"}`, background: activeLabel ? "var(--cobalt)" : "transparent", color: activeLabel ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", maxWidth: 150 }}>
+            <option value="">No label</option>
+            {shapeLabels.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        )}
+        {/* Typed voice command (RFC #59 slice 2): the same grammar push-to-talk
+            will feed — a keyboard command line meanwhile, and the accessibility
+            path. Focus suppresses canvas shortcuts via the existing INPUT guards.
+            Deixis: focus marks the utterance's start — "this room" then needs an
+            aim placed AFTER it (park the pointer on the room, type, Enter). */}
+        {cluster("Command",
+          <input
+            type="text"
+            placeholder="cpt 1 · waste 7 · this room"
+            title={'Command line (RFC #59): a condition tag ("CPT-1", "carpet one", "tile 2 waste 5"), "waste 7", "label Phase 1", "clear label", "author <your name>" (new marks sign it — the report can group by author), or "note …" — Enter runs it through the same actions the buttons use. End with "this room" / "here" while the pointer rests on a room to trace and commit it there ("carpet one, this room"). Push-to-talk dictation will feed this box.'}
+            onFocus={() => { voiceAimMarkRef.current = aimSeqRef.current; }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const v = e.currentTarget.value.trim();
+              if (!v) return;
+              const el = e.currentTarget;   // capture: currentTarget nulls after dispatch, and deixis outcomes can resolve async (raster)
+              // router confirm (RFC #59 slice 5): the rejected text is still in
+              // the box (only success clears it) — a second ⏎ on the SAME text
+              // confirms the pending offer instead of re-rejecting in a loop
+              if (pendingAgentOfferRef.current && v === pendingAgentOfferRef.current.transcript) {
+                agentOfferFnsRef.current.confirm();
+                el.value = "";
+                return;
+              }
+              Promise.resolve(onVoiceCommand(v)).then((ok) => { if (ok) el.value = ""; });
+            }}
+            style={{ fontFamily: "var(--f-mono)", fontSize: 11.5, padding: "5px 6px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", width: 150 }}
+          />
+        )}
+        {/* Push-to-talk (RFC #59 recognizer): hold the button (or M) to dictate
+            into the same grammar the Command box runs. Hidden entirely where
+            capture is unsupported — graceful feature-absence, never broken. */}
+        {captureSupported() && cluster("Voice",
+          <button
+            title={'Hold to talk (or hold M anywhere on the canvas): speak a command — "carpet one, waste seven", "label phase two", "note …", or end with "this room" to trace at the cursor. Release to run; Esc discards. Audio is processed on-device and never leaves the browser.'}
+            onPointerDown={(e) => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); voiceHoldRef.current = true; voiceFnsRef.current.start(); }}
+            onPointerUp={() => { if (voiceHoldRef.current) { voiceHoldRef.current = false; voiceFnsRef.current.end(true); } }}
+            onPointerCancel={() => { if (voiceHoldRef.current) { voiceHoldRef.current = false; voiceFnsRef.current.end(false); } }}
+            style={{ padding: "5px 10px", border: `1px solid ${voiceChip?.tone === "live" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: voiceChip?.tone === "live" ? "var(--cobalt)" : "transparent", color: voiceChip?.tone === "live" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, lineHeight: 1 }}>
+            {voiceChip?.tone === "live" ? "● talking" : "talk · M"}
+          </button>
+        )}
+        <div style={{ flex: 1 }} />
+        {cluster(`Scale — ${labelFor(focusPanel)}`,
+          <>
+            <button onClick={() => setUnits((u) => (u === "metric" ? "imperial" : "metric"))}
+              title={units === "metric" ? "Metric display (m² / m) — click for imperial. Calibrate in meters; 1:50-style scales in the list. Display only — stored takeoffs never change." : "Imperial display (SF / LF) — click for metric (m² / m, calibrate in meters, 1:50-style scales). Display only — stored takeoffs never change."}
+              style={{ padding: "6px 10px", border: `1px solid ${units === "metric" ? "var(--cobalt)" : "var(--ink-faint)"}`, background: units === "metric" ? "var(--cobalt)" : "transparent", color: units === "metric" ? "var(--paper-bright)" : "var(--ink)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, lineHeight: 1 }}>
+              {units === "metric" ? "m" : "ft"}
+            </button>
+            <ToolMenu
+              title={scaleTitle}
+              onOpenChange={onScaleMenuDepth}
+              face={<span>{scaleFace}</span>}
+              faceStyle={{ fontFamily: "var(--f-mono)", fontSize: 11.5, ...scaleFaceStyle }}
+              menuStyle={{ minWidth: 250 }}
+              items={scaleItems}
+            />
+          </>
+        )}
+        {cluster("Action",
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 150 }}>
+            {markupDraft && (tool === "cloud" || tool === "callout" || tool === "highlight" || tool === "dimension") && <span style={{ fontSize: 11, color: "var(--cobalt)" }}>click the {tool === "callout" ? "label spot" : tool === "dimension" ? "other end" : "opposite corner"}…</span>}
+            {finishOk && (
+              <button onClick={finishShape} title="Finish shape (↵ or double-click)" style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Finish ({poly.length})</button>
+            )}
+            {proposal?.regions.length > 0 && (
+              <button onClick={createProposal} title="Create the selected takeoff(s) (↵). ⌫ removes the last click; Esc discards the selection." style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "none", background: "var(--c-positive)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600, fontSize: 12.5, lineHeight: 1 }}><Icon name="check" size={14} />Create ({proposal.regions.length})</button>
+            )}
+          </span>
+        )}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
+          style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
+        {/* ⋯ overflow — rarely-used project controls, so the row never wraps
+            and nothing shifts position mid-work (issue #61's contract). */}
+        <ToolMenu
+          title="More — guide, appearance, schedule import, project moves"
+          onOpenChange={onMenuDepth}
+          face={<span style={{ fontWeight: 700, letterSpacing: "0.08em" }}>⋯</span>}
+          items={[
+            { id: "guide", label: "How OpenTakeoff works", shortcut: "?", onSelect: () => setGuideOpen(true) },
+            { id: "theme", label: theme === "dark" ? "Light chrome" : "Dark chrome", onSelect: toggleTheme },
+            { section: "Drawing style" },
+            { id: "drawstyle", custom: drawStyleRow },
+            { id: "draftoutline", custom: draftOutlineRow },
+            "divider",
+            { id: "schedule", icon: "rectTool", label: "Import from schedule", active: tool === "schedule", onSelect: () => { setScheduleAnchor(null); setTool((t) => (t === "schedule" ? "select" : "schedule")); } },
+            ...(cloudMode ? [
+              "divider",
+              { id: "closeproj", label: "Close project", onSelect: closeProject },
+              ...(browseProjects ? [{ id: "projects", label: "Team projects", onSelect: browseProjects }] : []),
+            ] : []),
+            ...(!cloudMode && googleUser && isGoogleConfigured() && projectHomeFolderId() ? [
+              "divider",
+              { id: "browse", label: "Browse team projects", onSelect: () => navigate("/projects") },
+            ] : []),
+          ]}
+        />
+        <PresenceChip bridge={store.syncBridge} />
+        <AccountChip note={cloudMode ? "Synced to Google Drive" : "Local workspace"} onOpenChange={onMenuDepth} />
+      </div>
+      )}
+
+      {/* quick-access condition palette — its own slim band under the toolbar
+          (like the sheet-tabs / conditions-strip rows), not crammed into the
+          already-wrapping top bar. A curated ≤9 pinned conditions for one-click
+          activation without opening the panel: drag a condition here from the
+          Takeoffs panel (or the strip) to pin it, or use a row's pushpin. Each
+          chip carries its 1–9 hotkey badge (cobalt); single-click activates
+          (reassigning a selected shape, like every activation surface),
+          double-click opens the docked panel scrolled to that row, the pushpin
+          unpins, and dragging one chip onto another reorders (which renumbers
+          the hotkeys). Below the chips, the active condition's appearance editor
+          — the same one the docked panel row renders — so line/fill/hatch/height
+          are editable without opening the sidebar. Shown once there's a
+          condition to pin, so the drop zone is discoverable. */}
+      {!focusMode && conditions.length > 0 && (
+        <div
+          onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "copy"; } }}
+          onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(CONDITION_DND_MIME); if (id) pinToPalette(id); }}
+          style={{ padding: "5px 14px", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span title="Quick-access conditions — drag a condition here (or use a row's pushpin) to pin it, up to 9. Press 1–9 to activate by this order; click a chip to activate; double-click to open the panel."
+              style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--ink-muted)" }}>Conditions</span>
+            {paletteConds.length === 0 ? (
+              <span style={{ fontSize: 11.5, color: "var(--ink-muted)", fontStyle: "italic", padding: "3px 8px", border: "1px dashed var(--ink-faint)" }}>drag conditions here (or pin a row) for 1-9 one-click access</span>
+            ) : paletteConds.map((c) => {
+              const on = c.id === activeCond;
+              const reassign = tool === "select" && selectedId;
+              const idx = palette.indexOf(c.id);   // palette position → the 1–9 hotkey number
+              return (
+                <span key={c.id} style={{ display: "inline-flex", alignItems: "center" }}
+                  onDragOver={(e) => { if (e.dataTransfer.types.includes(CONDITION_DND_MIME)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"; } }}
+                  onDrop={(e) => { if (!e.dataTransfer.types.includes(CONDITION_DND_MIME)) return; e.preventDefault(); e.stopPropagation(); const dragId = e.dataTransfer.getData(CONDITION_DND_MIME); if (dragId) { if (palette.includes(dragId)) movePalette(dragId, idx); else pinToPalette(dragId); } }}>
+                  <button type="button" draggable
+                    onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copyMove"; }}
+                    onClick={() => activateCondition(c.id)}
+                    onDoubleClick={() => openConditionInPanel(c.id)}
+                    title={reassign ? `Reassign the selected takeoff to ${c.finish_tag} (double-click opens the panel)` : `${c.finish_tag} — press ${idx + 1} or click to activate, double-click to open in the panel, drag onto another chip to reorder`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 5px", border: on ? `2px solid ${c.color}` : (reassign ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5, lineHeight: 1 }}>
+                    {idx < 9 && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: "var(--cobalt)", border: "1px solid var(--cobalt)", borderRadius: 3, padding: "0 3px" }}>{idx + 1}</span>}
+                    <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
+                  </button>
+                  <button type="button" onClick={() => unpinFromPalette(c.id)} title={`Unpin ${c.finish_tag} from the palette`}
+                    style={{ border: "none", background: "none", cursor: "pointer", color: "var(--cobalt)", padding: "0 3px", lineHeight: 0, display: "inline-flex" }}>
+                    <Icon name="pin" size={12} />
+                  </button>
+                </span>
+              );
+            })}
+            {paletteConds.length >= PALETTE_MAX && (
+              <span style={{ fontSize: 10.5, color: "var(--ink-muted)", fontStyle: "italic" }}>full ({PALETTE_MAX})</span>
+            )}
+            {/* add a condition without opening the (now-collapsed) sidebar */}
+            <button type="button" onClick={addCondition} title="Add a new condition"
+              style={{ padding: "3px 9px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12, color: "var(--ink-muted)" }}>+ condition</button>
+          </div>
+          {/* the active condition's appearance editor, restored to the top bar —
+              same component the docked panel row renders (one source of truth) */}
+          {aCond && (
+            <div style={{ marginTop: 5, paddingTop: 5, borderTop: "1px solid var(--ink-faint)" }}>
+              <ConditionAppearanceEditor cond={aCond} onUpdateCond={updateCond} onSetCondParam={setCondParam} onAssignAttr={assignAttr} conditionColumns={conditionColumns} layout="row" units={units} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* open-sheet tabs — what you opened from the gallery; click to view,
+          ⊞ to side-by-side, ✕ to close; the dropdown lists every open sheet */}
+      {!focusMode && openTabs.length > 0 && (
+        <div style={{ display: "flex", gap: 5, alignItems: "center", padding: "5px 14px", flexWrap: openTabs.length > MANY_TABS ? "nowrap" : "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", minWidth: 0 }}>
+          <span style={{ fontFamily: "var(--f-mono)", fontSize: 9.5, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--ink-muted)", flexShrink: 0 }}>Sheets</span>
+          {openTabs.length > MANY_TABS && (
+            <button type="button" onClick={() => scrollTabStrip(-1)} title="Scroll sheets left" aria-label="Scroll sheets left" style={{ flexShrink: 0, padding: "4px 5px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", display: "inline-flex" }}><Icon name="chevronLeft" size={12} /></button>
+          )}
+          <div ref={tabStripRef} data-sheet-tab-strip style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: openTabs.length > MANY_TABS ? "nowrap" : "wrap", overflowX: openTabs.length > MANY_TABS ? "auto" : "visible", minWidth: 0, flex: openTabs.length > MANY_TABS ? 1 : "0 1 auto", scrollbarWidth: "none", overscrollBehaviorX: "contain" }}>
+          {openTabs.map((k) => {
+            const inGroup = sheetGroup.includes(k);
+            const on = sheetGroup.length ? inGroup : k === sheetKey;
+            const lbl = tabLabel(k);
+            return (
+              <span key={k} data-sheet-tab={on ? "active" : "idle"} style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, border: "1px solid var(--ink-faint)", borderBottom: on ? "2px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: on ? "var(--paper-cream)" : "transparent", padding: "3px 6px 2px 9px", maxWidth: 190 }}>
+                <button onClick={() => goToSheet(k)} title={k} style={{ border: "none", background: "none", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 11.5, color: "var(--ink)", fontFamily: "var(--f-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140, padding: 0 }}>{lbl}</button>
+                <button onClick={() => toggleInGroup(k)} title={inGroup ? "Remove from side-by-side" : "Side-by-side with the current sheet"} style={{ border: "none", background: "none", cursor: "pointer", color: inGroup ? "var(--cobalt)" : "var(--ink-faint)", padding: 0, display: "inline-flex" }}><Icon name="sideBySide" size={11} /></button>
+                <button onClick={() => closeTab(k)} title="Close tab" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0, display: "inline-flex" }}><Icon name="close" size={10} /></button>
+              </span>
+            );
+          })}
+          </div>
+          {openTabs.length > MANY_TABS && (
+            <button type="button" onClick={() => scrollTabStrip(1)} title="Scroll sheets right" aria-label="Scroll sheets right" style={{ flexShrink: 0, padding: "4px 5px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", display: "inline-flex" }}><Icon name="chevronRight" size={12} /></button>
+          )}
+          {openTabs.length > 1 && openTabs.length <= MANY_TABS && (
+            <ToolMenu
+              title="Jump to an open sheet"
+              onOpenChange={onMenuDepth}
+              face={<span style={{ fontFamily: "var(--f-mono)", fontSize: 11 }}>{openTabs.length} open</span>}
+              items={openTabs.map((k) => ({ id: k, icon: "document", label: tabLabel(k), active: sheetGroup.length ? sheetGroup.includes(k) : k === sheetKey, onSelect: () => goToSheet(k) }))}
+            />
+          )}
+        </div>
+      )}
+
+      {/* compact conditions strip — OPTIONAL small-project mode. The docked
+          Takeoffs panel is the primary conditions surface; the strip renders
+          the same state (activate/reassign, hotkey badges, + condition) for
+          users who want max panel-collapse and one-click switching. Toggled
+          from the panel header, persisted with the panel prefs. */}
+      {!focusMode && panelPrefs.strip && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", padding: "7px 14px", flexWrap: "wrap", borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)" }}>
+          <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--ink-muted)" }}>Conditions</span>
+          {conditions.map((c, i) => {
+            const on = c.id === activeCond;
+            // the 1–9 badge follows the same rule as the hotkeys: palette order
+            // when curated, condition order (fallback) when nothing is pinned
+            const pinnedPal = palette.length > 0;
+            const hIdx = pinnedPal ? palette.indexOf(c.id) : i;
+            const hot = hIdx >= 0 && hIdx < 9;
+            return (
+              <button key={c.id} draggable onDragStart={(e) => { e.dataTransfer.setData(CONDITION_DND_MIME, c.id); e.dataTransfer.effectAllowed = "copy"; }} onClick={() => activateCondition(c.id)} title={tool === "select" && selectedId ? "Reassign selected shape to this condition" : (hot ? `Press ${hIdx + 1} · drag to the palette to pin` : "Drag to the palette to pin")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 10px 3px 4px", borderRadius: 0, border: on ? `2px solid ${c.color}` : (tool === "select" && selectedId ? "1px dashed var(--cobalt)" : "1px solid var(--ink-faint)"), background: on ? "var(--surface-pop)" : "transparent", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 12.5 }}>
+                {hot && <span style={{ fontSize: 9, fontFamily: "var(--f-mono,monospace)", color: pinnedPal ? "var(--cobalt)" : "var(--ink-muted)", border: `1px solid ${pinnedPal ? "var(--cobalt)" : "var(--ink-faint)"}`, borderRadius: 3, padding: "0 3px" }}>{hIdx + 1}</span>}
+                <span style={{ borderRadius: 4, overflow: "hidden", lineHeight: 0 }}><HatchSwatch type={c.hatch || "solid"} line={c.color} fill={c.fill} /></span>{c.finish_tag}
+              </button>
+            );
+          })}
+          <button onClick={addCondition} style={{ padding: "4px 10px", borderRadius: 0, border: "1px dashed var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 12.5, color: "var(--ink-muted)" }}>+ condition</button>
+        </div>
+      )}
+
+      {/* calibration prompt */}
+      {tool === "calibrate" && (
+        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
+          {calib.length < 2 ? <span>Custom scale: click two points along a known dimension ({calib.length}/2). Tip: use the longest dimension. (Or just pick a standard scale above.)</span> : (
+            <span>Real length:{" "}
+              <input name="calibration-length" type="number" value={pendingLen} onChange={(e) => setPendingLen(e.target.value)} onKeyDown={(e) => e.key === "Enter" && applyCalibration()} placeholder={units === "metric" ? "meters" : "feet"} autoFocus style={{ width: 90, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
+              <button onClick={applyCalibration} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Apply</button>
+              <button onClick={() => setCalib([])} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* check-a-dimension prompt — read-only twin of calibrate: measure a printed
+          dimension at the current scale, compare with what the drawing says */}
+      {tool === "check" && (
+        <div style={{ padding: "8px 14px", background: "var(--paper-bright)", borderBottom: "1px solid var(--hairline-warm)", fontSize: 14 }}>
+          {check.length < 2 ? (
+            <span>Check a dimension: click both ends of a printed dimension ({check.length}/2). The measured length shows here — compare it with what the drawing says.</span>
+          ) : checkCross ? (
+            <span style={{ color: "var(--c-danger)" }}>Check on one sheet — those two clicks landed on different sheets. <button onClick={() => { setCheck([]); setCheckStated(""); }} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button></span>
+          ) : !checkUpp ? (
+            <span style={{ color: "var(--c-danger)" }}>No scale set for {labelFor(checkPanel)} — pick a standard scale or calibrate first, then check it here.</span>
+          ) : checkPx <= 0 ? (
+            <span style={{ color: "var(--c-danger)" }}>Those two clicks landed on the same point — click the two <b>ends</b> of a printed dimension.</span>
+          ) : (
+            <span>
+              measures <b style={{ fontFamily: "var(--f-mono)" }}>{fmtCheckLen(checkFeet, units)}</b> at {stdValue || "custom scale"} · drawing says{" "}
+              <input name="check-stated-length" value={checkStated} onChange={(e) => setCheckStated(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} placeholder={units === "metric" ? "meters" : `feet (12'6, 6" ok)`} autoFocus style={{ width: 100, padding: 5, borderRadius: 0, border: "1px solid var(--ink-faint)" }} /> {units === "metric" ? "m" : "ft"}
+              {checkErrPct != null && (() => {
+                // checkVerdict grades the ROUNDED value the chip displays (and
+                // normalizes -0), so color and number can never contradict —
+                // see units.ts for the ≤1/≤5 tie-break rationale
+                const v = checkVerdict(checkErrPct);
+                const pct = `${v.shown >= 0 ? "+" : ""}${v.shown.toFixed(1)}%`;
+                return (
+                  <b style={{ marginLeft: 8, color: v.grade === "match" ? "var(--c-positive)" : v.grade === "close" ? "var(--c-warning)" : "var(--c-danger)" }}>
+                    {v.grade === "match" ? `matches — scale checks out (${pct})`
+                      : v.grade === "close" ? `off by ${pct} — re-check or recalibrate`
+                      : `off by ${pct} — wrong scale; recalibrate`}
+                  </b>
+                );
+              })()}
+              {checkStatedFeet > 0 && (
+                <button onClick={recalibrateFromCheck} style={{ marginLeft: 8, padding: "5px 12px", borderRadius: 0, border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer" }}>Recalibrate to this</button>
+              )}
+              <button onClick={() => { setCheck([]); setCheckStated(""); }} style={{ marginLeft: 6, padding: "5px 10px", borderRadius: 0, border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer" }}>Reset</button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* canvas + issue desk */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0, position: "relative" /* anchors the narrow-screen panel overlay */ }}>
+       {/* tool rail — machined faces grouped by MCP module (the concept shell).
+           Individual tiles replace deck 2's Measure/Cut Out menus; Markup keeps
+           its variety flyout on one tile (five markup kinds don't earn five
+           faces). Lives in the canvas row so docked panels + canvas reflow
+           beside it; survives focus mode — it IS the tool access. */}
+       {view === "canvas" && (
+       <nav role="toolbar" aria-label="Tools" style={{ width: "var(--rail-w)", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-1)", paddingTop: "var(--sp-2)", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflowY: "auto", overflowX: "visible" }}>
+         {railLabel("SEL")}
+         {railTile("select", "select", "Select — pick a takeoff, drag points; drag open canvas to pan", "V")}
+         {railLabel("MEAS")}
+         {MEASURE_TOOLS.map((t) => railTile(t.id, t.icon, t.label, t.shortcut))}
+         {railLabel("CUT")}
+         {CUT_TOOLS.map((t) => railTile(t.id, t.icon, t.label, t.shortcut, null, { tint: "var(--c-danger)" }))}
+         {railLabel("MARK")}
+         <span ref={(el) => { if (el) markTileTopRef.current = el.getBoundingClientRect().top; }} style={{ position: "relative", display: "inline-flex" }}>
+           <ToolMenu
+             title="Markup — annotations, not measurements"
+             active={MARKUP_IDS.includes(tool)}
+             onOpenChange={onMenuDepth}
+             flyout="right"
+             face={<Icon name="markup" size={17} />}
+             items={[
+               { section: "Markup — notes on the plan, never measured" },
+               ...MARKUP_TOOLS.map((t) => ({ id: t.id, icon: t.icon, label: t.label, shortcut: t.shortcut, active: tool === t.id, onSelect: () => { setTool(t.id); setMarkupDraft(null); } })),
+             ]}
+           />
+           {/* highlighter style popover — fixed beside the rail while armed
+               (fixed, not absolute: the rail's scroll box would clip it) */}
+           {tool === "highlighter" && (
+             <div style={{ position: "fixed", left: "calc(var(--rail-w) + 8px)", top: markTileTopRef.current || 200, zIndex: Z.popover, background: "var(--paper-bright)", border: "1px solid var(--ink-faint)", borderRadius: 0, boxShadow: "var(--shadow-pop)", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 7 }}>
+               <div style={{ display: "flex", gap: 6 }} title="Ink">
+                 {HL_INKS.map((c) => (
+                   <button key={c} onClick={() => setHlStyle((st) => ({ ...st, color: c }))}
+                     style={{ width: 16, height: 16, padding: 0, background: c, border: hlStyle.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />
+                 ))}
+               </div>
+               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                 {HL_SIZES.map(([lbl, px]) => (
+                   <button key={lbl} onClick={() => setHlStyle((st) => ({ ...st, size: px }))} title={`${lbl === "F" ? "Fine" : lbl === "M" ? "Medium" : "Broad"} tip`}
+                     style={{ width: 22, height: 20, padding: 0, fontFamily: "var(--f-mono)", fontSize: 10, cursor: "pointer", border: hlStyle.size === px ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: hlStyle.size === px ? "var(--ink)" : "transparent", color: hlStyle.size === px ? "var(--paper-bright)" : "var(--ink)" }}>{lbl}</button>
+                 ))}
+                 <span style={{ width: 1, alignSelf: "stretch", background: "var(--ink-faint)" }} />
+                 {[["chisel", "M4 16 L14 6 L18 10 L8 20 Z"], ["round", "M5 17 Q12 3 19 13"]].map(([tip, d]) => (
+                   <button key={tip} onClick={() => setHlStyle((st) => ({ ...st, tip }))} title={`${tip} tip`}
+                     style={{ width: 24, height: 20, padding: 1, cursor: "pointer", border: hlStyle.tip === tip ? "1px solid var(--ink)" : "1px solid var(--ink-faint)", background: "transparent" }}>
+                     <svg viewBox="0 0 24 24" width="18" height="14">{tip === "chisel"
+                       ? <path d={d} fill="currentColor" stroke="none" />
+                       : <path d={d} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />}</svg>
+                   </button>
+                 ))}
+               </div>
+             </div>
+           )}
+         </span>
+         {/* Approval stamp — ink over pencil. Human-only by design: this tile
+             is the ONLY way an estimator seal is minted (no MCP tool, no agent
+             path), so the mark means a person looked. */}
+         {railTile("approve", "approve", "Approval stamp — the estimator's ink. Click a committed takeoff to approve it, or empty plan to approve the sheet; click a seal to lift it. ⌘Z undoes. Human-only.", null,
+           () => setTool((t) => (t === "approve" ? "select" : "approve")), { tint: tool === "approve" ? "var(--c-positive)" : undefined, armed: tool === "approve" })}
+         {railLabel("CAL")}
+         {railTile("calibrate", "calibrate", "Calibrate — click two points of a known dimension", null)}
+       </nav>
+       )}
+       {/* docked LEFT panel — one of Markups/Stamps/RFIs at a time. Reflows the
+           canvas (a flex sibling), mirroring the docked Takeoffs panel on the right. */}
+       {leftTab && (
+         <div style={{ width: 360, flexShrink: 0, display: "flex", flexDirection: "column", borderRight: "1px solid var(--ink-faint)", background: "var(--paper-bright)", overflow: "hidden", minHeight: 0 }}>
+           {/* tab strip */}
+           <div style={{ display: "flex", alignItems: "stretch", background: "var(--cobalt)", color: "var(--accent-contrast)" }}>
+             {[{ id: "markup", label: "Markups", n: markupCount }, { id: "stamp", label: "Stamps", n: stampLib.stamps.length }, { id: "rfi", label: "RFIs", n: rfis.length }].map((t) => (
+               <button key={t.id} onClick={() => setLeftTab(t.id)} title={t.label}
+                 style={{ flex: 1, padding: "9px 6px", border: "none", borderBottom: leftTab === t.id ? "2px solid var(--accent-contrast)" : "2px solid transparent", background: leftTab === t.id ? "rgba(255,255,255,.18)" : "transparent", color: "var(--accent-contrast)", cursor: "pointer", fontWeight: leftTab === t.id ? 700 : 500, fontSize: 12 }}>
+                 {t.label}{t.n ? ` · ${t.n}` : ""}
+               </button>
+             ))}
+             <button onClick={() => setLeftTab(null)} title="Close panel" style={{ padding: "0 12px", border: "none", background: "transparent", color: "var(--accent-contrast)", fontSize: 16, cursor: "pointer" }}>×</button>
+           </div>
+           {/* body of the active tab */}
+           <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+             {leftTab === "markup" && (
+               <div>
+                 {/* layer show/hide — hides the on-canvas markup layer AND its hit-testing
+                     (can't select/delete/fly-to an invisible markup); orthogonal to the
+                     marked-set export, which still includes markups. */}
+                 <div style={{ display: "flex", justifyContent: "flex-end", padding: "6px 10px", borderBottom: "1px solid var(--ink-faint)" }}>
+                   <button
+                     onClick={() => { const nv = !showMarkups; setShowMarkups(nv); if (!nv) setSelectedMarkupId(null); }}
+                     title={showMarkups ? "Hide the markup layer on the canvas" : "Show the markup layer on the canvas"}
+                     style={{ background: "transparent", border: "1px solid var(--ink-faint)", color: "var(--ink)", fontSize: 11, cursor: "pointer", padding: "2px 7px" }}>
+                     {showMarkups ? "Hide layer" : "Show layer"}
+                   </button>
+                 </div>
+                 <div style={{ padding: "8px 10px", color: "var(--ink-muted)" }}>
+                   Pick <b>☁ Cloud</b>, <b>▨ Highlight</b>, <b>💬 Callout</b>, <b>T Text</b>, or <b>⟷ Dimension</b> above, then click the plan to annotate it.
+                 </div>
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).length === 0 && (
+                   <div style={{ padding: "4px 12px 14px", color: "var(--ink-muted)" }}>No markups {groupKeys.length > 1 ? "on these sheets" : "on this sheet"} yet.</div>
+                 )}
+                 {markups.filter((m) => panelKeySet.has(m.sheet_id)).map((m) => (
+                   <div key={m.id} style={{ padding: "10px 12px", borderTop: "1px solid var(--ink-faint)" }}>
+                     <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                       <span style={{ fontSize: 10, fontWeight: 700, color: "var(--cobalt)", textTransform: "uppercase" }}>{m.type}</span>
+                       {/* inline edit — the panel's fallback for the canvas overlay, since a
+                           markup here may be off-screen or on another sheet (no click point).
+                           Enter/blur commit, Esc cancels; INPUT is guarded from the global keys. */}
+                       {panelEditId === m.id ? (
+                         <input name="markup-text" autoComplete="off" autoFocus defaultValue={m.text || ""}
+                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); } else if (e.key === "Escape") { e.preventDefault(); e.currentTarget.value = m.text || ""; setPanelEditId(null); } }}
+                           onBlur={(e) => { updateMarkup(m.id, { text: e.currentTarget.value.trim() }); setPanelEditId(null); }}
+                           style={{ flex: 1, minWidth: 0, fontSize: 12.5, padding: "1px 4px", border: "1px solid var(--cobalt)", borderRadius: 0, outline: "none" }} />
+                       ) : (
+                         <span style={{ flex: 1, color: "var(--ink)" }}>{m.type === "svg" ? <em style={{ color: "var(--ink-muted)" }}>(vector symbol)</em> : ([m.type === "dimension" && Number(m.len_ft) > 0 ? dimLabel(m.len_ft) : "", m.text].filter(Boolean).join(" · ") || <em style={{ color: "var(--ink-muted)" }}>(no text)</em>)}</span>
+                       )}
+                       {m.type !== "svg" && <button onClick={() => setPanelEditId((id) => (id === m.id ? null : m.id))} title="Edit text" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)" }}>✎</button>}
+                       <button onClick={() => deleteMarkup(m.id)} title="Delete markup" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--c-danger)" }}>🗑</button>
+                     </div>
+                     {/* appearance — per-markup color (reuse PALETTE) + line style; both
+                         additive: unset color falls back to the cobalt(linked)/amber default,
+                         unset style to solid. The RFI ⬢/number badge stays cobalt regardless. */}
+                     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 7, flexWrap: "wrap" }}>
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginRight: 2 }}>Color</span>
+                       <button title="Auto (linkage color)" onClick={() => updateMarkup(m.id, { color: "" })} style={{ width: 26, height: 15, borderRadius: 4, background: "var(--paper-bright)", border: !m.color ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer", fontSize: 8.5, lineHeight: "11px", color: "var(--ink-muted)" }}>auto</button>
+                       {PALETTE.map((c) => <button key={c} title={c} onClick={() => updateMarkup(m.id, { color: c })} style={{ width: 15, height: 15, borderRadius: 4, background: c, border: m.color === c ? "2px solid var(--ink)" : "1px solid var(--ink-faint)", cursor: "pointer" }} />)}
+                       <select name="markup-line-style" value={m.line_style || "solid"} onChange={(e) => updateMarkup(m.id, { line_style: e.target.value })} title="Line style" style={{ marginLeft: 4, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {LINE_STYLE_IDS.map((id) => <option key={id} value={id}>{LINE_STYLES[id].label}</option>)}
+                       </select>
+                       {/* line weight — a multiplier over the element's base stroke width (default
+                           ×1, clamped 0.5–3); additive, absent = ×1 so legacy markups are unchanged */}
+                       <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }}>Weight</span>
+                       <select name="markup-weight" value={String(snapWeight(m.weight))} onChange={(e) => updateMarkup(m.id, { weight: Number(e.target.value) })} title="Line weight (× base)" style={{ fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }}>
+                         {WEIGHT_STEPS.map((wv) => <option key={wv} value={wv}>{wv}×</option>)}
+                       </select>
+                       {/* revision-delta △n — clouds only; blank clears it (no delta drawn) */}
+                       {m.type === "cloud" && (
+                         <>
+                           <span style={{ fontSize: 10.5, color: "var(--ink-muted)", marginLeft: 4 }} title="Revision-delta number (△) drawn at a cloud corner">Rev △</span>
+                           <input name="markup-rev" type="number" min="0" step="1" value={Number.isFinite(m.rev) ? m.rev : ""} placeholder="—"
+                             onChange={(e) => { const raw = e.target.value; updateMarkup(m.id, { rev: raw === "" ? undefined : Math.max(0, Math.floor(Number(raw) || 0)) }); }}
+                             title="Revision number for the △ delta (blank = none)"
+                             style={{ width: 40, fontSize: 11, border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", padding: "1px 3px" }} />
+                         </>
+                       )}
+                     </div>
+                     {/* Condition link — which scope this annotation is ABOUT.
+                         Same one-to-many shape as the RFI link below it. */}
+                     {(() => {
+                       const lc = m.condition_id ? condById[m.condition_id] : null;
+                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                       return (
+                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                           {lc ? (
+                             <>
+                               <span title={`Annotation is about ${lc.finish_tag}`}
+                                 style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700 }}>
+                                 <span style={{ width: 9, height: 9, background: lc.color, border: "1px solid var(--ink-faint)" }} />
+                                 {lc.finish_tag}
+                               </span>
+                               <button onClick={() => { setActiveCond(lc.id); }} style={{ ...ctrl, color: "var(--cobalt)" }} title="Make this the active condition">Select</button>
+                               <button onClick={() => unlinkCondition(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Detach this annotation from its condition">Detach</button>
+                             </>
+                           ) : conditions.length > 0 && (
+                             <select name="link-condition" value="" onChange={(e) => { if (e.target.value) linkCondition(m, e.target.value); }}
+                               title="Attach this annotation to a condition" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 170 }}>
+                               <option value="">Attach to condition…</option>
+                               {conditions.map((c) => <option key={c.id} value={c.id}>{c.finish_tag}</option>)}
+                             </select>
+                           )}
+                         </div>
+                       );
+                     })()}
+                     {/* RFI controls — raise a fresh RFI, link an existing one, or unlink */}
+                     {(() => {
+                       const linked = m.rfi_id ? rfis.find((r) => r.id === m.rfi_id) : null;
+                       const ctrl = { padding: "2px 7px", border: "1px solid var(--ink-faint)", background: "transparent", cursor: "pointer", fontSize: 11 };
+                       return (
+                         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                           {linked ? (
+                             <>
+                               <span style={{ fontFamily: "var(--f-mono)", fontSize: 11, fontWeight: 700, color: "var(--cobalt)" }}>⬢ {String(linked.number ?? "")}</span>
+                               <button onClick={() => { setLeftTab("rfi"); }} style={{ ...ctrl, color: "var(--cobalt)" }} title="Open the RFI register">Open</button>
+                               <button onClick={() => unlinkRfi(m)} style={{ ...ctrl, color: "var(--ink-muted)" }} title="Unlink this markup from its RFI">Unlink</button>
+                             </>
+                           ) : (
+                             <>
+                               <button onClick={() => raiseRfi(m)} style={{ ...ctrl, color: "var(--cobalt)", fontWeight: 600 }} title="Create a new RFI from this markup">Raise RFI</button>
+                               {rfis.length > 0 && (
+                                 <select name="link-rfi" value="" onChange={(e) => { if (e.target.value) linkRfi(m, e.target.value); }}
+                                   title="Link this markup to an existing RFI" style={{ ...ctrl, background: "var(--paper-bright)", maxWidth: 150 }}>
+                                   <option value="">Link existing…</option>
+                                   {rfis.map((r) => <option key={r.id} value={r.id}>{r.number}{r.subject ? ` · ${r.subject}` : ""}</option>)}
+                                 </select>
+                               )}
+                             </>
+                           )}
+                         </div>
+                       );
+                     })()}
+                   </div>
+                 ))}
+               </div>
+             )}
+             {leftTab === "stamp" && (
+               <StampPanel
+                 docked
+                 library={stampLib} armedStamp={armedStamp}
+                 selectedMarkup={selectedMarkupId ? markups.find((m) => m.id === selectedMarkupId) : null}
+                 onArm={armStamp} onSaveSelected={saveMarkupAsStamp} onDelete={deleteStamp} onRename={renameStamp}
+                 onExport={exportStamps} onImport={importStamps} onImportSvg={importSvgStamp} onClose={() => setLeftTab(null)}
+               />
+             )}
+             {leftTab === "rfi" && (
+               <RfiPanel
+                 docked
+                 rfis={rfis} markups={markups}
+                 onUpdateRfi={updateRfi} onDeleteRfi={deleteRfi} onFlyTo={flyToMarkup}
+                 sheetLabel={(k) => tabLabel(k)} onClose={() => setLeftTab(null)}
+               />
+             )}
+           </div>
+         </div>
+       )}
+       {splitView ? (
+         <SplitLayout
+           orientation={splitView.orientation}
+           ratio={splitView.ratio}
+           onRatioChange={(r) => setSplitView((s) => s && { ...s, ratio: r })}
+           onFlip={() => setSplitView((s) => s && { ...s, orientation: s.orientation === "v" ? "h" : "v" })}
+           onCollapse={() => setSplitView(null)}
+           primary={primaryViewport}
+           reference={<div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div>}
+         />
+       ) : primaryViewport}
 
         {/* Agent panel — DOCKED right-rail sibling (reflows the canvas like the
             Takeoffs panel). Honest empty state until the BYO-AI seam is
