@@ -7297,6 +7297,7 @@ export default function TakeoffCanvas() {
            // .app-shell div — neither of which this element sits between).
            if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
            e.preventDefault(); e.stopPropagation();
+           e.dataTransfer.dropEffect = "copy"; // negotiate the cursor — a bare preventDefault() without this leaves the browser showing "no-drop" over a valid target
            const r = e.currentTarget.getBoundingClientRect();
            setDragZone(dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView }));
          }}
