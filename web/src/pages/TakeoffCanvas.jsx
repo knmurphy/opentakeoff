@@ -9238,15 +9238,24 @@ export default function TakeoffCanvas() {
         {tilePanelOpen && (() => {
           const selTileCond = selShape && selShape.measure_role === "floor_area" ? condById[selShape.condition_id] : null;
           const selHasTile = selTileCond && hasTileSetup(selTileCond);
-          const selEffectiveConfig = selHasTile ? (() => {
-            const base = tileConfig(selTileCond.tile_setup);
-            const tl = selShape.tile_layout || {};
-            return {
-              ...base,
-              ...(Array.isArray(tl.origin) ? { origin: tl.origin } : {}),
-              ...(tl.rotation != null ? { rotation_deg: tl.rotation } : {}),
-            };
-          })() : null;
+          // Show the SAME resolved config the grid draws and the report counts
+          // (effectiveTileSetup, via byShape.layout.config) — not the raw
+          // tile_setup default. Otherwise a balanced room with no override
+          // would display origin [0,0] while the drawn/counted grid uses the
+          // optimizer origin, and the first "This room" edit would pin a grid
+          // off the wrong baseline. Fall back to the plain merge only when the
+          // shape isn't figured (unscaled sheet → no byShape entry).
+          const selEffectiveConfig = selHasTile
+            ? (tileTakeoff.byShape.get(selShape.id)?.layout?.config || (() => {
+                const base = tileConfig(selTileCond.tile_setup);
+                const tl = selShape.tile_layout || {};
+                return {
+                  ...base,
+                  ...(Array.isArray(tl.origin) ? { origin: tl.origin } : {}),
+                  ...(tl.rotation != null ? { rotation_deg: tl.rotation } : {}),
+                };
+              })())
+            : null;
           return (
             <TilePanel
               layouts={[...tileByCond.entries()].map(([condId, ti]) => {
