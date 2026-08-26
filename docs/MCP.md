@@ -185,8 +185,11 @@ Forty tools, in the order an agent tends to reach for them:
   `export_takeoff` (the raw `opentakeoff.takeoff_canvas.v1` canvas payload—materials
   as config rows, importable by the app), `export_report` (the
   computed `opentakeoff.report.v1` Report document—waste-adjusted nets, the
-  materials buy list as order quantities, per-sheet subtotals, scale
-  provenance; the contract for pricing consumers), `export_marked_pdf` (**the
+  materials buy list as order quantities—including per-condition `roll_goods`
+  (seams figured, cuts packed, rolls ordered) and `tile_goods` (Safe counts,
+  whole-box orders on one dye lot, grout bags, cut sheet) blocks—per-sheet
+  subtotals, scale provenance; the contract for pricing consumers),
+  `export_marked_pdf` (**the
   marked-up planset**—the plan sheets vector-copied with shapes, hatches,
   quantity chips, and annotations burned in, plus a legend cover; the
   deliverable a human reviews, with machine-traced work disclosed as pending

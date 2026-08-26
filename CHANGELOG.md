@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-08-26 — tile learns to buy: patterns, cuts, boxes, and joints
+
+### Added
+- **Tile patterning — the same three-seam shape as roll goods (M3–M4).** A `tile_setup` opt-in on a condition (pattern `grid` / `brick_50` / `brick_33` / `diagonal` / `herringbone` / `basketweave`, rotation, origin, edge strategy, joint width, a SKU list) is what makes a condition tile-patterned; conditions stay trade-agnostic. The pure layout engine tiles every `floor_area` shape on a scaled sheet and classifies each placement full / cut / corner / hole, then a **sliver-avoidance origin optimizer** walks candidate origins to keep the smallest cut piece off the pattern — a naive origin can strand a hairline sliver at a wall, and the optimizer refuses that layout for one that doesn't. **Safe purchase count** is the estimator's own hand-tally rule made explicit: `full` tiles plus one whole tile per `cut` and `corner` piece, because a cut piece never gets re-sliced from scrap on site — from there the order rounds to **whole boxes on one dye lot**, then adds a breakage/attic **margin** on top (`figured` → `with_margin`), so the purchase quantity is never the bare geometric count. Grout figures from the same joint width and tile geometry as the existing grout calculator, in bags. A **cut sheet** consolidates the cut/corner rows into buyable pieces instead of one row per placement. Per-edge **trim** exposure (suggested and confirmed thresholds, read off the condition's transitions) reports **trim LF** plus **inside/outside corner EA**, the same way `derive_base` reports base LF. **TCNA EJ171 movement joints** figure as LF from the perimeter, the field, and the transitions crossing it — the same derivation family as `derive_transitions`. `export_report`'s `opentakeoff.report.v1` gains an additive, always-emitted `tile_goods` block (one row per tile condition with floor shapes on a scaled sheet: `full`/`cut`/`corner`/`hole` counts, `kept_area_sf`, `safe`/`boxes`/`figured`/`with_margin`, `grout_bags`, `cutsheet`, `warnings`) — a tile-less project's exports stay byte-identical, and purchase quantities scale by the condition's `×N` multiplier at the report seam, mirroring `roll_goods` exactly.
+
 ## 2026-08-24 — the takeoff goes back into CAD
 
 ### Added
