@@ -128,8 +128,8 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
         </label>
         {ts.purchase?.reuse?.enabled && (
           <label style={fld}>Sliver threshold (in)
-            <input type="number" min="0" step="0.25" value={ts.purchase?.reuse?.sliver_threshold_in ?? 2}
-              onChange={(e) => patch({ purchase: { ...(ts.purchase || {}), reuse: { ...(ts.purchase?.reuse || {}), sliver_threshold_in: parseFloat(e.target.value) || 0 } } })}
+            <input type="number" min="0.25" step="0.25" value={ts.purchase?.reuse?.sliver_threshold_in ?? 2}
+              onChange={(e) => patch({ purchase: { ...(ts.purchase || {}), reuse: { ...(ts.purchase?.reuse || {}), sliver_threshold_in: Math.max(0.25, parseFloat(e.target.value) || 2) } } })}
               style={{ ...ip, width: 56 }} />
           </label>
         )}

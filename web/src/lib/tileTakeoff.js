@@ -16,7 +16,7 @@ import { reusePlan } from "./tileCalc/reuse.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 
-export { hasTileSetup };
+export { hasTileSetup, reusePlanForCondition };
 
 // verts_norm/verts_norm_holes → feet, using the shape's own bitmap dims + upp.
 // Same normalization roll uses (rollTakeoff.js:118-120), just [x,y] tuples
@@ -232,11 +232,17 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
 // purchase quantities (safe, boxes, grout bags, order figures) scale by
 // multiplier; measured geometry (full/cut/corner/keptArea_sf) is reported
 // as-measured per unit, matching roll's orderFt-is-per-unit / ×N-at-report
-// posture. `reuse_enabled`/`reuse_whole`/`reuse_boxes` (M6) are additive:
-// present with real figures only when the condition's `purchase.reuse`
-// opted in (byCond carries `reuseOrder` in that case — Task 6.2); absent
-// reuse reports `reuse_enabled: false, reuse_whole: 0, reuse_boxes: 0`, and
-// `reuse_whole`/`reuse_boxes` scale by the same ×N multiplier as Safe boxes.
+// posture. `reuse_enabled`/`reuse_whole`/`reuse_with_margin`/`reuse_boxes`/
+// `reuse_downgraded` (M6) are additive: present with real figures only when
+// the condition's `purchase.reuse` opted in (byCond carries `reuseOrder` in
+// that case — Task 6.2); absent reuse reports `reuse_enabled: false,
+// reuse_whole: 0, reuse_with_margin: 0, reuse_boxes: 0, reuse_downgraded:
+// null`. `reuse_whole`/`reuse_with_margin`/`reuse_boxes` scale by the same
+// ×N multiplier as Safe boxes, mirroring Safe's figured/with_margin pair.
+// `reuse_downgraded` carries the pattern-driven downgrade reason string
+// (reusePlanForCondition) when reuse was requested but no savings could be
+// modeled for the pattern — numbers then equal Safe even though
+// `reuse_enabled` is true.
 export function tileReportRows(tileByCond, rows) {
   if (!tileByCond || !tileByCond.size || !Array.isArray(rows)) return [];
   const out = [];
@@ -264,7 +270,9 @@ export function tileReportRows(tileByCond, rows) {
       grout_bags: ti.grout.bags * mult,
       reuse_enabled: reuseEnabled,
       reuse_whole: reuseEnabled ? ti.reuseOrder.figured * mult : 0,
+      reuse_with_margin: reuseEnabled ? ti.reuseOrder.withMargin * mult : 0,
       reuse_boxes: reuseEnabled ? ti.reuseOrder.boxes * mult : 0,
+      reuse_downgraded: reuseEnabled && ti.reuse.downgraded ? ti.reuse.downgraded : null,
       cutsheet: ti.cutsheet,
       warnings: ti.warnings,
     });

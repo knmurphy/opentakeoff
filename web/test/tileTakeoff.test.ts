@@ -6,7 +6,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
 import { orderTiles } from "../src/lib/tileCalc/order.ts";
-import { computeTileTakeoff, tileReportRows } from "../src/lib/tileTakeoff.js";
+import { computeTileTakeoff, tileReportRows, reusePlanForCondition } from "../src/lib/tileTakeoff.js";
+import { reusePlan } from "../src/lib/tileCalc/reuse.ts";
+import type { Classified } from "../src/lib/tileGeometry/classify.ts";
 
 // A 4ft x 4ft square room: verts_norm in [0,1] against a 100x100px sheet
 // rendered at upp=0.04 ft/px => bitmap is 4ft x 4ft.
@@ -259,7 +261,7 @@ test("computeTileTakeoff: With-reuse never perturbs the Safe order (byte-identic
   assert.deepEqual(onSummary.counts, offSummary.counts);
 });
 
-test("tileReportRows: reuse_enabled/reuse_whole/reuse_boxes are additive and scale by the condition multiplier", () => {
+test("tileReportRows: reuse_enabled/reuse_whole/reuse_with_margin/reuse_boxes/reuse_downgraded are additive and scale by the condition multiplier", () => {
   const cond = makeReuseCondition();
   cond.tile_setup.purchase = { reuse: { enabled: true } };
   const shape = makeReuseShape("reuseShapeReport", cond.id);
@@ -272,10 +274,12 @@ test("tileReportRows: reuse_enabled/reuse_whole/reuse_boxes are additive and sca
   assert.equal(out.length, 1);
   assert.equal(out[0].reuse_enabled, true);
   assert.equal(out[0].reuse_whole, summary.reuseOrder.figured * 3);
+  assert.equal(out[0].reuse_with_margin, summary.reuseOrder.withMargin * 3);
   assert.equal(out[0].reuse_boxes, summary.reuseOrder.boxes * 3);
+  assert.equal(out[0].reuse_downgraded, null, "grid is not an AABB-approximate pattern");
 });
 
-test("tileReportRows: reuse disabled reports reuse_enabled:false, reuse_whole:0, reuse_boxes:0", () => {
+test("tileReportRows: reuse disabled reports reuse_enabled:false, reuse_whole:0, reuse_with_margin:0, reuse_boxes:0, reuse_downgraded:null", () => {
   const cond = makeTileCondition();
   const shape = makeShape(cond.id);
   const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
@@ -285,5 +289,96 @@ test("tileReportRows: reuse disabled reports reuse_enabled:false, reuse_whole:0,
   assert.equal(out.length, 1);
   assert.equal(out[0].reuse_enabled, false);
   assert.equal(out[0].reuse_whole, 0);
+  assert.equal(out[0].reuse_with_margin, 0);
   assert.equal(out[0].reuse_boxes, 0);
+  assert.equal(out[0].reuse_downgraded, null);
+});
+
+// FIX 4 (M6 adversarial polish) — grain-locked reuse pools each SKU's
+// offcuts separately (design §3.3): a condition with two usable SKUs must
+// never let one SKU's cut donate/consume an offcut from the other's pool.
+// reusePlanForCondition buckets classified cells by `quad.skuId` and calls
+// the pure `reusePlan` once per bucket, summing wholeTiles — so the
+// condition-level total for a two-SKU classified set must equal the sum of
+// running `reusePlan` independently on each SKU's own cells. Cut dims are
+// deliberately chosen so, if cross-SKU sharing ever crept in (removing the
+// bucketing), the shared/mixed pool would satisfy a cut with fewer whole
+// tiles than the bucketed sum — this test would then fail.
+test("reusePlanForCondition: two SKUs on one condition never share offcuts", () => {
+  const skuA = { id: "skuA", name: "A", w_in: 24, h_in: 24, color: "#111" };
+  const skuB = { id: "skuB", name: "B", w_in: 12, h_in: 12, color: "#222" };
+  const tile_setup = { pattern: "grid", skus: [skuA, skuB] };
+
+  // Each SKU gets two identical straight cuts — classic same-SKU reuse: the
+  // first cut opens a tile and leaves an offcut sized to satisfy the second.
+  // areaFull_sf/areaKept_sf are required by the Classified type but ignored
+  // by reusePlan (it reads cls/cut/quad.skuId only).
+  const cellsA: Classified[] = [
+    { cls: "cut", cut: { w_in: 3, h_in: 24, lShaped: false }, quad: { cx: 0, cy: 0, w: 24, h: 24, rot: 0, skuId: "skuA" }, areaFull_sf: 4, areaKept_sf: 1 },
+    { cls: "cut", cut: { w_in: 3, h_in: 24, lShaped: false }, quad: { cx: 0, cy: 0, w: 24, h: 24, rot: 0, skuId: "skuA" }, areaFull_sf: 4, areaKept_sf: 1 },
+  ];
+  const cellsB: Classified[] = [
+    { cls: "cut", cut: { w_in: 3, h_in: 12, lShaped: false }, quad: { cx: 0, cy: 0, w: 12, h: 12, rot: 0, skuId: "skuB" }, areaFull_sf: 1, areaKept_sf: 0.25 },
+    { cls: "cut", cut: { w_in: 3, h_in: 12, lShaped: false }, quad: { cx: 0, cy: 0, w: 12, h: 12, rot: 0, skuId: "skuB" }, areaFull_sf: 1, areaKept_sf: 0.25 },
+  ];
+
+  const independentA = reusePlan({ classified: cellsA, sku: skuA, pattern: "grid" });
+  const independentB = reusePlan({ classified: cellsB, sku: skuB, pattern: "grid" });
+  const independentSum = independentA.wholeTiles + independentB.wholeTiles;
+
+  const combined = reusePlanForCondition(tile_setup, [...cellsA, ...cellsB], {});
+  assert.equal(combined.wholeTiles, independentSum, "bucketed condition total must equal the sum of per-SKU independent runs");
+  assert.equal(combined.offcutsUsed, independentA.offcutsUsed + independentB.offcutsUsed);
+});
+
+// FIX 5 (M6 adversarial polish) — "figured once per condition" (design §3.3,
+// Invariants) means With-reuse pools classified cells from EVERY shape on
+// the condition into ONE reusePlan call, not one call per shape summed
+// afterward. Two identical 4.25x4.25ft rooms on separate sheets, each
+// producing the same right/bottom-edge cut pairs as the single-room reuse
+// test above (7 wholeTiles on its own, 2 offcuts reused internally): pooled
+// together at the condition level, the SECOND room's cuts can also draw on
+// offcuts the FIRST room's pass left in the pool, so the condition total
+// must beat the naive sum of each room solved independently (byShape run
+// per-shape informational reuse, computed in isolation from the other
+// shape's cells — see summarizeShape).
+const dimsFor3 = (sheetId: string) => (sheetId === "sheetA" || sheetId === "sheetB" ? { w: 100, h: 100 } : null);
+const uppFor3 = (sheetId: string) => (sheetId === "sheetA" || sheetId === "sheetB" ? 0.0425 : null);
+
+function makeReuseShapeOnSheet(id: string, condId: string, sheetId: string) {
+  return {
+    id,
+    sheet_id: sheetId,
+    condition_id: condId,
+    measure_role: "floor_area",
+    verts_norm: [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ],
+  };
+}
+
+test("computeTileTakeoff: With-reuse pools offcuts across shapes on one condition (figured once, not per-shape)", () => {
+  const cond = makeReuseCondition();
+  cond.tile_setup.purchase = { reuse: { enabled: true } };
+  const room1 = makeReuseShapeOnSheet("room1", cond.id, "sheetA");
+  const room2 = makeReuseShapeOnSheet("room2", cond.id, "sheetB");
+
+  const { byCond, byShape } = computeTileTakeoff([cond], [room1, room2], dimsFor3, uppFor3);
+  const agg = byCond.get(cond.id);
+  const s1 = byShape.get("room1");
+  const s2 = byShape.get("room2");
+  assert.ok(agg.reuse && s1.reuse && s2.reuse, "expected condition- and shape-level reuse plans");
+
+  const perShapeSum = s1.reuse.wholeTiles + s2.reuse.wholeTiles;
+  assert.equal(s1.reuse.wholeTiles, 7);
+  assert.equal(s2.reuse.wholeTiles, 7);
+  assert.equal(perShapeSum, 14);
+
+  // Pooled once across both rooms' classified cells, the condition beats the
+  // per-shape-independent sum — cross-room offcut reuse, not summation.
+  assert.ok(agg.reuse.wholeTiles < perShapeSum, "condition-level pooling must beat summing each room's independent reuse plan");
+  assert.equal(agg.counts.safe, s1.counts.safe + s2.counts.safe, "Safe counts still sum additively across shapes");
 });

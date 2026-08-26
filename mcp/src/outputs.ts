@@ -629,7 +629,7 @@ export const exportReportOutput = {
   units: z.string(),
   display_units: z.string(),
   roll_goods: z.array(z.record(z.unknown())).describe("Roll-goods order rows (#136) — order_lf / rolls / order_qty per roll-goods condition, ×N applied; empty when no condition carries a roll_setup (always the case for a headless session today)"),
-  tile_goods: z.array(z.record(z.unknown())).describe("Tile order rows (Task 8) — full/cut/corner/hole counts, kept_area_sf, safe/boxes/figured/with_margin, grout_bags, cutsheet, and warnings per tile-setup condition, ×N applied to purchase quantities; empty when no condition carries a tile_setup"),
+  tile_goods: z.array(z.record(z.unknown())).describe("Tile order rows (Task 8) — full/cut/corner/hole counts, kept_area_sf, safe/boxes/figured/with_margin, grout_bags, reuse_enabled/reuse_whole/reuse_with_margin/reuse_boxes/reuse_downgraded (M6, additive — present with zero/null figures when purchase.reuse is not opted in), cutsheet, and warnings per tile-setup condition, ×N applied to purchase quantities; empty when no condition carries a tile_setup"),
 };
 
 /** export_marked_pdf — the tool writes the PDF to disk and replies with where
