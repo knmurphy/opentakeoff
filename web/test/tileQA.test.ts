@@ -170,3 +170,70 @@ test("tileWarnings: no tile_layout.band → no band_skipped warning", () => {
   const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
   assert.equal(warnings.filter((w) => w.kind === "band_skipped").length, 0);
 });
+
+// FIX 1 (P1) — tileWarnings used to destructure only `{ rings }` from
+// fieldRingForBand and then solve against the RAW `ring_ft` (the full room)
+// for both effectiveTileSetup and solveTileLayout, instead of the band's
+// re-scoped `fieldRing_ft` summarizeShape (tileTakeoff.js) actually orders
+// against. A 4.25ft x 4.25ft square room, 1ft tile, origin [0,0] pinned via
+// start_full: the raw room ring leaves a 0.25ft leftover strip along the
+// far edges (x=[4,4.25], y=[4,4.25]) — under half a tile, a sliver. A
+// 0.25ft-wide band at 0ft offset erodes EXACTLY that leftover strip away:
+// the field's own inner ring becomes [0.25,4.0]x[0.25,4.0], whose far edge
+// (4.0) realigns flush with the tile grid (a grid line at every whole
+// foot), leaving only a 0.75ft corner cut (well over half a tile) on the
+// near edge — zero slivers. Any sliver reported here is therefore
+// necessarily a phantom cell inside the band annulus the takeoff never
+// orders (proven repro: 140 "safe" tiles audited vs 126 actually figured
+// on the review's 20x14ft/1ft-band example).
+test("tileWarnings: FIX 1 — a banded room is audited against the band's inner ring, not the raw room ring (no phantom sliver in the band annulus)", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.edge_strategy = "start_full";
+  const cond = makeCondition("c1", ts);
+  const skuId = ts.skus[0].id;
+  const squareRoom: [number, number][] = [
+    [0, 0],
+    [0.425, 0],
+    [0.425, 0.425],
+    [0, 0.425],
+  ];
+  const shape = {
+    id: "s1",
+    condition_id: "c1",
+    sheet_id: "sheet1",
+    measure_role: "floor_area",
+    verts_norm: squareRoom,
+    tile_layout: { band: { sku_id: skuId, width_ft: 0.25, offset_ft: 0 } },
+  };
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  const slivers = warnings.filter((w) => w.kind === "sliver");
+  assert.equal(
+    slivers.length,
+    0,
+    `expected the band-shrunk field to report zero slivers, got ${JSON.stringify(slivers)}`,
+  );
+});
+
+// FIX 4 (P2) — a band with sku_id set but width_ft <= 0 used to figure
+// nothing and warn nothing, silently solving the full ring (the same P1
+// posture as an unfixed band gate, minus even the honest "too small"
+// warning). It must now be withheld with an explicit warning, agreeing
+// with summarizeShape's (tileTakeoff.js) own width<=0 warning.
+test("tileWarnings: a band with width_ft 0 is withheld with a warning, not a silent full-ring solve", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const cond = makeCondition("c1", ts);
+  const skuId = ts.skus[0].id;
+  const shape = { ...makeShape("s1", "c1"), tile_layout: { band: { sku_id: skuId, width_ft: 0, offset_ft: 0 } } };
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  const skipped = warnings.filter((w) => w.kind === "band_skipped");
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].detail, /width must be > 0/i);
+});

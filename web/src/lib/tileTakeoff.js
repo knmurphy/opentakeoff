@@ -134,11 +134,17 @@ function reusePlanForCondition(tile_setup, classified, reuseOpts) {
 function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   const warnings = [layoutWarning(tile_setup)].filter(Boolean);
   const bandCfg = tile_layout?.band;
-  const { fieldRing_ft, rings } = fieldRingForBand({ ring_ft, holes_ft, band: bandCfg });
+  const { fieldRing_ft, rings, band: resolvedBand, invalidWidth } = fieldRingForBand({ ring_ft, holes_ft, band: bandCfg });
   let band;
-  if (bandCfg && bandCfg.sku_id && Number(bandCfg.width_ft) > 0) {
+  if (invalidWidth) {
+    warnings.push("Band width must be > 0 — band skipped.");
+  } else if (resolvedBand) {
     if (rings) {
-      const bandSku = (tile_setup.skus || []).find((s) => s.id === bandCfg.sku_id) ?? primarySku(tile_setup);
+      const foundSku = (tile_setup.skus || []).find((s) => s.id === resolvedBand.sku_id);
+      const bandSku = foundSku ?? primarySku(tile_setup);
+      if (!foundSku && bandSku) {
+        warnings.push(`Band SKU "${resolvedBand.sku_id}" not on this condition — figured from ${bandSku.name || bandSku.id}.`);
+      }
       const bandTileLen_ft = Math.max(Number(bandSku?.w_in) || 0, Number(bandSku?.h_in) || 0) / 12;
       if (bandSku && bandTileLen_ft > 0) {
         const lf = ringPerimeterFt(rings.outer);
@@ -151,11 +157,10 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
           inner: rings.inner,
         };
       } else {
-        warnings.push(`Band skipped: SKU "${bandCfg.sku_id}" has no usable tile size for a band.`);
+        warnings.push(`Band skipped: SKU "${resolvedBand.sku_id}" has no usable tile size for a band.`);
       }
     } else {
-      const offset_ft = Number(bandCfg.offset_ft) || 0;
-      warnings.push(`Band skipped: room too small for a ${bandCfg.width_ft}ft band at ${offset_ft}ft offset.`);
+      warnings.push(`Band skipped: room too small for a ${resolvedBand.width_ft}ft band at ${resolvedBand.offset_ft}ft offset.`);
     }
   }
   const solveSetup = effectiveTileSetup({ tile_setup, tile_layout, ring_ft: fieldRing_ft, holes_ft });
@@ -214,20 +219,13 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
   if (!tileConds.length) return { byCond, byShape };
   const condById = new Map(tileConds.map((c) => [c.id, c]));
 
-  for (const s of shapes || []) {
-    if (s.measure_role !== "floor_area") continue;
-    const cond = condById.get(s.condition_id);
-    if (!cond) continue;
-    if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) continue;
-    const dims = dimsFor(s.sheet_id);
-    const upp = uppFor(s.sheet_id);
-    if (!dims || !(dims.w > 0) || !(upp > 0)) continue;
-
-    const ring_ft = ringFt(s.verts_norm, dims, upp);
-    const holes_ft = (s.verts_norm_holes || []).map((ring) => ringFt(ring, dims, upp));
-    const summary = summarizeShape(cond.tile_setup, ring_ft, holes_ft, s.tile_layout);
-    byShape.set(s.id, summary);
-
+  // get-or-create the condition aggregate — pulled out so a shape SKIPPED
+  // below (unscaled sheet, degenerate ring) can still land its exclusion on
+  // a real byCond entry (FIX 6): the alternative, silently dropping a
+  // condition whose only shapes were skipped, reports "no tile work" to
+  // export_report/MCP instead of the honest "scale missing"/"degenerate
+  // ring" — a hole in the bid a batch audit exists to catch.
+  const aggFor = (cond) => {
     let agg = byCond.get(cond.id);
     if (!agg) {
       agg = {
@@ -238,9 +236,37 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
         warnings: new Set(),
         shapeIds: [],
         bandBySku: new Map(),
+        excluded: { unscaled: 0, degenerate: 0 },
       };
       byCond.set(cond.id, agg);
     }
+    return agg;
+  };
+
+  for (const s of shapes || []) {
+    if (s.measure_role !== "floor_area") continue;
+    const cond = condById.get(s.condition_id);
+    if (!cond) continue;
+    if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) {
+      aggFor(cond).excluded.degenerate++;
+      continue;
+    }
+    const dims = dimsFor(s.sheet_id);
+    const upp = uppFor(s.sheet_id);
+    // FIX 7: `dims.h > 0` is required alongside `dims.w > 0` (tileQA.ts's
+    // own unscaled-sheet gate checks both) — a zero-height bitmap figures
+    // an all-zero room silently otherwise.
+    if (!dims || !(dims.w > 0) || !(dims.h > 0) || !(upp > 0)) {
+      aggFor(cond).excluded.unscaled++;
+      continue;
+    }
+
+    const ring_ft = ringFt(s.verts_norm, dims, upp);
+    const holes_ft = (s.verts_norm_holes || []).map((ring) => ringFt(ring, dims, upp));
+    const summary = summarizeShape(cond.tile_setup, ring_ft, holes_ft, s.tile_layout);
+    byShape.set(s.id, summary);
+
+    const agg = aggFor(cond);
     agg.counts.full += summary.counts.full;
     agg.counts.cut += summary.counts.cut;
     agg.counts.corner += summary.counts.corner;
@@ -267,6 +293,13 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
   for (const agg of byCond.values()) {
     agg.cutsheet = consolidateCutRows(agg.cutRows);
     delete agg.cutRows;
+    if (agg.excluded.unscaled > 0) {
+      agg.warnings.add(`${agg.excluded.unscaled} room(s) excluded from tile figures: unscaled sheet.`);
+    }
+    if (agg.excluded.degenerate > 0) {
+      agg.warnings.add(`${agg.excluded.degenerate} room(s) excluded from tile figures: degenerate ring.`);
+    }
+    delete agg.excluded;
     agg.warnings = Array.from(agg.warnings);
     agg.order = orderTiles({
       safeCount: agg.counts.safe,

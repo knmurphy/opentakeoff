@@ -254,7 +254,7 @@ function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
               </select>
             </label>
             <label style={fld}>Width (ft)
-              <input type="number" step="0.05" min="0" value={band.width_ft ?? 0.5} onChange={(e) => setBandField("width_ft", parseFloat(e.target.value) || 0)} style={{ ...ip, width: 56 }} />
+              <input type="number" step="0.05" min="0.05" value={band.width_ft ?? 0.5} onChange={(e) => setBandField("width_ft", Math.max(0.05, parseFloat(e.target.value) || 0.5))} style={{ ...ip, width: 56 }} />
             </label>
             <label style={fld}>Offset (ft)
               <input type="number" step="0.05" min="0" value={band.offset_ft ?? 0} onChange={(e) => setBandField("offset_ft", parseFloat(e.target.value) || 0)} style={{ ...ip, width: 56 }} />

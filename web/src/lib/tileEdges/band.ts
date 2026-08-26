@@ -203,6 +203,12 @@ export function ringCornerCount(ring: readonly Pt[]): number {
 
 export type BandConfig = { sku_id?: string; width_ft?: number; offset_ft?: number };
 
+// A band config that has cleared the usable-band gate: a real `sku_id` and a
+// positive `width_ft` (the raw config's `offset_ft` defaults to 0, coerced
+// once here). This is the SOLE validated shape both call sites read `band`
+// as — neither re-tests `sku_id`/`width_ft` on the raw config.
+export type UsableBand = { sku_id: string; width_ft: number; offset_ft: number };
+
 // The single re-scope both `tileTakeoff.js`'s `summarizeShape` and
 // `TakeoffCanvas.jsx`'s `tileOverlayForShape` need: gate on a usable band
 // config, run `bandRings`, and hand back the ring the FIELD solve should
@@ -211,6 +217,17 @@ export type BandConfig = { sku_id?: string; width_ft?: number; offset_ft?: numbe
 // file"); factoring it here makes the parity structural — the two
 // field-solve paths stay byte-identical by construction, not by two authors
 // independently reading the same comment correctly.
+//
+// This is also the SINGLE source of the usable-band decision (design §3.4):
+// callers branch on the returned `band`/`invalidWidth`/`rings` instead of
+// re-testing `band?.sku_id && width_ft > 0` themselves, so the gate can
+// never tighten independently at one call site and drift from the others.
+// `band` is the validated {sku_id, width_ft, offset_ft} — non-null exactly
+// when the raw config named a SKU and a positive width — regardless of
+// whether the geometry itself collapsed (that outcome is `rings`, not
+// `band`). `invalidWidth` flags the specific "SKU named but width_ft <= 0"
+// case a caller needs its own warning for, distinct from "no band
+// configured at all" (both otherwise report `band: null`).
 export function fieldRingForBand({
   ring_ft,
   holes_ft = [],
@@ -219,10 +236,12 @@ export function fieldRingForBand({
   ring_ft: [number, number][];
   holes_ft?: [number, number][][];
   band: BandConfig | null | undefined;
-}): { fieldRing_ft: [number, number][]; rings: BandRings | null } {
-  if (band?.sku_id && Number(band.width_ft) > 0) {
-    const rings = bandRings({ ring_ft, holes_ft, offset_ft: Number(band.offset_ft) || 0, width_ft: Number(band.width_ft) });
-    if (rings) return { fieldRing_ft: rings.inner, rings };
-  }
-  return { fieldRing_ft: ring_ft, rings: null };
+}): { fieldRing_ft: [number, number][]; rings: BandRings | null; band: UsableBand | null; invalidWidth: boolean } {
+  if (!band?.sku_id) return { fieldRing_ft: ring_ft, rings: null, band: null, invalidWidth: false };
+  const width_ft = Number(band.width_ft);
+  if (!(width_ft > 0)) return { fieldRing_ft: ring_ft, rings: null, band: null, invalidWidth: true };
+  const resolved: UsableBand = { sku_id: band.sku_id, width_ft, offset_ft: Number(band.offset_ft) || 0 };
+  const rings = bandRings({ ring_ft, holes_ft, offset_ft: resolved.offset_ft, width_ft: resolved.width_ft });
+  if (rings) return { fieldRing_ft: rings.inner, rings, band: resolved, invalidWidth: false };
+  return { fieldRing_ft: ring_ft, rings: null, band: resolved, invalidWidth: false };
 }

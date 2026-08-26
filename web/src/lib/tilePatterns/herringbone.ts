@@ -1,11 +1,12 @@
 // web/src/lib/tilePatterns/herringbone.ts
 import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
 import { pitchCell } from "../tilePitch.ts";
+import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
 
-// Herringbone is interlock-derived (design §3.1): it ignores the free
-// `origin`/`rotation_deg` and instead grows outward from a single seed
-// plank by repeatedly attaching neighbors at the six joints a plank of
-// nominal size w (long) x h (short) offers another perpendicular plank:
+// Herringbone is interlock-derived (design §3.1): it grows outward from a
+// single seed plank by repeatedly attaching neighbors at the six joints a
+// plank of nominal size w (long) x h (short) offers another perpendicular
+// plank:
 //   - four "T-joints": the capped end of a perpendicular neighbor butts
 //     against one of the two halves of this plank's long edge (top/bottom
 //     x left/right half).
@@ -17,7 +18,12 @@ import { pitchCell } from "../tilePitch.ts";
 // matching plank corners under an axis-aligned edge-to-cap translation
 // (rot values are 0 and π/2, not ±45°) and were verified numerically
 // (raster coverage, zero gap/zero overlap) for the 2:1 case before
-// landing here.
+// landing here. It still ignores the free `origin` for seed placement (the
+// interlock always grows from the room's own center) — but rotation_deg is
+// honored via the same shared whole-pattern post-rotation as every other
+// generator (pattern.ts): the assembled interlock is spun about `origin`
+// after it's built, over an expanded generation bound so a rotated pattern
+// still covers every corner of the room.
 function neighborOffsets(w: number, h: number): [number, number][] {
   const half = h / 2;
   const edge = (w + h) / 2;
@@ -65,7 +71,10 @@ function rectsOverlap(a: Node, b: Node, w: number, h: number): boolean {
 
 export const herringboneGenerator: PatternGenerator = {
   name: "herringbone",
-  generate({ bounds, w, h, joint, skuId }: GenInput): TileQuad[] {
+  generate(input: GenInput): TileQuad[] {
+    const { w, h, joint, origin, skuId } = input;
+    const angle = (input.rotation_deg || 0) * Math.PI / 180;
+    const bounds = angle === 0 ? input.bounds : genBoundsForRotation(input.bounds, origin, angle);
     const cell = pitchCell(w, h, joint);
     const offsets = neighborOffsets(cell.w, cell.h);
     // one-cell padded, like grid, so edge planks exist for later clipping
@@ -131,6 +140,6 @@ export const herringboneGenerator: PatternGenerator = {
       cx: n.cx, cy: n.cy, w, h, rot: normalizeRot(n.rot), skuId,
     }));
     out.sort((a, b) => a.cy - b.cy || a.cx - b.cx || a.rot - b.rot);
-    return out;
+    return angle === 0 ? out : rotateQuadsAboutOrigin(out, origin, angle);
   },
 };

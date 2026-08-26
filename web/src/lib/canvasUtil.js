@@ -74,3 +74,19 @@ export const instantiateTemplate = (t) => ({
 // built-in flooring defaults are only the empty-library fallback. Both paths
 // run instantiateTemplate — ONE condition constructor, no drift.
 export const seedConditions = (library) => (library?.length ? library : FLOORING_DEFAULTS).map(instantiateTemplate);
+// Pure inverse of instantiateTemplate above: condition → template shape (no
+// ids, no component state). Must copy every first-class sub-object
+// instantiateTemplate reinstates (roll_setup, tile_setup, …) — the write
+// side dropping one silently loses it on Library Apply / fresh-workspace
+// seeding, since both read through instantiateTemplate.
+export const condToTemplate = (c) => ({
+  finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
+  waste_pct: c.waste_pct || 0,
+  ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
+  ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
+  ...(c.laborType != null ? { laborType: c.laborType } : {}),
+  ...(c.subfloorType != null ? { subfloorType: c.subfloorType } : {}),
+  ...(c.roll_setup ? { roll_setup: { ...c.roll_setup } } : {}),   // #136 — the roll spec is part of what makes a CPT-1 template CPT-1
+  ...(c.tile_setup ? { tile_setup: structuredClone(c.tile_setup) } : {}),   // nested skus/joint/grout — deep copy, never share (mirrors instantiateTemplate above)
+  materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
+});

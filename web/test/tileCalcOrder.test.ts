@@ -29,3 +29,18 @@ test("PATTERN_WASTE: diagonal/herringbone carry more heuristic waste than grid",
   assert.ok(PATTERN_WASTE.diagonal > PATTERN_WASTE.grid);
   assert.ok(PATTERN_WASTE.herringbone > PATTERN_WASTE.grid);
 });
+
+// FIX 5 (P2) — a non-positive per_box (0, or negative via a bad import/MCP
+// edit_condition payload) used to ceil to Infinity or a negative box count.
+// It must fall back to sold-each (1 per "box") instead.
+test("orderTiles: per_box 0 or negative falls back to sold-each, never Infinity/negative boxes", () => {
+  const zero = orderTiles({ safeCount: 100, sku: sku({ per_box: 0 }), breakage_pct: 0.05, attic_pct: 0 });
+  assert.equal(zero.perBox, 1);
+  assert.ok(Number.isFinite(zero.boxes) && zero.boxes > 0);
+  assert.equal(zero.boxes, zero.withMargin);
+
+  const negative = orderTiles({ safeCount: 100, sku: sku({ per_box: -4 }), breakage_pct: 0.05, attic_pct: 0 });
+  assert.equal(negative.perBox, 1);
+  assert.ok(Number.isFinite(negative.boxes) && negative.boxes > 0);
+  assert.equal(negative.boxes, negative.withMargin);
+});

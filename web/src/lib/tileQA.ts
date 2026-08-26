@@ -136,29 +136,43 @@ export function tileWarnings(
       hole.map(([nx, ny]): [number, number] => [nx * dims.w * upp, ny * dims.h * upp]),
     );
 
-    // Mirrors summarizeShape's (tileTakeoff.js) band gate via the SAME
-    // shared helper: a configured band whose geometry collapses (room too
-    // small) figures no `summary.band` there and pushes a warning that
-    // never leaves the condition card — surface it here too, so a batch
-    // audit catches it without opening every room's panel.
+    // The SAME shared helper summarizeShape (tileTakeoff.js) calls — the
+    // single source of the usable-band decision (band.ts) — so a configured
+    // band whose geometry collapses (room too small) or whose width_ft is
+    // not positive figures no field re-scope there and pushes a warning
+    // that never leaves the condition card; surface both here too, so a
+    // batch audit catches them without opening every room's panel. Passing
+    // `fieldRing_ft` (not the raw `ring_ft`) into effectiveTileSetup and
+    // solveTileLayout below is the FIX for the P1 finding: the audited grid
+    // must be the SAME ring computeTileTakeoff's summarizeShape solves
+    // against, or a banded room is audited on phantom band-annulus cells
+    // the takeoff never orders.
     const bandCfg = s.tile_layout?.band;
-    if (bandCfg?.sku_id && Number(bandCfg.width_ft) > 0) {
-      const { rings } = fieldRingForBand({ ring_ft, holes_ft, band: bandCfg });
-      if (!rings) {
-        warnings.push({
-          condition_id: cond.id,
-          shape_id: s.id,
-          finish_tag,
-          sheet_id,
-          kind: "band_skipped",
-          detail: `Band skipped: room too small for a ${bandCfg.width_ft}ft band at ${Number(bandCfg.offset_ft) || 0}ft offset.`,
-          at_norm: centroidNorm(s.verts_norm),
-        });
-      }
+    const { fieldRing_ft, rings, band, invalidWidth } = fieldRingForBand({ ring_ft, holes_ft, band: bandCfg });
+    if (invalidWidth) {
+      warnings.push({
+        condition_id: cond.id,
+        shape_id: s.id,
+        finish_tag,
+        sheet_id,
+        kind: "band_skipped",
+        detail: "Band width must be > 0 — band skipped.",
+        at_norm: centroidNorm(s.verts_norm),
+      });
+    } else if (band && !rings) {
+      warnings.push({
+        condition_id: cond.id,
+        shape_id: s.id,
+        finish_tag,
+        sheet_id,
+        kind: "band_skipped",
+        detail: `Band skipped: room too small for a ${band.width_ft}ft band at ${band.offset_ft}ft offset.`,
+        at_norm: centroidNorm(s.verts_norm),
+      });
     }
 
-    const solveSetup = effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft, holes_ft });
-    const { config, classified } = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
+    const solveSetup = effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft: fieldRing_ft, holes_ft });
+    const { config, classified } = solveTileLayout({ tile_setup: solveSetup, ring_ft: fieldRing_ft, holes_ft });
     const halfW_in = config.w_in / 2;
     const halfH_in = config.h_in / 2;
 

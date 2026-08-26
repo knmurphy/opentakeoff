@@ -155,7 +155,7 @@ import {
   PANEL_GAP, DETAIL_ENGAGE, DETAIL_MARGIN, MAX_CANVAS_DIM, MAX_CANVAS_AREA, SYNC_MS, GESTURE_MS, SNAP_CELL,
   MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, HL_INKS, HL_SIZES,
 } from "../lib/canvasConstants.js";
-import { uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
+import { uid, clamp, isDangerMsg, instantiateTemplate, condToTemplate, seedConditions } from "../lib/canvasUtil.js";
 // Tile-pyramid rendering (#86) — pure math in lib/tiles.ts (tested), worker
 // pool in lib/tilePool.ts, DOM/Worker orchestration glue here via one
 // long-lived compositor instance. Replaces the old single-raster base +
@@ -7031,16 +7031,6 @@ export default function TakeoffCanvas() {
     templatesRef.current = next; setTemplates(next);
     store.saveTemplates(next).catch((e) => setCommitMsg(`Couldn't save the library: ${e.message || e}`));
   };
-  const condToTemplate = (c) => ({
-    finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
-    waste_pct: c.waste_pct || 0,
-    ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
-    ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
-    ...(c.laborType != null ? { laborType: c.laborType } : {}),
-    ...(c.subfloorType != null ? { subfloorType: c.subfloorType } : {}),
-    ...(c.roll_setup ? { roll_setup: { ...c.roll_setup } } : {}),   // #136 — the roll spec is part of what makes a CPT-1 template CPT-1
-    materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
-  });
   const saveActiveAsTemplate = () => {
     if (!aCond) return;
     const tpl = condToTemplate(aCond);

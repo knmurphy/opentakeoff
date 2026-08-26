@@ -44,7 +44,11 @@ export function orderTiles(args: {
   const breakage = breakage_pct ?? 0.05;
   const attic = attic_pct ?? 0;
   const withMargin = Math.ceil(figured * (1 + breakage) + figured * attic);
-  const perBox = sku.per_box ?? 1;
+  // A non-positive per_box (0, negative, or a garbage import value) would
+  // otherwise ceil to Infinity or a negative box count (MCP edit_condition /
+  // import_takeoff both accept untrusted per_box values) — fall back to
+  // sold-each (1 per "box") instead of propagating the bad value.
+  const perBox = typeof sku.per_box === "number" && sku.per_box > 0 ? sku.per_box : 1;
   const boxes = Math.ceil(withMargin / perBox);
   return { figured, withMargin, boxes, perBox, dyeLots: 1 };
 }

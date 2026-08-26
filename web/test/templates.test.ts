@@ -17,7 +17,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { sanitizeTemplates } from "../src/lib/templates.js";
-import { instantiateTemplate } from "../src/lib/canvasUtil.js";
+import { instantiateTemplate, condToTemplate } from "../src/lib/canvasUtil.js";
 import { store } from "../src/lib/store.js";
 
 beforeEach(() => {
@@ -99,7 +99,7 @@ test("loadTemplates returns [] for a missing or non-array record", async () => {
   assert.deepEqual(await store.loadTemplates(), []);
 });
 
-test("templateFromCondition deep-copies tile_setup (no shared reference)", () => {
+test("instantiateTemplate deep-copies tile_setup (no shared reference)", () => {
   const cond = { finish_tag: "CT-1", color: "#9333ea", waste_pct: 10, materials: [],
     tile_setup: { pattern: "grid", origin: [0, 0], rotation_deg: 0, edge_strategy: "balanced",
       skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
@@ -108,4 +108,41 @@ test("templateFromCondition deep-copies tile_setup (no shared reference)", () =>
   assert.deepEqual(tpl.tile_setup, cond.tile_setup);
   tpl.tile_setup.joint.width_in = 0.25;              // mutate the copy
   assert.equal(cond.tile_setup.joint.width_in, 0.125); // original untouched
+});
+
+// P1 regression: condToTemplate (the WRITE side — save-active-as-template /
+// library save) used to omit tile_setup entirely while instantiateTemplate
+// (the READ side, above) already copied it — Library Apply and fresh-
+// workspace seeding silently dropped tile patterning on every reload.
+test("condToTemplate copies tile_setup (deep, no shared reference)", () => {
+  const cond = { finish_tag: "CT-1", color: "#9333ea", fill: "#9333ea", hatch: "solid", waste_pct: 10, materials: [],
+    tile_setup: { pattern: "grid", origin: [0, 0], rotation_deg: 0, edge_strategy: "balanced",
+      skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
+      joint: { width_in: 0.125 }, grout: {} } };
+  const tpl = condToTemplate(cond);
+  assert.deepEqual(tpl.tile_setup, cond.tile_setup);
+  tpl.tile_setup.joint.width_in = 0.25;               // mutate the copy
+  assert.equal(cond.tile_setup.joint.width_in, 0.125); // original untouched
+});
+
+test("condToTemplate -> instantiateTemplate round-trip preserves tile_setup", () => {
+  const cond = { finish_tag: "CT-1", color: "#9333ea", fill: "#9333ea", hatch: "solid", waste_pct: 10, materials: [],
+    tile_setup: { pattern: "herringbone", origin: [0, 0], rotation_deg: 45, edge_strategy: "balanced",
+      skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
+      joint: { width_in: 0.125 }, grout: {} } };
+  const tpl = condToTemplate(cond);
+  const inst = instantiateTemplate(tpl);
+  assert.deepEqual(inst.tile_setup, cond.tile_setup);
+  inst.tile_setup.joint.width_in = 0.5;
+  assert.equal(cond.tile_setup.joint.width_in, 0.125);
+  assert.equal(tpl.tile_setup.joint.width_in, 0.125);
+});
+
+test("condToTemplate copies roll_setup (no shared reference)", () => {
+  const cond = { finish_tag: "CPT-1", color: "#2f7d54", fill: "#2f7d54", hatch: "solid", waste_pct: 5, materials: [],
+    roll_setup: { width_ft: 12, direction_deg: 0 } };
+  const tpl = condToTemplate(cond);
+  assert.deepEqual(tpl.roll_setup, cond.roll_setup);
+  tpl.roll_setup.width_ft = 15;
+  assert.equal(cond.roll_setup.width_ft, 12);
 });

@@ -565,3 +565,92 @@ test("summarizeShape: a resolved band SKU with no positive tile size skips the b
   // band's inner ring, same as the healthy-SKU band test above.
   assert.equal(summary.counts.full, 4, "field re-scope is independent of band SKU validity");
 });
+
+// FIX 3 (P2) — a band sku_id that doesn't resolve on this condition used to
+// silently fall back to the primary SKU with no warning (only the
+// no-usable-size branch above warned). A stale/mistyped sku_id figuring
+// under the WRONG material with no disclosure is a silent PO error.
+test("summarizeShape: an unresolved band sku_id warns which SKU it was figured from", () => {
+  const cond = makeBandCondition();
+  const primary = cond.tile_setup.skus[0];
+  const banded = { ...makeShape(cond.id), tile_layout: { band: { sku_id: "does-not-exist", width_ft: 1, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [banded], dimsFor, uppFor);
+  const summary = byShape.get(banded.id);
+  assert.ok(summary?.band, "expected a band figure sized off the fallback SKU");
+  assert.ok(
+    summary.warnings.some(
+      (w: string) => typeof w === "string" && w.includes('Band SKU "does-not-exist"') && w.includes(primary.name),
+    ),
+    `expected an unresolved-band-sku warning naming the fallback, got ${JSON.stringify(summary.warnings)}`,
+  );
+});
+
+// FIX 4 (P2) — a band with sku_id set but width_ft <= 0 (reachable via the
+// TilePanel width input's `parseFloat(...)||0` while the band checkbox
+// stays checked) used to figure nothing AND warn nothing — the field
+// silently solved the full ring with no disclosure at all. It must now be
+// withheld with an explicit warning, exactly like a geometrically-collapsed
+// band, and the field must NOT re-scope (no band means no re-scope).
+test("summarizeShape: a band with width_ft 0 is withheld with a warning, field solves against the ORIGINAL ring unchanged", () => {
+  const cond = makeBandCondition();
+  const skuId = cond.tile_setup.skus[0].id;
+  const zeroWidth = { ...makeShape(cond.id), tile_layout: { band: { sku_id: skuId, width_ft: 0, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [zeroWidth], dimsFor, uppFor);
+  const summary = byShape.get(zeroWidth.id);
+  assert.ok(summary);
+  assert.equal(summary.band, undefined, "no band figure for a zero-width band");
+  assert.equal(summary.counts.full, 16, "field solves against the full room ring, unaffected by a zero-width band");
+  assert.ok(
+    summary.warnings.some((w: string) => typeof w === "string" && /width must be > 0/i.test(w)),
+    `expected a band-width warning, got ${JSON.stringify(summary.warnings)}`,
+  );
+});
+
+// FIX 6 (P2) — computeTileTakeoff's shape-skip guards (unscaled sheet,
+// verts<3) used to `continue` with no disclosure at all: a condition whose
+// only shape was skipped never got a byCond entry, so export_report/MCP
+// snapshot reported "no tile work" instead of the real reason. Every skip
+// now lands a warning on the condition's byCond entry (created if needed).
+test("computeTileTakeoff: a tile condition whose only shape sits on an unscaled sheet still gets a byCond exclusion warning", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const { byCond, byShape } = computeTileTakeoff([cond], [shape], () => null, () => null);
+  assert.equal(byShape.size, 0, "the unscaled shape never figures");
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond entry even though every shape on the condition was excluded");
+  assert.equal(agg.counts.full, 0);
+  assert.ok(
+    agg.warnings.some((w: string) => w.includes("excluded from tile figures") && w.includes("unscaled sheet")),
+    `expected an unscaled-sheet exclusion warning, got ${JSON.stringify(agg.warnings)}`,
+  );
+});
+
+test("computeTileTakeoff: a degenerate ring (verts_norm.length < 3) gets a byCond exclusion warning naming the reason", () => {
+  const cond = makeTileCondition();
+  const shape = { ...makeShape(cond.id), verts_norm: [[0, 0], [1, 1]] };
+  const { byCond, byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  assert.equal(byShape.size, 0, "a 2-vertex ring never figures");
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond entry even though the only shape was degenerate");
+  assert.ok(
+    agg.warnings.some((w: string) => w.includes("excluded from tile figures") && w.includes("degenerate ring")),
+    `expected a degenerate-ring exclusion warning, got ${JSON.stringify(agg.warnings)}`,
+  );
+});
+
+// FIX 7 (nit) — the shape-skip guard checked `dims.w > 0` but not
+// `dims.h > 0` (tileQA.ts's own unscaled-sheet gate checks both); a
+// zero-height bitmap dims would otherwise figure an all-zero room silently
+// instead of being excluded with a warning.
+test("computeTileTakeoff: a zero-height sheet dims is excluded like a zero-width one", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const dimsZeroH = (sheetId: string) => (sheetId === "sheet1" ? { w: 100, h: 0 } : null);
+  const { byCond, byShape } = computeTileTakeoff([cond], [shape], dimsZeroH, uppFor);
+  assert.equal(byShape.size, 0, "a zero-height sheet must not figure any tiles");
+  const agg = byCond.get(cond.id);
+  assert.ok(agg);
+  assert.ok(agg.warnings.some((w: string) => w.includes("unscaled sheet")));
+});

@@ -1,11 +1,15 @@
 // web/src/lib/tilePatterns/offset.ts
 import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
 import { pitchCell } from "../tilePitch.ts";
+import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
 
 export function offsetGenerator(name: string, fraction: number): PatternGenerator {
   return {
     name,
-    generate({ bounds, w, h, joint, origin, skuId }: GenInput): TileQuad[] {
+    generate(input: GenInput): TileQuad[] {
+      const { w, h, joint, origin, skuId } = input;
+      const angle = (input.rotation_deg || 0) * Math.PI / 180;
+      const bounds = angle === 0 ? input.bounds : genBoundsForRotation(input.bounds, origin, angle);
       const cell = pitchCell(w, h, joint);
       const [ox, oy] = origin;
       const startJ = Math.floor((bounds.minY - oy) / cell.h) - 1;
@@ -18,7 +22,7 @@ export function offsetGenerator(name: string, fraction: number): PatternGenerato
         for (let i = startI; i <= endI; i++)
           out.push({ cx: ox + rowShift + (i + 0.5) * cell.w, cy: oy + (j + 0.5) * cell.h, w, h, rot: 0, skuId });
       }
-      return out;
+      return angle === 0 ? out : rotateQuadsAboutOrigin(out, origin, angle);
     },
   };
 }

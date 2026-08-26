@@ -1,19 +1,22 @@
 // web/src/lib/tilePatterns/diagonal.ts
 import type { GenInput, PatternGenerator, TileQuad } from "./types.ts";
 import { gridGenerator } from "./grid.ts";
+import { genBoundsForRotation, rotateQuadsAboutOrigin } from "./pattern.ts";
 
 export const diagonalGenerator: PatternGenerator = {
   name: "diagonal",
   generate(input: GenInput): TileQuad[] {
-    const a = Math.PI / 4, ca = Math.cos(a), sa = Math.sin(a);
-    const [ox, oy] = input.origin;
-    // generate on an expanded bound so the rotated lattice still covers the room
-    const pad = Math.hypot(input.bounds.maxX - input.bounds.minX, input.bounds.maxY - input.bounds.minY);
-    const big = { minX: input.bounds.minX - pad, minY: input.bounds.minY - pad,
-                  maxX: input.bounds.maxX + pad, maxY: input.bounds.maxY + pad };
-    return gridGenerator.generate({ ...input, bounds: big }).map((q) => {
-      const dx = q.cx - ox, dy = q.cy - oy;
-      return { ...q, cx: ox + dx * ca - dy * sa, cy: oy + dx * sa + dy * ca, rot: a };
-    });
+    // Diagonal is "grid, rotated" — the original special case the shared
+    // rotation contract (pattern.ts) generalizes. It still defaults to 45°
+    // (the classic diagonal look) when rotation_deg is unset/zero, but an
+    // explicit rotation_deg now overrides that default like every other
+    // generator.
+    const rotDeg = input.rotation_deg || 45;
+    const angle = rotDeg * Math.PI / 180;
+    // generate over the rotation-correct generation bounds (pattern.ts) so
+    // the rotated lattice still fully covers the room from any origin
+    const big = genBoundsForRotation(input.bounds, input.origin, angle);
+    const flat = gridGenerator.generate({ ...input, bounds: big, rotation_deg: 0 });
+    return rotateQuadsAboutOrigin(flat, input.origin, angle);
   },
 };
