@@ -162,7 +162,7 @@ Reached from a **"Keyboard shortcuts…"** button in the `UserGuide` footer. One
 
 Changes apply immediately and persist to this browser.
 
-**v1 limitation (documented):** because capture cancels on `Esc`/`Backspace`, those keys (and `Delete`/`Enter`) cannot be *assigned* as a new binding through the modal. Rebinding the `escape`/`commit`/`deleteBack` commands *away* from their defaults works normally (click the row, type the new chord). Assigning *to* a reserved key is deferred.
+**v1 limitation (documented):** capture cancels on physical `Esc`/`Backspace`, so those two keys cannot be *assigned* as a new binding through the modal. `Enter` and `Delete` are **assignable** once `commit`/`deleteBack` are rebound away — while those commands still hold them, reject-not-steal blocks the assignment (the effective map still owns them). Rebinding the `escape`/`commit`/`deleteBack` commands *away* from their defaults works normally (click the row, type the new chord).
 
 ## 10. Architecture / files
 
@@ -195,5 +195,5 @@ The modal and the handler swap are verified in the running app (Vite): load the 
 - No multi-binding *editor* (a command holds one chord after remap; `deleteBack`'s pair is only a default).
 - No remapping of holds, pointer gestures, or positional digits (see §3).
 - No per-project or per-user (cloud) keymap — browser-global only.
-- No assigning *to* the reserved keys (`Esc`/`Backspace`/`Delete`/`Enter`) — capture cancels on them (see §9).
+- No assigning *to* `Esc`/`Backspace` (capture cancels on them, §9). `Enter`/`Delete` become assignable once `commit`/`deleteBack` move off them.
 - No inline prose copy re-derivation (toast strings keep default key text).
