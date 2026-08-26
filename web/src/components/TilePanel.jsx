@@ -12,7 +12,6 @@
 // (built by the canvas from computeTileTakeoff's byCond + condById) and the
 // Task 4 `warnings` list, and dispatches patches upward. SKU images are
 // deferred (design §6 #1) — color swatch only.
-import { useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 
 const TILE_PATTERNS = [

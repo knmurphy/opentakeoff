@@ -448,8 +448,8 @@ test("exportPayload: a shape's own tile_layout override rides the snapshot verba
   s.editCondition("CT-1", { tile_setup: { pattern: "grid" } });
 
   const target = s.shapes[0];
-  target.tile_layout = { origin: [0.3, 0.1], rotation_deg: 90 };
+  target.tile_layout = { origin: [0.3, 0.1], rotation: 90 };
 
   const p = s.exportPayload() as { tile_layouts: Array<{ tile_layout?: unknown }> };
-  assert.deepEqual(p.tile_layouts[0].tile_layout, { origin: [0.3, 0.1], rotation_deg: 90 });
+  assert.deepEqual(p.tile_layouts[0].tile_layout, { origin: [0.3, 0.1], rotation: 90 });
 });

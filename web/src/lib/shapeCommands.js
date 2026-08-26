@@ -436,7 +436,20 @@ export function applyShapeCommand(shapes, cmd) {
       const next = shapes.map((sh) => {
         if (sh.id !== cmd.id) return sh;
         prior = "tile_layout" in sh ? { tile_layout: sh.tile_layout } : {};
-        return { ...sh, tile_layout: { ...(sh.tile_layout || {}), ...cmd.patch } };
+        // Merge, then drop any key the patch set to `undefined` — the panel's
+        // "follow condition default" reset sends `{rotation: undefined}`, and
+        // absent-means-inherit (§4.1) requires the key GONE, not present-and-
+        // undefined. An override emptied of every key collapses to no
+        // tile_layout at all, so a fully-reset room reads identically to one
+        // that never carried an override (and hashes stably in tileLayoutSig).
+        const merged = { ...(sh.tile_layout || {}), ...cmd.patch };
+        for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
+        if (Object.keys(merged).length === 0) {
+          if (!("tile_layout" in sh)) return sh;
+          const { tile_layout: _tl, ...rest } = sh;
+          return rest;
+        }
+        return { ...sh, tile_layout: merged };
       });
       return { shapes: next, inverse: { type: "tileLayout", id: cmd.id, restore: prior } };
     }

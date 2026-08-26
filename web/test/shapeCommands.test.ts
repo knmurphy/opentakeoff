@@ -543,7 +543,7 @@ test("tileLayout: sets tile_layout on a shape with none; inverse removes the key
   const shapes = [
     { id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]] },
   ];
-  const patch = { origin: [0.1, 0.1], rotation_deg: 15 };
+  const patch = { origin: [0.1, 0.1], rotation: 15 };
   const r = roundTrip(shapes, { type: "tileLayout", id: "a", patch });
   assert.deepEqual(r.shapes[0].tile_layout, patch);
   assert.equal(r.shapes[0].updated_at, undefined, "no stamp — a layout override is not a geometry edit");
@@ -557,13 +557,13 @@ test("tileLayout: merges patch onto an existing tile_layout; inverse restores th
   const shapes = [
     {
       id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]],
-      tile_layout: { origin: [0, 0], rotation_deg: 0, cut_sides: ["N"] },
+      tile_layout: { origin: [0, 0], rotation: 0, cut_sides: ["N"] },
     },
   ];
-  const patch = { rotation_deg: 45, edge_overrides: { 0: "trim" } };
+  const patch = { rotation: 45, edge_overrides: { 0: "trim" } };
   const r = roundTrip(shapes, { type: "tileLayout", id: "a", patch });
   assert.deepEqual(r.shapes[0].tile_layout, {
-    origin: [0, 0], rotation_deg: 45, cut_sides: ["N"], edge_overrides: { 0: "trim" },
+    origin: [0, 0], rotation: 45, cut_sides: ["N"], edge_overrides: { 0: "trim" },
   }, "patch shallow-merges over the existing tile_layout — untouched fields survive");
   assert.deepEqual(r.inverse, { type: "tileLayout", id: "a", restore: { tile_layout: shapes[0].tile_layout } });
   const undone = applyShapeCommand(r.shapes, r.inverse);
@@ -575,7 +575,7 @@ test("tileLayout: input array and shape object are never mutated", () => {
     { id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: [[0, 0], [1, 0], [1, 1]], tile_layout: { origin: [0, 0] } },
   ];
   const before = clone(shapes);
-  const r = applyShapeCommand(shapes, { type: "tileLayout", id: "a", patch: { rotation_deg: 90 } });
+  const r = applyShapeCommand(shapes, { type: "tileLayout", id: "a", patch: { rotation: 90 } });
   assert.notEqual(r.shapes, shapes, "apply must return a new array");
   assert.notEqual(r.shapes[0], shapes[0], "apply must return a new shape object for the touched shape");
   assert.deepEqual(shapes, before, "the input array/shape must be untouched");
