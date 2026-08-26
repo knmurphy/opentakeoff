@@ -613,6 +613,25 @@ export default function TakeoffCanvas() {
   // the run-click render's. Updated every render (cheap object build).
   const agentStateRef = useRef({ panels: [], scales: {}, scaleSources: {}, detectedScales: {}, conditions: [], status: "loading" });
   useEffect(() => () => agentAbortRef.current?.abort(), []);   // leaving the canvas stops a live agent run
+  // Dev-only long-task logger: surface main-thread blocks >=50ms during real
+  // interaction (pan/zoom, pattern switch, vertex drag) in the console, so a
+  // perf regression self-reports without an explicit profiling pass. Stripped
+  // from production (import.meta.env.DEV is false there) and a no-op where the
+  // `longtask` entry type is unsupported (Safari/Firefox). Complements the
+  // offline timing gate in bench/tilePerf.mts.
+  useEffect(() => {
+    if (!import.meta.env.DEV || typeof PerformanceObserver === "undefined") return undefined;
+    let obs;
+    try {
+      obs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          if (e.duration >= 50) console.warn(`[longtask] ${Math.round(e.duration)}ms`, e.name || "");
+        }
+      });
+      obs.observe({ entryTypes: ["longtask"] });
+    } catch { /* longtask unsupported — logger stays a no-op */ }
+    return () => { try { obs?.disconnect(); } catch { /* already gone */ } };
+  }, []);
   const [ocSel, setOcSel] = useState(null);        // selected proposal vertex {ri, vi} — Delete removes just that point
   const [ocHover, setOcHover] = useState(-1);      // proposal region under the cursor — handles reveal on hover
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)

@@ -13,6 +13,7 @@
     "test": "node --import tsx --test test/*.test.ts",
     "bench": "node --import tsx bench/run.mts",
     "bench:callouts": "node --import tsx bench/callouts.mts",
+    "bench:tile": "node --import tsx bench/tilePerf.mts",
     "bench:batch": "node --import tsx bench/batch.mts",
     "check": "npm run typecheck && npm run lint && npm test && npm run bench && npm run build",
     "styles:sync": "diff src/styles/tokens.css ${SPLINE_DIR:-../../spline-app/frontend}/src/styles/tokens.css && diff src/styles/app.css ${SPLINE_DIR:-../../spline-app/frontend}/src/styles/app.css && echo styles-in-sync || echo \"sibling missing or drifted (non-fatal)\"",
