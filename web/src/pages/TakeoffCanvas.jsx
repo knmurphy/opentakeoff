@@ -329,6 +329,12 @@ function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverrid
 // no trim and is never drawn (skipped at the render call site).
 const TILE_EDGE_COLORS = { trim: "#c47a10", threshold: "#1f3fc7", bullnose: "#0e9488", cove: "#7c3aed" };
 
+// FIFO cap for netCacheRef (One-Click built "net" per sheet+scale). A long
+// session revisiting many sheets at many zoom tiers — each ftPx tier is a
+// distinct key — would otherwise grow this unbounded (unlike maskCacheRef,
+// which is cleared on group change). 24 tiers of live work is generous.
+const NET_CACHE_MAX = 24;
+
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
   const [sheets, setSheets] = useState([]);
@@ -4934,6 +4940,9 @@ export default function TakeoffCanvas() {
         built = netCall({ type: "build", key: ck, segs, meta, subpaths: subpathsIn, ftPx, texts: textsIn, opts: buildOpts })
           .then((m) => { if (m.error) { netCacheRef.current.delete(ck); throw new Error(m.error); } try { Object.assign(window.__netLast, { faces: m.faces, starved: m.starved, ms: m.ms }); } catch { /* diagnostics only */ } return m; });
         netCacheRef.current.set(ck, built);
+        // FIFO evict oldest over the cap. Safe to drop an in-flight promise:
+        // an awaiter already holds its reference (a future miss just rebuilds).
+        while (netCacheRef.current.size > NET_CACHE_MAX) netCacheRef.current.delete(netCacheRef.current.keys().next().value);
       }
       let info;
       try { info = await built; }
@@ -5978,6 +5987,7 @@ export default function TakeoffCanvas() {
         built = netCall({ type: "build", key: ck, segs, meta, subpaths: subpathsRef.current.get(key) || null, ftPx, texts: textMarksRef.current.get(key) || [], opts: {} })
           .then((m) => { if (m.error) { netCacheRef.current.delete(ck); throw new Error(m.error); } return m; });
         netCacheRef.current.set(ck, built);
+        while (netCacheRef.current.size > NET_CACHE_MAX) netCacheRef.current.delete(netCacheRef.current.keys().next().value);   // FIFO cap (see the first build site)
       }
       try { await built; } catch { return { error: "One-Click couldn't read this sheet's linework — the estimator will have to trace it." }; }
       const rm = await netCall({ type: "room", key: ck, x: local[0] * kF, y: local[1] * kF, ftPx, mode: "room" });
