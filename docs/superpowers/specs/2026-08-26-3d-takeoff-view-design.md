@@ -148,8 +148,9 @@ value exists until a consumer reads it). **Default when unset: `vertical`** —
 flush is the opt-in minority case; the builder dispatches unset as vertical so
 a user-created third linear condition (a second base product, another reducer
 type) never lands in an undefined state. **UI entry point, pinned:** a
-two-state toggle beside the extrude_h_ft input on the same param row, after
-the `Style <select>` enum precedent at `TakeoffsPanel.jsx:466-472`. Shown
+two-state toggle button (not a second `<select>`) beside the extrude_h_ft
+input on the same param row — following the inline-enum-control precedent of
+the `Style <select>` at `TakeoffsPanel.jsx:466-472`. Shown
 unconditionally, same reasoning as extrude_h_ft — inert where no linear shapes
 exist, so a brand-new reducer-type condition can reach `flush` before its
 first shape commits.
@@ -190,15 +191,18 @@ for mixed wall heights; extrude_h_ft adopts it rather than inventing a
 stricter condition-splitting requirement.
 
 Unset `extrude_h_ft` → translucent nominal post/ribbon + legend note
-(refusal-over-guessing carried into visuals). With seeds plus the nudge this
-is the rare case, not the day-one default.
+(refusal-over-guessing carried into visuals). The nominal HEIGHT is its own
+constant (start: 3 ft — a tall dimension, distinct from the 1/24 ft floor
+thickness nominal; never borrow one for the other). With seeds plus the nudge
+this is the rare case, not the day-one default.
 
 ### 3. `web/src/components/View3D.jsx` — lazy renderer + overlay
 
 `React.lazy(() => import(...))`; Vite splits three into the chunk. Import
-`OrbitControls` from `three/examples/jsm/controls/OrbitControls.js` (the file,
-not the addons barrel — the 150 KB gz estimate holds only under per-file
-imports; verify against a real build before asserting in docs).
+`OrbitControls` from `three/examples/jsm/controls/OrbitControls.js` and
+`mergeGeometries` from `three/examples/jsm/utils/BufferGeometryUtils.js` —
+the files, not the addons barrel (the 150 KB gz estimate holds only under
+per-file imports; verify against a real build before asserting in docs).
 
 Renderer contract (all from the Web3D review):
 
@@ -209,13 +213,19 @@ Renderer contract (all from the Web3D review):
   attribute joins the merge). **Carve-outs, stated:** (1) standalone-deduct
   excluded volumes get **one translucent-red mesh per condition that owns a
   standalone deduct, parented under that condition's Group** — alpha-blended
-  material cannot share a draw call with the condition's opaque geometry, and
+  material (`depthWrite: false` — an excluded volume can sit coincident with
+  an unholed slab beneath it; opaque+transparent coplanarity is a textbook
+  z-fight) cannot share a draw call with the condition's opaque geometry, and
   per-condition parenting keeps explode and legend toggles working through
   ordinary visibility/transform (a shared scene-wide batch would orphan the
   red marker mid-explode and can't be condition-toggled without a rebuild);
   (2) count posts get **one InstancedMesh per condition that owns count
   shapes**, parented under that condition's Group, built from a unit-height
-  post geometry with per-instance z-scale = each shape's snapshotted
+  post geometry that is **BASE-ANCHORED — local z spans [0, 1], never a
+  default-centered [-0.5, 0.5] primitive** (a centered geometry under
+  per-instance z-scale buries half of every post below the floor: an 8'0"
+  guard renders 4' under grade, silently). Instance matrix = translate(x, y,
+  0) · scale(rx, ry, extrude_h_ft) with each shape's snapshotted
   `extrude_h_ft` (condition default, or its per-shape override — per-shape
   heights must not break instancing), with an instanceId→shapeId array
   kept alongside for future consumers (no raycast/picking in v1 — selection
@@ -240,10 +250,11 @@ Renderer contract (all from the Web3D review):
   audit — that needs a vertical section the data does not support. **Section
   cut and explode are mutually exclusive in the UI** (a world-space plane does
   not track per-condition Δz; coupling them is undefined physics).
-- **Lifecycle:** on unmount — `renderer.dispose()`, `renderer.forceContextLoss()`,
-  dispose every geometry/material, null refs. WebGL context-lost → overlay +
-  re-init. If open/close profiling shows hitches, keep one renderer alive
-  hidden instead of remounting.
+- **Lifecycle:** on unmount — `renderer.dispose()`,
+  `renderer.forceContextLoss()`, `controls.dispose()` (OrbitControls attaches
+  its own DOM listeners), dispose every geometry/material, null refs. WebGL
+  context-lost → overlay + re-init. If open/close profiling shows hitches,
+  keep one renderer alive hidden instead of remounting.
 - **DPI/resize:** `ResizeObserver` → `camera.aspect` +
   `camera.updateProjectionMatrix()` (mutating `.aspect` alone is a no-op) +
   `renderer.setSize()`; `setPixelRatio(min(devicePixelRatio, 2))`.
@@ -251,8 +262,9 @@ Renderer contract (all from the Web3D review):
   color — no light rig, consistent with schematic fidelity; DoubleSide as
   stated above.
 - **Framing:** fit-to-content from bounding sphere + FOV, recomputed on legend
-  toggle (visible content changes). Explode deliberately leaves framing
-  static (exploded groups may exit the fitted sphere; the user re-frames).
+  toggle (visible content changes) and via a dedicated reset-view button in
+  the overlay chrome. Explode deliberately leaves framing static (exploded
+  groups may exit the fitted sphere); the button is the re-frame affordance.
 
 ### 4. TakeoffCanvas integration (monolith preserved — trigger only)
 
