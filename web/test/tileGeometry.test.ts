@@ -70,16 +70,37 @@ for (const pat of ["grid", "brick_50", "brick_33", "diagonal"]) {
 // classifyLayout takes joint_in in INCHES — this pins the correct unit
 // conversion between the two call sites (Task 10 review finding). A
 // 1/4in joint is 0.25/12 ft to generate() and 0.25 to classifyLayout().
-test("grid: a nonzero joint produces a sensible, joint-inset cut dimension", () => {
+test("grid: a nonzero joint produces a sensible, joint-inset cut dimension, with a FEET-unit lattice", () => {
   const g = getPattern("grid");
   const jointIn = 0.25;
+  const jointFt = jointIn / 12;
   const input = {
     bounds: { minX: 0, minY: 0, maxX: 1.5, maxY: 2 },
-    w: 1, h: 1, joint: jointIn / 12,
+    w: 1, h: 1, joint: jointFt,
     origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s",
   };
+  const quads = g.generate(input);
+
+  // Pin the GENERATOR side of the unit boundary directly: grid's lattice
+  // pitch is `w + joint` in generate()'s own (feet) unit, so two tiles in
+  // the same row must sit exactly `1 + jointFt` apart. If generate() were
+  // ever fed `jointIn` (0.25) as if it were feet — the exact bug this test
+  // exists to catch — spacing would be 1.25, not ~1.02083, and this fails.
+  const cy0 = quads[0].cy;
+  const row = quads.filter((q) => q.cy === cy0).map((q) => q.cx).sort((a, b) => a - b);
+  assert.ok(row.length >= 2, "row has at least two tiles to measure lattice spacing");
+  const spacing = row[1] - row[0];
+  assert.ok(
+    Math.abs(spacing - (1 + jointFt)) < 1e-6,
+    `lattice spacing (${spacing}) should be tile width + joint-in-FEET (${1 + jointFt})`,
+  );
+
+  // Pin the CLASSIFY side of the unit boundary: classifyLayout takes
+  // joint_in in INCHES (0.25, not 0.25/12) and insets the installed face
+  // by half that joint, so a cut tile's kept width must land strictly
+  // between 0 and the 12in nominal face.
   const narrow: [number, number][] = [[0, 0], [1.5, 0], [1.5, 2], [0, 2]];
-  const c = classifyLayout(g.generate(input), narrow, [], jointIn);
+  const c = classifyLayout(quads, narrow, [], jointIn);
   const cut = c.find((x) => x.cls === "cut" || x.cls === "corner");
   assert.ok(cut, "a cut/corner tile exists in a 1.5ft-wide room of 1ft tiles");
   const w_in = cut!.cut!.w_in;
