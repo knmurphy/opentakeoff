@@ -107,6 +107,22 @@ import RollPanel from "../components/RollPanel.jsx";
 import LayerPanel from "../components/LayerPanel.jsx";
 import { rollColorForType } from "../lib/rollgoods.js";
 import { computeRollTakeoff, seamLfByShape } from "../lib/rollTakeoff.js";
+// Tile patterning (M5 Task 6): computeTileTakeoff mirrors rollTakeoff's own
+// bridge (byCond/byShape); solveTileLayout is the pure inch/foot solve
+// bridge run PER tiled floor shape here for RENDERING (byShape carries no
+// quads); tileOverlay turns a solved layout into panel-px SVG primitives +
+// the hatch<->grid LOD gate; tileQA is the cross-room sliver/warning batch
+// list; TilePanel is the docked setup/room/QA desk. shapeCommands' own
+// `tileLayout` command (mirrors `rollcut`) is the ONE undoable per-room
+// origin/rotation/edge-override command every gesture below dispatches.
+import TilePanel from "../components/TilePanel.jsx";
+import { computeTileTakeoff } from "../lib/tileTakeoff.js";
+import { hasTileSetup, tileConfig } from "../lib/tileSetup.ts";
+import { solveTileLayout } from "../lib/tileSolve.ts";
+import { tileOverlayPrimitives, shouldShowGrid } from "../lib/tileOverlay.ts";
+import { tileWarnings } from "../lib/tileQA.ts";
+import { tileLayoutSig } from "../lib/tileLayoutSig.ts";
+import { edgeExposures } from "../lib/tileEdges/expose.ts";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -253,6 +269,37 @@ const TOOL_VERB = {
 
 // The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
 // live in components/TakeoffsPanel.jsx — the panel is their only surface now.
+
+// Tile patterning (M5 Task 6) — the pure per-shape solve+overlay bridge. A
+// module-level function (no React state closures) so the steady-state memo
+// AND a live origin-drag preview can share exactly one code path: pass an
+// explicit origin/rotation override for the live-drag case, omit both for
+// the shape's own committed tile_layout (falling through to the condition
+// default per §4.1). ringFt mirrors tileTakeoff.js's own conversion byte
+// for byte (verts_norm -> feet via the shape's bitmap dims + upp) — the
+// two modules must never disagree about where a room's ring sits.
+function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverride) {
+  if (!cond || !dims || !(dims.w > 0) || !(upp > 0)) return null;
+  if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) return null;
+  const ringFt = (verts) => verts.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
+  const ring_ft = ringFt(s.verts_norm);
+  const holes_ft = (s.verts_norm_holes || []).map(ringFt);
+  const base = tileConfig(cond.tile_setup);
+  const tl = s.tile_layout || {};
+  const origin = originOverride !== undefined ? originOverride : (Array.isArray(tl.origin) ? tl.origin : base.origin);
+  const rotation_deg = rotationOverride !== undefined ? rotationOverride : (tl.rotation != null ? tl.rotation : base.rotation_deg);
+  const effective = { ...cond.tile_setup, origin, rotation_deg };
+  const layout = solveTileLayout({ tile_setup: effective, ring_ft, holes_ft });
+  const skus = cond.tile_setup?.skus || [];
+  const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond.color || "#888";
+  const overlay = tileOverlayPrimitives(layout, upp, skuColor);
+  const edges = edgeExposures({ ring_ft, overrides: Object.fromEntries(Object.entries(tl.edge_overrides || {}).map(([i, o]) => [i, o?.exposure])) });
+  return { config: layout.config, tiles: overlay.tiles, origin: overlay.origin, ring_ft, edges };
+}
+
+// Edge-exposure ink (M5 Task 6, tileEdges/expose.ts kinds) — "field" needs
+// no trim and is never drawn (skipped at the render call site).
+const TILE_EDGE_COLORS = { trim: "#c47a10", threshold: "#1f3fc7", bullnose: "#0e9488", cove: "#7c3aed" };
 
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
@@ -516,6 +563,12 @@ export default function TakeoffCanvas() {
   const [rollEdit, setRollEdit] = useState(false);        // cut-edit mode — cuts take pointer events (slide / resize / double-click reset)
   const [rollPanelOpen, setRollPanelOpen] = useState(false); // docked Roll panel (diagram + reorder)
   const rollDragRef = useRef(null);                       // live cut-drag gesture; commit is ONE rollcut command on release
+  // ── tile patterning (M5 Task 6) — view state; figured layouts are a memo below ──
+  const [tileShow, setTileShow] = useState(true);         // draw the figured tile grid over the plan
+  const [tileEdit, setTileEdit] = useState(false);        // origin/edge-edit mode — the overlay takes pointer events
+  const [tilePanelOpen, setTilePanelOpen] = useState(false); // docked Tile panel (setup + this room + QA)
+  const [tileDragPreview, setTileDragPreview] = useState(null); // live origin-drag preview: {id, origin:[x,y] ft} for ONE shape, never written to `shapes` (tileLayout has no `prev` escape hatch — see beginTileOrigin)
+  const tileDragRef = useRef(null);                       // live origin-drag gesture; commit is ONE tileLayout command on release
   const [agentLog, setAgentLog] = useState([]);           // streaming run status [{kind, text}]
   const [agentRunning, setAgentRunning] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false); // BYO-key config modal (ai.js seam)
@@ -642,6 +695,7 @@ export default function TakeoffCanvas() {
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
   const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
   const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
+  const tileFocusRef = useRef(null);    // pending QA-warning fly-to target: {sheet_id, at_norm?, shape_id?} (M5 Task 6, same two-phase posture as pendingFlyRef)
 
   const [snapOn, setSnapOn] = useState(false);   // snap-to-vector (beta) — off until calibrated on real plans
   const [angleOn, setAngleOn] = useState(true);  // 45°/90° angle guides (polar tracking) — on by default; ⇧ = hard lock
@@ -1092,6 +1146,112 @@ export default function TakeoffCanvas() {
   // the HUD, the project roll-up, and a zone check agree with the Report on
   // what the layout welds.
   const seamCtx = useMemo(() => ({ seamByShape: seamLfByShape(rollByCond) }), [rollByCond]);
+
+  // Tile takeoff (M5 Task 6) — mirrors rollTakeoff's own memo exactly: same
+  // dimsFor/uppFor closures, same dep list (uppFor reads scales + a pinned
+  // ref, never listed directly).
+  const tileTakeoff = useMemo(
+    () => computeTileTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff above
+    [conditions, shapes, panelImgs, scales]
+  );
+  const tileByCond = tileTakeoff.byCond;
+  // §3.7 persist/reset key — every tiled floor shape's tileLayoutSig, joined.
+  // Pure zoom/pan never touches verts_norm/tile_setup/tile_layout, so this
+  // string is stable across them; a real geometry/setup/override edit flips
+  // it. tileOverlayByPanel keys off THIS, not `shapes` directly, so a live
+  // drag preview (which never writes `shapes` — see beginTileOrigin below)
+  // can't thrash the expensive per-room solve on every render either.
+  const tileOverlaySig = useMemo(() => {
+    const tileConds = conditions.filter(hasTileSetup);
+    if (!tileConds.length) return "";
+    const condMap = new Map(tileConds.map((c) => [c.id, c]));
+    const parts = [];
+    for (const s of shapes) {
+      if (s.measure_role !== "floor_area") continue;
+      const cond = condMap.get(s.condition_id);
+      if (!cond) continue;
+      parts.push(s.id + ":" + tileLayoutSig(s, cond.tile_setup));
+    }
+    return parts.join("|");
+  }, [conditions, shapes]);
+  // Per-panel solved overlays (§4.1/§4.2) — one entry per tiled floor shape,
+  // each carrying its own solved tile grid + ring + edge exposures in PANEL
+  // px. A live origin-drag (tileDragPreview) overrides ONE shape's entry at
+  // render time (see the overlay render below) rather than re-keying this
+  // memo, so dragging never re-solves every OTHER room on the sheet.
+  const tileOverlayByPanel = useMemo(() => {
+    const byPanel = new Map();
+    const tileConds = conditions.filter(hasTileSetup);
+    if (!tileConds.length) return byPanel;
+    const condMap = new Map(tileConds.map((c) => [c.id, c]));
+    for (const s of shapes) {
+      if (s.measure_role !== "floor_area") continue;
+      const cond = condMap.get(s.condition_id);
+      if (!cond) continue;
+      const dims = panelImgs[s.sheet_id] || null;
+      const upp = uppFor(s.sheet_id);
+      const ov = tileOverlayForShape(s, cond, dims, upp);
+      if (!ov) continue;
+      const arr = byPanel.get(s.sheet_id) || [];
+      arr.push({ shapeId: s.id, conditionId: cond.id, upp, ...ov });
+      byPanel.set(s.sheet_id, arr);
+    }
+    return byPanel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tileOverlaySig (not `shapes`/`conditions` directly) is the real memo key, §3.7: persists across pure zoom, resets only on a real geometry/setup/override edit
+  }, [tileOverlaySig, panelImgs, scales]);
+  // Cross-room QA (Task 4) — a 40-room job audited once, not one zoom at a
+  // time. Same dimsFor/uppFor contract as computeTileTakeoff.
+  const tileWarningsList = useMemo(
+    () => tileWarnings(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff/tileTakeoff above
+    [conditions, shapes, panelImgs, scales]
+  );
+
+  // Origin drag (M5 Task 6) — mirrors the roll cut-drag pattern (#136) below,
+  // with ONE deliberate difference: shapeCommands' `tileLayout` command has
+  // no `rollcut`-style `prev` escape hatch, so it always derives its undo
+  // inverse from the CURRENT `shapes` array at commit time. A live preview
+  // that wrote straight into `shapes` (roll's own preview path) would
+  // poison that inverse with the near-final drag position instead of the
+  // true grab-time origin. So the live preview lives entirely in
+  // `tileDragPreview` (component state, never touches `shapes`); `shapes` —
+  // and therefore the command's `prior` snapshot — stays exactly as it was
+  // at grab time until the ONE dispatchShape fired on release.
+  const beginTileOrigin = (e, shapeId, upp, baseOriginFt) => {
+    if (!tileEdit) return;
+    e.stopPropagation(); e.preventDefault();
+    tileDragRef.current = { id: shapeId, upp, sx: e.clientX, sy: e.clientY, base: baseOriginFt, moved: false, lastOrigin: null };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const moveTileOrigin = (e) => {
+    const d = tileDragRef.current; if (!d) return;
+    const dxFt = ((e.clientX - d.sx) / tfRef.current.scale) * d.upp;
+    const dyFt = ((e.clientY - d.sy) / tfRef.current.scale) * d.upp;
+    d.moved = d.moved || Math.abs(dxFt) > 1e-4 || Math.abs(dyFt) > 1e-4;
+    d.lastOrigin = [d.base[0] + dxFt, d.base[1] + dyFt];
+    setTileDragPreview({ id: d.id, origin: d.lastOrigin });
+  };
+  const endTileOrigin = () => {
+    const d = tileDragRef.current; if (!d) return;
+    tileDragRef.current = null;
+    setTileDragPreview(null);
+    if (!d.moved || !d.lastOrigin) return;   // zero-motion = not an edit — no command, no undo entry
+    dispatchShape({ type: "tileLayout", id: d.id, patch: { origin: d.lastOrigin } });
+  };
+  // Edge-exposure confirm (M5 Task 6) — click an edge in edit mode to cycle
+  // its kind and confirm it in one step (tileEdges/expose.ts: a confirmed
+  // override always wins over the proximity-suggested default). ONE
+  // tileLayout command per click — a click has no drag delta to preview.
+  const TILE_EDGE_CYCLE = ["trim", "threshold", "bullnose", "cove", "field"];
+  const cycleTileEdge = (shapeId, edgeIndex, currentKind) => {
+    const s = shapes.find((sh) => sh.id === shapeId);
+    if (!s) return;
+    const i = TILE_EDGE_CYCLE.indexOf(currentKind);
+    const next = TILE_EDGE_CYCLE[(i + 1) % TILE_EDGE_CYCLE.length];
+    const edge_overrides = { ...(s.tile_layout?.edge_overrides || {}), [edgeIndex]: { exposure: next, confirmed: true } };
+    dispatchShape({ type: "tileLayout", id: shapeId, patch: { edge_overrides } });
+  };
 
   // Cut drag (#136) — the self-contained element-drag pattern (the panel-resize
   // handle's): the cut's own <g> opts into pointer events in edit mode, captures
@@ -2156,6 +2316,20 @@ export default function TakeoffCanvas() {
     // once the panel bitmap exists, center (or give up if the markup has no anchor)
     // and clear the ref regardless, so an unanchored markup can't get stuck pending.
     if (sp && sp.img.w) { centerOnMarkup(m); pendingFlyRef.current = null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status]);
+
+  // Tile QA focus (M5 Task 6) — same two-phase posture as the markup fly-to
+  // above, for a raw Warning target (tileQA.ts) instead of a markup id: no
+  // "was it deleted" check (a Warning isn't a persisted record), so this
+  // only drops a stale target on a render error or an already-closed sheet.
+  useEffect(() => {
+    const w = tileFocusRef.current;
+    if (!w) return;
+    if (status === "error") { tileFocusRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(w.sheet_id)) return;
+    const sp = panels.find((p) => p.key === w.sheet_id);
+    if (sp && sp.img.w) { centerTileFocus(w); tileFocusRef.current = null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelImgs, groupSig, status]);
 
@@ -5318,6 +5492,29 @@ export default function TakeoffCanvas() {
     // inline center can't run yet, hand off to the phase-2 effect below.
     if (!centerOnMarkup(m)) pendingFlyRef.current = m;
   }
+  // Tile QA click-to-focus (M5 Task 6, tileQA.ts Warning): centers on
+  // w.at_norm when present and always selects w.shape_id (if any) so the
+  // docked panel's "this room" section reflects the flagged room even for
+  // a warning with no point to pan to (e.g. an unscaled sheet).
+  function centerTileFocus(w) {
+    const sp = panelByKey(w.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    if (w.shape_id) selectShape(w.shape_id);
+    if (!Array.isArray(w.at_norm)) return true;
+    const el = containerRef.current;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const scale = tfRef.current.scale;
+    const sx = w.at_norm[0] * sp.img.w + sp.xOffset, sy = w.at_norm[1] * sp.img.h;
+    setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    return true;
+  }
+  function focusTileWarning(w) {
+    if (!w || !w.sheet_id) return;
+    setTilePanelOpen(true);
+    if (!panelKeySet.has(w.sheet_id)) { tileFocusRef.current = w; openSheets([w.sheet_id], false); return; }
+    if (!centerTileFocus(w)) tileFocusRef.current = w;
+  }
 
   function finishShape() {
     if (tool === "zone") {
@@ -7880,6 +8077,13 @@ export default function TakeoffCanvas() {
               {/* committed shapes + markups, one group per panel in its local frame */}
               {panels.map((p) => {
                 const pShapes = stackedShapes.filter((s) => s.sheet_id === p.key);
+                // M5 Task 6 — hatch<->grid LOD swap (§4.2): a tiled floor shape's
+                // hatch fill is suppressed exactly when its own grid overlay is
+                // showing, so the two never double-draw (hatch stays the
+                // overview/print fill below the LOD threshold — §6).
+                const tileGridShapeIds = tileShow
+                  ? new Set((tileOverlayByPanel.get(p.key) || []).filter((ov) => shouldShowGrid(ov.config, ov.upp, tf.scale)).map((ov) => ov.shapeId))
+                  : null;
                 const dn = (vn) => vn.map(([x, y]) => [x * p.img.w, y * p.img.h]);
                 const label = labelFor(p);
                 return (
@@ -7930,11 +8134,11 @@ export default function TakeoffCanvas() {
                       if (!ded && s.verts_norm_holes?.length) {
                         const ringD = (ring) => `M${dn(ring).map((q) => q.join(",")).join("L")}Z`;
                         const d = ringD(s.verts_norm) + s.verts_norm_holes.map(ringD).join("");
-                        return <path key={s.id} d={d} fillRule="evenodd" fill={pending ? col + "14" : shapeFill(cond)} stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw} strokeDasharray={pending ? pDash : dashArrayFor(cond?.line_style || "solid", z)} />;
+                        return <path key={s.id} d={d} fillRule="evenodd" fill={pending ? col + "14" : (tileGridShapeIds?.has(s.id) ? "none" : shapeFill(cond))} stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw} strokeDasharray={pending ? pDash : dashArrayFor(cond?.line_style || "solid", z)} />;
                       }
                       // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
                       return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")}
-                        fill={ded ? (pending ? "rgba(176,58,38,.10)" : "rgba(176,58,38,.28)") : pending ? col + "14" : shapeFill(cond)}
+                        fill={ded ? (pending ? "rgba(176,58,38,.10)" : "rgba(176,58,38,.28)") : pending ? col + "14" : (tileGridShapeIds?.has(s.id) ? "none" : shapeFill(cond))}
                         stroke={ded ? "#b03a26" : (sel ? DS.selection.color : col)} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw}
                         strokeDasharray={pending ? pDash : ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
@@ -8364,6 +8568,84 @@ export default function TakeoffCanvas() {
                                 onPointerDown={(e) => beginRollCut(e, ct, "end")} />
                             </>
                           )}
+                        </g>
+                      );
+                    })}
+                    {/* Tile-grid overlay (M5 Task 6, §4.1/§4.2) — every tiled
+                        floor shape's solved layout drawn to scale over its
+                        room: full tiles solid, cut tiles lighter + dashed,
+                        corner tiles corner-marked, holes flagged red — plus
+                        an origin crosshair (drag to relocate the grid) and
+                        the room's edge exposures (dashed ghost = suggested,
+                        inked = confirmed; click cycles/confirms). Gated on
+                        shouldShowGrid's LOD threshold — below it the
+                        condition's ordinary hatch fill (above) carries the
+                        read instead (the suppression Set built above this
+                        panel's shape loop). Inert until edit mode, then the
+                        crosshair and each edge own their own pointer events
+                        — mirrors the roll-goods cut overlay immediately
+                        above. The one shape being origin-dragged solves its
+                        OWN live preview here (never touches `shapes` — see
+                        beginTileOrigin); every other shape reads the memo. */}
+                    {tileShow && (tileOverlayByPanel.get(p.key) || []).map((entry) => {
+                      const live = tileDragPreview && tileDragPreview.id === entry.shapeId
+                        ? (() => {
+                            const ds = shapes.find((sh) => sh.id === entry.shapeId);
+                            const dCond = condById[entry.conditionId];
+                            if (!ds || !dCond) return null;
+                            return tileOverlayForShape(ds, dCond, panelImgs[ds.sheet_id] || null, entry.upp, tileDragPreview.origin);
+                          })()
+                        : null;
+                      const ov = live || entry;
+                      if (!shouldShowGrid(ov.config, entry.upp, tf.scale)) return null;
+                      const s = tf.scale;
+                      return (
+                        <g key={"tile" + entry.shapeId}>
+                          {ov.tiles.map((t, i) => {
+                            const rotDeg = (t.rot * 180) / Math.PI;
+                            const isHole = t.cls === "hole";
+                            const fillA = t.cls === "cut" ? "18" : "33";
+                            return (
+                              <g key={i} style={{ pointerEvents: "none" }}>
+                                <rect x={t.cx - t.w / 2} y={t.cy - t.h / 2} width={t.w} height={t.h}
+                                  transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`}
+                                  fill={isHole ? "rgba(176,58,38,.24)" : t.color + fillA}
+                                  stroke={isHole ? "#b03a26" : t.color}
+                                  strokeOpacity={isHole ? 0.9 : 0.55}
+                                  strokeWidth={(t.cls === "corner" ? 2 : 1) / s}
+                                  strokeDasharray={t.cls === "cut" || isHole ? `${3 / s} ${2 / s}` : undefined} />
+                                {t.cls === "corner" && (
+                                  <path d={`M${t.cx - t.w / 2},${t.cy - t.h / 2} l${Math.min(t.w, t.h) * 0.35},0 l0,${Math.min(t.w, t.h) * 0.35} Z`}
+                                    transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`} fill={t.color} fillOpacity={0.85} />
+                                )}
+                              </g>
+                            );
+                          })}
+                          {(ov.edges || []).map((edge) => {
+                            if (edge.exposure === "field") return null;
+                            const a = ov.ring_ft[edge.shapeEdgeIndex], b = ov.ring_ft[(edge.shapeEdgeIndex + 1) % ov.ring_ft.length];
+                            const ecol = TILE_EDGE_COLORS[edge.exposure] || TILE_EDGE_COLORS.trim;
+                            return (
+                              <line key={"edge" + edge.shapeEdgeIndex}
+                                x1={a[0] / entry.upp} y1={a[1] / entry.upp} x2={b[0] / entry.upp} y2={b[1] / entry.upp}
+                                stroke={ecol} strokeWidth={(edge.confirmed ? 3 : 2) / s}
+                                strokeOpacity={edge.confirmed ? 0.95 : 0.5}
+                                strokeDasharray={edge.confirmed ? undefined : `${5 / s} ${3 / s}`}
+                                strokeLinecap="round"
+                                style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "pointer" : undefined }}
+                                onClick={(e) => { if (tileEdit) { e.stopPropagation(); cycleTileEdge(entry.shapeId, edge.shapeEdgeIndex, edge.exposure); } }}>
+                                <title>{`${edge.exposure}${edge.confirmed ? " (confirmed)" : " (suggested)"} — ${fmtCheckLen(edge.length_lf, units)}${tileEdit ? " · click to cycle" : ""}`}</title>
+                              </line>
+                            );
+                          })}
+                          <g style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "grab" : undefined }}
+                            onPointerDown={(e) => beginTileOrigin(e, entry.shapeId, entry.upp, ov.config.origin)}
+                            onPointerMove={moveTileOrigin} onPointerUp={endTileOrigin} onPointerCancel={endTileOrigin}>
+                            <title>{`Tile origin${tileEdit ? " — drag to relocate the grid" : ""}`}</title>
+                            <circle cx={ov.origin.x} cy={ov.origin.y} r={7 / s} fill="none" stroke="#1f3fc7" strokeWidth={2 / s} />
+                            <line x1={ov.origin.x - 10 / s} y1={ov.origin.y} x2={ov.origin.x + 10 / s} y2={ov.origin.y} stroke="#1f3fc7" strokeWidth={1.6 / s} />
+                            <line x1={ov.origin.x} y1={ov.origin.y - 10 / s} x2={ov.origin.x} y2={ov.origin.y + 10 / s} stroke="#1f3fc7" strokeWidth={1.6 / s} />
+                          </g>
                         </g>
                       );
                     })}
@@ -8877,6 +9159,8 @@ export default function TakeoffCanvas() {
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
           {panelBtn(() => setAgentOpen((o) => !o), "target", "Agent — describe a takeoff; it stages dashed proposals you accept or reject (bring your own AI key)", agentOpen, agentProposals.length)}
           {rollByCond.size > 0 && panelBtn(() => setRollPanelOpen((o) => !o), "roll", "Roll goods — the cut diagram, cutting order, and figured order footage", rollPanelOpen, rollByCond.size)}
+          {tileByCond.size > 0 && panelBtn(() => setTilePanelOpen((o) => !o), "sheets", "Tile — the grid layout, cuts, and per-room origin/rotation", tilePanelOpen, tileByCond.size)}
+          {tilePanelOpen && panelBtn(() => setTileEdit((o) => !o), "calibrate", "Tile edit — drag a room's origin crosshair to relocate its grid; click an edge to cycle/confirm its trim/threshold exposure", tileEdit)}
           {layerEntries.length > 0 && panelBtn(() => setLayersOpen((o) => !o), "layers", "PDF layers — what this drawing's own layer table states each ink is; set what One-Click treats as wall and what it ignores", layersOpen, layerEntries.reduce((n, e) => n + e.layers.length, 0))}
           {panelBtn(() => setShowRevisions(true), "revisions", "Revisions — save the takeoff at each bid revision, compare what moved", showRevisions)}
         </div>
@@ -8924,6 +9208,44 @@ export default function TakeoffCanvas() {
             onClose={() => setRollPanelOpen(false)}
           />
         )}
+
+        {/* Tile panel (M5 Task 6) — DOCKED right-rail sibling like the Roll
+            panel: per-condition setup/summary cards, the selected room's
+            origin/rotation override, and the cross-room QA list. A pure
+            view — layout state lives on the conditions (tile_setup, via
+            onTileSetup) and on the shapes (tile_layout, via the undoable
+            tileLayout command). */}
+        {tilePanelOpen && (() => {
+          const selTileCond = selShape && selShape.measure_role === "floor_area" ? condById[selShape.condition_id] : null;
+          const selHasTile = selTileCond && hasTileSetup(selTileCond);
+          const selEffectiveConfig = selHasTile ? (() => {
+            const base = tileConfig(selTileCond.tile_setup);
+            const tl = selShape.tile_layout || {};
+            return {
+              ...base,
+              ...(Array.isArray(tl.origin) ? { origin: tl.origin } : {}),
+              ...(tl.rotation != null ? { rotation_deg: tl.rotation } : {}),
+            };
+          })() : null;
+          return (
+            <TilePanel
+              layouts={[...tileByCond.entries()].map(([condId, ti]) => {
+                const c = condById[condId];
+                return { condId, tag: c?.finish_tag || "?", color: c?.color, multiplier: c?.multiplier || 1, ti };
+              })}
+              selectedShape={selHasTile ? { id: selShape.id, tile_layout: selShape.tile_layout } : null}
+              effectiveConfig={selEffectiveConfig}
+              show={tileShow} onShow={setTileShow}
+              onTileSetup={(condId, patch) => {
+                const c = condById[condId];
+                if (c) updateCondById(condId, { tile_setup: { ...c.tile_setup, ...patch } });
+              }}
+              onTileLayout={(shapeId, patch) => dispatchShape({ type: "tileLayout", id: shapeId, patch })}
+              warnings={tileWarningsList} onFocusWarning={focusTileWarning}
+              onClose={() => setTilePanelOpen(false)}
+            />
+          );
+        })()}
 
         {/* Layers panel (#85 phase 2) — DOCKED right-rail sibling like the Roll
             panel: the sheet's PDF layer table (names + stated roles) with the
