@@ -17,12 +17,33 @@
 // sorted (TakeoffCanvas's `refStackedShapes`, the reference-pane analog of
 // the primary's `stackedShapes` — NOT scoped to the primary's sheetGroup, so
 // a shape on a sheet the primary isn't even displaying still mirrors here).
+//
+// Tab bar (Task 7): a thin strip of chips along the pane's top edge listing
+// `refSet` — the sheets dropped here, `activeKey` included. Clicking a chip
+// asks the caller to re-frame it (`onSelectRef`); a chip's ✕ asks the caller
+// to drop it (`onRemoveRef`). `activeKey` is the RAW, unvalidated
+// `splitView.refKey` (not the caller-sanitized `refKey` prop below) so a
+// dangling reference still highlights the right chip while the content area
+// shows "Drop a sheet here" — the bar must stay usable exactly when the
+// content area can't render anything. Always rendered at the TOP edge
+// regardless of split orientation (decide-on-sight: for a horizontal split
+// this puts the bar directly under the divider's flip/collapse controls;
+// for a vertical split it's the top of the right-hand pane — one code path,
+// no orientation prop needed here). Dropping a sheet tab anywhere on this
+// pane (`SHEET_TAB_DND_MIME`, same discipline as the primary pane's
+// tab-to-split gesture) adds it to the reference set and frames it —
+// `onDropSheet`.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MIN_SCALE, MAX_SCALE, SYNC_MS, GESTURE_MS } from "../lib/canvasConstants";
+import { SHEET_TAB_DND_MIME } from "../lib/dropZones";
 import { HatchPattern } from "./hatches.jsx";
 import { renderShapeGlyph } from "./shapeGlyphs.jsx";
+import { Icon } from "../brand/icons.jsx";
 
-export default function ReferencePane({ refKey, panelImg, paintBase, paintDetail, epoch, onFrame, shapes = [], conditions = [], condById = {}, darkMode = false, patId }) {
+export default function ReferencePane({
+  refKey, panelImg, paintBase, paintDetail, epoch, shapes = [], conditions = [], condById = {}, darkMode = false, patId,
+  refSet = [], activeKey = null, tabLabel = (k) => k, onSelectRef, onRemoveRef, onDropSheet,
+}) {
   const stageRef = useRef(null);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const viewportRef = useRef(null);
@@ -39,7 +60,6 @@ export default function ReferencePane({ refKey, panelImg, paintBase, paintDetail
   const applyTf = useCallback(() => {
     const { x, y, scale: s } = tfRef.current;
     if (stageRef.current) stageRef.current.style.transform = `translate(${x}px,${y}px) scale(${s})`;
-    onFrame?.(tfRef.current);
     const sync = scaleSyncRef.current;
     if (s === sync.lastScale || sync.timer) return;
     const wait = Math.max(0, SYNC_MS - (performance.now() - sync.last));
@@ -47,7 +67,7 @@ export default function ReferencePane({ refKey, panelImg, paintBase, paintDetail
       sync.timer = 0; sync.last = performance.now(); sync.lastScale = tfRef.current.scale;
       setScale(tfRef.current.scale);
     }, wait);
-  }, [onFrame]);
+  }, []);
   useEffect(() => () => { if (scaleSyncRef.current.timer) clearTimeout(scaleSyncRef.current.timer); }, []);
   // Re-apply after every React render so an unrelated re-render (e.g. the
   // primary committing a shape, which re-renders this pane's new `shapes`
@@ -168,56 +188,117 @@ export default function ReferencePane({ refKey, panelImg, paintBase, paintDetail
     if (refKey && canvasRef.current) paintBase(`ref::${refKey}`, canvasRef.current);
   }, [refKey, epoch, paintBase]);
 
-  if (!refKey) return (
-    <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div>
-  );
+  // Center-drop-to-add (Task 7): the reference pane is always the SECOND (and
+  // last) pane once a split exists, so unlike the primary pane's 5-zone
+  // hit-test (dropZoneAt), there's no edge/center distinction to make here —
+  // any drop anywhere on this pane means "add to the reference set". Filter
+  // on SHEET_TAB_DND_MIME + stopPropagation, same discipline as the primary
+  // pane's tab-to-split gesture (TakeoffCanvas.jsx), so a dragged condition
+  // chip or an OS file drag still falls through untouched.
+  const onDragOverSheet = useCallback((e) => {
+    if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
+    e.preventDefault(); e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const onDropSheetTab = useCallback((e) => {
+    if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
+    e.preventDefault(); e.stopPropagation();
+    const droppedKey = e.dataTransfer.getData(SHEET_TAB_DND_MIME);
+    if (droppedKey) onDropSheet?.(droppedKey);
+  }, [onDropSheet]);
 
   return (
-    <div ref={viewportRef} onPointerDown={onPointerDown}
-      style={{ position: "absolute", inset: 0, overflow: "hidden", touchAction: "none", background: "var(--paper, #f4f1ea)" }}>
-      <div ref={stageRef} style={{ position: "absolute", transformOrigin: "0 0", width: panelImg?.w, height: panelImg?.h }}>
-        {/* CSS width/height stretch the (bounded, coarse-then-budget) base
-            backing store up to the sheet's full logical footprint — the same
-            "small backing store, CSS-stretched" contract the primary pane's
-            base canvases use (TakeoffCanvas's drawPanels base layer). Without
-            this the canvas would render at its raw pixel size instead of
-            filling the stage. */}
-        <canvas ref={canvasRef}
-          style={{ position: "absolute", left: 0, top: 0, width: panelImg?.w, height: panelImg?.h, boxShadow: "0 2px 20px rgba(0,0,0,.18)" }} />
-        {/* detail layer (Task 6) — a crop of the visible region + margin
-            composited from cached tiles at the current zoom, exactly like the
-            primary pane's per-source detail canvases (TakeoffCanvas's
-            drawPanels detail layer); active at every zoom level, no
-            DETAIL_ENGAGE gate (paintReferenceDetail in TakeoffCanvas.jsx) —
-            only hidden when the crop reports the source is off-screen.
-            Position/size are set imperatively by the compositor's paintDetail
-            on each reveal, same as the primary's. */}
-        <canvas ref={detailCanvasRef}
-          style={{ position: "absolute", left: 0, top: 0, display: "none", pointerEvents: "none" }} />
-        {/* Read-only shape mirror (Task 5). pointerEvents:none end to end —
-            no selection, no vertex handles, no click/drag reaches a shape
-            here. Sits in the SAME transformed stage as the base canvas above
-            (this div's CSS pan/zoom), in the sheet's own local px frame, so
-            shapes track the raster under this pane's independent transform
-            exactly like the primary's overlay tracks its own stage.
-            Every <pattern> id is "ref-"-prefixed (patId(c, "ref-")) so this
-            <defs> can NEVER collide with the primary's own <defs> — a
-            collision would make url(#…) resolution document-order-dependent
-            and corrupt one pane's fills (the reason this task exists). */}
-        {panelImg && (
-          <svg width={panelImg.w} height={panelImg.h} viewBox={`0 0 ${panelImg.w} ${panelImg.h}`}
-            style={{ position: "absolute", top: 0, left: 0, overflow: "visible", pointerEvents: "none" }}>
-            <defs>
-              {conditions.map((c) => <HatchPattern key={patId(c, "ref-")} id={patId(c, "ref-")} type={c.hatch || "solid"} line={c.color} fill={c.fill} dark={darkMode} />)}
-            </defs>
-            {shapes.map((s) => renderShapeGlyph(s, {
-              dn: (vn) => vn.map(([x, y]) => [x * panelImg.w, y * panelImg.h]),
-              cond: condById[s.condition_id], sel: false, z: scale, darkMode,
-              patId: (c) => patId(c, "ref-"),
-            }))}
-          </svg>
+    <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}
+      onDragOver={onDragOverSheet} onDrop={onDropSheetTab}>
+      <ReferenceTabBar refSet={refSet} activeKey={activeKey} tabLabel={tabLabel} onSelect={onSelectRef} onRemove={onRemoveRef} />
+      <div style={{ position: "relative", flex: 1, minHeight: 0, minWidth: 0 }}>
+        {!refKey ? (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div>
+        ) : (
+          <div ref={viewportRef} onPointerDown={onPointerDown}
+            style={{ position: "absolute", inset: 0, overflow: "hidden", touchAction: "none", background: "var(--paper, #f4f1ea)" }}>
+            <div ref={stageRef} style={{ position: "absolute", transformOrigin: "0 0", width: panelImg?.w, height: panelImg?.h }}>
+              {/* CSS width/height stretch the (bounded, coarse-then-budget) base
+                  backing store up to the sheet's full logical footprint — the same
+                  "small backing store, CSS-stretched" contract the primary pane's
+                  base canvases use (TakeoffCanvas's drawPanels base layer). Without
+                  this the canvas would render at its raw pixel size instead of
+                  filling the stage. */}
+              <canvas ref={canvasRef}
+                style={{ position: "absolute", left: 0, top: 0, width: panelImg?.w, height: panelImg?.h, boxShadow: "0 2px 20px rgba(0,0,0,.18)" }} />
+              {/* detail layer (Task 6) — a crop of the visible region + margin
+                  composited from cached tiles at the current zoom, exactly like the
+                  primary pane's per-source detail canvases (TakeoffCanvas's
+                  drawPanels detail layer); active at every zoom level, no
+                  DETAIL_ENGAGE gate (paintReferenceDetail in TakeoffCanvas.jsx) —
+                  only hidden when the crop reports the source is off-screen.
+                  Position/size are set imperatively by the compositor's paintDetail
+                  on each reveal, same as the primary's. */}
+              <canvas ref={detailCanvasRef}
+                style={{ position: "absolute", left: 0, top: 0, display: "none", pointerEvents: "none" }} />
+              {/* Read-only shape mirror (Task 5). pointerEvents:none end to end —
+                  no selection, no vertex handles, no click/drag reaches a shape
+                  here. Sits in the SAME transformed stage as the base canvas above
+                  (this div's CSS pan/zoom), in the sheet's own local px frame, so
+                  shapes track the raster under this pane's independent transform
+                  exactly like the primary's overlay tracks its own stage.
+                  Every <pattern> id is "ref-"-prefixed (patId(c, "ref-")) so this
+                  <defs> can NEVER collide with the primary's own <defs> — a
+                  collision would make url(#…) resolution document-order-dependent
+                  and corrupt one pane's fills (the reason this task exists). */}
+              {panelImg && (
+                <svg width={panelImg.w} height={panelImg.h} viewBox={`0 0 ${panelImg.w} ${panelImg.h}`}
+                  style={{ position: "absolute", top: 0, left: 0, overflow: "visible", pointerEvents: "none" }}>
+                  <defs>
+                    {conditions.map((c) => <HatchPattern key={patId(c, "ref-")} id={patId(c, "ref-")} type={c.hatch || "solid"} line={c.color} fill={c.fill} dark={darkMode} />)}
+                  </defs>
+                  {shapes.map((s) => renderShapeGlyph(s, {
+                    dn: (vn) => vn.map(([x, y]) => [x * panelImg.w, y * panelImg.h]),
+                    cond: condById[s.condition_id], sel: false, z: scale, darkMode,
+                    patId: (c) => patId(c, "ref-"),
+                  }))}
+                </svg>
+              )}
+            </div>
+          </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Thin chip strip (Task 7) — the reference pane's own "which sheet is
+// framed" affordance, the read-only-pane analog of the primary's open-tabs
+// strip (TakeoffCanvas.jsx). Deliberately much plainer than that strip: no
+// drag-out, no side-by-side toggle, no overflow scroller — a reference set
+// is expected to stay small (a handful of comparison sheets, not the whole
+// plan), and `overflowX:"auto"` on the strip covers the rare case it grows
+// past the pane's width (a vertical split at MAX_RATIO leaves the reference
+// pane just ~20% wide). Renders nothing for an empty `refSet` — the caller
+// guards against ever reaching that state today (TakeoffCanvas.jsx's
+// onRemoveRef refuses to empty the last member; Task 8 owns the eventual
+// auto-collapse), but this stays a no-op instead of crashing either way.
+function ReferenceTabBar({ refSet, activeKey, tabLabel, onSelect, onRemove }) {
+  if (!refSet.length) return null;
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center", padding: "3px 6px", overflowX: "auto", minWidth: 0, flexShrink: 0, borderBottom: "1px solid var(--ink-faint)", background: "var(--paper-bright)", scrollbarWidth: "none" }}>
+      {refSet.map((k) => {
+        const on = k === activeKey;
+        return (
+          <span key={k} style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, border: "1px solid var(--ink-faint)", borderBottom: on ? "2px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: on ? "var(--paper-cream)" : "transparent", padding: "2px 5px 1px 7px", maxWidth: 140 }}>
+            <button type="button" onClick={() => onSelect?.(k)} title={k}
+              style={{ border: "none", background: "none", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 10.5, color: "var(--ink)", fontFamily: "var(--f-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 105, padding: 0 }}>
+              {tabLabel(k)}
+            </button>
+            {refSet.length > 1 && (
+              <button type="button" onClick={() => onRemove?.(k)} title="Remove from reference"
+                style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0, display: "inline-flex" }}>
+                <Icon name="close" size={9} />
+              </button>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }

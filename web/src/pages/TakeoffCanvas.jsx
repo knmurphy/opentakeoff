@@ -413,6 +413,47 @@ export default function TakeoffCanvas() {
   // to null the moment it's known bad, same as "no split reference" at all.
   const rawRefKey = splitView?.refKey || null;
   const effectiveRefKey = rawRefKey && refInvalid === rawRefKey ? null : rawRefKey;
+  // The reference pane's tab bar (Task 7): the set of sheets dropped there.
+  // normalizeSplitView backfills refSet on every LOAD, but a split minted
+  // directly by setSplitView in this file (or the DEV __otSetSplit hook)
+  // isn't required to set it — same [refKey] fallback the codec uses, kept
+  // here so every read site (the bar itself, the handlers below) can trust
+  // this array rather than re-deriving the fallback each time.
+  const refSet = splitView?.refSet?.length ? splitView.refSet : (rawRefKey ? [rawRefKey] : []);
+  // Click a reference-bar chip: re-frame it. A no-op if it's already framed
+  // (still a harmless setSplitView call — the resolve effect's `sameKey`
+  // check absorbs it without touching refDimsRef/refDetailCancelRef).
+  const selectRefTab = (key) => setSplitView((s) => s && { ...s, refKey: key });
+  // ✕ on a chip: drop it from the set. Guarded against ever emptying the
+  // set — Task 8 owns the eventual auto-collapse when the last reference
+  // sheet is removed; until then this is a no-op on a single-member set
+  // (ReferencePane's tab bar already hides the ✕ in that case, so this
+  // guard is defense against any other caller, not the only thing stopping
+  // the UI). Reframes to the sheet at the same INDEX the removed chip held
+  // (clamped to the new length) when the removed chip was the one currently
+  // framed — same "land where you were, not always the first" idiom as
+  // closeTab's own reframe above, so removing chip 2-of-3 lands on the new
+  // chip 2, not always back to chip 1.
+  const removeRefTab = (key) => setSplitView((s) => {
+    if (!s) return s;
+    const set = s.refSet?.length ? s.refSet : [s.refKey];
+    if (set.length <= 1) return s;
+    const i = set.indexOf(key);
+    const next = set.filter((k) => k !== key);
+    const refKey = s.refKey === key ? next[Math.min(Math.max(i, 0), next.length - 1)] : s.refKey;
+    return { ...s, refSet: next, refKey };
+  });
+  // Drop a sheet tab onto the reference pane's own surface (Task 7): joins
+  // the reference set (if not already a member) and frames it — the
+  // reference-pane analog of the primary pane's edge-drop-to-split gesture,
+  // except every drop here is a "center" drop (see ReferencePane.jsx's
+  // comment on why it skips dropZoneAt's edge/center hit-test entirely).
+  const dropOntoReference = (droppedKey) => setSplitView((s) => {
+    if (!s) return s;
+    const set = s.refSet?.length ? s.refSet : [s.refKey];
+    const next = set.includes(droppedKey) ? set : [...set, droppedKey];
+    return { ...s, refSet: next, refKey: droppedKey };
+  });
 
   const [scales, setScales] = useState({});
   const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
@@ -944,6 +985,15 @@ export default function TakeoffCanvas() {
 
   // page 1 keeps the bare file name (pre-paging takeoffs still load); pages 2+ → "name#page"
   const sheetKey = page > 1 ? `${active}#${page}` : active;
+  // Most-recently-viewed tab order (Task 7): the "Reference ▸ Split
+  // Vertical/Horizontal" menu items default their chosen sheet to the
+  // most-recently-used non-active open tab, and openTabs itself is
+  // insertion-ordered (append-on-open), not recency-ordered, so it can't
+  // answer that on its own. Front-loads sheetKey on every navigation,
+  // deduped; a closed tab simply falls out of the openTabs.includes() filter
+  // at read time rather than being pruned here.
+  const tabMruRef = useRef([]);
+  useEffect(() => { tabMruRef.current = [sheetKey, ...tabMruRef.current.filter((k) => k !== sheetKey)]; }, [sheetKey]);
   // toggle a sheet in/out of the side-by-side group; first toggle from single
   // mode seeds the group with the sheet currently on screen
   const toggleInGroup = (key) => setSheetGroup((g) => {
@@ -1870,23 +1920,35 @@ export default function TakeoffCanvas() {
     // would re-fit and silently undo the user's own pan/zoom on this pane
     // every time they switch the primary's sheet.
     const sameKey = refKey && refDimsRef.current?.key === refKey;
-    if (!sameKey) { setRefPanelImg(null); refDimsRef.current = null; }
-    if (!refKey) {
-      // Collapse (splitView→null ⇒ refKey→null): cancel any in-flight
-      // reference-detail compositor work and clear its dedup key, the same
-      // shape as the resetAll() and visibilitychange clears below. The
-      // panelImg reset just above (setRefPanelImg(null)) already forces a
-      // fresh fit-to-view (and therefore a fresh renderKey) on the next
-      // reopen of this refKey in the common case, but that path depends on
-      // ReferencePane's own effect ordering; this clear makes the parent's
-      // OWN bookkeeping correct independent of that, matches the other two
-      // sites exactly, and stops a genuinely in-flight compositor request
-      // from completing against a canvas this pane has already unmounted.
+    if (!sameKey) {
+      setRefPanelImg(null); refDimsRef.current = null;
+      // Collapse (splitView→null ⇒ refKey→null) OR a SWAP (tab-bar chip
+      // click reframes A→B, Task 7): either way the sheet this pane was
+      // just showing is no longer current, so cancel any in-flight
+      // reference-detail compositor work for it and clear its dedup key —
+      // the same shape as the resetAll() and visibilitychange clears below.
+      // Without this, a swap's brand-new refKey lands (rawRefKey/
+      // effectiveRefKey update immediately) well before this effect's own
+      // async doc/page resolution below completes, so ReferencePane's
+      // structural detail-repaint effect fires FIRST against the new key
+      // while `refDimsRef.current` is still null — paintReferenceDetail's
+      // own dims guard short-circuits that call before it ever reaches the
+      // cancel-then-replace logic, leaving the OLD sheet's in-flight
+      // request to complete (or fail) unattended instead of being
+      // superseded the moment the user moved on. The panelImg reset just
+      // above (setRefPanelImg(null)) already forces a fresh fit-to-view
+      // (and therefore a fresh renderKey) on the next reopen in the common
+      // case, but that path depends on ReferencePane's own effect ordering;
+      // this clear makes the parent's OWN bookkeeping correct independent
+      // of that, matches the other two sites exactly, and stops a
+      // genuinely in-flight compositor request from completing against a
+      // canvas this pane has since repurposed for a different sheet (or,
+      // on collapse, unmounted).
       try { refDetailCancelRef.current?.cancel(); } catch { /* done */ }
       refDetailCancelRef.current = null;
       refDetailKeyRef.current = null;
-      return;
     }
+    if (!refKey) return;
     if (isStitchKey(refKey)) { setRefInvalid(refKey); return; }
     let cancelled = false;
     (async () => {
@@ -7224,6 +7286,37 @@ export default function TakeoffCanvas() {
     ? { id: "ungroup", label: "Leave stitch — back to one sheet", title: "Back to a single sheet (the stitch's first member) — the stitch keeps its takeoffs and reopens from the gallery or its tab", onSelect: ungroup }
     : { id: "ungroup", label: "Ungroup — back to one sheet", title: "Back to one sheet — you land on the sheet you were last working; every sheet keeps its takeoffs and markups", onSelect: ungroup });
   if (!sheetGroup.length && lastGroup.length >= 2) sheetMenuItems.push({ id: "regroup", label: `Regroup (${lastGroup.length})`, title: `Side-by-side again with the same ${lastGroup.length} sheets — each keeps its own scale, takeoffs and markups`, onSelect: regroup });
+  // "Reference ▸ Split Vertical/Horizontal" (Task 7) — the discoverable,
+  // keyboard/menu-driven fallback for the drag-a-tab-to-split gesture (Task
+  // 4), for whoever doesn't discover or can't perform the drag. Only offered
+  // pre-split: dragging is ALSO edge-disabled once a split exists (see
+  // primaryViewport's onDragOver/onDrop above), and re-running this would
+  // silently discard the current reference SET, not add to it — the one way
+  // to add a second sheet to an existing reference is still the drop-onto-
+  // the-reference-pane gesture (ReferencePane.jsx's onDropSheet); this menu
+  // only ever MINTS a new split. The candidate sheet defaults to the
+  // most-recently-viewed OPEN tab that isn't already on screen in the
+  // primary (tabMruRef, front-loaded on every sheetKey change above),
+  // falling back to the first open tab that qualifies; excludes every
+  // member of `groupKeys` (not just the focused sheetKey) so a side-by-side
+  // group never offers to reference a sheet it's already showing.
+  const referenceCandidate = splitView ? null : (
+    tabMruRef.current.find((k) => openTabs.includes(k) && !groupKeys.includes(k))
+    ?? openTabs.find((k) => !groupKeys.includes(k))
+    ?? null
+  );
+  if (referenceCandidate) {
+    sheetMenuItems.push({
+      id: "ref-split-v", label: "Reference ▸ Split Vertical",
+      title: `Open a read-only reference pane beside this one, framing ${tabLabel(referenceCandidate)}`,
+      onSelect: () => setSplitView({ orientation: "v", ratio: 0.5, refKey: referenceCandidate, refSet: [referenceCandidate] }),
+    });
+    sheetMenuItems.push({
+      id: "ref-split-h", label: "Reference ▸ Split Horizontal",
+      title: `Open a read-only reference pane below this one, framing ${tabLabel(referenceCandidate)}`,
+      onSelect: () => setSplitView({ orientation: "h", ratio: 0.5, refKey: referenceCandidate, refSet: [referenceCandidate] }),
+    });
+  }
   if (sheetMenuItems.length) sheetMenuItems.push("divider");
   sheetMenuItems.push({ id: "gallery", icon: "sheets", label: "Open gallery…", shortcut: "G", onSelect: () => setView("gallery") });
   sheetMenuItems.push({
@@ -7433,7 +7526,7 @@ export default function TakeoffCanvas() {
            if (zone === "center") { toggleInGroup(droppedKey); return; } // join primary group (existing behavior)
            const orientation = zoneToOrientation(zone); // "v" | "h"
            // dropped sheet frames the reference pane; primary keeps its content
-           setSplitView({ orientation, ratio: 0.5, refKey: droppedKey });
+           setSplitView({ orientation, ratio: 0.5, refKey: droppedKey, refSet: [droppedKey] });
          }}>
         <div ref={containerRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={leaveCanvas} onContextMenu={(e) => e.preventDefault()}
@@ -9149,7 +9242,8 @@ export default function TakeoffCanvas() {
          primary={primaryViewport}
          reference={splitView ? (
            <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} paintDetail={paintReferenceDetail} epoch={refEpoch}
-             shapes={refStackedShapes} conditions={conditions} condById={condById} darkMode={darkMode} patId={patId} />
+             shapes={refStackedShapes} conditions={conditions} condById={condById} darkMode={darkMode} patId={patId}
+             refSet={refSet} activeKey={rawRefKey} tabLabel={tabLabel} onSelectRef={selectRefTab} onRemoveRef={removeRefTab} onDropSheet={dropOntoReference} />
          ) : null}
        />
 
