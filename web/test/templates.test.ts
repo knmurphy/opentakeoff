@@ -17,6 +17,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { sanitizeTemplates } from "../src/lib/templates.js";
+import { instantiateTemplate } from "../src/lib/canvasUtil.js";
 import { store } from "../src/lib/store.js";
 
 beforeEach(() => {
@@ -96,4 +97,15 @@ test("loadTemplates returns [] for a missing or non-array record", async () => {
   assert.deepEqual(await store.loadTemplates(), []);
   await store.saveTemplates("not-a-list" as any);   // saveTemplates already guards
   assert.deepEqual(await store.loadTemplates(), []);
+});
+
+test("templateFromCondition deep-copies tile_setup (no shared reference)", () => {
+  const cond = { finish_tag: "CT-1", color: "#9333ea", waste_pct: 10, materials: [],
+    tile_setup: { pattern: "grid", origin: [0, 0], rotation_deg: 0, edge_strategy: "balanced",
+      skus: [{ id: "sku1", name: "T", w_in: 12, h_in: 24, color: "#9333ea" }],
+      joint: { width_in: 0.125 }, grout: {} } };
+  const tpl = instantiateTemplate(cond);             // canvasUtil.js's condition-template constructor (roll_setup precedent at line ~66)
+  assert.deepEqual(tpl.tile_setup, cond.tile_setup);
+  tpl.tile_setup.joint.width_in = 0.25;              // mutate the copy
+  assert.equal(cond.tile_setup.joint.width_in, 0.125); // original untouched
 });
