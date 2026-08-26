@@ -161,6 +161,10 @@ import { findCutoutParent, subtractCutout, recomposeCutouts, cutRunsAcross } fro
 import { computeShapeMetrics, needsMetrics } from "../lib/shapeMetrics.js";
 import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, heightVal, heightUnit, heightInputToFeet, heightStep, dimInputStr, dimLabel } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
+import { isolate3D } from "../lib/scene3dScope.js";
+
+// 3D takeoff view — lazy: three.js + its addons only load once a user opens it.
+const View3D = React.lazy(() => import("../components/View3D.jsx"));
 
 // Carpet roll width — a run reaching this needs a seam. The live cursor readout
 // turns amber at/past it so the estimator sees where seams fall while tracing.
@@ -696,6 +700,7 @@ export default function TakeoffCanvas() {
   }, [commitMsgState]);
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [showRevisions, setShowRevisions] = useState(false); // Revisions overlay (save / compare any two, buy-list deltas, CSV, auto-banked restore)
+  const [show3d, setShow3d] = useState(false); // 3D view overlay (lazy — see View3D import above)
   const [importRows, setImportRows] = useState(null);        // Import-from-schedule approval rows (null = dialog closed)
   const [scheduleAnchor, setScheduleAnchor] = useState(null); // first marquee corner for the "schedule" tool — ISOLATED from poly so it can never leak into a measure shape
   // ── the Symbol tool (#264) — same two-click marquee idiom as schedule ─────
@@ -1061,6 +1066,16 @@ export default function TakeoffCanvas() {
   // the FOCUSED panel (the one last clicked); single mode focuses the lone panel.
   const focusPanel = (focusKey && groupKeys.includes(focusKey) && panelByKey(focusKey)) || panels[0];
   const unitsPerPx = scales[focusPanel.key] ?? null;
+  // 3D view opens on the focused panel's sheet when a group view has focus,
+  // else the active single-view sheet — one sheet, never stitched. focusPanel
+  // never null once a sheet is open (panelByKey falls back to panels[0]), so
+  // active3dKey === focusPanel.key by construction — use focusPanel directly
+  // for img dims below rather than a re-lookup.
+  const active3dKey = focusPanel.key;
+  // gate the 2D letter tools through the toolbar menu-depth counter while
+  // the overlay is open — symmetric with every onOpenChange={onMenuDepth}
+  // call site: open bumps it here, onClose (below) drops it back.
+  useEffect(() => { if (show3d) onMenuDepth(true); }, [show3d, onMenuDepth]);
   const labelFor = (p) => stitchById[p.key]?.name || (p.file === active && pageLabels[p.page]) || (p.page > 1 ? `Sheet ${p.page}` : p.file);
   // Scale semantics (why geometry divides by factorFor and calibration
   // multiplies back to baseline) are documented on the pure functions in
@@ -2662,6 +2677,7 @@ export default function TakeoffCanvas() {
       if (viewRef.current === "gallery") return;
       if (lower === "g") { setView("gallery"); return; }
       if (lower === "f") { toggleFocusMode(); return; }
+      if (lower === "w") { if (uppFor(active3dKey)) setShow3d(true); else setCommitMsg("Set the sheet scale first — 3D is feet-true or nothing"); return; }
       if (e.key === "D" && e.shiftKey) { setTool("deduct-rect"); return; }
       // no `p` binding: pan is not a tool — drag open canvas, or Space/middle/right-drag
       // Q with a bendable trace in flight flips the straight/curve switch
@@ -2705,8 +2721,7 @@ export default function TakeoffCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales]);
+  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales, focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // ^ shapes/scales joined the deps with the agent accept path (the delete-handler
   //   precedent): ⏎ accept dispatches an `add` against the CURRENT array, so a
   //   shapes change with no other dep change must re-subscribe this handler.
@@ -7389,6 +7404,9 @@ export default function TakeoffCanvas() {
           </span>
         )}
         <div style={{ flex: 1 }} />
+        <button onClick={() => (uppFor(active3dKey) ? setShow3d(true) : setCommitMsg("Set the sheet scale first — 3D is feet-true or nothing"))}
+          title="3D view — this sheet's takeoff extruded (needs scale)"
+          style={{ padding: "8px 14px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>3D</button>
         <button onClick={() => setShowReport(true)} disabled={!conditions.length} title="Open the takeoff report — per-condition breakdown with waste, plus CSV / JSON export."
           style={{ padding: "8px 14px", border: "none", background: conditions.length ? "var(--ink)" : "var(--text-faint)", color: "var(--paper-bright)", cursor: conditions.length ? "pointer" : "default", fontWeight: 700, fontFamily: "var(--f-mono)", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase" }}>Report</button>
         {/* ⋯ overflow — rarely-used project controls, so the row never wraps
@@ -9065,6 +9083,19 @@ export default function TakeoffCanvas() {
           </span>
           <button onClick={() => window.location.reload()} style={{ whiteSpace: "nowrap", padding: "6px 12px", border: "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", fontSize: 12 }}>Reload</button>
         </div>
+      )}
+
+      {show3d && uppFor(active3dKey) && (
+        <React.Suspense fallback={null}>
+          <View3D
+            shapes={visibleShapes.filter((s) => s.sheet_id === active3dKey)}
+            conditions={conditions}
+            sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
+            focusIds={isolate3D(selectedId, visibleShapes.filter((s) => s.sheet_id === active3dKey))}
+            sheetLabel={tabLabel(active3dKey)}
+            onClose={() => { onMenuDepth(false); setShow3d(false); }}
+          />
+        </React.Suspense>
       )}
 
       {showReport && (

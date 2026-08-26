@@ -8,6 +8,7 @@ import {
 import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
 import { seedConditions } from "../src/lib/canvasUtil.js";
 import { conditionFromPlay } from "../src/lib/plays.js";
+import { isolate3D } from "../src/lib/scene3dScope.js";
 
 const SHEET = { widthPx: 1000, heightPx: 2000, upp: 0.05 };
 const COND = { id: "c1", finish_tag: "CPT-1", color: "#2f7d54" };
@@ -231,4 +232,19 @@ test("a saved Play round-trips the extrude fields through COND_KEEP", () => {
   );
   assert.equal(cond.extrude_mode, "vertical");
   assert.ok(Math.abs(cond.extrude_h_ft - 1 / 3) < 1e-12);
+});
+
+test("isolate3D: selected floor + derived base + label-equal siblings; unlinked stay; others dropped", () => {
+  const shapes = [
+    { id: "f1", sheet_id: "a", label: "112", measure_role: "floor_area", verts_norm: [], computed: {} },
+    { id: "b1", sheet_id: "a", label: "112", measure_role: "linear", verts_norm: [], computed: {}, origin: { derived: { from_shape_id: "f1" } } },
+    { id: "f2", sheet_id: "a", label: "114", measure_role: "floor_area", verts_norm: [], computed: {} },
+    { id: "w1", sheet_id: "a", measure_role: "surface_area", verts_norm: [], computed: {} }, // hand-traced, no link
+  ];
+  const vis = isolate3D("f1", shapes as any);
+  assert.equal(vis!.has("f1"), true);
+  assert.equal(vis!.has("b1"), true);
+  assert.equal(vis!.has("w1"), true);  // unlinked stays visible (spec)
+  assert.equal(vis!.has("f2"), false); // linked to another room → dropped
+  assert.equal(isolate3D(null, shapes as any), null);
 });
