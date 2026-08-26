@@ -123,7 +123,9 @@ export const RIBBON_HALF_FT = 1 / 24;       // vertical ribbon half-width
 export const FLUSH_HALF_FT = 1 / 12;        // flush strip half-width
 
 export function toWorldFt(verts_norm, sheet) {
-  return verts_norm.map(([nx, ny]) => [nx * sheet.widthPx * sheet.upp, -(ny * sheet.heightPx * sheet.upp)]);
+  // `|| 0` folds IEEE-754 −0 to +0 — ny === 0 otherwise yields −0, which
+  // assert/strict deepEqual (SameValue) distinguishes from 0 and fails tests.
+  return verts_norm.map(([nx, ny]) => [nx * sheet.widthPx * sheet.upp, -(ny * sheet.heightPx * sheet.upp) || 0]);
 }
 
 export function worldWindingCCW(ring) {
@@ -230,7 +232,7 @@ test("linear vertical: shape > condition > nominal cascade; override wins; unset
   assert.ok(unset.notes.some((n) => n.kind === "unset-height" && n.tag === "RB-1"));
 });
 
-test("derived base ring: interior side + derived flag + openings note (once)", () => {
+test("derived base ring: interior INSET (geometry, not a label) + derived flag + openings note (once)", () => {
   const shapes = [
     { id: "f1", sheet_id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: SQ_NORM, computed: {} },
     { id: "b1", sheet_id: "a", condition_id: "c1", measure_role: "linear", verts_norm: SQ_NORM, computed: {},
@@ -240,17 +242,26 @@ test("derived base ring: interior side + derived flag + openings note (once)", (
   const b = ribbons.find((r) => r.shapeId === "b1")!;
   assert.equal(b.side, "interior");
   assert.equal(b.derived, true);
+  // the inset moved EVERY vertex off the raw boundary, toward the room
+  const raw = toWorldFt(SQ_NORM, SHEET);
+  for (let i = 0; i < 4; i++) {
+    const moved = Math.hypot(b.path_ft[i][0] - raw[i][0], b.path_ft[i][1] - raw[i][1]);
+    assert.ok(moved > RIBBON_HALF_FT * 0.5, `vertex ${i} inset by ≥ half the half-width`);
+  }
   const op = notes.filter((n) => n.kind === "openings");
-  assert.equal(op.length, 1); // deduped per scene
+  assert.equal(op.length, 1);
   assert.match(op[0].text, /openings/i);
 });
 
-test("xn note per condition with multiplier > 1", () => {
-  const { notes } = buildScene({
-    sheet: SHEET, conditions: [{ ...COND, multiplier: 3 }],
-    shapes: [{ id: "s1", sheet_id: "a", condition_id: "c1", measure_role: "floor_area", verts_norm: SQ_NORM, computed: {} }],
-  });
-  assert.ok(notes.some((n) => n.kind === "xn" && n.tag === "CPT-1" && /×3/.test(n.text)));
+test("xn note fires for EVERY role, hoisted above the role dispatch", () => {
+  for (const role of ["floor_area", "deduct", "surface_area", "linear", "count"]) {
+    const verts = role === "count" ? [[0.25, 0.25]] : role === "floor_area" || role === "deduct" ? SQ_NORM : [[0, 0], [0.1, 0]];
+    const { notes } = buildScene({
+      sheet: SHEET, conditions: [{ ...COND, multiplier: 3 }],
+      shapes: [{ id: "s1", sheet_id: "a", condition_id: "c1", measure_role: role, verts_norm: verts, computed: {} }],
+    });
+    assert.ok(notes.some((n) => n.kind === "xn" && n.tag === "CPT-1"), `${role} emits xn`);
+  }
 });
 
 test("linear flush: z0 = higher adjoining slab top via between_shape_ids; hand-traced → nominal + note", () => {
@@ -276,7 +287,7 @@ test("linear flush: z0 = higher adjoining slab top via between_shape_ids; hand-t
 
 test("count → post at exact point; override wins", () => {
   const { posts } = buildScene({
-    sheet: SHEET, conditions: [{ id: "cG", finish_tag: "CG-1", color: "#1f6b4a", extrude_h_ft: 4 }],
+    sheet: SHEET, conditions: [{ id: "cG", finish_tag: "CG-1", color: "#0f766e", extrude_h_ft: 4 }],
     shapes: [{ id: "s5", sheet_id: "a", condition_id: "cG", measure_role: "count", verts_norm: [[0.25, 0.25]], computed: { count: 1 } }],
   });
   assert.deepEqual(posts[0].pt_ft, [12.5, -25]);
@@ -290,7 +301,7 @@ test("miter clamp: near-reversal joint bevels — all vertices within bbox + MIT
   const TOL = MITER_LIMIT * 0.05 + 1e-6;
   const xs = r.positions.filter((_, i) => i % 2 === 0);
   const ys = r.positions.filter((_, i) => i % 2 === 1);
-  assert.ok(r.positions.length >= 12, "two segments → at least two quads");
+  assert.ok(r.positions.length >= 24, "two segments → two quads (12 floats each)");
   assert.ok(Math.max(...xs) <= 10 + TOL && Math.min(...xs) >= 0 - TOL, "no miter spike");
   assert.ok(Math.max(...ys) <= 0.05 + TOL && Math.min(...ys) >= 0 - TOL, "no miter spike (y)");
 });
@@ -369,6 +380,9 @@ export function buildRibbon(pathFt, halfWidth) {
 Role dispatch (replaces the Task 1 comment line) plus helpers:
 
 ```js
+    // ×N never duplicates geometry — note per condition, hoisted ABOVE the
+    // role dispatch so every role's `continue` still reaches it (cycle-2 bug).
+    if ((c.multiplier || 1) > 1) note("xn", c.finish_tag, `${c.finish_tag}: ×${c.multiplier} applies at condition level`);
     if (s.measure_role === "deduct") {
       if (s.cuts_shape_id) continue; // reconciled: hole already baked into the parent
       const vf = ringCCW(toWorldFt(s.verts_norm, sheet));
@@ -378,7 +392,7 @@ Role dispatch (replaces the Task 1 comment line) plus helpers:
     }
     if (s.measure_role === "surface_area") {
       const h = Number(s.height_ft) > 0 ? Number(s.height_ft) : Number(c.height_ft) || 0;
-      ribbons.push({ path_ft: toWorldFt(s.verts_norm, sheet), z0: 0, z1: h, side: "center",
+      ribbons.push({ path_ft: nudgePath(toWorldFt(s.verts_norm, sheet), -RIBBON_HALF_FT / 2), z0: 0, z1: h, side: "center",
         color: c.color, tag: c.finish_tag, mode: "vertical", shapeId: s.id,
         derived: false, translucent: !(h > 0) });
       if (!(h > 0)) note("unset-height", c.finish_tag, `${c.finish_tag} has no height set — shown at nominal`);
@@ -394,7 +408,14 @@ Role dispatch (replaces the Task 1 comment line) plus helpers:
           color: c.color, tag: c.finish_tag, mode: "flush", shapeId: s.id, derived, translucent: false });
       } else {
         const h = extrudeHeight(s, c);
-        ribbons.push({ path_ft: toWorldFt(s.verts_norm, sheet), z0: 0, z1: h > 0 ? h : NOMINAL_HEIGHT_FT,
+        // Interior inset (spec, Web3D B9): derived rings are the floor's own
+        // boundary, so offset them INTO the room by the ribbon half-width or
+        // they render coincident with the slab edge. Hand-traced runs center
+        // on the path, nudged +half/2 so a base and a wainscot sharing one
+        // wall line never share literal world coordinates.
+        const rawPath = toWorldFt(s.verts_norm, sheet);
+        ribbons.push({ path_ft: derived ? insetRing(rawPath, RIBBON_HALF_FT) : nudgePath(rawPath, RIBBON_HALF_FT / 2),
+          z0: 0, z1: h > 0 ? h : NOMINAL_HEIGHT_FT,
           side: derived ? "interior" : "center",
           color: c.color, tag: c.finish_tag, mode: "vertical", shapeId: s.id,
           derived, translucent: !(h > 0) });
@@ -408,8 +429,6 @@ Role dispatch (replaces the Task 1 comment line) plus helpers:
         color: c.color, tag: c.finish_tag, shapeId: s.id, translucent: !(h > 0) });
       if (!(h > 0)) note("unset-height", c.finish_tag, `${c.finish_tag} has no installed height set — shown at nominal`);
     }
-    // ×N never duplicates geometry — a per-condition note instead
-    if ((c.multiplier || 1) > 1) note("xn", c.finish_tag, `${c.finish_tag}: ×${c.multiplier} applies at condition level`);
 ```
 
 Helpers (same file):
@@ -442,6 +461,40 @@ export function centroid2(ring) {
   for (const p of ring) { x += p[0]; y += p[1]; }
   return [x / ring.length, y / ring.length];
 }
+
+// Interior inset for derived base rings: ringCCW-normalized rings are CCW in
+// world, so the interior lies LEFT of each directed edge; inward normal =
+// rotate the edge direction +90°: n = (−uy, ux). Each vertex moves along the
+// bisector of its two adjacent inward edge normals, clamped to the plain edge
+// normal when degenerate (reflex corners) — a bounded inset, never a spike.
+export function insetRing(ring, dist) {
+  const r = ringCCW(ring);
+  const n = r.length;
+  const inward = (i) => {
+    const a = r[i], b = r[(i + 1) % n];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    return [-(b[1] - a[1]) / l, (b[0] - a[0]) / l];
+  };
+  return r.map((p, i) => {
+    const nPrev = inward((i - 1 + n) % n), nNext = inward(i);
+    let bx = nPrev[0] + nNext[0], by = nPrev[1] + nNext[1];
+    const bl = Math.hypot(bx, by);
+    if (bl < 1e-9) { bx = nNext[0]; by = nNext[1]; } else { bx /= bl; by /= bl; }
+    return [p[0] + bx * dist, p[1] + by * dist];
+  });
+}
+
+// Deterministic lateral nudge so two ribbons sharing one wall line (e.g. a
+// hand-traced base + a wainscot trace over the same snapped centerline) never
+// occupy identical world coordinates (spec Web3D B9). Offsets every vertex
+// along its edge's left normal by delta — sign is the caller's role choice.
+export function nudgePath(path, delta) {
+  return path.map((p, i) => {
+    const b = path[Math.min(i + 1, path.length - 1)];
+    const l = Math.hypot(b[0] - p[0], b[1] - p[1]) || 1;
+    return [p[0] + (-(b[1] - p[1]) / l) * delta, p[1] + ((b[0] - p[0]) / l) * delta];
+  });
+}
 ```
 
 - [ ] **Step 4: Run → green.** Commit: `feat: scene3d — deducts, ribbons (miter/bevel), posts, scene notes`.
@@ -457,7 +510,7 @@ export function centroid2(ring) {
 - Test: `web/test/scene3d.test.ts` (append)
 
 **Interfaces:**
-- Produces: RB-1 gains `extrude_mode: "vertical", extrude_h_ft: 1/3`; TR-1 gains `extrude_mode: "flush"`; new seed entry `{ finish_tag: "CG-1", color: "#1f6b4a", hatch: "vert", waste_pct: 0, materials: [], extrude_h_ft: 4 }` (template shape — no `fill`; remaining cosmetics are implementer's choice under the palette doctrine).
+- Produces: RB-1 gains `extrude_mode: "vertical", extrude_h_ft: 1/3`; TR-1 gains `extrude_mode: "flush"`; new seed entry `{ finish_tag: "CG-1", color: "#0f766e", hatch: "vert", waste_pct: 0, materials: [], extrude_h_ft: 4 }` (template shape — no `fill`; color deliberately distinct from ui.js SVG.positive #1f6b4a; remaining cosmetics are implementer's choice under the palette doctrine).
 
 - [ ] **Step 1: Failing test**
 
@@ -533,6 +586,16 @@ if (!(Number(aCond?.extrude_h_ft) > 0) && (cRole === "count" || (cRole === "line
 
 (`cRole` is the role being committed at that site — inline the literal `"count"` / `"linear"` at each of the three sites rather than threading a variable, matching how each commit function already knows its own role.)
 
+**`commitSweep` toast collision (cycle-2 finding):** `TakeoffCanvas.jsx:4235` already calls `setCommitMsg(\`Committed ${rows.length} EA …\`)` unconditionally right after the shape mapping, and `setCommitMsg` is single-slot last-write-wins (`:677-679`) — a reminder inserted before it is silently clobbered. In `commitSweep`, do NOT add a second `setCommitMsg`; instead EXTEND the existing call at `:4235`:
+
+```js
+const needH = !(Number(aCond?.extrude_h_ft) > 0);
+setCommitMsg(`Committed ${rows.length} EA under ${aCond?.finish_tag ?? "…"} …`
+  + (needH ? ` · set installed height (3D H) for ${aCond.finish_tag} — the 3D view renders it` : ""));
+```
+
+(One message, one slot — the reminder rides the success toast. `commitCount` has no competing `setCommitMsg` today, so its reminder is a plain call as written above.)
+
 - [ ] **Step 3: Per-shape override** — clone `setShapeHeight`/`clearShapeHeight` (`:6661-6676`) as `setShapeExtrude`/`clearShapeExtrude`: fields `extrude_h_ft`/`extrude_override`, and **no `recomputeShape` call** — display-only, quantities untouched. Inspector input mirroring the surface-height block (`:8779-8792`), gated on `selShape.measure_role === "count" || selShape.measure_role === "linear"`, with the same ↺ revert-to-condition affordance.
 - [ ] **Step 4: `cd web && npm run check`** → green. **Step 5: Hand-verify** (`npm run dev`, sample plan): set RB-1 3D H = 4 in; place a single count under CG-1; sweep-place more (toast appears on unset conditions); select one guard → override to 8 ft → ↺ reverts. **Step 6: Commit** `feat: extrude controls, per-shape overrides, reminder toast`.
 
@@ -572,11 +635,11 @@ Renderer contracts the implementation must honor:
 - **Axis mapping:** `new THREE.Vector3(x, up, w)` from scene3d's `[x, up, w]` tuples; `pt_ft`/`path_ft` entries are `[x, w]` pairs → `Vector3(p[0], h, p[1])`. No further negation anywhere.
 - **Per-condition Groups:** merged slab+ribbon `BufferGeometry` per condition via `mergeGeometries` (position/normal only; color from the per-condition `MeshBasicMaterial`, never vertex-baked); `DoubleSide` on all materials; `transparent: true, opacity: 0.35` for `translucent` shapes — translucent and derived ribbons are separate merged meshes per condition (opacity is material state); **derived ribbons render at `opacity: 0.7`** (the derived-vs-hand-traced distinction; door gaps aren't drawn, so derived runs read as schematic).
 - **Excluded volumes:** one translucent-red `MeshBasicMaterial({ color: EXCLUDED_COLOR, transparent: true, opacity: 0.35, depthWrite: false })` mesh per deduct-owning condition, parented under that condition's Group.
-- **Posts:** per condition owning count shapes, `new THREE.CylinderGeometry(1, 1, 1, 12).rotateX(Math.PI / 2).translate(0, 0, 0.5)` — **CylinderGeometry's long axis is local Y; `rotateX` remaps it to local Z, then `translate` base-anchors z ∈ [0, 1]** — and per-instance `matrix = translate(pt.x, 0, pt[1]) · scale(1, 1, h)` via `setMatrixAt` (`h` = the post's own `z1`, so per-shape overrides scale per instance).
+- **Posts:** per condition owning count shapes, `new THREE.CylinderGeometry(1, 1, 1, 12).rotateX(Math.PI / 2).translate(0, 0, 0.5)` — **CylinderGeometry's long axis is local Y; `rotateX` remaps it to local Z, then `translate` base-anchors z ∈ [0, 1]** — and per-instance `matrix = translate(pt[0], 0, pt[1]) · scale(1, 1, h)` via `setMatrixAt` (`pt` is the plain `[x, w]` array from `pt_ft`; `h` = the post's own `z1`, so per-shape overrides scale per instance).
 - **In-scene captions:** each `notes` entry with an `at` anchor (excluded areas) renders a `THREE.Sprite` with a canvas-texture label ("excluded area — see plan") at that world point; all `notes` also render as legend chips (HTML rail).
 - **Legend toggles** set Group `.visible`. **Explode** (slider) sets each condition Group's `position.y = index * explode` — a transform, never a rebuild; UI disables section cut while `explode > 0` and vice versa. **Section cut:** one horizontal `THREE.Plane`, `renderer.localClippingEnabled = true`, the `clippingPlanes` array set on EVERY material (condition, excluded, post, sprite). **Framing:** fit-to-content (bounding sphere + FOV) on open, on legend toggle, and via a **reset-view button**; explode deliberately leaves framing static.
 - **Export:** button handler runs `renderer.render(scene, camera)` then reads `renderer.domElement.toDataURL("image/png")` in the same call stack; composites the image onto a 2D canvas with a footer strip — sheet label, scale, date, and verbatim: `schematic — not as-built; openings deducted, not shown; verify in field` — then downloads.
-- **Overlay chrome:** persistent (non-dismissible) honest-limitations label with the spec's verbatim text: "Schematic view — no wall thickness, no door frames, no casework, flat single-elevation floors, generic base profile, openings deducted-not-shown." **Unmount:** `renderer.dispose()`, `renderer.forceContextLoss()`, `controls.dispose()`, dispose every geometry/material/texture, null refs. **Resize:** `ResizeObserver` → `camera.aspect` + `camera.updateProjectionMatrix()` + `renderer.setSize()`; `setPixelRatio(Math.min(devicePixelRatio, 2))`. **Focus dimming:** when `focusIds` is non-null, merged per-condition geometry is built in two batches per condition (in-focus / out-of-focus) with the out-of-focus batch at `opacity: 0.15` — unlinked shapes stay visible, dimmed (Task 6 supplies the set).
+- **Overlay chrome:** persistent (non-dismissible) honest-limitations label with the spec's verbatim text: "Schematic view — no wall thickness, no door frames, no casework, flat single-elevation floors, generic base profile, openings deducted-not-shown." **Unmount:** `renderer.dispose()`, `renderer.forceContextLoss()`, `controls.dispose()`, dispose every geometry/material/texture, null refs. **Resize:** `ResizeObserver` → `camera.aspect` + `camera.updateProjectionMatrix()` + `renderer.setSize()`; `setPixelRatio(Math.min(devicePixelRatio, 2))`. **Focus isolation:** when `focusIds` is non-null, each condition's merged geometry is built in two batches (shapeId in-set / out-of-set); the OUT-of-set batch is `.visible = false` — hidden, not dimmed (the spec's "unlinked shapes stay visible" is satisfied because `isolate3D` keeps unlinked shapes IN the set; there is no dimming tier). When `derived` and `translucent` are both true, the unset-height translucent bucket (0.35) wins; the unset-height note still fires so nothing is silently lost.
 - **JSX not TSX:** plain `useState(null)` — no generics in `.jsx` (lint fails on `<number`).
 
 - [ ] **Step 3: Hand-verify** (sample plan: rooms + derived base + guards + a standalone deduct): top-down orientation matches the 2D sheet; derived base translucent; excluded caption sprite; explode, cut, toggles, reset view, export footer. **Step 4: Commit** `feat: View3D three.js renderer overlay`.
@@ -638,29 +701,39 @@ export function isolate3D(selectedId, shapes) {
 }
 ```
 
-- [ ] **Step 4: Canvas wiring.** Lazy overlay + scoping + gate (the panel/scale accessors follow the file's existing `panelByKey`/`uppFor` idioms — match the actual local names at implementation):
+- [ ] **Step 4: Canvas wiring.** Lazy overlay + scoping + gate. Verified real identifiers: the active single-view sheet key is **`sheetKey`** (`TakeoffCanvas.jsx:878`); panel lookup is **`panelByKey(k)`** (`:1036`) with the split/group view's focused panel at **`focusPanel`** (`:1060`); `uppFor`/`tabLabel`/`visibleShapes`/`selectedId` are real as-is. Scope decision: **v1 opens on the focused panel's sheet when a group view has focus (`focusPanel`), else the active sheet (`sheetKey`)** — one sheet, never stitched:
 
 ```jsx
 const View3D = React.lazy(() => import("../components/View3D.jsx"));
 // state: const [show3d, setShow3d] = useState(false);
-// in the toolbar, beside the Report toggle:
-<button onClick={() => setShow3d(true)} title="3D view — this sheet's takeoff extruded (needs scale)">3D</button>
+// at render scope:
+const active3dKey = focusPanel?.key ?? sheetKey;
+const panel3d = active3dKey ? panelByKey(active3dKey) : null;
+// toolbar, beside the Report toggle:
+<button onClick={() => (uppFor(active3dKey) ? setShow3d(true) : setCommitMsg("Set the sheet scale first — 3D is feet-true or nothing"))}
+  title="3D view — this sheet's takeoff extruded (needs scale)">3D</button>
 // overlay (rendered when show3d):
-{show3d && panel && uppFor(key) && (
+{show3d && panel3d && uppFor(active3dKey) && (
   <React.Suspense fallback={null}>
     <View3D
-      shapes={visibleShapes.filter((s) => s.sheet_id === key)}
+      shapes={visibleShapes.filter((s) => s.sheet_id === active3dKey)}
       conditions={conditions}
-      sheet={{ widthPx: panel.img.w, heightPx: panel.img.h, upp: uppFor(key) }}
-      focusIds={isolate3D(selectedId, visibleShapes.filter((s) => s.sheet_id === key))}
-      sheetLabel={tabLabel(key)}
+      sheet={{ widthPx: panel3d.img.w, heightPx: panel3d.img.h, upp: uppFor(active3dKey) }}
+      focusIds={isolate3D(selectedId, visibleShapes.filter((s) => s.sheet_id === active3dKey))}
+      sheetLabel={tabLabel(active3dKey)}
       onClose={() => setShow3d(false)} />
   </React.Suspense>
 )}
 ```
 
-Unscaled: the button opens the existing scale-gate message toast instead of the overlay (`uppFor(key) == null` branch). While the overlay is mounted, bump `menuDepthRef` (the `:804-808` pattern) so 2D letter tools don't re-arm; restore on close. Add a single-letter shortcut picked against the USER_GUIDE §15 table at implementation (O is taken); document it in §15.
-- [ ] **Step 5: Docs.** README Features bullet; USER_GUIDE: new "3D view" section (open/gate, legend chips + captions, explode, section cut, export footer, limitations label, per-shape 3D-H override) + §15 shortcut row; CHANGELOG entry; FEATURES.md row pointing at `scene3d.js`/`View3D.jsx`. **Step 6: `npm run check` green + full hand pass** (sample plan end-to-end: load, scale, trace, derive base, guards, open 3D, select a room → isolation dims, export PNG with footer). **Step 7: Commit** `feat: 3D takeoff view — canvas integration, isolation, docs`.
+Unscaled sheet: the button routes to the scale-gate toast (above) — the overlay never mounts unscaled. While the overlay is mounted, gate the 2D letter tools through the existing menu-depth counter (`:804-808`), the same way ToolMenu does — concretely:
+
+```jsx
+{show3d && <View3DGate onMount={() => onMenuDepth(true)} onUnmount={() => onMenuDepth(false)} />}
+```
+
+or simply call `onMenuDepth(true)` in the effect that opens the overlay and `onMenuDepth(false)` in `onClose` — one open, one close, symmetric. Add a single-letter shortcut picked against the USER_GUIDE §15 table at implementation (O, A, R, L, S, C, D, H, N, K, V, G, M, F, Q are taken); document it in §15.
+- [ ] **Step 5: Docs.** README Features bullet; USER_GUIDE: new "3D view" section (open/gate, legend chips + captions, explode, section cut, export footer, limitations label, per-shape 3D-H override, **and the disclosed bevel-seam artifact: sharp near-reversal corners render beveled and may show a thin seam**) + §15 shortcut row; CHANGELOG entry; FEATURES.md row pointing at `scene3d.js`/`View3D.jsx`. **Step 6: `npm run check` green + full hand pass** (sample plan end-to-end: load, scale, trace, derive base, guards, open 3D, select a room → out-of-room linked shapes hide, export PNG with footer). **Step 7: Commit** `feat: 3D takeoff view — canvas integration, isolation, docs`.
 
 ---
 
