@@ -621,6 +621,7 @@ if (!(Number(aCond?.extrude_h_ft) > 0) && (cRole === "count" || (cRole === "line
 const needH = !(Number(aCond?.extrude_h_ft) > 0);
 setCommitMsg(`Committed ${rows.length} EA under ${condById[activeCond]?.finish_tag || "condition"}${sw.includeSeed ? " — seed included" : ""}${skippedN ? ` · ${skippedN} excluded by label` : ""} · one undo step (${keyText("⌘Z")}).`
   + (needH ? ` · set installed height (3D H) for ${aCond?.finish_tag} — the 3D view renders it` : ""));
+```
 
 (One message, one slot — the reminder rides the success toast. `commitCount` has no competing `setCommitMsg` today, so its reminder is a plain call as written above.)
 
