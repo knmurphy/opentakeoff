@@ -52,19 +52,39 @@ test("diagonal quads are rotated 45°", () => {
 
 test("herringbone places interlocking rotated pairs covering the bounds", () => {
   const g = getPattern("herringbone");
-  const a = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const input = { bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const a = g.generate(input);
+  const b = g.generate(input);
+  assert.deepEqual(a, b);                       // deterministic
   assert.ok(a.length > 0);
-  // both +45° and -45° orientations present
+  // both axis-aligned orientations present (0 and π/2)
   const rots = new Set(a.map((q) => Math.round(q.rot * 1e6)));
   assert.equal(rots.size, 2);
 });
 
+test("herringbone ignores origin/rotation_deg (interlock-derived, §3.1)", () => {
+  const g = getPattern("herringbone");
+  const base = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const shifted = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [5, 5], rotation_deg: 90, skuId: "s1" });
+  assert.deepEqual(base, shifted);
+});
+
 test("basketweave alternates horizontal/vertical pairs", () => {
   const g = getPattern("basketweave");
-  const a = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const input = { bounds, w: 2, h: 1, joint: 0, origin: [0, 0] as [number, number], rotation_deg: 0, skuId: "s1" };
+  const a = g.generate(input);
+  const b = g.generate(input);
+  assert.deepEqual(a, b);                       // deterministic
   assert.ok(a.length > 0);
   const rots = new Set(a.map((q) => Math.round(q.rot * 1e6)));
   assert.equal(rots.size, 2); // 0 and π/2
+});
+
+test("basketweave ignores origin/rotation_deg (interlock-derived, §3.1)", () => {
+  const g = getPattern("basketweave");
+  const base = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+  const shifted = g.generate({ bounds, w: 2, h: 1, joint: 0, origin: [5, 5], rotation_deg: 90, skuId: "s1" });
+  assert.deepEqual(base, shifted);
 });
 
 test("herringbone warns for non-2:1 tiles", () => {

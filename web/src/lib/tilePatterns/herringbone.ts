@@ -14,9 +14,10 @@ import { pitchCell } from "../tilePitch.ts";
 // Each joint is exact (zero gap, zero overlap) only when w === 2*h, which
 // is precisely the classic 2:1 herringbone ratio; layoutWarning (index.ts)
 // flags any other ratio. The six local offsets below are derived by
-// matching plank corners under a +/-45-style edge-to-cap translation and
-// were verified numerically (raster coverage, zero gap/zero overlap) for
-// the 2:1 case before landing here.
+// matching plank corners under an axis-aligned edge-to-cap translation
+// (rot values are 0 and π/2, not ±45°) and were verified numerically
+// (raster coverage, zero gap/zero overlap) for the 2:1 case before
+// landing here.
 function neighborOffsets(w: number, h: number): [number, number][] {
   const half = h / 2;
   const edge = (w + h) / 2;
