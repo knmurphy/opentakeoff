@@ -547,6 +547,7 @@ export function nudgePath(path, delta) {
 ```ts
 import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
 import { seedConditions } from "../src/lib/canvasUtil.js";
+import { conditionFromPlay } from "../src/lib/plays.js";
 
 test("seeds carry extrude doctrine (RB-1 vertical 4in, TR-1 flush, CG-1 4ft)", () => {
   const byTag: Record<string, any> = Object.fromEntries(FLOORING_DEFAULTS.map((t) => [t.finish_tag, t]));
@@ -561,6 +562,15 @@ test("seedConditions passes the new fields through instantiateTemplate", () => {
   const rb = conds.find((c) => c.finish_tag === "RB-1");
   assert.equal(rb.extrude_mode, "vertical");
   assert.ok(Math.abs(rb.extrude_h_ft - 1 / 3) < 1e-12);
+});
+
+test("a saved Play round-trips the extrude fields through COND_KEEP", () => {
+  const cond = conditionFromPlay(
+    { finish_tag: "RB-1", color: "#475569", extrude_mode: "vertical", extrude_h_ft: 1 / 3 },
+    "RB-1", () => "cX", () => "mX",
+  );
+  assert.equal(cond.extrude_mode, "vertical");
+  assert.ok(Math.abs(cond.extrude_h_ft - 1 / 3) < 1e-12);
 });
 ```
 
@@ -754,13 +764,9 @@ const active3dKey = focusPanel.key; // focusPanel never null once a sheet is ope
 )}
 ```
 
-Unscaled sheet: the button routes to the scale-gate toast (above) — the overlay never mounts unscaled. While the overlay is mounted, gate the 2D letter tools through the existing menu-depth counter (`:804-808`), the same way ToolMenu does — concretely:
+Unscaled sheet: the button routes to the scale-gate toast (above) — the overlay never mounts unscaled. While the overlay is mounted, gate the 2D letter tools through the existing menu-depth counter — call `onMenuDepth(true)` in the effect that opens the overlay and `onMenuDepth(false)` in `onClose` (the same symmetric open/close pairing every `onOpenChange={onMenuDepth}` call site uses at `:7223`-`:7598`):
 
-```jsx
-{show3d && <View3DGate onMount={() => onMenuDepth(true)} onUnmount={() => onMenuDepth(false)} />}
-```
-
-or simply call `onMenuDepth(true)` in the effect that opens the overlay and `onMenuDepth(false)` in `onClose` — one open, one close, symmetric. Shortcut: **W** (not in the §15 taken set O, A, R, L, S, C, D, H, N, K, V, G, M, F, Q as of this plan; if a merged change has claimed W since, take the next free letter — §15 stays authoritative); register on `window` like every other tool letter and document in §15.
+Shortcut: **W** (independently verified unbound in the live keydown handler and shortcut tables at review time; if a merged change has claimed W since, take the next free letter — §15 stays authoritative); register on `window` like every other tool letter and document in §15.
 - [ ] **Step 5: Docs.** README Features bullet; USER_GUIDE: new "3D view" section (open/gate, legend chips + captions, explode, section cut, export footer, limitations label, per-shape 3D-H override, **and the disclosed bevel-seam artifact: sharp near-reversal corners render beveled and may show a thin seam**) + §15 shortcut row; CHANGELOG entry; FEATURES.md row pointing at `scene3d.js`/`View3D.jsx`. **Step 6: `npm run check` green + full hand pass** (sample plan end-to-end: load, scale, trace, derive base, guards, open 3D, select a room → out-of-room linked shapes hide, export PNG with footer). **Step 7: Commit** `feat: 3D takeoff view — canvas integration, isolation, docs`.
 
 ---
