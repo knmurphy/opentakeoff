@@ -291,6 +291,13 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
 ### Fixed
 - **Report and ⋯ were off the right edge on 1440-class laptops.** The toolbar is ~1,375px of fixed-width controls (its contract since #61: nothing wraps or shifts mid-work), and at 1366 or 1280 wide the row scrolled itself — a thin scrollbar nobody finds, with the canvas eating wheel gestures — so Report read as unclickable. The bar is now two parts: the working controls scroll as one region, and **Report, ⋯, presence and account are pinned outside it**, on screen at any width. Nothing wraps; at full width the bar is pixel-identical. Verified in 1366×768, 1280×720 and 1024×700 frames.
+## 2026-08-25 — your keys, your habit
+
+### Added
+- **Configurable keyboard shortcuts — every discrete shortcut is a named command.** **Keyboard shortcuts…** in the `?` guide opens a modal listing all 26 remappable commands (tools, navigation, edit, and the global `Esc`/`Enter`/delete-back ladder). Click a row, press a new chord, and the binding updates everywhere at once — toolbar labels, the guide tables, and every `keydown` handler read the same live keymap (`web/src/lib/keymap.ts`). Overrides persist browser-globally in IndexedDB (`keybindStore.js`, overrides-only shape); conflict policy is reject-never-steal, and reserved keys (`Esc`, `Backspace`, `Delete`, `Enter`) cannot be assigned as new bindings. Fixed (not in the modal): hold `Space` pan, hold `M` dictation, hold `⇧` angle lock, `⌥`- and `⇧`-click gestures, digits `1`–`9` for the condition palette, and scroll/zoom/pan gestures.
+
+### Changed
+- **`Esc` drops to Select when nothing is in progress.** The `escape` command's canvas handler keeps today's back-out ladder (vertex pick → One-Click selection → trace, proposal, calibration, check, selection, markup draft, armed stamp, zone). The refinement: clearing a live trace or other in-progress state stays in the current tool (clear-and-continue); only a truly stray `Esc` — nothing left to back out of — arms **Select**. Sweep cancel, guide close, gallery close, menu close, navigator back, and dictation discard keep their own handlers and do not switch tools.
 
 ## 2026-08-24 — the takeoff goes back into CAD
 
