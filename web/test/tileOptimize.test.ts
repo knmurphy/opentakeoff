@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { optimizeOrigin } from "../src/lib/tileGeometry/optimize.ts";
+import type { Classified } from "../src/lib/tileGeometry/classify.ts";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
 
-const sliverCount = (classified) => classified.filter((c) => {
+const sliverCount = (classified: Classified[]) => classified.filter((c: Classified) => {
   if (c.cls !== "cut" && c.cls !== "corner") return false;
   const wq = c.quad.w * 12, hq = c.quad.h * 12;
   return (c.cut && ((c.cut.w_in > 0.1 && c.cut.w_in < 0.5 * wq) || (c.cut.h_in > 0.1 && c.cut.h_in < 0.5 * hq)));

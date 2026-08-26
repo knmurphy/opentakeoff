@@ -9,7 +9,7 @@ import { computeTileTakeoff, tileReportRows } from "../src/lib/tileTakeoff.js";
 
 // A 4ft x 4ft square room: verts_norm in [0,1] against a 100x100px sheet
 // rendered at upp=0.04 ft/px => bitmap is 4ft x 4ft.
-function makeShape(condId) {
+function makeShape(condId: string) {
   return {
     id: "shape1",
     sheet_id: "sheet1",
@@ -24,8 +24,8 @@ function makeShape(condId) {
   };
 }
 
-const dimsFor = (sheetId) => (sheetId === "sheet1" ? { w: 100, h: 100 } : null);
-const uppFor = (sheetId) => (sheetId === "sheet1" ? 0.04 : null);
+const dimsFor = (sheetId: string) => (sheetId === "sheet1" ? { w: 100, h: 100 } : null);
+const uppFor = (sheetId: string) => (sheetId === "sheet1" ? 0.04 : null);
 
 function makeTileCondition() {
   const tile_setup = mintTileSetup();

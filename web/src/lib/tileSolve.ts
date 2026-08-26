@@ -50,9 +50,10 @@ export function solveTileLayout(args: {
   const joint = config.joint_in / 12;
 
   const gen = getPattern(config.pattern) ?? getPattern("grid");
+  const skus = Array.isArray(tile_setup.skus) ? tile_setup.skus : [];
   const skuId =
-    tile_setup.skus.find((s) => Number(s.w_in) > 0 && Number(s.h_in) > 0)?.id ??
-    tile_setup.skus?.[0]?.id ??
+    skus.find((s) => s && Number(s.w_in) > 0 && Number(s.h_in) > 0)?.id ??
+    skus[0]?.id ??
     "sku";
 
   const quads = gen
