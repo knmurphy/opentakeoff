@@ -7,6 +7,7 @@
 export type TileSku = {
   id: string; name: string; w_in: number; h_in: number;
   color: string; image?: string; glossiness?: number;
+  thickness_in?: number; per_box?: number;
 };
 export type TileJoint = { width_in: number };
 export type TilePattern =
@@ -19,6 +20,7 @@ export type TileSetup = {
   skus: TileSku[];
   joint: TileJoint;
   grout: Record<string, unknown>;
+  purchase?: { breakage_pct?: number; attic_pct?: number };
 };
 
 const usableSku = (s: unknown): boolean => {
