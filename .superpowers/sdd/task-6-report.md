@@ -44,3 +44,12 @@
 ## `npm run check`
 
 Green after changes (typecheck, lint warning only on unrelated eslint-disable elsewhere).
+
+## Fix round 1 (review P1)
+
+1. **Guide in gallery:** Removed `"guide"` from `NAV_COMMANDS` so the gallery early-return no longer blocks `?` before the dedicated `cmd === "guide"` handler (`focusMode` / `curveFlip` remain in `NAV_COMMANDS`).
+2. **Select-floor deps:** Added `calib`, `check`, `checkStated`, `scaleGuide`, `markupDraft`, `armedStamp`, `scheduleAnchor`, `symbolAnchor`, `alignPt`, `zoneCheck` to the merged keymap effect deps so `hadSomething` and the deleteBack ladder read current state.
+
+**P2 accepted (no fix):** `alt+Escape` / `alt+Backspace` no longer dispatch — `alt` is exact in the chord grammar; intentional unified behavior.
+
+`npm run check` green after fix round 1.

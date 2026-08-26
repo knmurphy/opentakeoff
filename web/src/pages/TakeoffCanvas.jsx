@@ -2844,7 +2844,7 @@ export default function TakeoffCanvas() {
     "oneclick", "area", "rect", "linear", "surface", "count", "deduct", "deduct-rect",
     "highlighter", "dimension", "check", "select", "symbol", "repeat",
   ]);
-  const NAV_COMMANDS = new Set(["gallery", "focusMode", "guide", "curveFlip"]);
+  const NAV_COMMANDS = new Set(["gallery", "focusMode", "curveFlip"]);
   useEffect(() => {
     const onKey = (e) => {
       const tg = e.target.tagName;
@@ -2998,7 +2998,7 @@ export default function TakeoffCanvas() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales, selectedId, selVert, selectedMarkupId, showMarkups, ocSel, approvals, groupSig, focusKey, shortcutsOpen, bowOpen, conditions]);
+  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales, selectedId, selVert, selectedMarkupId, showMarkups, ocSel, approvals, groupSig, focusKey, shortcutsOpen, bowOpen, calib, check, checkStated, scaleGuide, markupDraft, armedStamp, scheduleAnchor, symbolAnchor, imageAnchor, placingImageId, alignPt, zoneCheck, conditions]);
   // ^ selectedId/conditions joined for T (repeat the selected shape): the
   //   handler reads the selected record and validates its condition id.
   // ^ shapes/scales joined the deps with the agent accept path (the delete-handler
