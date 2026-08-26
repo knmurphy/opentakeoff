@@ -470,7 +470,7 @@ plus a vision-capable model id.
 | **Conditions** | Color + CAD hatch per finish, waste %, ×N multiplier, wall height, border thickness, schedule import, browser-wide library |
 | **Supporting Materials** | Labor + subfloor type, coverage rate × basis (incl. figured seam LF) → rounded order quantities, trowel/roller presets, grout calculator |
 | **Roll goods** | Per-condition roll setup → lanes, seams, multi-roll splits, to-scale cuts with drag-to-reorder nesting, Roll Order LF + Rolls + figured Seam LF on every export |
-| **Tile patterning** | Per-condition pattern/size/joint/edge setup → sliver-avoidance origin, safe purchase count, cut sheet; on the canvas, a to-scale grid overlay (full/cut/corner/hole) with a draggable origin and undoable edge-exposure gestures, a docked Tile panel, multi-room QA |
+| **Tile patterning** | Per-condition pattern/size/joint/edge setup → sliver-avoidance origin, safe purchase count, opt-in offcut reuse (grain-locked, beside the safe count), interior bands/listellos with their own run figuring, cut sheet; on the canvas, a to-scale grid overlay (full/cut/corner/hole) with a draggable origin and undoable edge-exposure gestures, a docked Tile panel, multi-room QA |
 | **Multi-sheet** | Sheet gallery, tabs and side-by-side groups, Regroup, levels, **stitching across a match line**, PDF layer roles |
 | **Report** | Per-condition Floor/Wall/Border SF, LF, EA, SY with and without waste, plus the combined buy list; columns, grouping, saved templates |
 | **Export** | CSV, JSON, **Excel (.xlsx)**, print, **Marked Set PDF**, RFI CSV/JSON |

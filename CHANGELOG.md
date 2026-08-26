@@ -2,6 +2,12 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-08-26 — tile stops wasting cuts, and learns to border a room
+
+### Added
+- **With-reuse offcut pool (opt-in per condition, M6).** A condition's tile card gains a **Reuse offcuts** checkbox and, once checked, a **Sliver threshold (in)** field (minimum 0.25). On, the card shows a second purchase count — **with reuse N tiles · M boxes** — beside the order line; reuse never removes that figure's breakage/attic margin, it only refines it, by modeling whole-tile cuts satisfied from other cuts' offcuts, grain-locked to the same SKU and orientation (no 90° rotation), sub-threshold slivers dropped. Diagonal, herringbone, and basketweave patterns cut at approximate dimensions, so reuse can't reason about them and the card reads **reuse n/a — grain ambiguous** instead. `export_report`'s `tile_goods` row gains additive `reuse_enabled` / `reuse_whole` / `reuse_with_margin` / `reuse_boxes` / `reuse_downgraded` fields.
+- **Interior bands / listellos (per room, M7).** The Tile panel's **This room** section gains a **Band (this room)** control — enable, then pick a band **SKU**, **Width (ft)**, and **Offset (ft)** from the wall — and the canvas draws an inset ring of that SKU inside the room. The field grid stops at the band's inner edge, so field tile counts drop to what's left once the band takes its perimeter strip; the band is figured as its own single-course run (perimeter LF ÷ the longest band-tile face, one miter cut per room corner) and shown as its own band line on the condition card. A band too big for its room is skipped, with a warning surfaced in the cross-room QA list. Adding or removing a band is one `⌘Z` step.
+
 ## 2026-08-26 — tile comes to the canvas: the grid, the panel, the gestures
 
 ### Added

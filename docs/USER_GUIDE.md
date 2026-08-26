@@ -374,6 +374,24 @@ only, no product photo yet) for a layout that mixes tile sizes. Select a room an
 a **This room** section: an origin and rotation override for that one shape, with a **follow
 default** link next to each field to drop the override and fall back to the condition again.
 
+**Reuse offcuts.** Each condition's card carries a **Reuse offcuts** checkbox and, once it's
+checked, a **Sliver threshold (in)** field (minimum 0.25). Turn it on and the card grows a
+second line — **with reuse N tiles · M boxes** — beside the order line; reuse never replaces
+that figure, only refines the margin. It models cutting whole tiles and satisfying other cuts
+from their offcuts, grain-locked to the same SKU and orientation (no 90° rotation), and drops
+any offcut thinner than the threshold as a sliver instead of counting it. Diagonal, herringbone,
+and basketweave patterns cut at approximate dimensions, so reuse can't reason about them — the
+card reads **reuse n/a for 〈pattern〉 — grain ambiguous** instead.
+
+**Interior bands.** Select a room and the **This room** section grows a **Band (this room)**
+checkbox. Turn it on and pick a **SKU**, a **Width (ft)**, and an **Offset (ft)** from the wall,
+and the canvas draws an inset ring of that SKU just inside the room's perimeter. The field grid
+stops at the band's inner edge — the band consumes that perimeter area, so the room's field tile
+count drops to match — and the band is figured as its own single-course run (perimeter LF ÷ the
+longest band-tile face, one miter cut per corner), shown as its own band line on the condition
+card. A room too small to hold the band is skipped, with a warning in the QA list below. Adding
+or removing a band is one `⌘Z` step, same as any other takeoff edit.
+
 **Tile edit.** Once the panel is open, **Tile edit — drag a room's origin crosshair to relocate
 its grid; click an edge to cycle/confirm its trim/threshold exposure** arms the grid for editing.
 Drag the crosshair and the whole pattern re-solves live under the cursor; release and it commits.
@@ -384,8 +402,8 @@ drag or an edge click exactly like any other takeoff edit.
 **QA, across every room at once.** The same panel lists every tiled room with something worth a
 second look—a sliver too thin to hold at a wall, a layout the engine couldn't solve cleanly, a
 hole straddling a joint, an unscaled sheet, a room whose pattern crosses a seam it can't reason
-about—so a 40-room tile job is audited in one pass instead of one zoom at a time. Click a row to
-pan straight to the room it's about.
+about, a **Band (this room)** too wide for its room—so a 40-room tile job is audited in one pass
+instead of one zoom at a time. Click a row to pan straight to the room it's about.
 
 ### Import from schedule
 
