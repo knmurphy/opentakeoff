@@ -36,6 +36,10 @@ forward from `main` — see §4.3), and the MCP `edit_condition` pattern.
 Grouped by domain. Each row names where the logic lives (module) and where it
 surfaces (integration point). Every row has a milestone in §5.
 
+Surfaces marked *panel*/*overlay* for a capability whose milestone is a `(pure)`
+engine milestone (M2–M4) come online with the canvas at M5; the milestone shown
+is where the computation lands.
+
 ### A. Tile definition — what a tile *is*
 
 | Capability | Module | Surfaces | Milestone |
@@ -59,6 +63,7 @@ surfaces (integration point). Every row has a milestone in §5.
 | Modular / Versailles (multi-size super-cell) | `patterns` modular (per-quad `skuId`) | overlay, panel | 9 |
 | Non-rectangular (hex, penny, octagon+dot) | `patterns` nonrect | overlay, panel | 9 |
 | Randomized / percentage layout (seeded) | `patterns` random | overlay, panel | 9 |
+| Accent tile replacement (swap a running tile for an accent SKU in a rhythm) | `patterns` + `tile_setup.skus` | panel, overlay | 9 |
 | Extensibility: interface + registry | `patterns/registry.ts` | — | 2 |
 
 ### C. Layout control — where and how the field sits
@@ -82,7 +87,7 @@ surfaces (integration point). Every row has a milestone in §5.
 | Purchase: *Safe* (full + one-per-cut) | `calc/tiles` | panel, report | 3 |
 | Purchase: *With reuse* (offcut pool, grain-lock, sliver threshold) | `calc/reuse` | panel, report | 6 |
 | Cut sheet (per-room, consolidated batch, offcut→cut map) | `calc/cutsheet` | report, marked set | 3 / 8 |
-| Hole cut accounting (hole straddles → cut tile) | `calc/tiles` | panel, report | 2 |
+| Hole cut accounting (hole straddles → cut tile) | `geometry` | panel, report | 2 |
 
 ### E. Trim & sundries — the edges
 
@@ -124,6 +129,7 @@ surfaces (integration point). Every row has a milestone in §5.
 | `report.v1` fields (tile counts, layout snapshot, trim edges) | `reportJson` | JSON export | 8 |
 | Waste-from-layout (**supersedes** heuristic `waste_pct`, see §4.1) | `calc` + `totals.js` | report | 3 |
 | **Scale-accurate tile layout sheet** (grid + cuts w/ dims + trim + corners at true scale) | `markedset.js` (PDF); `export_dxf` (DXF, post-rebase) | PDF now / DXF after rebase | 8 |
+| Install phasing (group rooms into phases; per-phase quantities) | report grouping (existing) | report | 8 |
 
 ### I. Interaction — the tool in the estimator's hands
 
@@ -276,7 +282,8 @@ stitch placement)`. Triggers and persistence:
 
 - **Recompute on:** `tile_setup` edit, origin/rotation change, `verts_norm`
   change, scale change, deduct/cutout change (holes), twin SKU edit, import
-  merge, **stitch alignment / origin-offset change**.
+  merge, **stitch alignment / origin-offset change**, and edge-trim / cut-side
+  edits on `shape.tile_layout`.
 - **Persist vs reset:** per-room `shape.tile_layout` persists across pure zoom;
   resets when the `verts_norm` hash, `tile_setup` hash, or **stitch layout
   signature** (`stitchLayoutSig`) changes — stale overrides dropped (roll's
@@ -372,8 +379,8 @@ scale. **PDF works today** via `markedset.js` (already scale-accurate). **DXF is
 a merge-forward dependency**: `export_dxf` lives on `main`; `feat/tile-patterning`
 is behind main and must rebase to pick it up. The cut sheet burned into the
 Marked Set is likewise forward scope (`markedset.js` renders shapes + annotations
-+ legend today, not schedules). Both ride the same layout snapshot the report
-uses, so drawing and order agree.
++ legend + an RFI schedule page today, but no tile cut-sheet schedule). Both ride
+the same layout snapshot the report uses, so drawing and order agree.
 
 ### 4.4 MCP — headless parity, staged into the path
 
@@ -405,9 +412,10 @@ reuse math and band geometry are trusted. MCP is staged through the path.
    Safe (full + one-per-cut), cut sheet, pattern-aware waste%, and grout-from-
    layout joint length. `export_report` tile counts. Layout supersedes
    `waste_pct` (§4.1). No reuse yet.
-4. **Perimeter trim + corners + thresholds + bullnose/cove (pure).** `tileEdges`
-   exposure record (suggested + confirmed), per-side trim LF, corner counts,
-   bullnose types + cove base SKUs; threshold reuse of `transitions.ts`.
+4. **Perimeter trim + corners + thresholds + bullnose/cove (pure).**
+   `tileEdges` exposure record (suggested + confirmed) + `calc/borders` per-side
+   trim LF and corner counts; bullnose types + cove base SKUs; threshold reuse
+   of `transitions.ts`.
 5. **Canvas overlay + focus flow + undo + hatch coexistence.** Select → zoom →
    always-on SVG overlay → docked panel → origin/rotation/edge-tagging undo
    commands; LOD hatch swap. `export_takeoff` layout snapshot.
@@ -454,5 +462,3 @@ of scope" — later in the path is not smaller in ambition.
    tile grid, and whether the Marked Set always draws the grid at scale.
 7. **Order-unit / box rounding** — which SKU drives the order when modular, and
    the EA-vs-SF rounding rule downstream of tile count.
-8. **Accent replacement + install phasing** — in the taxonomy; place explicitly
-   in the path (a later milestone) rather than leaving silent.
