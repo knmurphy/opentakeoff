@@ -83,17 +83,23 @@ Geometry rules (per role):
   (the shape snapshot — walls keep the height they were drawn at; reviewers
   confirmed this doctrine is exactly right).
 - **`linear`, mode vertical** (wall base) → ribbon inset toward the room
-  interior, `z ∈ [0, extrude_h_ft]`.
+  interior, `z ∈ [0, extrude_h_ft]`. **Unset `extrude_mode` on a linear
+  condition dispatches as `vertical`** — flush is the opt-in minority case
+  (TR-1 is the only seed needing it), and the builder, the extrude_h_ft
+  control gate, and this table all agree on that default.
 - **`linear`, mode flush** (transition/reducer strip) → thin strip in the floor
   plane, `z ∈ [h_floor, h_floor + thickness_in/12]` — it sits ON the adjoining
-  floor surface (z0 = the adjacent slab's top, never 0, so it never coplanar-
-  overlaps the floor beside it). Height = `thickness_in` as thickness, not as
-  a standing wall. This split is mandatory: RB-1 base and TR-1 transition
-  share `measure_role` and are physically opposite installs.
+  floor surface (z0 = the higher of the two adjoining slabs' tops when the
+  strip bridges floors of different `thickness_in` — its whole purpose; never
+  0, so it never coplanar-overlaps the floor beside it). Height =
+  `thickness_in` as thickness, not as a standing wall. This split is mandatory:
+  RB-1 base and TR-1 transition share `measure_role` and are physically
+  opposite installs.
 - **`count`** → vertical post at the exact point, `z ∈ [0, extrude_h_ft]`
   (corner guard: spec height, e.g. 4'0").
 
-Ribbon construction: quad strip per segment with miter at joints, under a
+Ribbon construction: quad strip per segment with miter at joints (θ = the
+interior angle between consecutive segments at the joint), under a
 **miter-limit clamp**: when the miter offset length (1/sin(θ/2)) exceeds 4×
 the ribbon half-width — which happens at near-straight reflex joints and sharp
 acute corners, i.e. ordinary freehand-trace noise — the join falls back to a
@@ -106,8 +112,10 @@ Testing).
 Interior-side resolution: rings carrying `origin.derived.from_shape_id` are
 inset toward the source floor polygon's interior (signed winding). Hand-traced
 runs center on path. Coincident wall ribbons (base + wainscot on one wall line
-— likely, since snapping makes it so) get small role-specific lateral nudges so
-no two ribbons share literal world coordinates (Web3D B9).
+— likely, since snapping makes it so) get role-specific lateral nudges derived
+from each ribbon's half-width (a fixed fraction of it, never an absolute
+epsilon, so the offset scales across sheet scales) so no two ribbons share
+literal world coordinates (Web3D B9).
 
 ### 2. `web/src/lib/scene3dSchema.js` (or within canvasConstants) — new condition fields
 
@@ -127,8 +135,13 @@ documentation false.
 
 **`extrude_mode`** — `'vertical' | 'flush'` on linear conditions only (count
 shapes render as posts unconditionally — no `post` value exists until a
-consumer reads it). Defaulted by condition seed: RB-1 → `vertical`, TR-1 →
-`flush`. Editable per condition.
+consumer reads it). **Default when unset: `vertical`** — flush is the opt-in
+minority case; the geometry table dispatches unset as vertical so a
+user-created third linear condition (a second base product, another reducer
+type) never lands in an undefined state. **UI entry point, pinned:** a
+two-state toggle beside the extrude_h_ft input on the same param row, after
+the `Style <select>` enum precedent at `TakeoffsPanel.jsx:466-472`. Shown for
+linear conditions only.
 
 **Seeds are part of this work, not already present:** `canvasConstants.js`
 FLOORING_DEFAULTS has no base/guard values today — the implementation ADDS
@@ -137,12 +150,19 @@ FLOORING_DEFAULTS has no base/guard values today — the implementation ADDS
 (count role, `extrude_h_ft: 4` — 4'0" corridor default). Without CG-1, every
 guard condition is user-created and starts as a translucent placeholder — the
 exact round-2 failure.
+CG-1's remaining seed fields (color, hatch, waste, materials) follow the
+existing FLOORING_DEFAULTS entry schema — cosmetic implementer's choice under
+the palette-is-user-data doctrine, decided at implementation, not spec time.
+Seeding touches fresh/empty workspaces only (`seedConditions` runs when a
+project has zero conditions), so no saved project is retroactively altered.
 
-**First-use nudge:** committing a `count` (or vertical-linear) shape while
-the active condition has no `extrude_h_ft` shows a one-line dismissible
-prompt (the existing toast pattern, not a modal): "Set installed height for
-{tag} — the 3D view renders it." The shape still commits. This closes the
-corner-guard day-one gap for user-created conditions beyond the seeds.
+**Reminder-until-set nudge:** committing a `count` (or vertical-linear) shape
+while the active condition has no `extrude_h_ft` shows a one-line dismissible
+message (the existing `setCommitMsg` toast pattern, auto-dismissing — not a
+modal, and it re-shows on later commits while still unset, hence the name):
+"Set installed height for {tag} — the 3D view renders it." The shape still
+commits. This closes the corner-guard day-one gap for user-created conditions
+beyond the seeds.
 
 **Mixed heights per spec section:** `extrude_h_ft` is per condition. A job
 with 4'0" corridor guards and 8'0" loading-dock guards under one finish tag
@@ -164,11 +184,19 @@ imports; verify against a real build before asserting in docs).
 Renderer contract (all from the Web3D review):
 
 - **Draw calls:** merge geometry per condition into one BufferGeometry (one
-  draw call per visible condition — worst case ~#conditions, tens, plus one
-  InstancedMesh); `InstancedMesh` for count posts, with an instanceId→shapeId
-  array kept alongside for future consumers (no raycast/picking in v1 —
-  selection isolation is 2D-selection-driven). Explode is then a per-condition
-  `Group.position` update per drag tick — never a rebuild.
+  draw call per visible condition; slab and ribbon geometries normalized to a
+  shared position/normal attribute layout before `mergeGeometries`).
+  **Carve-outs, stated:** (1) standalone-deduct excluded volumes are pulled
+  OUT of the per-condition merge into one shared translucent-red batch —
+  alpha-blended material cannot share a draw call with the condition's opaque
+  geometry; (2) count posts get **one InstancedMesh per count-role condition**,
+  parented under that condition's Group, with an instanceId→shapeId array
+  kept alongside for future consumers (no raycast/picking in v1 — selection
+  isolation is 2D-selection-driven). Worst case ≈ #conditions + 1
+  excluded-volume batch + #count-conditions InstancedMeshes — still tens.
+  Explode is a per-condition `Group.position` update per drag tick, uniform
+  across slabs, ribbons, and each condition's post InstancedMesh — never a
+  rebuild.
 - **Export:** export handler calls `renderer.render(scene, camera)` then reads
   `canvas.toDataURL()` synchronously in the same call stack (or constructs
   with `preserveDrawingBuffer: true`). The PNG is composited with a footer
