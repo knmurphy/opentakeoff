@@ -49,7 +49,12 @@ export function mintTileSetup(): TileSetup {
   };
 }
 
-export function tileConfig(ts: TileSetup) {
+export type TileConfig = {
+  w_in: number; h_in: number; joint_in: number;
+  pattern: TilePattern; origin: [number, number]; rotation_deg: number;
+};
+
+export function tileConfig(ts: TileSetup): TileConfig {
   const s = (ts.skus || []).find(usableSku) || ts.skus?.[0];
   return {
     w_in: Math.max(0.25, Number(s?.w_in) || 12),
