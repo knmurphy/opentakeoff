@@ -2646,7 +2646,7 @@ export default function TakeoffCanvas() {
     "oneclick", "area", "rect", "linear", "surface", "count", "deduct", "deduct-rect",
     "highlighter", "dimension", "check", "select", "symbol",
   ]);
-  const NAV_COMMANDS = new Set(["gallery", "focusMode", "guide", "curveFlip"]);
+  const NAV_COMMANDS = new Set(["gallery", "focusMode", "curveFlip"]);
   useEffect(() => {
     const onKey = (e) => {
       const tg = e.target.tagName;
@@ -2765,7 +2765,7 @@ export default function TakeoffCanvas() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales, selectedId, selVert, selectedMarkupId, showMarkups, ocSel, approvals, groupSig, focusKey, shortcutsOpen, bowOpen]);
+  }, [tool, poly, proposal, agentProposals, activeCond, sheetGroup, sheetKey, shapes, scales, selectedId, selVert, selectedMarkupId, showMarkups, ocSel, approvals, groupSig, focusKey, shortcutsOpen, bowOpen, calib, check, checkStated, scaleGuide, markupDraft, armedStamp, scheduleAnchor, symbolAnchor, alignPt, zoneCheck]);
 
   // remember the last armed measure tool — the Measure menu face shows it
   useEffect(() => { if (MEASURE_TOOLS.some((t) => t.id === tool)) lastMeasureRef.current = tool; }, [tool]);
