@@ -31,6 +31,7 @@ import { m365Config, M365_ENABLED_KEY } from "../lib/msgraph/config.js";
 import { metaGet, metaPut, metaDelete } from "../lib/store.js";
 import { groupSheetsByLevel, sortGalleryGroups } from "../lib/sheetLevels.js";
 import { renderThumb, loadThumb, saveThumb, thumbPixelWidth } from "../lib/thumbs.js";
+import { matches } from "../lib/keymap.ts";
 
 // Thumbnails in flight at once. The canvas rasters in its worker pool now, so
 // the main thread's pdf.js is mostly idle while the gallery is up; two keeps
@@ -157,7 +158,7 @@ export default function PlanNavigator({
   const escRef = useRef(() => {});
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") { e.stopPropagation(); escRef.current(); return; }
+      if (matches(e, "escape")) { e.stopPropagation(); escRef.current(); return; }
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       // "?" is app-level help, not a canvas tool shortcut, so it is not ours to

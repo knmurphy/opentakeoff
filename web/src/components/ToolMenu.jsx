@@ -12,6 +12,7 @@
 // the calibrated guide bar on the sheet behind the open menu).
 import React, { useEffect, useRef, useState } from "react";
 import { keyText } from "../lib/keys.ts";
+import { matches } from "../lib/keymap.ts";
 import { Icon } from "../brand/icons.jsx";
 
 const MENU_W = 232;
@@ -25,7 +26,7 @@ export default function ToolMenu({ face, active = false, accent = "cobalt", titl
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    const onKey = (e) => { if (matches(e, "escape")) setOpen(false); };
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
