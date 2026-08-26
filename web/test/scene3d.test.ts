@@ -5,6 +5,9 @@ import {
   buildScene, toWorldFt, ringCCW, worldWindingCCW, buildRibbon, nudgePath,
   NOMINAL_THICKNESS_FT, NOMINAL_HEIGHT_FT, EXCLUDED_COLOR, MITER_LIMIT, RIBBON_HALF_FT,
 } from "../src/lib/scene3d.js";
+import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
+import { seedConditions } from "../src/lib/canvasUtil.js";
+import { conditionFromPlay } from "../src/lib/plays.js";
 
 const SHEET = { widthPx: 1000, heightPx: 2000, upp: 0.05 };
 const COND = { id: "c1", finish_tag: "CPT-1", color: "#2f7d54" };
@@ -204,4 +207,28 @@ test("degenerate points filtered: duplicates and zero-length segments produce fi
   const r = buildRibbon([[0, 0], [0, 0], [5, 0], [5, 0]], 0.05);
   assert.ok(r.positions.every((v) => Number.isFinite(v)));
   assert.ok(r.positions.length >= 12, "one real segment → one quad");
+});
+
+test("seeds carry extrude doctrine (RB-1 vertical 4in, TR-1 flush, CG-1 4ft)", () => {
+  const byTag: Record<string, any> = Object.fromEntries(FLOORING_DEFAULTS.map((t) => [t.finish_tag, t]));
+  assert.equal(byTag["RB-1"].extrude_mode, "vertical");
+  assert.ok(Math.abs(byTag["RB-1"].extrude_h_ft - 1 / 3) < 1e-12);
+  assert.equal(byTag["TR-1"].extrude_mode, "flush");
+  assert.equal(byTag["CG-1"].extrude_h_ft, 4);
+});
+
+test("seedConditions passes the new fields through instantiateTemplate", () => {
+  const conds = seedConditions(null);
+  const rb = conds.find((c) => c.finish_tag === "RB-1");
+  assert.equal(rb.extrude_mode, "vertical");
+  assert.ok(Math.abs(rb.extrude_h_ft - 1 / 3) < 1e-12);
+});
+
+test("a saved Play round-trips the extrude fields through COND_KEEP", () => {
+  const cond = conditionFromPlay(
+    { finish_tag: "RB-1", color: "#475569", extrude_mode: "vertical", extrude_h_ft: 1 / 3 },
+    "RB-1", () => "cX", () => "mX",
+  );
+  assert.equal(cond.extrude_mode, "vertical");
+  assert.ok(Math.abs(cond.extrude_h_ft - 1 / 3) < 1e-12);
 });

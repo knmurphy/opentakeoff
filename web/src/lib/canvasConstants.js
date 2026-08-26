@@ -116,6 +116,7 @@ export const FLOORING_DEFAULTS = [
     { name: "Thinset mortar", kind: "mortar", per: 65, basis: "area", unit: "bag", note: '1/4″×3/8″×1/4″ sq' },
     { name: "Grout", kind: "grout", per: 512, basis: "area", unit: "bag", grout: { ...GROUT_DEFAULTS }, note: '12×24×3/8″ @ 1/8″ · 25 lb' },
   ] },
-  { finish_tag: "RB-1",  color: "#475569", hatch: "horiz",   waste_pct: 5,  materials: [{ name: "Cove base adhesive", kind: "adhesive", per: 40, basis: "linear", unit: "tube" }] },      // Rubber / resilient wall base (linear)
-  { finish_tag: "TR-1",  color: "#c96442", hatch: "vert",    waste_pct: 0,  materials: [] },                                                                                              // Transitions / reducers (linear)
+  { finish_tag: "RB-1",  color: "#475569", hatch: "horiz",   waste_pct: 5,  materials: [{ name: "Cove base adhesive", kind: "adhesive", per: 40, basis: "linear", unit: "tube" }], extrude_mode: "vertical", extrude_h_ft: 1 / 3 },  // Rubber / resilient wall base (linear)
+  { finish_tag: "TR-1",  color: "#c96442", hatch: "vert",    waste_pct: 0,  materials: [], extrude_mode: "flush" },                                                                       // Transitions / reducers (linear)
+  { finish_tag: "CG-1",  color: "#0ea5e9", hatch: "vert",    waste_pct: 0,  materials: [], extrude_h_ft: 4 },                                                                             // Casework / cabinetry guide (display-only extrude)
 ];

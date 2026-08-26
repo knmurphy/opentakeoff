@@ -4,7 +4,7 @@
 // are saved; applying a play mints a fresh condition. Pure list/shape helpers
 // are separated from the storage wrappers so they stay node-testable.
 const KEY = "opentakeoff_plays";
-const COND_KEEP = ["finish_tag", "color", "fill", "hatch", "height_ft", "thickness_in", "waste_pct"];
+const COND_KEEP = ["finish_tag", "color", "fill", "hatch", "height_ft", "thickness_in", "extrude_h_ft", "extrude_mode", "waste_pct"];
 const MAT_KEEP = ["name", "kind", "per", "basis", "unit", "round", "note", "grout"];
 
 const pick = (obj, keys) => {
@@ -30,6 +30,8 @@ export function conditionFromPlay(play, finishTag, mintCondId, mintMatId) {
     multiplier: 1,
     ...(play.height_ft != null ? { height_ft: play.height_ft } : {}),
     ...(play.thickness_in != null ? { thickness_in: play.thickness_in } : {}),
+    ...(play.extrude_h_ft != null ? { extrude_h_ft: play.extrude_h_ft } : {}),
+    ...(play.extrude_mode != null ? { extrude_mode: play.extrude_mode } : {}),
     ...(play.waste_pct != null ? { waste_pct: play.waste_pct } : {}),
     materials: (play.materials || []).map((m) => ({ id: mintMatId(), ...m })),
   };
