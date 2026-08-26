@@ -1,9 +1,9 @@
 # Tile Patterning — structured feature set & design
 
-Status: design, revised after adversarial review. This defines the **complete**
-feature, integrated cohesively into OpenTakeoff, and a build path that reaches
-all of it. Starting simple is a build *order*, not a target — nothing here is a
-scope cap.
+Status: design, revised after two adversarial-review rounds. This defines the
+**complete** feature, integrated cohesively into OpenTakeoff, and a build path
+that reaches all of it. Starting simple is a build *order*, not a target —
+nothing here is a scope cap.
 
 Companion doc: `docs/TILE_PATTERNING.md` (audit, prior art, taxonomy, algorithms,
 review findings). This doc synthesizes that into the thing to build.
@@ -26,119 +26,122 @@ library/twin/variant/duplicate machinery, `verts_norm` shape geometry, the role
 model (`floor_area`/`surface_area`/`linear`/`count`), the `conditionTotals` `ctx`
 seam, the zoom/detail rendering, the roll-goods "opt-in setup → pure engine →
 drawn SVG overlay → docked panel → report columns" *wiring*, `transitions.ts`,
-the scale-accurate Marked Set + DXF export, and the MCP `edit_condition` pattern.
+the scale-accurate Marked Set (and DXF export via `export_dxf`, once merged
+forward from `main` — see §4.3), and the MCP `edit_condition` pattern.
 
 ---
 
 ## 2. The complete feature set
 
 Grouped by domain. Each row names where the logic lives (module) and where it
-surfaces (integration point).
+surfaces (integration point). Every row has a milestone in §5.
 
 ### A. Tile definition — what a tile *is*
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Tile SKUs: name, W×H, color, glossiness, image(s) | `tile_setup.skus[]` | docked panel, marked set, report |
-| Multiple SKUs per pattern (rect + square, Versailles, accent) | pattern engine (§3.1) | docked panel |
-| Mixed laying from images or plain color | `tile_setup.skus[].images[]` | docked panel, overlay |
-| Tile catalog / library (size families, presets) | seed + library (like `FLOORING_DEFAULTS`) | condition library, panel |
-| Grout: preset sizes + custom, width + color | `tile_setup.joint`, `grout` | docked panel |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Tile SKUs: name, W×H, color, glossiness, image(s) | `tile_setup.skus[]` | docked panel, marked set, report | 1 |
+| Multiple SKUs per pattern (rect + square, Versailles, accent) | pattern engine (§3.1) | docked panel | 1 / 9 |
+| Mixed laying from images or plain color | `tile_setup.skus[].images[]` | docked panel, overlay | 1 (color) / §6.1 (images) |
+| Tile catalog / library (size families, presets) | seed + library (like `FLOORING_DEFAULTS`) | condition library, panel | 1 |
+| Grout: preset sizes + custom, width + color | `tile_setup.joint`, `grout` | docked panel | 1 |
 
 ### B. Pattern engine — how tiles are laid
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Straight grid | `patterns` lattice | overlay, panel |
-| Running bond (50% / 33% offset) | `patterns` offset | overlay, panel |
-| Diagonal 45° | `patterns` diagonal | overlay, panel |
-| Herringbone (gap-free via derived grid vectors) | `patterns` herringbone | overlay, panel |
-| Basketweave | `patterns` basketweave | overlay, panel |
-| Chevron, pinwheel/hopscotch, harlequin | `patterns` (motif) | overlay, panel |
-| Modular / Versailles (multi-size super-cell) | `patterns` modular (per-quad `skuId`) | overlay, panel |
-| Non-rectangular (hex, penny, octagon+dot) | `patterns` nonrect | overlay, panel |
-| Randomized / percentage layout | `patterns` random (`madum-ts`-class packing) | overlay, panel |
-| Extensibility: interface + registry | `patterns/registry.ts` | — |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Straight grid | `patterns` lattice | overlay, panel | 2 |
+| Running bond (50% / 33% offset) | `patterns` offset | overlay, panel | 2 |
+| Diagonal 45° | `patterns` diagonal | overlay, panel | 2 |
+| Herringbone (gap-free via derived grid vectors **for 2:1 tiles; non-2:1 warns**) | `patterns` herringbone | overlay, panel | 2 |
+| Basketweave | `patterns` basketweave | overlay, panel | 2 |
+| Chevron, pinwheel/hopscotch, harlequin | `patterns` (motif) | overlay, panel | 9 |
+| Modular / Versailles (multi-size super-cell) | `patterns` modular (per-quad `skuId`) | overlay, panel | 9 |
+| Non-rectangular (hex, penny, octagon+dot) | `patterns` nonrect | overlay, panel | 9 |
+| Randomized / percentage layout (seeded) | `patterns` random | overlay, panel | 9 |
+| Extensibility: interface + registry | `patterns/registry.ts` | — | 2 |
 
 ### C. Layout control — where and how the field sits
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Origin (drag on canvas + numeric) | `tile_setup.origin` | overlay crosshair, panel |
-| Rotation | `tile_setup.rotation` | panel, overlay |
-| Edge-cut strategy (full-corner / centered band / optimized) | `geometry/optimize.ts` | panel, overlay |
-| Auto-optimize offset (edge-aligned search, minimize cuts) | `geometry/optimize.ts` | panel |
-| Mark a side as a "cut side" (push partials to chosen edges) | `shape.tile_layout.cut_sides` | overlay (edge click) |
-| Per-room override of origin/rotation | `shape.tile_layout` | overlay, panel |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Origin (drag on canvas + numeric) | `tile_setup.origin` | overlay crosshair, panel | 5 |
+| Rotation | `tile_setup.rotation` | panel, overlay | 5 |
+| Edge-cut strategy (full-corner / centered band / optimized) | `geometry/optimize.ts` | panel, overlay | 3 / 5 |
+| Auto-optimize offset (edge-aligned search, minimize cuts) | `geometry/optimize.ts` | panel | 3 |
+| Mark a side as a "cut side" | `shape.tile_layout.cut_sides` | overlay (edge click) | 5 |
+| Per-room override of origin/rotation | `shape.tile_layout` | overlay, panel | 5 |
 
 ### D. Cut accounting — what actually gets ordered
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Full / cut / hole classification (polygon intersection) | `geometry` | overlay (shading) |
-| Corner-piece classification (edge-contact) | `geometry` | overlay, cut sheet |
-| L-cut notches (full tile + sawn corner notch) | `geometry` + cut sheet | cut sheet |
-| Purchase: *Safe* (full + one-per-cut) | `calc/tiles` | panel, report |
-| Purchase: *With reuse* (offcut pool, grain-lock, sliver threshold) | `calc/reuse` | panel, report |
-| Cut sheet (per-room, consolidated batch, offcut→cut map) | `calc/cutsheet` | report, marked set (forward scope) |
-| Hole cut accounting (hole straddles → cut tile) | `calc/tiles` | panel, report |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Full / cut / hole classification (polygon intersection) | `geometry` | overlay (shading) | 2 |
+| Corner-piece classification (edge-contact) | `geometry` | overlay, cut sheet | 2 |
+| L-cut notches (full tile + sawn corner notch) | `geometry` + cut sheet | cut sheet | 2 |
+| Purchase: *Safe* (full + one-per-cut) | `calc/tiles` | panel, report | 3 |
+| Purchase: *With reuse* (offcut pool, grain-lock, sliver threshold) | `calc/reuse` | panel, report | 6 |
+| Cut sheet (per-room, consolidated batch, offcut→cut map) | `calc/cutsheet` | report, marked set | 3 / 8 |
+| Hole cut accounting (hole straddles → cut tile) | `calc/tiles` | panel, report | 2 |
 
 ### E. Trim & sundries — the edges
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Per-side trim assignment (trim/bullnose/cove/profile/threshold) | `edges` | overlay (edge click), panel |
-| Trim LF + piece count (`ceil(len/piece)`) | `calc/borders` | panel, report |
-| Outside/inside corner counts (convex/reflex) | `calc/borders` | panel, report |
-| Bullnose types (surface/radius/double/corner three-way) | `tile_setup` + `edges` | panel |
-| Cove base tile (sanitary), distinct from resilient `RB-1` | `edges` | panel, report |
-| Marble thresholds at doorways/finish transitions | `edges` + reuse `transitions.ts` | overlay, report |
-| Borders / bands / listellos / accent strips (interior, not just perimeter) | `edges` (offset interior polygon) | overlay, panel |
-| Grout-from-layout (joint length × geometry, not area factor) | `calc/grout` + `coverage.js` | report |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Per-side trim assignment (trim/bullnose/cove/profile/threshold) | `edges` | overlay (edge click), panel | 4 |
+| Trim LF + piece count (`ceil(len/piece)`) | `calc/borders` | panel, report | 4 |
+| Outside/inside corner counts (convex/reflex) | `calc/borders` | panel, report | 4 |
+| Bullnose types (surface/radius/double/corner three-way) | `tile_setup` + `edges` | panel | 4 |
+| Cove base tile (sanitary), distinct from resilient `RB-1` | `edges` | panel, report | 4 |
+| Marble thresholds at doorways/finish transitions | `edges` + reuse `transitions.ts` | overlay, report | 4 |
+| Borders / bands / listellos / accent strips (interior) | `edges` (offset interior polygon) | overlay, panel | 7 |
+| Grout-from-layout (joint length × geometry, not area factor) | `calc/grout` + `coverage.js` | report | 3 |
 
 ### F. Wall tile — the vertical field
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Surface-area ring → elevation strip (unwrap) | `wall` | overlay, panel |
-| Openings / niches as holes in the strip | `wall` | overlay |
-| Multi-course base (cove/bullnose courses) | `wall` + `coverage.js` | panel, report |
-| Wall panels / stacked bands | `wall` | overlay, panel |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Surface-area ring → elevation strip (unwrap) | `wall` (strip) | overlay, panel | 10 |
+| Openings / niches as holes in the strip | `wall` (elevation) | overlay | 11 |
+| Multi-course base (cove/bullnose courses) | `wall` + `coverage.js` | panel, report | 11 |
+| Wall panels / stacked bands | `wall` (elevation) | overlay, panel | 11 |
 
 ### G. Curb & 3D — wrapped surfaces
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Curb as linear feature + cross-section profile | `curb` | overlay, panel |
-| Per-face pieces (top, two sides), corner/end cuts | `curb` | cut sheet, report |
-| Niches (recessed boxes) | `curb` + `wall` | overlay, panel |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Curb as linear feature + cross-section profile | `curb` | overlay, panel | 12 |
+| Per-face pieces (top, two sides), corner/end cuts | `curb` | cut sheet, report | 12 |
+| Developed net for L-plan / radius curbs | `curb/develop.ts` | overlay | 13 |
+| Niches (recessed boxes) | `wall` (elevation) | overlay, panel | 11 |
 
 ### H. Quantities & export — the deliverable
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Tile counts, trim LF, corner EA, grout in Report/CSV/XLSX | `totals.js` `ctx` + `reportColumns` | report |
-| Cut sheet and trim schedule | `calc/cutsheet` + `markedset.js` (forward scope) | report, marked set |
-| `report.v1` fields (tile counts, layout snapshot, trim edges) | `reportJson` | JSON export |
-| Waste-from-layout (replaces/augments heuristic waste %) | `calc` + `totals.js` | report |
-| **Scale-accurate tile layout sheet** (grid + cuts with dimensions + trim + corners at true scale, for install) | reuses `markedset.js` (PDF) + `export_dxf` (CAD) | PDF/DXF |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Tile counts, trim LF, corner EA, grout in Report/CSV/XLSX | `totals.js` `ctx` + `reportColumns` | report | 3 / 8 |
+| Cut sheet and trim schedule | `calc/cutsheet` + `markedset.js` | report, marked set | 8 |
+| `report.v1` fields (tile counts, layout snapshot, trim edges) | `reportJson` | JSON export | 8 |
+| Waste-from-layout (**supersedes** heuristic `waste_pct`, see §4.1) | `calc` + `totals.js` | report | 3 |
+| **Scale-accurate tile layout sheet** (grid + cuts w/ dims + trim + corners at true scale) | `markedset.js` (PDF); `export_dxf` (DXF, post-rebase) | PDF now / DXF after rebase | 8 |
 
 ### I. Interaction — the tool in the estimator's hands
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| Focus-on-a-shape: select → zoom → grid appears | canvas | — |
-| Tile-grid overlay (always-on SVG like roll cuts, not detail-gated) | canvas overlay | — |
-| Docked setup panel (Roll-panel pattern) | `TilePanel` | — |
-| Origin drag / rotation / edge tagging, one undoable command per gesture | `shapeCommands` | — |
-| Hatch ↔ overlay coexistence (overview vs detail zoom) | canvas + `hatches.jsx` | — |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| Focus-on-a-shape: select → zoom → grid appears | canvas | — | 5 |
+| Tile-grid overlay (always-on SVG like roll cuts, not detail-gated) | canvas overlay | — | 5 |
+| Docked setup panel (Roll-panel pattern) | `TilePanel` | — | 5 |
+| Origin drag / rotation / edge tagging, one undoable command per gesture | `shapeCommands` | — | 5 |
+| Hatch ↔ overlay coexistence (overview vs close zoom) | canvas + `hatches.jsx` | — | 5 |
 
 ### J. MCP / headless
 
-| Capability | Module | Surfaces |
-|---|---|---|
-| `tile_setup` on `edit_condition` (like `roll_setup`) | MCP `edit_condition` | — |
-| Headless layout + cut sheet + trim for agents | engine (pure) | `export_report`, `export_takeoff` |
+| Capability | Module | Surfaces | Milestone |
+|---|---|---|---|
+| `tile_setup` on `edit_condition` (like `roll_setup`) | MCP `edit_condition` | — | 1 |
+| Headless layout + cut sheet + trim for agents | engine (pure) | `export_report`, `export_takeoff` | 3 / 5 |
+| Agent audit (withheld/refusal parity) | engine + MCP | — | 14 |
 
 ---
 
@@ -158,35 +161,47 @@ from **one shared pitch primitive**, not three independent computations.
 `lib/tilePitch.ts` exports three views of the same cell, from nominal tile size
 (`w`, `h`) and joint (`j`):
 
-- **`nominalQuad`** — the tile *face*, `w × h`, no grout. This is what a SKU
-  *is* and what face area / coverage is computed from.
-- **`pitchCell`** — `(w+j) × (h+j)`, the repeat distance. This is what the
-  generator places and what the classifier / purchase math intersect against.
-- **`installedFace`** — `nominalQuad` inset by `j/2` on each side, the visual
-  face inside its grout gap. This is what the overlay and Marked Set draw.
+- **`nominalQuad`** — the tile *face*, `w × h`, no grout. Face area / coverage.
+- **`pitchCell`** — `(w+j) × (h+j)`, the repeat distance. Generator placement.
+- **`installedFace`** — `nominalQuad` inset by `j/2` per side, the visual face
+  inside its grout gap.
 
-Rule: **generator emits pitch-cell spacing; classifier + purchase use pitch
-cells; renderer + marked set use installed faces; face area uses `nominalQuad`.**
+Rules (four consumers, unambiguous):
+1. **Generator** emits `pitchCell` spacing.
+2. **Classification** (full / cut / out) tests `pitchCell` against the room.
+3. **Cut-piece dimensioning** — every measured cut-piece size and offcut area
+   that purchase, cut sheet, and reuse consume — is taken from the
+   **`installedFace` fragment** (inset `max(j/2, ε·min(w,h))`, companion §7.2),
+   **never** the grout-inclusive `pitchCell`, or cut SF is inflated by grout.
+4. **Rendering + Marked Set** draw `installedFace`; coverage area uses
+   `nominalQuad`.
+
 Grout never appears inside a generator (TileSim's answer to "joint included vs
-not"), and the pitch↔face conversion lives in exactly one module so the drawn
-field and the ordered quantity cannot disagree.
+not"); the pitch↔face conversion lives in exactly one module, so the drawn field
+and the ordered quantity cannot disagree.
 
 ### 3.1 `lib/tilePatterns/` — the pattern engine
 
-- `types.ts` — `TileSetup`, `TileSku`, `TileQuad {cx,cy,w,h,rot,sku}`, `PatternId`.
-- `pattern.ts` — `PatternGenerator` interface: `generate(bounds, setup) → TileQuad[]`
-  (pitch-cell quads, `rot`, `sku`).
+- `types.ts` — `TileSetup`, `TileSku`, `TileQuad {cx,cy,w,h,rot,sku}` where
+  **`w,h` are `pitchCell` extents**; the drawn/measured face is
+  `installedFace(quad)` and coverage area is `nominalQuad(quad)` (§3.0). The
+  struct never carries a raw ungrouted face directly.
+- `pattern.ts` — `PatternGenerator` interface: `generate(bounds, setup) → TileQuad[]`.
 - `registry.ts` — name → generator; a new pattern is a new file + registration.
 - Generators: `lattice` (grid), `offset` (brick), `diagonal`, `herringbone`,
-  `basketweave`, `motif` (chevron/pinwheel/harlequin), `modular` (multi-SKU
-  super-cell, per-quad `skuId`), `nonrect` (hex/penny), `random` (seeded PRNG —
-  see §6).
-- Deterministic: same inputs → same layout (required for undo, MCP, re-render;
-  `random` takes a seed).
-- **Origin applicability is pattern-specific**: grid/brick/diagonal honor origin
-  and rotation; herringbone/basketweave derive their own interlock and ignore a
-  free origin; modular is cell-anchored. This must be an explicit table, not a
-  blanket "origin applies" (the `tiletakeoff` finding).
+  `basketweave`, `motif` (chevron/pinwheel/harlequin), `modular` (multi-SKU,
+  per-quad `skuId`), `nonrect` (hex/penny), `random` (seeded PRNG — §6).
+- Deterministic: same inputs → same layout (`random` takes a seed).
+- **Origin applicability is pattern-specific** (the `tiletakeoff` finding — not
+  every pattern honors a free origin):
+
+  | Pattern | Origin | Rotation |
+  |---|---|---|
+  | grid, brick_50, brick_33 | honored | honored |
+  | diagonal | honored | fixed 45° |
+  | herringbone, basketweave | interlock-derived; free origin ignored | n/a |
+  | modular | cell-anchored | per cell |
+  | nonrect (hex/penny) | honored | pattern-fixed |
 
 ### 3.2 `lib/tileGeometry/` — classification & fragments
 
@@ -194,8 +209,10 @@ field and the ordered quantity cannot disagree.
   cell∩room intersection, not hand-rolled Sutherland–Hodgman.
 - `classify(cell, room, holes) → full | cut | hole | out`; corner = edge-contact,
   not corner point-in-polygon (misreads diagonal slivers).
-- Cut fragments: exact clipped footprint → cut-piece dimensions; L-cut detection
-  (full-extent tile with a rectangular corner notch).
+- Cut fragments: the clipped footprint intersected with the **`installedFace`**
+  (not the pitch cell, §3.0) → cut-piece dimensions and offcut area for
+  purchase / cut sheet / reuse; L-cut detection (full-extent tile with a
+  rectangular corner notch).
 - Hole detection: a tile straddling a hole is a cut tile (consumes a full tile).
 - Origin optimization: search only edge-aligned offsets (the offsets that change
   cut count) — exact and fast (TileCalculator).
@@ -204,19 +221,18 @@ field and the ordered quantity cannot disagree.
 
 - `tiles.ts` — full/cut/corner counts; **Safe** = full + one-per-cut; **With
   reuse** = full + `ceil(totalCutArea / tileArea)` refined by offcut pairing.
-  (Note: TileCalculator has two reuse paths — `interlockReuse` pairing vs a
-  `ceil(cutCoveredArea/tileArea)` fallback; we mirror that distinction, not a
-  single formula.)
+  (TileCalculator has two reuse paths — `interlockReuse` pairing vs a
+  `ceil(cutCoveredArea/tileArea)` fallback; we mirror both, not a single formula.)
 - `reuse.ts` — offcut pool: first-fit (practical) vs best-fit-decreasing
-  (optimize), grain-lock for planks, sliver threshold (tiletakeoff's `cutEngine`
-  model). Gated behind `reuse_mode`, auto-downgraded to `none` for patterns whose
+  (optimize), grain-lock for planks, sliver threshold (tiletakeoff's `cutEngine`).
+  Gated behind `reuse_mode`, auto-downgraded to `none` for patterns whose
   fragment geometry is only AABB-approximate.
 - `cutsheet.ts` — per-room summary, consolidated batch list, tile-by-tile
   offcut→cut mapping, L-cut rows.
 - `borders.ts` — per-side trim LF, piece count `ceil(len/piece)`, outside/inside
   corner counts (convex/reflex).
 - `grout.ts` — grout quantity from the layout's actual joint length, extending
-  `coverage.js` (which already has the area/LF grout math).
+  `coverage.js`.
 
 ### 3.4 `lib/tileEdges/` — trim & sundries derivation
 
@@ -238,9 +254,9 @@ field and the ordered quantity cannot disagree.
 
 - Split in two: (1) **strip projection** — a straight `surface_area` run × height
   becomes a 2D elevation rectangle, on which the floor pattern engine runs; (2)
-  **elevation model** — courses, bands, opening/niche cutouts as explicit holes —
-  a later sub-module. "Floor tile on a rectangle" is only true for (1); it must
-  not be claimed for openings/multi-course/panels.
+  **elevation model** — courses, bands, opening/niche cutouts as explicit holes.
+  "Floor tile on a rectangle" is only true for (1); it must not be claimed for
+  openings/multi-course/panels.
 - `surface_area` today is plan LF × `height_ft` (`totals.js`); it carries no
   elevation openings. Those are new geometry.
 - Multi-course base reuses `coverage.js` `baseGroutParams`/`baseCourses` (grout
@@ -251,27 +267,26 @@ field and the ordered quantity cannot disagree.
 - A curb is a linear feature + cross-section profile `{width, height}`. Faces:
   top = LF × width, two sides = LF × height each; corner and end-cut pieces.
 - Straight-profile first; L-plan/radius curbs need a developed (unfolded) net —
-  a separate module (`tileCurb/develop.ts`) built later. Niches ride the wall
-  elevation model, not the curb milestone.
+  `tileCurb/develop.ts`, built later. Niches ride the wall elevation model.
 
 ### 3.7 Layout lifecycle — recompute & invalidation
 
-A layout is a pure function of `(tile_setup, shape geometry, holes, scale)`.
-Recompute triggers and what persists vs resets must be specified up front:
+A layout is a pure function of `(tile_setup, shape geometry, holes, scale,
+stitch placement)`. Triggers and persistence:
 
 - **Recompute on:** `tile_setup` edit, origin/rotation change, `verts_norm`
-  change, scale change, deduct/cutout change (holes enter the layout), twin SKU
-  edit, import merge.
-- **Persist vs reset:** per-room `shape.tile_layout` (origin/rotation/cut_sides/
-  edge_overrides) persists across pure zoom; resets when the `verts_norm` hash or
-  `tile_setup` hash changes (stale overrides are dropped, like roll's `laneCount`
-  guard but keyed on vertex + setup hash for the 2D case).
+  change, scale change, deduct/cutout change (holes), twin SKU edit, import
+  merge, **stitch alignment / origin-offset change**.
+- **Persist vs reset:** per-room `shape.tile_layout` persists across pure zoom;
+  resets when the `verts_norm` hash, `tile_setup` hash, or **stitch layout
+  signature** (`stitchLayoutSig`) changes — stale overrides dropped (roll's
+  `laneCount` guard, keyed on vertex + setup + stitch for the 2D case).
 - **Multi-sheet / stitch / match-line:** a layout stops at a sheet boundary. A
   stitched room (`stitches.ts`) is one composite surface for tracing, but a
   seam-crossing tile layout needs an explicit human seam — we do not auto-join
-  layouts across a match line (the existing match-line doctrine). Tile layout
-  runs per member sheet by default; a stitch carries an explicit origin offset,
-  and a seam-crossing room is flagged for the estimator to resolve.
+  layouts across a match line (existing doctrine). Tile layout runs per member
+  sheet by default; a stitch carries an explicit origin offset; a seam-crossing
+  room is flagged for the estimator.
 
 ---
 
@@ -290,132 +305,132 @@ tile_setup: {
 ```
 
 - **Presence gates the feature** and corrupt payloads read as opted *out* at
-  runtime via defensive coercion (`hasRollSetup()` in `rollTakeoff.js:24-30` is
-  the precedent) — there is **no load-time sanitizer**; tile_setup uses the same
-  runtime-guard + export-passthrough strategy, plus an explicit validation rule.
+  runtime via defensive coercion (`hasRollSetup()` in `rollTakeoff.js:27-30` is
+  the precedent) — **no load-time sanitizer**; `tile_setup` uses runtime-guard +
+  export-passthrough, plus an explicit validation rule.
 - **Twin / duplicate / library copy is one-time, not propagating.** `mintTwin`
-  spreads the parent and `instantiateTemplate` deep-copies the setup object, so
-  `tile_setup` copies once at twin creation / library attach. `variants.ts`
-  propagation (row-level add/remove/revert) applies to **materials rows only**,
-  not condition-level setup objects — there is no per-SKU `origin_id`/`inherited`/
-  revert machinery today. Either build SKU-level propagation explicitly (later in
-  the path) or accept independent per-variant copies; do not claim it is free.
-- **Grout material references `tile_setup`** for size/joint — but "no drift" is
-  only true if field grout (basis `area`) is **derived-only** when `tile_setup`
-  is present (like `seam_lf` requires a roll layout): recompute `per` on every
-  layout solve; a hand-edited `per` requires an explicit "detach from tile_setup"
-  flag. Merely *storing* the geometry in one place does not stop a hand edit from
-  diverging (`coverage.js` `groutRateStale` covers base-height, not this).
+  spreads the parent and `instantiateTemplate` deep-copies the setup, so
+  `tile_setup` copies once. `variants.ts` propagation applies to **materials
+  rows only**, not condition-level setup objects — no per-SKU inherited/revert
+  machinery exists today. Either build SKU-level propagation explicitly (later in
+  the path) or accept independent per-variant copies; it is not free.
+- **Grout material references `tile_setup`**, and field grout (basis `area`)
+  becomes **derived-only** when `tile_setup` is present (like `seam_lf` requires
+  a roll layout): recompute `per` on every layout solve; a hand-edited `per`
+  needs an explicit "detach from tile_setup" flag. Storing geometry in one place
+  alone does not stop a hand edit from diverging (`coverage.js` `groutRateStale`
+  covers base-height only).
+- **Layout supersedes `waste_pct`.** When `tile_setup` is present, the Safe /
+  With-reuse counts ARE the order quantity; the condition's generic `waste_pct`
+  multiplier (`totals.js`) is **not** applied on top — that would double-count.
+  `waste_pct` remains the order basis only for opted-out tile conditions and all
+  non-tile conditions. (Same principle as grout-derived / seam_lf: a figured
+  quantity supersedes the heuristic.)
 - **Per-room layout state** lives on the shape as a versioned `shape.tile_layout`
   sub-object (parallel to `roll_layout`): `{ origin?, rotation?, cut_sides?,
-  edge_overrides? }` — origin/rotation/cut-sides/edge-trim all in one place, not
-  scattered. Invalidated on `verts_norm` hash or `tile_setup` hash change.
+  edge_overrides? }`. Invalidated on `verts_norm` hash, `tile_setup` hash, or
+  `stitchLayoutSig` change.
 - Sanitized at the version boundary: `takeoff_canvas.v1` + `report.v1` gain
-  `tile_setup`, `tile_layout`, and the layout snapshot; additive-only per the
-  existing schema rules.
+  `tile_setup`, `tile_layout`, and the layout snapshot; additive-only.
 
 ### 4.2 Canvas — the focus-on-a-shape flow
 
 1. Select a committed shape (a room's floor polygon).
 2. Zoom into it — crispness comes from the existing zoom rendering; the tile grid
    itself is **always-on SVG ink** (like roll cuts, toggled), **not gated by
-   `DETAIL_ENGAGE`** (which the #86 tile-pyramid refactor already retired as a
-   gate — `TakeoffCanvas.jsx` notes detail is "active at every zoom level").
-3. A new **tile-grid overlay** draws the layout on that shape (full solid, cut
-   tinted, hole flagged, corner marked, trim edges inked, origin crosshair) — the
-   same overlay mechanics as roll cuts (`rollShow` → SVG over rooms).
+   `DETAIL_ENGAGE`** (the #86 tile-pyramid refactor already retired that gate —
+   `TakeoffCanvas.jsx:1913-1926`).
+3. A new **tile-grid overlay** draws the layout (full solid, cut tinted, hole
+   flagged, corner marked, trim edges inked, origin crosshair) — the same
+   overlay mechanics as roll cuts.
 4. A **docked Tile panel** (Roll-panel pattern) carries the setup controls.
 5. Origin drag / rotation / edge tagging commit one undoable command per gesture
    (the `rollcut`/`shapeCommands` pattern, generalized to `tileset`/`tileedge`).
 
 **Hatch vs overlay:** a condition with `tile_setup` *replaces* its hatch with the
-tile grid at detail zoom (the grid *is* the appearance), while the hatch remains
-the overview/print fill at small zoom; the Marked Set draws the tile field at the
-same scale rule. This coexistence + LOD threshold is a §6 decision.
+tile grid past an **LOD swap threshold** (a distinct mechanism from the retired
+`DETAIL_ENGAGE` raster gate); the hatch stays the overview/print fill below it.
+The threshold value and Marked-Set behavior are a §6 decision.
 
 ### 4.3 Report — layout-derived quantities (three paths, not one)
 
-Roll goods surface figured quantities through **three parallel seams**, and tile
-must mirror all three (the doc previously claimed only the `ctx`):
+Roll goods surface figured quantities through **three parallel seams**; tile
+mirrors all three (verified: `totals.js:57-78`, `reportColumns.js:230-252`,
+`totals.js:490,578-584`):
 
-1. `conditionTotals(conditions, shapes, ctx)` — the `ctx.seamByShape` precedent:
-   a `tileByCondition` map carries full/cut/corner counts, trim LF, corner EA so
-   supporting-materials rows (grout, trim adhesive) divide against figured bases.
-2. `reportColumns.js` — supplemental columns fed by `ctx.rollByCond` (the
-   `ROLL_FIELDS` pattern): `tile:*` columns for counts/trim/waste.
+1. `conditionTotals(..., ctx)` — a `tileByCondition` map (the `ctx.seamByShape`
+   precedent) carries counts/trim/corners so supporting-materials rows divide
+   against figured bases.
+2. `reportColumns.js` — supplemental `tile:*` columns fed by `ctx.tileByCond`
+   (the `ROLL_FIELDS`/`rollColProfile` pattern).
 3. `reportJson` — a top-level `tile[]` block (the `roll_goods[]` pattern) in
-   `report.v1`, plus the cut-sheet/trim schedule and the layout snapshot.
-
-**Cut sheet in the Marked Set is forward scope**: `markedset.js` today renders
-shapes + annotations + legend, not layout schedules. The scale-accurate tile
-layout sheet (below) is its own export, not a Marked Set patch.
+   `report.v1`, plus cut-sheet/trim schedule and layout snapshot.
 
 **Scale-accurate layout sheet** (§2.H, the install deliverable): the tile grid,
 cut pieces with dimensions, trim lines, and corner positions burned at true
-scale, reusing the existing scale-accurate paths — `markedset.js` for PDF and
-`export_dxf` for CAD. This is what a tiler actually installs from; it rides the
-same layout snapshot the report uses, so the drawing and the order agree.
+scale. **PDF works today** via `markedset.js` (already scale-accurate). **DXF is
+a merge-forward dependency**: `export_dxf` lives on `main`; `feat/tile-patterning`
+is behind main and must rebase to pick it up. The cut sheet burned into the
+Marked Set is likewise forward scope (`markedset.js` renders shapes + annotations
++ legend today, not schedules). Both ride the same layout snapshot the report
+uses, so drawing and order agree.
 
 ### 4.4 MCP — headless parity, staged into the path
 
 `edit_condition` accepts `tile_setup` (as it does `roll_setup`: null opts out,
-partial patch merges). Rather than one monolithic parity milestone, tile's MCP
-surface lands incrementally alongside the canvas: `tile_setup` sanitize +
-round-trip early; `export_report` tile counts with the purchase milestone;
-`export_takeoff` layout snapshot with the overlay milestone; agent *audit*
-workflows (withheld/refusal parity) last.
+partial patch merges). MCP lands incrementally: `tile_setup` sanitize +
+round-trip (M1); `export_report` tile counts (M3); `export_takeoff` layout
+snapshot (M5); agent *audit* workflows (M14).
 
 ---
 
 ## 5. Build path — milestones to the complete feature
 
 Ordered by dependency; each milestone is a coherent, usable increment, and
-together they reach every row of §2. This is a path, not a cap. MCP is staged
-through the path (not deferred to the end), and offcut reuse lands *after* the
-overlay so layouts can be visually audited before reuse math is trusted.
+together they reach every §2 row (the Milestone column in §2 is the map). This
+is a path, not a cap. Offcut reuse (M6) and interior bands (M7) deliberately land
+**after** the canvas overlay (M5), so layouts are visually auditable before
+reuse math and band geometry are trusted. MCP is staged through the path.
 
 1. **Data model + runtime guard + seed + MCP round-trip.** `tile_setup` on the
-   condition, SKUs, joint presets, grout reference; `CT-1` seed gains a real
-   `tile_setup`; `hasTileSetup()` runtime guard; versioned into
-   `takeoff_canvas.v1`/`report.v1`; `edit_condition` accepts `tile_setup` +
-   round-trips it.
+   condition (SKUs, joint presets, colors, grout reference); `CT-1` seed gains a
+   real `tile_setup`; `hasTileSetup()` runtime guard; versioned into
+   `takeoff_canvas.v1`/`report.v1`; `edit_condition` accepts + round-trips it.
 2. **Layout contract + pattern engine + classification (pure, tested).**
-   `tilePitch.ts` (nominal/pitch/installed-face) + `tilePatterns` (lattice +
-   offset + diagonal + herringbone + basketweave) + `tileGeometry`
-   (`polygon-clipping`, full/cut/hole/corner, L-cut). Unit tests incl. the
-   pitch/face invariants and deterministic-recompute.
-3. **Safe purchase + cut sheet + waste (pure, no reuse yet).** `tileCalc`:
-   Safe (full + one-per-cut), cut sheet, pattern-aware waste%. `export_report`
-   gains tile counts. (Offcut reuse is the *next* milestone, not this one.)
-3b. **With-reuse (gated).** `reuse.ts` offcut pool behind `reuse_mode:
-   none | practical`, auto-downgraded for AABB-approximate patterns.
-4a. **Perimeter trim + corners + thresholds (pure).** `tileEdges` exposure
-   record (suggested + confirmed), per-side trim LF, corner counts; threshold
-   reuse of `transitions.ts`.
-4b. **Interior bands / listellos** (field inset + band pattern) — after the
-   overlay proves the perimeter flow.
+   `tilePitch.ts` (nominal/pitch/installed-face) + `tilePatterns` (lattice,
+   offset, diagonal, herringbone, basketweave) + `tileGeometry`
+   (`polygon-clipping`, full/cut/hole/corner, L-cut). Tests: pitch/face
+   invariants, installed-face cut-piece dimensioning, deterministic recompute.
+3. **Safe purchase + cut sheet + waste + grout-from-layout (pure).** `tileCalc`
+   Safe (full + one-per-cut), cut sheet, pattern-aware waste%, and grout-from-
+   layout joint length. `export_report` tile counts. Layout supersedes
+   `waste_pct` (§4.1). No reuse yet.
+4. **Perimeter trim + corners + thresholds + bullnose/cove (pure).** `tileEdges`
+   exposure record (suggested + confirmed), per-side trim LF, corner counts,
+   bullnose types + cove base SKUs; threshold reuse of `transitions.ts`.
 5. **Canvas overlay + focus flow + undo + hatch coexistence.** Select → zoom →
    always-on SVG overlay → docked panel → origin/rotation/edge-tagging undo
-   commands. `export_takeoff` gains the layout snapshot.
-6. **Report + export integration.** Three-path quantities (ctx + columns +
+   commands; LOD hatch swap. `export_takeoff` layout snapshot.
+6. **With-reuse (gated), after the overlay.** `reuse.ts` offcut pool behind
+   `reuse_mode: none | practical`, auto-downgraded for AABB-approximate patterns.
+7. **Interior bands / listellos, after the overlay.** Field inset + band pattern.
+8. **Report + export integration.** Three-path quantities (ctx + columns +
    reportJson), cut sheet in CSV/XLSX/`report.v1`, and the **scale-accurate tile
-   layout sheet** (PDF via `markedset.js`, DXF via `export_dxf`).
-7. **Remaining patterns.** Motif (chevron/pinwheel/harlequin), modular/Versailles
+   layout sheet** (PDF now; DXF once the branch rebases onto main's `export_dxf`).
+9. **Remaining patterns.** Motif (chevron/pinwheel/harlequin), modular/Versailles
    (per-quad `skuId`), non-rect (hex/penny), randomized (seeded) — each a new
    generator + registration + tests.
-8a. **Wall strip projection.** `tileWall` (1): straight run × height → elevation
-   rectangle, same engine.
-8b. **Wall elevation model.** `tileWall` (2): courses, bands, opening/niche
-   cutouts as holes.
-9a. **Straight curb.** `tileCurb` profile faces + end cuts.
-9b. **Developed curb nets.** L-plan/radius (`tileCurb/develop.ts`); niches ride
-   the wall elevation model.
-10. **MCP agent audit parity.** Withheld/refusal parity, layout audit workflow —
-   the agent-facing half, after the canvas path is proven.
+10. **Wall strip projection.** `tileWall` (1): straight run × height → elevation
+    rectangle, same engine.
+11. **Wall elevation model.** `tileWall` (2): courses, bands, opening/niche
+    cutouts as holes; multi-course base; niches.
+12. **Straight curb.** `tileCurb` profile faces + end cuts.
+13. **Developed curb nets.** L-plan/radius (`tileCurb/develop.ts`).
+14. **MCP agent audit parity.** Withheld/refusal parity, layout audit workflow.
 
-Milestones 1–6 make a tiler productive on floor tile with cuts + trim + a
-scale-accurate layout sheet; 7–10 reach the complete set. No milestone is "out of
-scope" — later in the path is not smaller in ambition.
+Milestones 1–8 make a tiler productive on floor tile with cuts, trim, reuse, and
+a scale-accurate layout sheet; 9–14 reach the complete set. No milestone is "out
+of scope" — later in the path is not smaller in ambition.
 
 ---
 
@@ -425,23 +440,19 @@ scope" — later in the path is not smaller in ambition.
    engine deterministic and the marked set clean; images serve client
    visualization. Where in the path do images land?
 2. **Randomized layout + determinism** — `madum-ts`-class percentage packing
-   breaks the "same input → same layout" rule unless it takes a seeded PRNG.
-   Is randomization core, or a later seeded delight?
+   breaks "same input → same layout" unless it takes a seeded PRNG. Core, or a
+   later seeded delight?
 3. **Curb representation** — 2D linear-feature + profile (canvas stays the single
    source of truth) vs a true 3D surface editor (TileSim has one). The design
    assumes the former; confirm.
 4. **Exposure auto-suggest aggressiveness** — how far auto-suggestion goes
-   (exterior-hull coincidence only, vs more) before the estimator confirms;
-   the override UX.
-5. **Multi-sheet / match-line policy** — confirmed as "layout stops at sheet
-   boundary; stitched rooms flag a seam for the estimator" (§3.7), but the
-   per-stitch origin-offset UX is open.
+   (exterior-hull coincidence only, vs more) before the estimator confirms.
+5. **Match-line origin-offset UX** — the policy is set (layout stops at sheet
+   boundary; stitched rooms flag a seam, §3.7); the per-stitch origin-offset
+   interaction is open.
 6. **Hatch ↔ overlay LOD threshold** — at what zoom the hatch gives way to the
    tile grid, and whether the Marked Set always draws the grid at scale.
-7. **Origin applicability table** — exact per-pattern behavior (grid/brick/
-   diagonal honor origin; herringbone/basketweave ignore it; modular is
-   cell-anchored) needs a concrete table, not prose.
-8. **Order-unit / box rounding** — which SKU drives the order when modular, and
+7. **Order-unit / box rounding** — which SKU drives the order when modular, and
    the EA-vs-SF rounding rule downstream of tile count.
-9. **Accent replacement + install phasing** — in the taxonomy but not yet placed
-   in the path; an explicit later-phase statement is needed, not silence.
+8. **Accent replacement + install phasing** — in the taxonomy; place explicitly
+   in the path (a later milestone) rather than leaving silent.
