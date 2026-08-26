@@ -1,7 +1,5 @@
 <!doctype html>
 <!-- THROWAWAY PROTOTYPE — tile grid designer ergonomics. Not production code.
-     Answers: what does the grid-designer tool feel like, and do the layout +
-     cut-accounting algorithms behave sensibly on convex / concave / holed rooms.
      Open directly in a browser; no build step. -->
 <html lang="en">
 <head>
@@ -11,9 +9,9 @@
 <style>
   :root {
     --field: #eef2f6; --paper: #ffffff; --ink: #16213a; --ink-soft: #52627a;
-    --ink-muted: #8a97ab; --line: #c9d2df; --cobalt: #1f3fc7;
-    --cobalt-tint: rgba(31,63,199,0.10); --danger: #b03a26; --danger-tint: rgba(176,58,38,0.14);
-    --positive: #1f6b4a; --f-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --ink-muted: #8a97ab; --line: #c9d2df; --cobalt: #1f3fc7; --danger: #b03a26;
+    --danger-tint: rgba(176,58,38,0.16); --positive: #1f6b4a;
+    --f-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
     --f-sans: -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
   }
   * { box-sizing: border-box; }
@@ -26,14 +24,18 @@
   .canvas { flex: 1 1 auto; position: relative; min-width: 0; }
   .canvas svg { display: block; width: 100%; height: 100%; background: #fbfcfe; }
   .canvas .hint { position: absolute; left: 14px; bottom: 12px; font-size: 11.5px; color: var(--ink-muted); pointer-events: none; }
-  .panel { width: 320px; flex: 0 0 320px; background: var(--paper); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .panel { width: 340px; flex: 0 0 340px; background: var(--paper); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 16px; }
   .group h2 { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); margin: 0 0 8px; }
   .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
   .row label { flex: 0 0 96px; color: var(--ink-soft); font-size: 12px; }
   .row select, .row input { flex: 1 1 auto; font: inherit; color: var(--ink); border: 1px solid var(--line); border-radius: 0; background: var(--paper); padding: 5px 7px; min-width: 0; }
+  .row input[type=color] { flex: 0 0 34px; padding: 2px; height: 28px; cursor: pointer; }
   .row input[type=range] { padding: 0; border: none; }
-  .row .val { flex: 0 0 64px; text-align: right; font-family: var(--f-mono); font-size: 12px; color: var(--ink); }
+  .row .val { flex: 0 0 56px; text-align: right; font-family: var(--f-mono); font-size: 12px; color: var(--ink); }
   .row select:focus, .row input:focus { outline: 1px solid var(--cobalt); outline-offset: -1px; }
+  .sub { border: 1px solid var(--line); padding: 8px 10px; margin-top: 6px; }
+  .sub h3 { font-size: 11px; font-weight: 650; margin: 0 0 6px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; }
+  .sub h3 .dot { width: 10px; height: 10px; border-radius: 0; border: 1px solid var(--line); }
   .readout { border-top: 1px solid var(--line); padding-top: 12px; }
   table { width: 100%; border-collapse: collapse; font-family: var(--f-mono); font-size: 12px; }
   td { padding: 3px 0; }
@@ -74,15 +76,48 @@
     </div>
 
     <div class="group">
-      <h2>Tile</h2>
+      <h2>Tile A — field</h2>
       <div class="row"><label>Size (W × H)</label>
         <input id="tw" type="number" min="1" step="1" value="12"><span>×</span>
-        <input id="th" type="number" min="1" step="1" value="24">
-        <span class="val">in</span>
+        <input id="th" type="number" min="1" step="1" value="24"><span class="val">in</span>
       </div>
+      <div class="row"><label>Color</label>
+        <input id="colorA" type="color" value="#1f3fc7">
+        <span class="val" id="colorALabel">#1f3fc7</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Tile B — accent</h2>
+      <div class="sub">
+        <h3><span class="dot" id="dotB"></span> second tile definition (mixes into the pattern)</h3>
+        <div class="row"><label>Size (W × H)</label>
+          <input id="tw2" type="number" min="1" step="1" value="12"><span>×</span>
+          <input id="th2" type="number" min="1" step="1" value="12"><span class="val">in</span>
+        </div>
+        <div class="row"><label>Color</label>
+          <input id="colorB" type="color" value="#b8860b">
+          <span class="val" id="colorBLabel">#b8860b</span>
+        </div>
+        <div class="footnote">Used by the “mixed” pattern — e.g. a 12×24 rectangle alternating with a 12×12 square. Rows share a width so they line up.</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Layout</h2>
       <div class="row"><label>Grout joint</label>
-        <input id="joint" type="number" min="0" step="0.0625" value="0.125">
-        <span class="val">in</span>
+        <select id="joint">
+          <option value="0.0625">1/16″</option>
+          <option value="0.125" selected>1/8″</option>
+          <option value="0.1875">3/16″</option>
+          <option value="0.25">1/4″</option>
+          <option value="0.375">3/8″</option>
+          <option value="0.5">1/2″</option>
+          <option value="custom">custom…</option>
+        </select>
+      </div>
+      <div class="row" id="jointCustomRow" style="display:none"><label>custom</label>
+        <input id="jointCustom" type="number" min="0" step="0.0625" value="0.125"><span class="val">in</span>
       </div>
       <div class="row"><label>Pattern</label>
         <select id="pattern">
@@ -92,6 +127,7 @@
           <option value="diagonal">Diagonal 45°</option>
           <option value="herringbone">Herringbone</option>
           <option value="basketweave">Basketweave</option>
+          <option value="mixed">Mixed · rect + square</option>
         </select>
       </div>
       <div class="row" id="angleRow"><label>Rotation</label>
@@ -111,8 +147,8 @@
       <h2>Quantities</h2>
       <table id="readout"></table>
       <div class="legend">
-        <span><span class="sw" style="background:#fff"></span>full</span>
-        <span><span class="sw" style="background:var(--cobalt-tint)"></span>cut</span>
+        <span><span class="sw" style="background:rgba(31,63,199,0.10)"></span>full</span>
+        <span><span class="sw" style="background:rgba(31,63,199,0.30)"></span>cut</span>
         <span><span class="sw" style="background:var(--danger-tint)"></span>hole cut</span>
         <span><span class="sw" style="background:#fff;border:2px solid var(--cobalt)"></span>trim edge</span>
       </div>
@@ -127,13 +163,15 @@ const pip = (x,y,p) => { let inside=false; for(let i=0,j=p.length-1;i<p.length;j
 const bounds = (p) => { let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity; for(const q of p){minx=Math.min(minx,q.x);miny=Math.min(miny,q.y);maxx=Math.max(maxx,q.x);maxy=Math.max(maxy,q.y);} return {minx,miny,maxx,maxy}; };
 
 // ── layout engine ─────────────────────────────────────────────────────────
-// Spacing uses PITCH (tile + joint); each tile's face is FACE (tile only).
-// Returns {cx,cy,w,h,rot} in feet. w/h are the tile FACE; grid spacing = pitch.
-function generateLayout(poly, {pattern, pitchW, pitchH, faceW, faceH, angleDeg=0, origin={x:0,y:0}}) {
+// SKUs: array of {w,h} in feet (face). Spacing uses pitch = face + joint.
+// Returns tiles {cx,cy,w,h,rot,sku}. w/h = face; grid spacing = pitch.
+function generateLayout(poly, {pattern, skus, joint, angleDeg=0, origin={x:0,y:0}}) {
+  const A = skus[0], B = skus[1];
   const b = bounds(poly);
-  const pad = Math.max(pitchW, pitchH) * 2;
+  const maxP = Math.max(A.w, A.h, B?B.w:0, B?B.h:0) + joint;
+  const pad = maxP * 2;
   const region = { minx:b.minx-pad, miny:b.miny-pad, maxx:b.maxx+pad, maxy:b.maxy+pad };
-  const g = (pw, ph, rowOffset) => {
+  const g = (face, pw, ph, rowOffset) => {
     const rot = (angleDeg*Math.PI)/180;
     const startX = origin.x - Math.ceil((origin.x-region.minx)/pw)*pw;
     const startY = origin.y - Math.ceil((origin.y-region.miny)/ph)*ph;
@@ -141,38 +179,47 @@ function generateLayout(poly, {pattern, pitchW, pitchH, faceW, faceH, angleDeg=0
     const out=[];
     for(let r=0;r<rows;r++){ const off=(rowOffset && r%2)? rowOffset*pw : 0;
       for(let c=-1;c<=cols;c++){ const x=startX+c*pw+off, y=startY+r*ph;
-        out.push({cx:x+faceW/2, cy:y+faceH/2, w:faceW, h:faceH, rot}); } }
+        out.push({cx:x+face.w/2, cy:y+face.h/2, w:face.w, h:face.h, rot, sku:0}); } }
     return out;
   };
   switch(pattern){
-    case 'herringbone': {   // face dims only; joint ignored in the interlock (mockup simplification)
-      const out=[]; const long=Math.max(faceW,faceH), short=Math.min(faceW,faceH), step=long+short;
+    case 'mixed': {   // alternate rows of A and B; same width assumed
+      const out=[]; const faces=[A,B], phs=[A.h+joint, B.h+joint];
+      let y = origin.y - Math.ceil((origin.y-region.miny)/(A.h+joint))*(A.h+joint);
+      let r=0; while(y<region.maxy){ const face=faces[r%2];
+        let x = origin.x - Math.ceil((origin.x-region.minx)/(A.w+joint))*(A.w+joint);
+        while(x<region.maxx){ out.push({cx:x+face.w/2, cy:y+face.h/2, w:face.w, h:face.h, rot:0, sku:r%2}); x+=(A.w+joint); }
+        y+=phs[r%2]; r++;
+      }
+      return out;
+    }
+    case 'herringbone': {
+      const out=[]; const long=Math.max(A.w,A.h), short=Math.min(A.w,A.h), step=long+short;
       const cols=Math.ceil((region.maxx-region.minx)/step)+3, rows=Math.ceil((region.maxy-region.miny)/step)+3;
       for(let r=-1;r<rows;r++) for(let c=-1;c<cols;c++){
         const bx=region.minx+c*step+(r%2?step/2:0), by=region.miny+r*step;
-        out.push({cx:bx+long/2, cy:by+short/2, w:long, h:short, rot:0});
-        out.push({cx:bx+long+short/2, cy:by+short+long/2, w:short, h:long, rot:0});
+        out.push({cx:bx+long/2, cy:by+short/2, w:long, h:short, rot:0, sku:0});
+        out.push({cx:bx+long+short/2, cy:by+short+long/2, w:short, h:long, rot:0, sku:0});
       }
       return out;
     }
     case 'basketweave': {
-      const out=[]; const unit=faceW*2;
+      const out=[]; const unit=A.w*2;
       const cols=Math.ceil((region.maxx-region.minx)/unit)+2, rows=Math.ceil((region.maxy-region.miny)/unit)+2;
       for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
         const x=region.minx+c*unit, y=region.miny+r*unit, horiz=(r+c)%2===0;
-        if(horiz){ out.push({cx:x+faceW/2,cy:y+faceH/4,w:faceW,h:faceH/2,rot:0}); out.push({cx:x+faceW/2,cy:y+faceH*3/4,w:faceW,h:faceH/2,rot:0}); }
-        else     { out.push({cx:x+faceW/4,cy:y+faceH/2,w:faceW/2,h:faceH,rot:0}); out.push({cx:x+faceW*3/4,cy:y+faceH/2,w:faceW/2,h:faceH,rot:0}); }
+        if(horiz){ out.push({cx:x+A.w/2,cy:y+A.h/4,w:A.w,h:A.h/2,rot:0,sku:0}); out.push({cx:x+A.w/2,cy:y+A.h*3/4,w:A.w,h:A.h/2,rot:0,sku:0}); }
+        else     { out.push({cx:x+A.w/4,cy:y+A.h/2,w:A.w/2,h:A.h,rot:0,sku:0}); out.push({cx:x+A.w*3/4,cy:y+A.h/2,w:A.w/2,h:A.h,rot:0,sku:0}); }
       }
       return out;
     }
-    case 'diagonal':  return g(pitchW, pitchH, 0).map(t=>({...t, rot: Math.PI/4}));
-    case 'brick_50':  return g(pitchW, pitchH, 0.5);
-    case 'brick_33':  return g(pitchW, pitchH, 1/3);
-    case 'grid': default: return g(pitchW, pitchH, 0);
+    case 'diagonal':  return g(A, A.w+joint, A.h+joint, 0).map(t=>({...t, rot: Math.PI/4}));
+    case 'brick_50':  return g(A, A.w+joint, A.h+joint, 0.5);
+    case 'brick_33':  return g(A, A.w+joint, A.h+joint, 1/3);
+    case 'grid': default: return g(A, A.w+joint, A.h+joint, 0);
   }
 }
 
-// tile's 4 corners (applying rot about center)
 function tileCorners(t){
   const pts=[{x:-t.w/2,y:-t.h/2},{x:t.w/2,y:-t.h/2},{x:t.w/2,y:t.h/2},{x:-t.w/2,y:t.h/2}];
   const cos=Math.cos(t.rot), sin=Math.sin(t.rot);
@@ -182,8 +229,6 @@ const tbbox = (t) => { const c=tileCorners(t); return bounds(c); };
 function hitsHole(t, hole){ const b=tbbox(t); return b.minx<hole.maxx && b.maxx>hole.minx && b.miny<hole.maxy && b.maxy>hole.miny; }
 function segDist(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay; const len2=dx*dx+dy*dy||1; let t=((px-ax)*dx+(py-ay)*dy)/len2; t=Math.max(0,Math.min(1,t)); const qx=ax+t*dx,qy=ay+t*dy; return Math.hypot(px-qx,py-qy); }
 
-// classify → 'full' | 'cut' | 'hole' | 'out'. Inset pulls corners INWARD toward
-// the tile center so a tile flush with a room edge reads as inside.
 function classify(t, room, hole){
   const c=tileCorners(t); const eps=Math.min(t.w,t.h)*0.02;
   const corners=c.map(p=>({x:p.x+(p.x<t.cx?eps:-eps), y:p.y+(p.y<t.cy?eps:-eps)}));
@@ -194,8 +239,6 @@ function classify(t, room, hole){
   if(nIn===0 && !centerIn) return 'out';
   return 'cut';
 }
-
-// corner piece = cut tile touching >=2 non-parallel room edges
 function isCorner(t, room){
   const b=tbbox(t); const cx=(b.minx+b.maxx)/2, cy=(b.miny+b.maxy)/2;
   const near=(ax,ay,bx,by)=> segDist(cx,cy,ax,ay,bx,by) < Math.max(t.w,t.h)*0.55;
@@ -214,7 +257,8 @@ const ROOMS = {
 };
 
 // ── state ────────────────────────────────────────────────────────────────
-const state = { room:"rect", pattern:"grid", tw:12, th:24, joint:0.125, angle:0, origin:{x:0,y:0}, trim:new Set() };
+const state = { room:"rect", pattern:"grid", tw:12, th:24, tw2:12, th2:12,
+  colorA:"#1f3fc7", colorB:"#b8860b", joint:0.125, angle:0, origin:{x:0,y:0}, trim:new Set() };
 let scale = 1, off = {x:0,y:0};
 
 // ── render ───────────────────────────────────────────────────────────────
@@ -222,6 +266,7 @@ const svg = document.getElementById('svg');
 const NS='http://www.w3.org/2000/svg';
 const SVG=(t,a)=>{ const e=document.createElementNS(NS,t); for(const k in a) e.setAttribute(k,a[k]); return e; };
 const sx=(x)=>x*scale+off.x, sy=(y)=>y*scale+off.y;
+function hexRgba(hex,a){ const h=hex.replace('#',''); const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16); return `rgba(${r},${g},${b},${a})`; }
 
 function fitView(room){
   const b=bounds(room.poly); const wrap=document.getElementById('canvasWrap');
@@ -232,14 +277,14 @@ function fitView(room){
 
 function render(){
   const room=ROOMS[state.room];
-  const faceW=state.tw/12, faceH=state.th/12, j=state.joint/12;
-  const pitchW=faceW+j, pitchH=faceH+j;
-  const tiles=generateLayout(room.poly,{pattern:state.pattern, pitchW, pitchH, faceW, faceH, angleDeg:state.angle, origin:state.origin});
+  const skus=[{w:state.tw/12, h:state.th/12}, {w:state.tw2/12, h:state.th2/12}];
+  const colors=[state.colorA, state.colorB];
+  const joint=state.joint/12;
+  const tiles=generateLayout(room.poly,{pattern:state.pattern, skus, joint, angleDeg:state.angle, origin:state.origin});
 
   svg.innerHTML="";
   const roomPath = room.poly.map((p,i)=>`${i?'L':'M'}${sx(p.x)},${sy(p.y)}`).join('')+"Z";
-  const roomEl=SVG('path',{d:roomPath, fill:'#fff', stroke:'#16213a', 'stroke-width':2, 'stroke-linejoin':'round', 'pointer-events':'none'});
-  svg.appendChild(roomEl);
+  svg.appendChild(SVG('path',{d:roomPath, fill:'#fff', stroke:'#16213a', 'stroke-width':2, 'stroke-linejoin':'round', 'pointer-events':'none'}));
 
   let full=0, cut=0, hole=0, corner=0;
   for(const t of tiles){
@@ -247,13 +292,13 @@ function render(){
     if(cls==='out') continue;
     const c=tileCorners(t);
     const d=c.map((p,i)=>`${i?'L':'M'}${sx(p.x)},${sy(p.y)}`).join('')+"Z";
-    let fill="#fff", sw=0.75, stroke="#c9d2df", cornerFlag=false;
-    if(cls==='cut'){ cut++; fill="rgba(31,63,199,0.10)"; cornerFlag=isCorner(t,room.poly); if(cornerFlag) corner++; }
-    else if(cls==='hole'){ hole++; fill="rgba(176,58,38,0.14)"; }
-    else full++;
-    const el=SVG('path',{d, fill, stroke, 'stroke-width':sw, 'stroke-linejoin':'round', 'pointer-events':'none'});
-    svg.appendChild(el);
-    if(cornerFlag){ svg.appendChild(SVG('circle',{cx:sx(t.cx), cy:sy(t.cy), r:3, fill:'#1f3fc7'})); }
+    const col = colors[t.sku||0];
+    let fill, cornerFlag=false;
+    if(cls==='cut'){ cut++; fill=hexRgba(col,0.30); cornerFlag=isCorner(t,room.poly); if(cornerFlag) corner++; }
+    else if(cls==='hole'){ hole++; fill="rgba(176,58,38,0.16)"; }
+    else { full++; fill=hexRgba(col,0.10); }
+    svg.appendChild(SVG('path',{d, fill, stroke:'#c9d2df', 'stroke-width':0.75, 'stroke-linejoin':'round', 'pointer-events':'none'}));
+    if(cornerFlag) svg.appendChild(SVG('circle',{cx:sx(t.cx), cy:sy(t.cy), r:3, fill:col}));
   }
 
   if(room.hole){
@@ -261,7 +306,6 @@ function render(){
     svg.appendChild(SVG('path',{d, fill:'#16213a', 'fill-opacity':0.08, stroke:'#16213a', 'stroke-width':2}));
   }
 
-  // room edges — clickable for trim tagging
   for(let i=0;i<room.poly.length;i++){
     const a=room.poly[i], b=room.poly[(i+1)%room.poly.length];
     const tagged=state.trim.has(i);
@@ -272,18 +316,16 @@ function render(){
     svg.appendChild(el);
   }
 
-  // origin crosshair
   svg.appendChild(SVG('circle',{cx:sx(state.origin.x), cy:sy(state.origin.y), r:6, fill:'none', stroke:'#b03a26', 'stroke-width':1.5}));
   svg.appendChild(SVG('line',{x1:sx(state.origin.x)-10, y1:sy(state.origin.y), x2:sx(state.origin.x)+10, y2:sy(state.origin.y), stroke:'#b03a26','stroke-width':1}));
   svg.appendChild(SVG('line',{x1:sx(state.origin.x), y1:sy(state.origin.y)-10, x2:sx(state.origin.x), y2:sy(state.origin.y)+10, stroke:'#b03a26','stroke-width':1}));
 
-  // ── readout ──
-  const faceArea = faceW*faceH;
+  // readout
+  const faceArea = (state.tw/12)*(state.th/12);
   const netArea = polyArea(room.poly) - (room.hole? (room.hole.maxx-room.hole.minx)*(room.hole.maxy-room.hole.miny) : 0);
   const areaOrder = Math.ceil(netArea/faceArea);
   const naiveOrder = full + cut + hole;
   const wastePct = areaOrder>0 ? ((naiveOrder-areaOrder)/areaOrder*100) : 0;
-
   let trimLf=0;
   for(const i of state.trim){ const a=room.poly[i], b=room.poly[(i+1)%room.poly.length]; trimLf+=Math.hypot(b.x-a.x,b.y-a.y); }
 
@@ -298,10 +340,20 @@ function render(){
 
 // ── controls ─────────────────────────────────────────────────────────────
 const num=(id)=>Number(document.getElementById(id).value);
+function jointValue(){
+  const sel=document.getElementById('joint').value;
+  if(sel==='custom'){ document.getElementById('jointCustomRow').style.display=''; return num('jointCustom'); }
+  document.getElementById('jointCustomRow').style.display='none'; return Number(sel);
+}
 function syncAll(){
   state.room=document.getElementById('room').value;
   state.pattern=document.getElementById('pattern').value;
-  state.tw=num('tw'); state.th=num('th'); state.joint=num('joint');
+  state.tw=num('tw'); state.th=num('th'); state.tw2=num('tw2'); state.th2=num('th2');
+  state.colorA=document.getElementById('colorA').value; state.colorB=document.getElementById('colorB').value;
+  document.getElementById('colorALabel').textContent=state.colorA;
+  document.getElementById('colorBLabel').textContent=state.colorB;
+  document.getElementById('dotB').style.background=state.colorB;
+  state.joint=jointValue();
   state.angle=num('angle'); state.origin={x:num('ox'), y:num('oy')};
   document.getElementById('angleVal').textContent=state.angle+"°";
   const rotable = state.pattern==='grid'||state.pattern==='brick_50'||state.pattern==='brick_33';
@@ -309,9 +361,8 @@ function syncAll(){
   document.getElementById('angle').disabled = !rotable;
   fitView(ROOMS[state.room]); render();
 }
-['room','pattern','tw','th','joint','angle','ox','oy'].forEach(id=>document.getElementById(id).addEventListener('input',syncAll));
+['room','pattern','tw','th','tw2','th2','colorA','colorB','joint','jointCustom','angle','ox','oy'].forEach(id=>document.getElementById(id).addEventListener('input',syncAll));
 
-// origin drag on empty canvas
 let dragging=false;
 svg.addEventListener('pointerdown',(e)=>{ if(e.target!==svg) return; dragging=true; svg.setPointerCapture(e.pointerId); });
 svg.addEventListener('pointermove',(e)=>{ if(!dragging) return;
