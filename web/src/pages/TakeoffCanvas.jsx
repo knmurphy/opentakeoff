@@ -1356,6 +1356,114 @@ export default function TakeoffCanvas() {
     dispatchShape({ type: "tileLayout", id: shapeId, patch: { edge_overrides } });
   };
 
+  // The tile-grid overlay JSX, precomputed once per panel — NOT re-created on
+  // every parent render. The monolith re-renders ~11Hz during pan/zoom (setTf)
+  // and on every hover/selection/commit-message tick; rebuilding this
+  // hundreds-to-thousands-of-<rect> subtree inline (as it was) made React
+  // reconcile the whole grid on each of those renders, competing with the pan
+  // loop for main-thread time. Keyed on the CONTENT that changes the drawn
+  // grid — the solved overlay memo, the live origin-drag preview, the zoom
+  // scale (stroke widths are 1/scale), band summaries, edit mode, units — so a
+  // pan at constant zoom, a hover, or a status tick returns the SAME element
+  // refs and React skips the whole subtree (the protection TakeoffsPanel gets
+  // from React.memo). `panels`/handlers are captured, not deps: panels' content
+  // is covered by groupSig + panelImgs, and the handlers branch only on
+  // tileEdit/shapes (both deps), so a stale capture is impossible.
+  const tileOverlayJsxByPanel = useMemo(() => {
+    const byPanel = new Map();
+    if (!tileShow) return byPanel;
+    const s = tf.scale;
+    const condMap = new Map(conditions.map((c) => [c.id, c]));
+    for (const p of panels) {
+      const entries = tileOverlayByPanel.get(p.key) || [];
+      if (!entries.length) continue;
+      const nodes = [];
+      for (const entry of entries) {
+        const live = tileDragPreview && tileDragPreview.id === entry.shapeId
+          ? (() => {
+              const ds = shapes.find((sh) => sh.id === entry.shapeId);
+              const dCond = condMap.get(entry.conditionId);
+              if (!ds || !dCond) return null;
+              return tileOverlayForShape(ds, dCond, panelImgs[ds.sheet_id] || null, entry.upp, tileDragPreview.origin);
+            })()
+          : null;
+        const ov = live || entry;
+        if (!shouldShowGrid(ov.config, entry.upp, s)) continue;
+        const bandSummary = tileTakeoff.byShape.get(entry.shapeId)?.band;
+        const bandCond = condMap.get(entry.conditionId);
+        const bandColor = bandSummary
+          ? (bandCond?.tile_setup?.skus || []).find((sk) => sk && sk.id === bandSummary.sku_id)?.color || bandCond?.color || "#888"
+          : null;
+        const bandPath = bandSummary
+          ? (() => {
+              const bp = bandOverlayPrimitives(bandSummary, entry.upp);
+              const ring = (pts) => pts.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x},${pt.y}`).join(" ") + " Z";
+              return `${ring(bp.outer)} ${ring(bp.inner)}`;
+            })()
+          : null;
+        nodes.push(
+          <g key={"tile" + entry.shapeId}>
+            {bandPath && (
+              <path d={bandPath} fillRule="evenodd" fill={bandColor} fillOpacity={0.4}
+                stroke={bandColor} strokeOpacity={0.85} strokeWidth={1.6 / s}
+                style={{ pointerEvents: "none" }}>
+                <title>{`Band — ${bandSummary.tiles} tile${bandSummary.tiles === 1 ? "" : "s"} · ${fmtCheckLen(bandSummary.lf, units)}`}</title>
+              </path>
+            )}
+            {ov.tiles.map((t, i) => {
+              const rotDeg = (t.rot * 180) / Math.PI;
+              const isHole = t.cls === "hole";
+              const fillA = t.cls === "cut" ? "18" : "33";
+              return (
+                <g key={i} style={{ pointerEvents: "none" }}>
+                  <rect x={t.cx - t.w / 2} y={t.cy - t.h / 2} width={t.w} height={t.h}
+                    transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`}
+                    fill={isHole ? "rgba(176,58,38,.24)" : t.color + fillA}
+                    stroke={isHole ? "#b03a26" : t.color}
+                    strokeOpacity={isHole ? 0.9 : 0.55}
+                    strokeWidth={(t.cls === "corner" ? 2 : 1) / s}
+                    strokeDasharray={t.cls === "cut" || isHole ? `${3 / s} ${2 / s}` : undefined} />
+                  {t.cls === "corner" && (
+                    <path d={`M${t.cx - t.w / 2},${t.cy - t.h / 2} l${Math.min(t.w, t.h) * 0.35},0 l0,${Math.min(t.w, t.h) * 0.35} Z`}
+                      transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`} fill={t.color} fillOpacity={0.85} />
+                  )}
+                </g>
+              );
+            })}
+            {(ov.edges || []).map((edge) => {
+              if (edge.exposure === "field") return null;
+              const a = ov.ring_ft[edge.shapeEdgeIndex], b = ov.ring_ft[(edge.shapeEdgeIndex + 1) % ov.ring_ft.length];
+              const ecol = TILE_EDGE_COLORS[edge.exposure] || TILE_EDGE_COLORS.trim;
+              return (
+                <line key={"edge" + edge.shapeEdgeIndex}
+                  x1={a[0] / entry.upp} y1={a[1] / entry.upp} x2={b[0] / entry.upp} y2={b[1] / entry.upp}
+                  stroke={ecol} strokeWidth={(edge.confirmed ? 3 : 2) / s}
+                  strokeOpacity={edge.confirmed ? 0.95 : 0.5}
+                  strokeDasharray={edge.confirmed ? undefined : `${5 / s} ${3 / s}`}
+                  strokeLinecap="round"
+                  style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "pointer" : undefined }}
+                  onClick={(e) => { if (tileEdit) { e.stopPropagation(); cycleTileEdge(entry.shapeId, edge.shapeEdgeIndex, edge.exposure); } }}>
+                  <title>{`${edge.exposure}${edge.confirmed ? " (confirmed)" : " (suggested)"} — ${fmtCheckLen(edge.length_lf, units)}${tileEdit ? " · click to cycle" : ""}`}</title>
+                </line>
+              );
+            })}
+            <g style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "grab" : undefined }}
+              onPointerDown={(e) => beginTileOrigin(e, entry.shapeId, entry.upp, ov.config.origin)}
+              onPointerMove={moveTileOrigin} onPointerUp={endTileOrigin} onPointerCancel={endTileOrigin}>
+              <title>{`Tile origin${tileEdit ? " — drag to relocate the grid" : ""}`}</title>
+              <circle cx={ov.origin.x} cy={ov.origin.y} r={7 / s} fill="none" stroke="#1f3fc7" strokeWidth={2 / s} />
+              <line x1={ov.origin.x - 10 / s} y1={ov.origin.y} x2={ov.origin.x + 10 / s} y2={ov.origin.y} stroke="#1f3fc7" strokeWidth={1.6 / s} />
+              <line x1={ov.origin.x} y1={ov.origin.y - 10 / s} x2={ov.origin.x} y2={ov.origin.y + 10 / s} stroke="#1f3fc7" strokeWidth={1.6 / s} />
+            </g>
+          </g>
+        );
+      }
+      if (nodes.length) byPanel.set(p.key, nodes);
+    }
+    return byPanel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- panels/handlers captured: panels' content = groupSig + panelImgs (both deps); handlers branch only on tileEdit/shapes (both deps)
+  }, [tileShow, tf.scale, conditions, tileOverlayByPanel, tileDragPreview, shapes, panelImgs, tileTakeoff, tileEdit, units, groupSig]);
+
   // Cut drag (#136) — the self-contained element-drag pattern (the panel-resize
   // handle's): the cut's own <g> opts into pointer events in edit mode, captures
   // the pointer, live-PREVIEWS by writing shape.roll_layout through raw
@@ -8716,95 +8824,7 @@ export default function TakeoffCanvas() {
                         above. The one shape being origin-dragged solves its
                         OWN live preview here (never touches `shapes` — see
                         beginTileOrigin); every other shape reads the memo. */}
-                    {tileShow && (tileOverlayByPanel.get(p.key) || []).map((entry) => {
-                      const live = tileDragPreview && tileDragPreview.id === entry.shapeId
-                        ? (() => {
-                            const ds = shapes.find((sh) => sh.id === entry.shapeId);
-                            const dCond = condById[entry.conditionId];
-                            if (!ds || !dCond) return null;
-                            return tileOverlayForShape(ds, dCond, panelImgs[ds.sheet_id] || null, entry.upp, tileDragPreview.origin);
-                          })()
-                        : null;
-                      const ov = live || entry;
-                      if (!shouldShowGrid(ov.config, entry.upp, tf.scale)) return null;
-                      const s = tf.scale;
-                      // Interior band (M7 Task 7.3) — read the already-figured
-                      // `summary.band` off tileTakeoff.byShape (band placement
-                      // is independent of the live origin/rotation drag, so
-                      // this never needs the `live` override above) and draw
-                      // the outer-minus-inner annulus as one evenodd path,
-                      // filled with the band SKU's own color at an opacity
-                      // distinct from field tiles. Gated on the same
-                      // shouldShowGrid LOD check as the field (above).
-                      const bandSummary = tileTakeoff.byShape.get(entry.shapeId)?.band;
-                      const bandCond = condById[entry.conditionId];
-                      const bandColor = bandSummary
-                        ? (bandCond?.tile_setup?.skus || []).find((sk) => sk && sk.id === bandSummary.sku_id)?.color || bandCond?.color || "#888"
-                        : null;
-                      const bandPath = bandSummary
-                        ? (() => {
-                            const bp = bandOverlayPrimitives(bandSummary, entry.upp);
-                            const ring = (pts) => pts.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x},${pt.y}`).join(" ") + " Z";
-                            return `${ring(bp.outer)} ${ring(bp.inner)}`;
-                          })()
-                        : null;
-                      return (
-                        <g key={"tile" + entry.shapeId}>
-                          {bandPath && (
-                            <path d={bandPath} fillRule="evenodd" fill={bandColor} fillOpacity={0.4}
-                              stroke={bandColor} strokeOpacity={0.85} strokeWidth={1.6 / s}
-                              style={{ pointerEvents: "none" }}>
-                              <title>{`Band — ${bandSummary.tiles} tile${bandSummary.tiles === 1 ? "" : "s"} · ${fmtCheckLen(bandSummary.lf, units)}`}</title>
-                            </path>
-                          )}
-                          {ov.tiles.map((t, i) => {
-                            const rotDeg = (t.rot * 180) / Math.PI;
-                            const isHole = t.cls === "hole";
-                            const fillA = t.cls === "cut" ? "18" : "33";
-                            return (
-                              <g key={i} style={{ pointerEvents: "none" }}>
-                                <rect x={t.cx - t.w / 2} y={t.cy - t.h / 2} width={t.w} height={t.h}
-                                  transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`}
-                                  fill={isHole ? "rgba(176,58,38,.24)" : t.color + fillA}
-                                  stroke={isHole ? "#b03a26" : t.color}
-                                  strokeOpacity={isHole ? 0.9 : 0.55}
-                                  strokeWidth={(t.cls === "corner" ? 2 : 1) / s}
-                                  strokeDasharray={t.cls === "cut" || isHole ? `${3 / s} ${2 / s}` : undefined} />
-                                {t.cls === "corner" && (
-                                  <path d={`M${t.cx - t.w / 2},${t.cy - t.h / 2} l${Math.min(t.w, t.h) * 0.35},0 l0,${Math.min(t.w, t.h) * 0.35} Z`}
-                                    transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`} fill={t.color} fillOpacity={0.85} />
-                                )}
-                              </g>
-                            );
-                          })}
-                          {(ov.edges || []).map((edge) => {
-                            if (edge.exposure === "field") return null;
-                            const a = ov.ring_ft[edge.shapeEdgeIndex], b = ov.ring_ft[(edge.shapeEdgeIndex + 1) % ov.ring_ft.length];
-                            const ecol = TILE_EDGE_COLORS[edge.exposure] || TILE_EDGE_COLORS.trim;
-                            return (
-                              <line key={"edge" + edge.shapeEdgeIndex}
-                                x1={a[0] / entry.upp} y1={a[1] / entry.upp} x2={b[0] / entry.upp} y2={b[1] / entry.upp}
-                                stroke={ecol} strokeWidth={(edge.confirmed ? 3 : 2) / s}
-                                strokeOpacity={edge.confirmed ? 0.95 : 0.5}
-                                strokeDasharray={edge.confirmed ? undefined : `${5 / s} ${3 / s}`}
-                                strokeLinecap="round"
-                                style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "pointer" : undefined }}
-                                onClick={(e) => { if (tileEdit) { e.stopPropagation(); cycleTileEdge(entry.shapeId, edge.shapeEdgeIndex, edge.exposure); } }}>
-                                <title>{`${edge.exposure}${edge.confirmed ? " (confirmed)" : " (suggested)"} — ${fmtCheckLen(edge.length_lf, units)}${tileEdit ? " · click to cycle" : ""}`}</title>
-                              </line>
-                            );
-                          })}
-                          <g style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "grab" : undefined }}
-                            onPointerDown={(e) => beginTileOrigin(e, entry.shapeId, entry.upp, ov.config.origin)}
-                            onPointerMove={moveTileOrigin} onPointerUp={endTileOrigin} onPointerCancel={endTileOrigin}>
-                            <title>{`Tile origin${tileEdit ? " — drag to relocate the grid" : ""}`}</title>
-                            <circle cx={ov.origin.x} cy={ov.origin.y} r={7 / s} fill="none" stroke="#1f3fc7" strokeWidth={2 / s} />
-                            <line x1={ov.origin.x - 10 / s} y1={ov.origin.y} x2={ov.origin.x + 10 / s} y2={ov.origin.y} stroke="#1f3fc7" strokeWidth={1.6 / s} />
-                            <line x1={ov.origin.x} y1={ov.origin.y - 10 / s} x2={ov.origin.x} y2={ov.origin.y + 10 / s} stroke="#1f3fc7" strokeWidth={1.6 / s} />
-                          </g>
-                        </g>
-                      );
-                    })}
+                    {tileOverlayJsxByPanel.get(p.key)}
                   </g>
                 );
               })}
