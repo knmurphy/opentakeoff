@@ -59,65 +59,84 @@ are lost.**
 ### Absolute baseline (clean text vs golden)
 
 The parser ceiling on real layout, before any noise: row recall **100%**,
-field accuracy **91.7%**, perfect rows **14/28**. The entire gap is two known
-limitations, pinned in `test/scheduleOcr.test.ts` so a fix shows up as a
-deliberate test update:
+field accuracy **95.2%**, perfect rows **20/28** (after the hardening below —
+was 91.7% / 14). The one remaining gap is a single limitation, pinned in
+`test/scheduleOcr.test.ts` so a fix shows up as a deliberate test update:
 
-1. **`MISC. FINISHES` is not in the section vocabulary** (`sectionKey` folds it
-   to `MISCFINISHES`; the map has `MISC`), so its 6 rows inherit the previous
-   section's `ceiling` category — category accuracy 78.6%.
-2. **Remarks bleed into SIZE.** Grout and sheen notes (8 rows) sit nearer the
-   SIZE anchor than the REMARKS anchor on this layout, so nearest-anchor
-   banding smears them — size accuracy 71.4%.
+- **Remarks bleed into SIZE.** Grout and sheen notes (8 rows) sit nearer the
+  SIZE anchor than the REMARKS anchor on this layout, so nearest-anchor
+  banding smears them — size accuracy 71.4%. This is an anchor-*geometry*
+  problem, not a text-noise one, so the text hardening below doesn't touch it;
+  it's the next hardening target.
 
-### Noise sweep (vs clean parse — noise sensitivity in isolation)
+(The former second limitation — `MISC. FINISHES` inheriting the wrong category
+because `sectionKey` folds it to `MISCFINISHES`, which the strict map lacked —
+was **fixed** by the fuzzy section resolver; category accuracy 78.6% → 100%.)
 
-25 seeds per point; input CER is measured, not assumed. Headline table
-(`--seeds`/`--json` for more):
+### The cliff Experiment 1 found — and the hardening it drove
 
-| char noise (nominal) | input CER | row recall | field acc | total collapses (0 rows) |
-|---|---|---|---|---|
-| 0.005 | 0.5% | 98.4% | 90.9% | 0/25 |
-| 0.01 | 1.0% | 90.9% | 85.3% | 1/25 |
-| 0.02 | 2.1% | 83.6% | 70.9% | 1/25 |
-| 0.03 | 3.1% | 67.4% | 72.2% | 5/25 |
-| 0.05 | 5.0% | 62.3% | 54.5% | 5/25 |
+The first sweep measured a parser whose noise budget was **≈ 0.5% CER** and
+whose failure was not graceful: by 1% CER whole-parse *collapses* (0 rows out)
+appeared. The cliffs were structural, not statistical:
 
-| word drop rate | detection recall | row recall | field acc |
-|---|---|---|---|
-| 1% | 99.0% | 95.4% | 95.9% |
-| 5% | 94.8% | 92.3% | 84.0% |
-| 10% | 89.8% | 87.3% | 75.7% |
-
-### The finding that reorders the roadmap
-
-**The current parser's noise budget is ≈ 0.5% CER** (row recall ≥ 95% and
-field acc ≥ 90% hold only through the 0.005 sweep point), and failure is not
-graceful: by 1% CER whole-parse collapses appear. The cliffs are structural,
-not statistical:
-
-- **Header anchors are single points of failure.** Corrupt the one `CODE`
-  header word and `findAnchors` fails → the entire parse returns `[]`
-  (pinned in the test suite). Same for losing both `MANUFACTURER` and `COLOR`.
-- **Section words gate whole blocks.** A corrupted `FLOORING` drops every row
-  until the next recognized section.
-- **The code regex is exact.** `CPT-1` read as `CP7-1` fails
-  `^[A-Z]{1,4}(-[A-Z0-9]{1,4})?$` and the row vanishes silently.
+- **Header anchors were single points of failure** — corrupt the one `CODE`
+  word and `findAnchors` failed → the entire parse returned `[]`.
+- **Section words gated whole blocks** — a corrupted `FLOORING` dropped every
+  row under it.
+- **The code regex was exact** — `CPT-1` read as `CP7-1` failed
+  `^[A-Z]{1,4}(-[A-Z0-9]{1,4})?$` and the row vanished silently.
 
 Printed-text OCR at 144 DPI realistically lands in the 1–5% CER range — above
-this budget. So the highest-leverage next step is **not engine work**: it is
-making the parser noise-tolerant (fuzzy header/section matching within edit
-distance 1–2, a confusion-aware code matcher, anchor recovery from column
-geometry when header words are damaged). That likely multiplies the budget
-several-fold and every engine — Gemini included — benefits. It also directly
-mitigates both absolute-baseline limitations (fuzzy section matching would
-catch `MISC. FINISHES`).
+that budget — so the highest-leverage move was **parser hardening, not engine
+work**. `scheduleParse.ts` now matches headers, sections, and codes
+OCR-tolerantly (bounded edit distance 1–2; a confusion-aware code shape that
+still rejects lone numbers; a prefix/fuzzy section resolver). Each fuzzy path
+fires only when the strict form misses, so **clean vector text is
+byte-for-byte unaffected** — the existing parser suite is untouched and green.
+
+### Noise sweep, before → after (vs clean parse — noise sensitivity in isolation)
+
+25 seeds per point; input CER measured, not assumed:
+
+| char noise | input CER | row recall (before → after) | whole-parse collapses / 25 (before → after) |
+|---|---|---|---|
+| 0.5% | 0.5% | 98.4% → 98.4% | 0 → 0 |
+| 1% | 1.0% | 90.9% → **95.6%** | 1 → **0** |
+| 2% | 2.1% | 83.6% → **91.3%** | 1 → **0** |
+| 3% | 3.1% | 67.4% → **89.0%** | 5 → **0** |
+| 5% | 5.0% | 62.3% → **83.3%** | 5 → **0** |
+| 8% | 8.0% | 43.0% → **72.1%** | 8 → **0** |
+
+**The cliff is gone.** Row recall roughly doubled at moderate noise, and
+whole-parse collapses were eliminated through 8% CER. Two budgets now, because
+the two failures aren't equal:
+
+- **Row-survival budget** (row recall ≥ 95% — a lost row is *silent* data
+  loss): **≈ 1% CER, doubled from 0.5%**, with no collapse observed through 8%.
+  This is the line the parser defends. Word drops: rows survive a 1% detection
+  miss rate (drops of whole anchor words remain the parser's hard limit —
+  fuzzy matching can't recover text that never arrived).
+- **Combined budget** (row recall ≥ 95% AND field acc ≥ 90%): still ≈ 0.5% CER,
+  now gated by *field text fidelity* — getting `WILSONART` or `1408 HIGH
+  ROLLER` exactly right is the OCR engine's job, not the parser's. A field typo
+  is visible and editable in the approval dialog; a lost row is not. So this
+  budget is the whole-pipeline ceiling the engine must lift.
+
+The takeaway for engine selection: **the parser no longer amplifies OCR error
+into lost rows** up to ~8% CER, so an off-the-shelf engine in the 1–5% range
+should now yield a nearly complete row set, with residual errors landing as
+editable field typos rather than missing line items.
 
 ## Roadmap (the experiment ladder)
 
 1. ~~**Oracle sweep** — measure the CER budget.~~ Done, above.
-2. **Parser hardening** — fuzzy anchors/sections/codes, re-run the sweep,
-   watch the budget move. Cheap, engine-agnostic, measurable.
+2. ~~**Parser hardening** — fuzzy anchors/sections/codes, re-run the sweep,
+   watch the budget move.~~ Done: the collapse cliff is gone and the
+   row-survival budget doubled (before/after above). Remaining hardening the
+   sweep still points at — anchor recovery from column geometry when a header
+   word is *dropped* (not just corrupted), and fixing the remarks→SIZE
+   geometry — is deferred behind engine evaluation, since dropped-word
+   robustness matters less once a real engine's detection recall is known.
 3. **Off-the-shelf ceiling** — PaddleOCR (official onnxruntime-web browser
    SDK) and `ocrs` (Rust→WASM, RTen) as `OcrEngine` adapters over rasterized
    fixture regions, scored by this same harness; include a DPI sweep

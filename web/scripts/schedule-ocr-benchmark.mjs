@@ -30,9 +30,13 @@ const argOf = (name, dflt) => {
 const SEEDS = Number(argOf("--seeds", 25));
 const jsonOut = argOf("--json", null);
 
-// Row recall is the headline (a lost row is silent data loss in the import
-// dialog); field accuracy is the fine print. The budget is the harshest noise
-// level that still clears both.
+// Two budgets, because the two failures aren't equal. A LOST ROW is silent
+// data loss — it never reaches the approval dialog, so row recall is the
+// product-critical line and parser hardening is what defends it. A FIELD TYPO
+// is visible and editable in the dialog, and getting the text right is
+// genuinely the OCR engine's job — so the combined budget (recall AND fields)
+// tracks the whole pipeline's ceiling. We report both.
+const ROW_BUDGET = 0.95;
 const BUDGET = { rowRecall: 0.95, fieldAccOverall: 0.9 };
 const CER_SWEEP = [0.005, 0.01, 0.02, 0.03, 0.05, 0.08, 0.12];
 const DROP_SWEEP = [0.01, 0.02, 0.05, 0.1, 0.2];
@@ -92,19 +96,28 @@ for (const id of cases) {
   console.log();
   const dropRows = sweep("word drop", DROP_SWEEP, (dropRate) => ({ dropRate }));
 
-  const passes = (r) => r.rowRecall >= BUDGET.rowRecall && r.fieldAccOverall >= BUDGET.fieldAccOverall;
-  const lastCer = [...cerRows].reverse().find(passes);
-  const lastDrop = [...dropRows].reverse().find(passes);
-  console.log(`\n**CER budget** (row recall ≥ ${pct(BUDGET.rowRecall)} AND field acc ≥ ${pct(BUDGET.fieldAccOverall)}):`);
-  console.log(lastCer
-    ? `- char noise: holds through nominal ${lastCer.point} (measured input CER ${pct(lastCer.inputCer)})`
+  const passesRow = (r) => r.rowRecall >= ROW_BUDGET;
+  const passesBoth = (r) => r.rowRecall >= BUDGET.rowRecall && r.fieldAccOverall >= BUDGET.fieldAccOverall;
+  const lastCerRow = [...cerRows].reverse().find(passesRow);
+  const lastCerBoth = [...cerRows].reverse().find(passesBoth);
+  const lastDropRow = [...dropRows].reverse().find(passesRow);
+  const noCollapse = [...cerRows].reverse().find((r) => r.collapses === 0);
+  console.log(`\n**Row-survival budget** (row recall ≥ ${pct(ROW_BUDGET)} — the product-critical line, defended by the parser):`);
+  console.log(lastCerRow
+    ? `- char noise: rows survive through nominal ${lastCerRow.point} (measured input CER ${pct(lastCerRow.inputCer)})`
     : `- char noise: fails at every swept level`);
-  console.log(lastDrop
-    ? `- word drops: holds through ${pct(lastDrop.point)} detection miss rate`
+  console.log(lastDropRow
+    ? `- word drops: rows survive through ${pct(lastDropRow.point)} detection miss rate`
     : `- word drops: fails at every swept level`);
+  console.log(`- no whole-parse collapse observed through nominal ${noCollapse ? [...cerRows].filter((r) => r.collapses === 0).at(-1).point : "—"}`);
+  console.log(`\n**Combined budget** (row recall ≥ ${pct(BUDGET.rowRecall)} AND field acc ≥ ${pct(BUDGET.fieldAccOverall)} — whole-pipeline ceiling, gated by OCR text fidelity):`);
+  console.log(lastCerBoth
+    ? `- char noise: holds through nominal ${lastCerBoth.point} (measured input CER ${pct(lastCerBoth.inputCer)})`
+    : `- char noise: fails at every swept level`);
 
   report.cases[id] = { absolute: abs, cerSweep: cerRows, dropSweep: dropRows,
-    budgetCer: lastCer?.point ?? null, budgetDrop: lastDrop?.point ?? null };
+    rowBudgetCer: lastCerRow?.point ?? null, combinedBudgetCer: lastCerBoth?.point ?? null,
+    rowBudgetDrop: lastDropRow?.point ?? null };
 }
 
 if (jsonOut) {

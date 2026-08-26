@@ -143,24 +143,72 @@ test("committed words parse to the golden 28 rows through the real parser", () =
   const s = scoreRows(golden, rows);
   assert.equal(s.rowRecall, 1);
   assert.equal(s.rowPrecision, 1);
-  // Known limitation #1 (PINNED): "MISC. FINISHES" is not in the section
-  // vocabulary (sectionKey folds it to MISCFINISHES, the map only has MISC),
-  // so its 6 rows inherit the previous section's ceiling category.
-  assert.equal(s.fieldAcc.category, 22 / 28);
-  // Known limitation #2 (PINNED): remarks-column text (grout + sheen notes,
-  // 8 rows) sits nearer the SIZE anchor than the REMARKS anchor on this real
-  // layout, so nearest-anchor banding smears it into size.
+  // Former limitation #1, now FIXED by parser hardening: "MISC. FINISHES"
+  // folds to MISCFINISHES, which the fuzzy section resolver maps to MISC
+  // (transition) by prefix. All 28 categories are now correct (was 22/28).
+  assert.equal(s.fieldAcc.category, 1);
+  // Limitation #2 STILL PINNED (a geometry issue the text-hardening doesn't
+  // touch): remarks-column text (grout + sheen notes, 8 rows) sits nearer the
+  // SIZE anchor than the REMARKS anchor on this real layout, so nearest-anchor
+  // banding smears it into size. This is the next hardening target (anchor
+  // geometry), not a noise-tolerance one.
   assert.equal(s.fieldAcc.size, 20 / 28);
   // everything else is exact
   assert.equal(s.fieldAcc.description, 1);
   assert.equal(s.fieldAcc.manufacturer, 1);
   assert.equal(s.fieldAcc.style, 1);
   assert.equal(s.fieldAcc.spec_color, 1);
-  assert.equal(s.perfectRows, 14);
+  assert.equal(s.perfectRows, 20);
 });
 
 test("losing the CODE header word collapses the whole parse — the cliff the sweep measures", () => {
   const noCode = fixture.words.filter((w) => !(w.str === "CODE" && w.y < 400));
   assert.equal(noCode.length, fixture.words.length - 1);
+  // fuzzy matching helps CHAR noise, not a whole DROPPED anchor word — this
+  // stays the drop cliff, and the harness's dropSweep is what measures it
   assert.deepEqual(parseSchedule(wordsToTokens(noCode)), []);
+});
+
+// ── parser hardening: fuzzy header / section / code (docs/SCHEDULE-OCR.md) ────
+
+/** Corrupt one character of the first token whose str === `word` near the top
+ * of the region (headers/sections live there), simulating a single glyph
+ * confusion. Returns a fresh word array. */
+function confuseFirst(words: OcrWord[], word: string, replacement: string): OcrWord[] {
+  const i = words.findIndex((w) => w.str === word);
+  assert.ok(i >= 0, `no "${word}" token to corrupt`);
+  return words.map((w, j) => (j === i ? { ...w, str: replacement } : w));
+}
+
+test("a confused CODE header (C0DE) no longer drops the schedule", () => {
+  // pre-hardening this returned [] — the sharpest cliff Experiment 1 found
+  const noisy = confuseFirst(fixture.words, "CODE", "C0DE");
+  const rows = parseSchedule(wordsToTokens(noisy));
+  assert.equal(rows.length, 28);
+  assert.equal(scoreRows(golden, rows).rowRecall, 1);
+});
+
+test("a confused section header (FLOORING → FL0ORING) keeps its block's category", () => {
+  const noisy = confuseFirst(fixture.words, "FLOORING", "FL0ORING");
+  const rows = parseSchedule(wordsToTokens(noisy));
+  // CPT-1..C stay floor instead of falling through to the section above
+  for (const tag of ["CPT-1", "CPT-2", "VCT-1", "PT-1", "PT-2", "C"]) {
+    assert.equal(rows.find((r) => r.finish_tag === tag)?.category, "floor", tag);
+  }
+});
+
+test("a confused code glyph (CPT-1 → CP7-1) still yields a row", () => {
+  const noisy = confuseFirst(fixture.words, "CPT-1", "CP7-1");
+  const rows = parseSchedule(wordsToTokens(noisy));
+  assert.equal(rows.length, 28);
+  // the row survives under its (mis-read) tag rather than vanishing
+  assert.ok(rows.some((r) => r.finish_tag === "CP7-1"));
+});
+
+test("hardening is conservative: a lone number is never mistaken for a code", () => {
+  // inject a stray numeric first-cell row inside the schedule body
+  const stray: OcrWord[] = [{ str: "51839", x: 2986, y: 700, w: 90, h: 25 }];
+  const rows = parseSchedule(wordsToTokens([...fixture.words, ...stray]));
+  assert.ok(!rows.some((r) => r.finish_tag === "51839"));
+  assert.equal(rows.length, 28); // nothing invented
 });

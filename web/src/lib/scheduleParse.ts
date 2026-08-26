@@ -49,9 +49,71 @@ type Column = (typeof COLUMNS)[number];
 // ACT-1, PLAM-2, RES-W), or a lone letter (C = concrete sealer). Section words
 // are caps too, so the caller checks those first.
 const CODE_RE = /^[A-Z]{1,4}(-[A-Z0-9]{1,4})?$/;
+// OCR-tolerant code shape (issue: browser-OCR noise budget). When the strict
+// form fails, accept 1–5 alnum + optional "-" + 1–5 alnum PROVIDED there is at
+// least one letter — so a glyph confusion in the alpha prefix (CPT-1 → CP7-1)
+// still reads as a code, while a lone number (a keynote, a dim, a stray color
+// index like 51839) never does. Only reached when the strict form misses, so
+// clean vector text is byte-for-byte unaffected.
+const CODE_RE_FUZZY = /^[A-Z0-9]{1,5}(-[A-Z0-9]{1,5})?$/;
+const looksLikeCode = (s: string): boolean => CODE_RE.test(s) || (CODE_RE_FUZZY.test(s) && /[A-Z]/.test(s));
 
 const norm = (s: string) => (s || "").trim().toUpperCase();
 const sectionKey = (s: string) => norm(s).replace(/[^A-Z]/g, "");
+
+// Bounded edit distance: is `a` within `k` edits of `b`? Early-exits when a
+// whole DP row exceeds k, so it stays cheap for the k∈{1,2} the fuzzy fallbacks
+// use. The harness (lib/ocr/score.ts) has a full levenshtein for measurement;
+// this bounded twin keeps scheduleParse self-contained and pdfjs-free.
+function withinEdits(a: string, b: string, k: number): boolean {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > k) return false;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= n; j++) {
+      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > k) return false;
+    prev = cur;
+  }
+  return prev[n] <= k;
+}
+
+// A header word matches its column name when it starts with the 5-char prefix
+// (the strict rule) OR the same length of prefix is within 1 edit (a confusion
+// like MANUF→MANDF, or COLOR→C0LOR). Comparing only the prefix keeps a wrapped
+// two-word header ("MATERIAL/PRODUCT") matching MATERIAL.
+const headerHit = (u: string, col: Column): boolean => {
+  const p = col.slice(0, 5);
+  return u.startsWith(p) || withinEdits(u.slice(0, p.length), p, 1);
+};
+const fuzzyIncludes = (ups: string[], target: string, k: number): boolean =>
+  ups.includes(target) || ups.some((u) => withinEdits(u, target, k));
+
+// The section vocabulary as a list, for prefix/fuzzy resolution when the exact
+// stripped key misses. Order is longest-first so a longer word wins a prefix
+// tie (MISCFINISHES → MISC before any 4-letter near-miss).
+const SECTION_WORDS = Object.keys(SECTION_CATEGORY).sort((a, b) => b.length - a.length);
+
+// Resolve a stripped section key to its category, OCR-tolerantly. Exact wins;
+// then a prefix relationship of ≥4 shared leading chars (this is what catches
+// "MISC. FINISHES" → MISCFINISHES → MISC, a real-layout miss the strict map has
+// always had); then within 1 edit (2 for the longer words). Returns null when
+// nothing plausibly matches, so a data row is never mistaken for a section.
+function sectionCategory(key: string): Category | null {
+  if (SECTION_CATEGORY[key]) return SECTION_CATEGORY[key];
+  for (const w of SECTION_WORDS) {
+    if (w.length >= 4 && key.length >= 4 && (key.startsWith(w) || w.startsWith(key))) return SECTION_CATEGORY[w];
+  }
+  for (const w of SECTION_WORDS) {
+    if (withinEdits(key, w, w.length >= 7 ? 2 : 1)) return SECTION_CATEGORY[w];
+  }
+  return null;
+}
 
 // Cluster tokens into visual rows by y, then order each row left→right. A row's
 // y is the running average so a tall cell doesn't split. tolFrac scales the gap
@@ -79,13 +141,16 @@ const cx = (t: Token) => t.x + 0; // x is the left edge; header cells left-align
 function findAnchors(rows: Token[][]): { col: Column; x: number }[] | null {
   for (const r of rows) {
     const ups = r.map((t) => norm(t.str).replace(/[^A-Z]/g, ""));
-    const hasCode = ups.includes("CODE");
-    const hasAnchor = ups.includes("MANUFACTURER") || ups.includes("COLOR");
+    // Header words tolerate noise: CODE within 1 edit, MANUFACTURER within 2
+    // (it's long), COLOR within 1 — so a single glyph confusion in a header
+    // cell no longer drops the whole schedule (the parser's sharpest cliff).
+    const hasCode = fuzzyIncludes(ups, "CODE", 1);
+    const hasAnchor = fuzzyIncludes(ups, "MANUFACTURER", 2) || fuzzyIncludes(ups, "COLOR", 1);
     if (!hasCode || !hasAnchor) continue;
     const anchors: { col: Column; x: number }[] = [];
     for (const t of r) {
       const u = norm(t.str).replace(/[^A-Z]/g, "");
-      for (const c of COLUMNS) if (u.startsWith(c.slice(0, 5))) { anchors.push({ col: c, x: cx(t) }); break; }
+      for (const c of COLUMNS) if (headerHit(u, c)) { anchors.push({ col: c, x: cx(t) }); break; }
     }
     // de-dupe (a wrapped header can repeat) keeping the leftmost, need ≥3 to band
     const seen = new Set<string>();
@@ -113,20 +178,25 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
   if (!anchors) return [];
 
   let section: string | null = null;
+  let sectionCat: Category | null = null;
   const out: ScheduleRow[] = [];
   for (const r of rows) {
     const first = r[0];
     const key = sectionKey(first.str);
     const joined = r.map((t) => t.str).join(" ").trim();
-    // a lone-ish section header row
-    if (SECTION_CATEGORY[key] && joined.length < 24) { section = key; continue; }
-    // data rows need a section and a code-shaped first cell
+    // a lone-ish section header row — resolve its category OCR-tolerantly (the
+    // length guard, not the vocabulary, is what keeps a data row from being
+    // read as a section, so fuzzier section lookup is safe here)
+    const cat = joined.length < 24 ? sectionCategory(key) : null;
+    if (cat) { section = key; sectionCat = cat; continue; }
+    // data rows need a section and a code-shaped first cell (fuzzy code shape
+    // so a confused glyph — CPT-1 → CP7-1 — doesn't silently drop the row)
     const codeTok = norm(first.str).replace(/[^A-Z0-9-]/g, "");
-    if (!section || !CODE_RE.test(codeTok)) continue;
+    if (!section || !looksLikeCode(codeTok)) continue;
 
     const cells: Record<Column, string[]> = { CODE: [], MATERIAL: [], MANUFACTURER: [], STYLE: [], COLOR: [], SIZE: [], REMARKS: [] };
     for (const t of r) cells[columnFor(cx(t), anchors)].push(t.str.trim());
-    const category = SECTION_CATEGORY[section] ?? "other";
+    const category = sectionCat ?? "other";
     out.push({
       finish_tag: codeTok,
       section,
