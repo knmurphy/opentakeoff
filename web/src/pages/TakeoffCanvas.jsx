@@ -299,16 +299,25 @@ const TOOL_VERB = {
 // `summarizeShape` calls, so the two field-solve paths stay byte-identical
 // by construction. `edges`/the returned `ring_ft` stay keyed to the ROOM's
 // own ring (edge exposures are the room's walls, unaffected by a band).
-function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverride) {
+function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverride, preLayout) {
   if (!cond || !dims || !(dims.w > 0) || !(upp > 0)) return null;
   if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) return null;
   const ringFt = (verts) => verts.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
   const ring_ft = ringFt(s.verts_norm);
-  const holes_ft = (s.verts_norm_holes || []).map(ringFt);
   const tl = s.tile_layout || {};
-  const { fieldRing_ft } = fieldRingForBand({ ring_ft, holes_ft, band: tl.band });
-  const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft: fieldRing_ft, holes_ft, originOverride, rotationOverride });
-  const layout = solveTileLayout({ tile_setup: effective, ring_ft: fieldRing_ft, holes_ft });
+  // Perf: reuse the takeoff's already-solved layout (tileTakeoff.byShape) when
+  // there is no live drag override — it is produced by the SAME
+  // fieldRingForBand -> effectiveTileSetup -> solveTileLayout chain, so the
+  // drawn grid is now literally the counted grid (not two paths that must
+  // agree). Only a live origin/rotation drag (originOverride/rotationOverride)
+  // re-solves, and only for the ONE shape being dragged.
+  let layout = (originOverride === undefined && rotationOverride === undefined) ? preLayout : null;
+  if (!layout) {
+    const holes_ft = (s.verts_norm_holes || []).map(ringFt);
+    const { fieldRing_ft } = fieldRingForBand({ ring_ft, holes_ft, band: tl.band });
+    const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft: fieldRing_ft, holes_ft, originOverride, rotationOverride });
+    layout = solveTileLayout({ tile_setup: effective, ring_ft: fieldRing_ft, holes_ft });
+  }
   const skus = cond.tile_setup?.skus || [];
   const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond.color || "#888";
   const overlay = tileOverlayPrimitives(layout, upp, skuColor);
@@ -1234,15 +1243,15 @@ export default function TakeoffCanvas() {
       if (!cond) continue;
       const dims = panelImgs[s.sheet_id] || null;
       const upp = uppFor(s.sheet_id);
-      const ov = tileOverlayForShape(s, cond, dims, upp);
+      const ov = tileOverlayForShape(s, cond, dims, upp, undefined, undefined, tileTakeoff.byShape.get(s.id)?.layout);
       if (!ov) continue;
       const arr = byPanel.get(s.sheet_id) || [];
       arr.push({ shapeId: s.id, conditionId: cond.id, upp, ...ov });
       byPanel.set(s.sheet_id, arr);
     }
     return byPanel;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tileOverlaySig (not `shapes`/`conditions` directly) is the real memo key, §3.7: persists across pure zoom, resets only on a real geometry/setup/override edit
-  }, [tileOverlaySig, panelImgs, scales]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tileOverlaySig (not `shapes`/`conditions`) is the real memo key (§3.7: persists across pure zoom); tileTakeoff supplies the reused solved layout and recomputes on the same edits
+  }, [tileOverlaySig, tileTakeoff, panelImgs, scales]);
   // Cross-room QA (Task 4) — a 40-room job audited once, not one zoom at a
   // time. Same dimsFor/uppFor contract as computeTileTakeoff.
   const tileWarningsList = useMemo(
