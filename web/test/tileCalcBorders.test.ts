@@ -63,6 +63,28 @@ test("trimTallies: includeSuggested tallies unconfirmed suggestions", () => {
   assert.deepEqual(withSuggested, [{ exposure: "trim", length_lf: 20, pieces: 10 }]);
 });
 
+// cornerTallies must gate on confirmed exposure exactly like trimTallies
+// (M4 review): a standalone rectangle with no overrides has 4 SUGGESTED,
+// UNCONFIRMED trim edges — corner EA must stay empty by default so a
+// bid-line bridge never sees confirmed corners paired with unconfirmed LF.
+test("cornerTallies: gates on confirmed exposure like trimTallies", () => {
+  const ring: [number, number][] = [[0, 0], [6, 0], [6, 4], [0, 4]];
+
+  const suggested = edgeExposures({ ring_ft: ring });
+  assert.deepEqual(trimTallies(suggested), []);
+  assert.deepEqual(cornerTallies(ring, suggested), { outside: 0, inside: 0 });
+  assert.deepEqual(cornerTallies(ring, suggested, { includeSuggested: true }), {
+    outside: 4,
+    inside: 0,
+  });
+
+  const confirmed = edgeExposures({
+    ring_ft: ring,
+    overrides: { 0: "trim", 1: "trim", 2: "trim", 3: "trim" },
+  });
+  assert.deepEqual(cornerTallies(ring, confirmed), { outside: 4, inside: 0 });
+});
+
 // finish_neighbor is preserved on a tally only when every edge in the group
 // shares the same neighbor (e.g. a run of threshold edges against one carpet
 // room).

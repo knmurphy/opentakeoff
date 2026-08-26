@@ -62,17 +62,27 @@ export function trimTallies(
 
 /**
  * Corner EA at each ring vertex where both adjacent edges are trimmed
- * (non-`field`) — a field/field vertex carries no border piece at all.
- * Classifies convex (outside) vs reflex (inside) from the cross product of
- * the adjacent edge vectors; the sign that means "convex" depends on the
- * ring's own winding, so the signed area is computed first and the cross
- * sign is interpreted against it — correct for a ring supplied either way.
+ * (design §2.E) — convex vertices need an outside-corner piece, reflex
+ * vertices (a notch cutting into the room) need an inside-corner piece.
+ * Uses the ring's signed area to tell convex from reflex regardless of
+ * winding direction.
+ *
+ * Gates on the SAME confirmed/includeSuggested rule as `trimTallies`: an
+ * edge only counts toward a corner unless it's `field`, and only if it's
+ * `confirmed` (or `includeSuggested` opts a suggestion in) — a corner EA
+ * must never be more committed than the trim LF it sits between (§3.4
+ * "never auto-committed").
  */
-export function cornerTallies(ring_ft: [number, number][], exposures: EdgeExposure[]): CornerTally {
+export function cornerTallies(
+  ring_ft: [number, number][],
+  exposures: EdgeExposure[],
+  opts?: { includeSuggested?: boolean },
+): CornerTally {
+  const includeSuggested = opts?.includeSuggested ?? false;
   const n = ring_ft.length;
   const trimmed = new Set<number>();
   for (const e of exposures) {
-    if (e.exposure !== "field") trimmed.add(e.shapeEdgeIndex);
+    if (e.exposure !== "field" && (e.confirmed || includeSuggested)) trimmed.add(e.shapeEdgeIndex);
   }
 
   let signedArea = 0;
