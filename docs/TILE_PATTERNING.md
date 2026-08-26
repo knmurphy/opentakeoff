@@ -455,3 +455,33 @@ honest angled-pattern ordering.
   RapidSketch Tile, CTD, TilePlanner) for a feature-parity matrix.
 - OpenTakeoff's own `stitches.ts` (match-line stitching) as adjacent multi-sheet
   geometry.
+
+---
+
+## 8. Decisions from the mockup round
+
+An interactive prototype (`prototype/grid-designer.html`) made the tool feelable.
+Three product decisions came out of it, and one strategic fork remains open.
+
+### 8.1 Product decisions (settled direction)
+
+- **Grout joint** is a *standard-size picker plus a custom entry* (1/16″–1/2″
+  presets), not a free number field. Matches the `GROUT_JOINTS` preset list in
+  prior art.
+- **Tiles carry colors**, assignable per definition — the mockup tints full
+  tiles at low alpha and cut tiles higher so color and cut-state stay separable.
+- **A pattern composes multiple tile definitions** (SKUs), not one. The mockup's
+  "mixed" pattern alternates a 12×24 rectangle with a 12×12 square by row —
+  this is the *modular* generator the architect flagged as missing (§7.2), now
+  confirmed as wanted. Versailles-style 3+ SKU modules are the same generator
+  extended; v1 can start at two SKUs sharing a width.
+
+### 8.2 Strategic fork — build here, or build on `tiletakeoff`
+
+The author is comfortable cloning `tiletakeoff` (built by a professional tiler)
+and enhancing it. **Blocker: it has no license** (no LICENSE file, no
+`package.json` `license` field) — default "all rights reserved," so it cannot be
+cloned into Apache-2.0 OpenTakeoff. Options: (a) ask `moshegluck` for a license,
+(b) fork it as a separate private experiment, or (c) reimplement its engine
+*approach* in OpenTakeoff — the domain model is the valuable part, and that is
+copied by reimplementation, not by cloning code. Unresolved; the user decides.
