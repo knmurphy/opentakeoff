@@ -113,6 +113,75 @@ function roomPolygon(gf: GeometryFactory, outerClosed: readonly Pt[], holes: rea
   return gf.createPolygon(shell, holeRings);
 }
 
+// ── pure-JS fast-path predicates (feet, no jsts) ─────────────────────────
+// jsts's OverlayOp.intersection per tile is the classify hot cost, and for a
+// real room the vast majority of tiles are wholly INTERIOR (full) or wholly
+// OUTSIDE (generator padding) — neither needs a boolean overlay. These cheap
+// predicates resolve those two populations analytically; only genuinely
+// boundary-straddling tiles (O(perimeter)) fall through to the exact jsts
+// path below. Exactness is preserved: a tile is fast-classified ONLY when it
+// is provably full or provably out; anything ambiguous defers to jsts.
+type Box = { minX: number; minY: number; maxX: number; maxY: number };
+function bboxOf(pts: readonly Pt[]): Box {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of pts) { if (x < minX) minX = x; if (y < minY) minY = y; if (x > maxX) maxX = x; if (y > maxY) maxY = y; }
+  return { minX, minY, maxX, maxY };
+}
+function boxesDisjoint(a: Box, b: Box): boolean {
+  return a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY;
+}
+// Ray-cast point-in-polygon over a ring (open or closed, feet).
+function pointInRing(px: number, py: number, r: readonly Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const [xi, yi] = r[i], [xj, yj] = r[j];
+    if (((yi > py) !== (yj > py)) && (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+function inRoom(px: number, py: number, outer: readonly Pt[], holes: readonly (readonly Pt[])[]): boolean {
+  if (!pointInRing(px, py, outer)) return false;
+  for (const h of holes) if (pointInRing(px, py, h)) return false;
+  return true;
+}
+function orient(ax: number, ay: number, bx: number, by: number, cx: number, cy: number): number {
+  return (by - ay) * (cx - ax) - (bx - ax) * (cy - ay);
+}
+// Segment p1p2 vs p3p4 intersection INCLUDING collinear/endpoint touch — a
+// touch is treated as an intersection so a boundary grazing a tile defers to
+// jsts rather than being mis-classified as full.
+function segsIntersect(p1: Pt, p2: Pt, p3: Pt, p4: Pt): boolean {
+  const d1 = orient(p3[0], p3[1], p4[0], p4[1], p1[0], p1[1]);
+  const d2 = orient(p3[0], p3[1], p4[0], p4[1], p2[0], p2[1]);
+  const d3 = orient(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+  const d4 = orient(p1[0], p1[1], p2[0], p2[1], p4[0], p4[1]);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  const on = (a: Pt, b: Pt, c: Pt) =>
+    Math.min(a[0], b[0]) - 1e-12 <= c[0] && c[0] <= Math.max(a[0], b[0]) + 1e-12 &&
+    Math.min(a[1], b[1]) - 1e-12 <= c[1] && c[1] <= Math.max(a[1], b[1]) + 1e-12;
+  if (d1 === 0 && on(p3, p4, p1)) return true;
+  if (d2 === 0 && on(p3, p4, p2)) return true;
+  if (d3 === 0 && on(p1, p2, p3)) return true;
+  if (d4 === 0 && on(p1, p2, p4)) return true;
+  return false;
+}
+// A tile is provably FULL iff all 4 corners are inside the room AND no room/
+// hole edge crosses a tile edge AND no room/hole vertex sits inside the tile
+// (a concavity can't intrude without one of the latter two). Returns false
+// (=> defer to jsts) the moment anything is ambiguous.
+function tileFullyInside(corners: readonly Pt[], rings: readonly (readonly Pt[])[], outer: readonly Pt[], holes: readonly (readonly Pt[])[]): boolean {
+  for (const [x, y] of corners) if (!inRoom(x, y, outer, holes)) return false;
+  const te: [Pt, Pt][] = [[corners[0], corners[1]], [corners[1], corners[2]], [corners[2], corners[3]], [corners[3], corners[0]]];
+  for (const r of rings) {
+    for (let i = 0; i < r.length - 1; i++) {
+      const a = r[i], b = r[i + 1];
+      if (pointInRing(a[0], a[1], corners)) return false;
+      for (const [q1, q2] of te) if (segsIntersect(a, b, q1, q2)) return false;
+    }
+  }
+  return true;
+}
+
 // jsts's OverlayOp throws a non-noded TopologyException on a self-intersecting
 // input polygon — reachable whenever the room ring is transiently invalid (a
 // mid-drag bowtie the canvas now also gates out) or a user commits a genuinely
@@ -296,10 +365,21 @@ export function classifyLayout(
   const edges = roomEdges(outerClosed);
   const shell: JstsGeometry = makeValid(gf.createPolygon(ring(gf, windAs(outerClosed, true))));
   const room = makeValid(roomPolygon(gf, outerClosed, holes));
+  const holeRings = holes.map(closeRing);
+  const roomBox = bboxOf(outerClosed);
+  const fastRings: Pt[][] = [outerClosed, ...holeRings];
 
   return quads.map((quad): Classified => {
     const areaFull_sf = quad.w * quad.h;
-    const tile: JstsGeometry = gf.createPolygon(ring(gf, closeRing(tileCorners(quad))));
+    const corners = tileCorners(quad);
+    const tbox = bboxOf(corners);
+    // Fast-path: wholly outside the room bbox — generator padding, no overlay.
+    if (boxesDisjoint(tbox, roomBox)) return { quad, cls: "out", areaFull_sf, areaKept_sf: 0 };
+    // Fast-path: wholly interior — a full tile, areaKept == areaFull, no overlay.
+    if (tileFullyInside(corners, fastRings, outerClosed, holeRings)) {
+      return { quad, cls: "full", areaFull_sf, areaKept_sf: areaFull_sf };
+    }
+    const tile: JstsGeometry = gf.createPolygon(ring(gf, closeRing(corners)));
     const kept = safeIntersection(room, tile);
     const areaKept_sf = kept ? Math.max(0, kept.getArea()) : 0;
 
