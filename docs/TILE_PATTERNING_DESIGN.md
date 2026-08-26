@@ -111,7 +111,7 @@ is where the computation lands.
 | Multi-course base (cove/bullnose courses) | `wall` + `coverage.js` | panel, report | 11 |
 | Wall panels / stacked bands | `wall` (elevation) | overlay, panel | 11 |
 
-### G. Curb & 3D — wrapped surfaces
+### G. Curb & wet-area assembly — wrapped surfaces & waterproofing
 
 | Capability | Module | Surfaces | Milestone |
 |---|---|---|---|
@@ -119,6 +119,9 @@ is where the computation lands.
 | Per-face pieces (top, two sides), corner/end cuts | `curb` | cut sheet, report | 12 |
 | Developed net for L-plan / radius curbs | `curb/develop.ts` | overlay | 13 |
 | Niches (recessed boxes) | `wall` (elevation) | overlay, panel | 11 |
+| Waterproofing / uncoupling membrane SF (wet-area walls + pan floor) | `wetArea` | report | 11 |
+| Slope-to-drain / pre-slope mud bed (shower pan floor) | `wetArea` | overlay, report | 13 |
+| Prefab pan / curb / bench systems (Wedi/Kerdi) as EA alternative | `wetArea` | panel, report | 13 |
 
 ### H. Quantities & export — the deliverable
 
@@ -130,6 +133,7 @@ is where the computation lands.
 | Waste-from-layout (**supersedes** heuristic `waste_pct`, see §4.1) | `calc` + `totals.js` | report | 3 |
 | **Scale-accurate tile layout sheet** (grid + cuts w/ dims + trim + corners at true scale) | `markedset.js` (PDF); `export_dxf` (DXF, post-rebase) | PDF now / DXF after rebase | 8 |
 | Install phasing (group rooms into phases; per-phase quantities) | report grouping (existing) | report | 8 |
+| Labor ROM as a *quantity* (complexity-weighted labor SF + cut/corner/trim/joint driver counts; no $, priced externally) | `calc` + existing labor field | report (Labor view) | 8 |
 
 ### I. Interaction — the tool in the estimator's hands
 
@@ -277,12 +281,18 @@ and the ordered quantity cannot disagree.
 - Multi-course base reuses `coverage.js` `baseGroutParams`/`baseCourses` (grout
   math only — piece layout is the elevation model).
 
-### 3.6 `lib/tileCurb/` — wrapped 3D surfaces (2D-source-of-truth)
+### 3.6 `lib/tileCurb/` + `lib/tileWetArea/` — curb & wet-area assembly (2D source of truth)
 
 - A curb is a linear feature + cross-section profile `{width, height}`. Faces:
   top = LF × width, two sides = LF × height each; corner and end-cut pieces.
 - Straight-profile first; L-plan/radius curbs need a developed (unfolded) net —
   `tileCurb/develop.ts`, built later. Niches ride the wall elevation model.
+- **Wet-area assembly** (`lib/tileWetArea/`): waterproofing/uncoupling **membrane
+  SF** derived from the wet-area wall + pan geometry we already compute (M11);
+  **slope-to-drain / pre-slope mud-bed** for the pan floor and **prefab
+  pan/curb/bench systems** (Wedi/Kerdi) as an EA alternative to a mud bed (M13).
+  This is the resolved wet-area scope decision (§8.2): the feature owns the full
+  assembly bid, not just the tile.
 
 ### 3.7 Layout lifecycle — recompute & invalidation
 
@@ -447,17 +457,20 @@ reuse math and band geometry are trusted. MCP is staged through the path.
    `reuse_mode: none | practical`, auto-downgraded for AABB-approximate patterns.
 7. **Interior bands / listellos, after the overlay.** Field inset + band pattern.
 8. **Report + export integration.** Three-path quantities (ctx + columns +
-   reportJson), cut sheet in CSV/XLSX/`report.v1`, and the **scale-accurate tile
-   layout sheet** (PDF now; DXF once the branch rebases onto main's `export_dxf`).
+   reportJson), cut sheet in CSV/XLSX/`report.v1`, the **scale-accurate tile
+   layout sheet** (PDF now; DXF once the branch rebases onto main's `export_dxf`),
+   and the **labor ROM quantity** (complexity-weighted labor SF + driver counts)
+   into the Labor view — a quantity, never a dollar.
 9. **Remaining patterns.** Motif (chevron/pinwheel/harlequin), modular/Versailles
    (per-quad `skuId`), non-rect (hex/penny), randomized (seeded) — each a new
    generator + registration + tests.
 10. **Wall strip projection.** `tileWall` (1): straight run × height → elevation
     rectangle, same engine.
-11. **Wall elevation model.** `tileWall` (2): courses, bands, opening/niche
-    cutouts as holes; multi-course base; niches.
+11. **Wall elevation model + wet-area membrane.** `tileWall` (2): courses, bands,
+    opening/niche cutouts as holes; multi-course base; niches; **waterproofing /
+    uncoupling membrane SF** for wet-area walls + pan.
 12. **Straight curb.** `tileCurb` profile faces + end cuts.
-13. **Developed curb nets.** L-plan/radius (`tileCurb/develop.ts`).
+13. **Developed curb nets + wet-area pan.** L-plan/radius (`tileCurb/develop.ts`); **slope-to-drain / pre-slope mud bed**; **prefab pan/curb/bench (Wedi/Kerdi) as an EA alternative**.
 14. **MCP agent audit parity.** Withheld/refusal parity, layout audit workflow.
 15. **3D visualization (read-only).** `lib/tile3d/` + a lazy `three/` view:
     extrude committed rooms, drape the figured layout as textures on floor /
@@ -491,12 +504,6 @@ path is not smaller in ambition.
    interaction is open.
 6. **Hatch ↔ overlay LOD threshold** — at what zoom the hatch gives way to the
    tile grid, and whether the Marked Set always draws the grid at scale.
-7. **Bid-scope ownership** — does the tile feature own the full wet-area
-   *assembly* bid (waterproofing membrane, slope-to-drain, prefab pans) and
-   *labor* estimating, or just the tile plus its direct sundries? The estimator
-   review (§8) argues the assembly and labor are where the money and liability
-   sit — a product call, not a hedge. (Order-unit / box rounding, previously
-   listed here, is now core — §8.1.)
 
 ---
 
@@ -505,8 +512,8 @@ path is not smaller in ambition.
 An adversarial review by a veteran tile estimator/installer judged the *bid*,
 not the geometry. Verdict: the geometry / cut / trim engine is more rigorous
 than the prior art, but the design "stops where the money and the liability
-are." The must-address items below are now core; two are genuine product-scope
-calls (§6.7).
+are." The must-address items below are now core; the two product-scope calls it
+raised are now **resolved** (§8.2).
 
 ### 8.1 Folding in as core
 
@@ -534,19 +541,25 @@ calls (§6.7).
   corrected). The edge-aligned search minimizes sub-½-tile slivers and balances
   opposing cuts — two layouts can tie on cut count while one leaves an ugly
   sliver on a sight-line wall.
-- **Labor hook.** The exact cut/corner counts are a strong labor-complexity
-  proxy; feed a pattern/size rate multiplier (diagonal +15–25%, herringbone/
-  chevron +40–100%, large-format back-butter/clips) into the report's labor
-  line. Milestone 8.
+- **Labor as a ROM *quantity*, never a dollar.** OpenTakeoff keeps cost/pricing
+  out; labor surfaces as a *quantity* the estimator prices elsewhere. Emit a
+  complexity-weighted **labor SF** (measured SF × a pattern/size factor —
+  straight 1.0, diagonal ~1.2, herringbone/chevron ~1.6, large-format ~1.3,
+  mosaic ~1.4) plus the raw labor drivers already computed as quantities (cut
+  count, corner-piece EA, trim LF, movement-joint LF). One external $/unit
+  prices them; no dollars in-app. Ties into the existing free-text labor type +
+  the report's Labor-view column. Milestone 8.
 - **Multi-room batch QA.** A cross-room sliver/warning list so a 40-room job is
   not audited one zoom at a time. Milestone 5.
 
-### 8.2 Scope decisions (yours — §6.7)
+### 8.2 Resolved scope decisions
 
-- **Wet-area assembly ownership** — waterproofing membrane SF, slope-to-drain /
-  pre-slope mud bed, and prefab pan/curb systems (Wedi/Kerdi-Board) are 20–30% of
-  a shower's material dollars and its top leak-failure liability. Does the tile
-  feature own the *assembly* bid, or just the tile + direct sundries?
-- **Labor estimating depth** — the rate hook above, vs a fuller labor model.
-
-Both are named here, not silently absent.
+- **Wet-area assembly — OWNED (full).** The feature takes off the whole wet-area
+  assembly, not just the tile: waterproofing/uncoupling **membrane SF**,
+  **slope-to-drain / pre-slope mud bed**, and **prefab pan/curb/bench systems**
+  (Wedi/Kerdi) as an EA alternative — the 20–30% of a shower's dollars and its
+  top liability. Folded into §2.G, §3.6 (`lib/tileWetArea/`), milestones 11 & 13.
+- **Labor — ROM quantity, not cost.** Cost estimating stays out of OpenTakeoff;
+  labor is emitted as a *quantity* (complexity-weighted labor SF + driver counts,
+  §8.1) that external pricing multiplies by a rate. No labor-rate database, no
+  dollars in-app.
