@@ -534,6 +534,8 @@ export default function TakeoffCanvas() {
   // typist watching "2.4" become "2.438" mid-word cannot finish the number.
   const [shapeHDraft, setShapeHDraft] = useState(null);
   useEffect(() => { setShapeHDraft(null); }, [selectedId]);   // a draft belongs to ONE wall
+  const [shapeExtrudeDraft, setShapeExtrudeDraft] = useState(null);
+  useEffect(() => { setShapeExtrudeDraft(null); }, [selectedId]);   // draft belongs to ONE shape's 3D-H override
   const [selVert, setSelVert] = useState(null);         // selected vertex index of the selected shape — Delete removes just that point
   const [selectedMarkupId, setSelectedMarkupId] = useState(null); // selected markup — mutually exclusive with selectedId
   const [rfis, setRfis] = useState([]);                 // RFI register (Request For Information); linked to markups via markup.rfi_id === rfi.id
@@ -4099,7 +4101,11 @@ export default function TakeoffCanvas() {
       computed: { perimeter_lf: +LF.toFixed(2), area_sf: tIn > 0 ? +((LF * tIn) / 12).toFixed(2) : 0 },
       ...(activeLabel ? { label: activeLabel } : {}),
       origin: { method: "manual", ...(baked ? { curved: true } : {}) },
+      ...(Number(aCond?.extrude_h_ft) > 0 ? { extrude_h_ft: Number(aCond.extrude_h_ft) } : {}),
     }] });
+    if (!(Number(aCond?.extrude_h_ft) > 0) && (aCond?.extrude_mode || "vertical") === "vertical") {
+      setCommitMsg(`Set installed height for ${aCond?.finish_tag || "condition"} — the 3D view renders it`);
+    }
   }
   // Surface Area — trace the wall run in plan; SF = traced LF × the condition's
   // height. The wall-tile "stack" workflow: set tile height once, trace walls.
@@ -4230,9 +4236,12 @@ export default function TakeoffCanvas() {
       verts_norm: [[m.at[0] / sw.img.w, m.at[1] / sw.img.h]], computed: { count: 1 },
       ...(activeLabel ? { label: activeLabel } : {}),
       origin: { method: "symbol_sweep", symbol: { score: m.score, rotation: m.rotation, mirrored: m.mirrored, seed: { source: "instance", sheet: sw.key, ...(m.seedRow ? { seed_instance: true } : {}) } } },
+      ...(Number(aCond?.extrude_h_ft) > 0 ? { extrude_h_ft: Number(aCond.extrude_h_ft) } : {}),
     })) });
     const skippedN = sw.matches.length - sw.matches.filter((m) => !off.has(tagKey(m))).length;
-    setCommitMsg(`Committed ${rows.length} EA under ${condById[activeCond]?.finish_tag || "condition"}${sw.includeSeed ? " — seed included" : ""}${skippedN ? ` · ${skippedN} excluded by label` : ""} · one undo step (${keyText("⌘Z")}).`);
+    const needH = !(Number(aCond?.extrude_h_ft) > 0);
+    setCommitMsg(`Committed ${rows.length} EA under ${condById[activeCond]?.finish_tag || "condition"}${sw.includeSeed ? " — seed included" : ""}${skippedN ? ` · ${skippedN} excluded by label` : ""} · one undo step (${keyText("⌘Z")}).`
+      + (needH ? ` · set installed height (3D H) for ${aCond?.finish_tag || "condition"} — the 3D view renders it` : ""));
     setSweep(null);
   }
 
@@ -4242,7 +4251,11 @@ export default function TakeoffCanvas() {
     dispatchShape({ type: "add", shapes: [{
       sheet_id: tp.key, condition_id: activeCond, measure_role: "count",
       verts_norm: [[(p[0] - tp.xOffset) / tp.img.w, p[1] / tp.img.h]], computed: { count: 1 }, ...(activeLabel ? { label: activeLabel } : {}), origin: { method: "manual" },
+      ...(Number(aCond?.extrude_h_ft) > 0 ? { extrude_h_ft: Number(aCond.extrude_h_ft) } : {}),
     }] });
+    if (!(Number(aCond?.extrude_h_ft) > 0)) {
+      setCommitMsg(`Set installed height for ${aCond?.finish_tag || "condition"} — the 3D view renders it`);
+    }
   }
 
   // ── One-Click Area — click inside a room; the linework bounds it ──────────
@@ -6674,6 +6687,17 @@ export default function TakeoffCanvas() {
       return { ...next, computed: recomputeShape(next) };
     }));
   };
+  // extrude_h_ft/extrude_override mirror the height overrides above, but are
+  // display-only for the 3D view — quantities (recomputeShape) never depend
+  // on installed height, so neither setter touches computed.
+  const setShapeExtrude = (raw) => {
+    const v = Math.max(0, heightInputToFeet(parseFloat(raw) || 0, units));
+    setShapes((ss) => ss.map((s) => (s.id !== selectedId ? s : { ...s, extrude_h_ft: v, extrude_override: true })));
+  };
+  const clearShapeExtrude = () => {
+    setShapeExtrudeDraft(null);
+    setShapes((ss) => ss.map((s) => (s.id !== selectedId ? s : { ...s, extrude_h_ft: Number(condById[s.condition_id]?.extrude_h_ft) || 0, extrude_override: false })));
+  };
   const finishOk = !bowOpen && (((tool === "area" || tool === "deduct") && poly.length >= 3) || (tool === "zone" && poly.length >= 3 && !zoneTraceCross) || ((tool === "linear" || tool === "surface") && poly.length >= 2));
 
   // ── Layers panel (#85 phase 2) wiring ──────────────────────────────────────
@@ -8787,6 +8811,20 @@ export default function TakeoffCanvas() {
               <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>{heightUnit(units)} → {fa(selShape.computed?.area_sf || 0)}</span>
               {condH > 0 && Number(selShape.height_ft) !== condH && (
                 <button onClick={clearShapeHeight} title="Set this wall to the condition height" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0 }}>↺</button>
+              )}
+            </div>
+          )}
+          {selShape && (selShape.measure_role === "count" || (selShape.measure_role === "linear" && (condById[selShape.condition_id]?.extrude_mode || "vertical") === "vertical")) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }} title="Installed height for THIS shape only — the 3D view extrudes it here instead of the condition's 3D H. ↺ returns to the condition height.">
+              <Icon name="height" size={12} />
+              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>3D H (this)</span>
+              <input name="shape-extrude-h-ft" type="number" min="0" step={heightStep(units)} value={shapeExtrudeDraft ?? dimInputStr(selShape.extrude_h_ft, units, "height")}
+                onChange={(e) => { setShapeExtrudeDraft(e.target.value); setShapeExtrude(e.target.value); }}
+                onBlur={() => { if (shapeExtrudeDraft != null) setShapeExtrude(shapeExtrudeDraft); setShapeExtrudeDraft(null); }}
+                style={{ width: 56, padding: "2px 5px", border: "1px solid var(--ink-faint)", fontSize: 12 }} />
+              <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>{heightUnit(units)}</span>
+              {Number(condById[selShape.condition_id]?.extrude_h_ft) > 0 && Number(selShape.extrude_h_ft) !== Number(condById[selShape.condition_id].extrude_h_ft) && (
+                <button onClick={clearShapeExtrude} title="Set this shape to the condition's 3D H" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0 }}>↺</button>
               )}
             </div>
           )}

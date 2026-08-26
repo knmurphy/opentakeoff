@@ -480,6 +480,22 @@ export function ConditionAppearanceEditor({ cond: c, onUpdateCond, onSetCondPara
           <DimParamInput name="condition-thickness-in" internal={c.thickness_in} units={units} kind="thickness" width={50}
             onCommit={(v) => onSetCondParam("thickness_in", v)} />
         </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }} title={`Installed height (${heightUnit(units)}) — the 3D view extrudes wall base and count items (corner guards) to this. Per-shape: select a shape to override just that one.`}>
+          <span style={{ color: "var(--ink-muted)" }}>3D H</span>
+          <DimParamInput name="condition-extrude-h-ft" internal={c.extrude_h_ft} units={units} kind="height" width={54}
+            onCommit={(v) => onSetCondParam("extrude_h_ft", v)} />
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }} title="How linear runs install: vertical stands up the wall (base); flush lies in the floor plane (transition/reducer strips).">
+          <span style={{ color: "var(--ink-muted)" }}>3D</span>
+          {[["vertical", "↕ base"], ["flush", "≡ flush"]].map(([id, label]) => (
+            <button key={id} type="button" onClick={() => onUpdateCond({ extrude_mode: id })}
+              style={{ fontSize: 10.5, padding: "1px 6px", cursor: "pointer",
+                border: (c.extrude_mode || "vertical") === id ? "1px solid var(--accent, #1f3fc7)" : "1px solid var(--ink-faint)",
+                background: (c.extrude_mode || "vertical") === id ? "var(--paper-dim, #eef1f7)" : "var(--paper-bright)" }}>
+              {label}
+            </button>
+          ))}
+        </span>
       </div>
       {conditionColumns.length > 0 && isRow && rule()}
       {conditionColumns.length > 0 && (

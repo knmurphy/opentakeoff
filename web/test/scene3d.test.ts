@@ -218,10 +218,10 @@ test("seeds carry extrude doctrine (RB-1 vertical 4in, TR-1 flush, CG-1 4ft)", (
 });
 
 test("seedConditions passes the new fields through instantiateTemplate", () => {
-  const conds = seedConditions(null);
-  const rb = conds.find((c) => c.finish_tag === "RB-1");
+  const conds: { finish_tag: string; extrude_mode?: string; extrude_h_ft?: number }[] = seedConditions(null);
+  const rb = conds.find((c) => c.finish_tag === "RB-1")!;
   assert.equal(rb.extrude_mode, "vertical");
-  assert.ok(Math.abs(rb.extrude_h_ft - 1 / 3) < 1e-12);
+  assert.ok(Math.abs(Number(rb.extrude_h_ft) - 1 / 3) < 1e-12);
 });
 
 test("a saved Play round-trips the extrude fields through COND_KEEP", () => {
