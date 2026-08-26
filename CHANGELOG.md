@@ -2,6 +2,12 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-08-26 — measure before you OCR
+
+### Added
+- **The schedule-OCR evaluation harness (`docs/SCHEDULE-OCR.md`)** — the first step toward reading *scanned* finish schedules fully client-side, with no paid API in the path. A vector schedule's text layer is perfect, free ground truth, so the harness extracts real "marquee" word fixtures from the demo VA set (`scripts/make-schedule-ocr-fixture.mjs`, hand-authored golden rows beside them), scores at two layers (word-level detection/CER, row-level per-field accuracy keyed on `finish_tag` — a misread tag is a *lost row*, `src/lib/ocr/score.ts`), and defines the pluggable engine contract every future candidate implements (`src/lib/ocr/types.ts`).
+- **Experiment 1, the oracle sweep (`scripts/schedule-ocr-benchmark.mjs`)** — seeded OCR-shaped noise (glyph confusions, deletions, insertions, word drops, `src/lib/ocr/noise.ts`) over the ground-truth words, fed to the *shipped* parser. The number every engine decision hangs on came out brutal: **the importer's noise budget is ≈ 0.5% character error**, with whole-parse collapses appearing by 1% — the header anchor words, section words, and exact code regex are cliffs, not slopes. Conclusion, written into the doc's roadmap: parser noise-tolerance comes before any engine work, and the harness is what will prove it moved the budget. The clean-text baseline also quantified two real-layout parser limitations (a `MISC. FINISHES` section outside the vocabulary; remarks smearing into SIZE under nearest-anchor banding), both pinned in `test/scheduleOcr.test.ts` so a fix reads as a deliberate update, not drift.
+
 ## 2026-08-24 — the drawing overlay stays crisp through a zoom
 
 ### Fixed
