@@ -7,6 +7,7 @@ import {
   tileOverlayPrimitives,
   overlayCellPx,
   shouldShowGrid,
+  bandOverlayPrimitives,
 } from "../src/lib/tileOverlay.ts";
 import { TILE_OVERLAY_MIN_CELL_PX } from "../src/lib/canvasConstants.js";
 
@@ -88,4 +89,19 @@ test("overlayCellPx / shouldShowGrid: false below the TILE_OVERLAY_MIN_CELL_PX t
 
   assert.ok(overlayCellPx(config, uppAtOrAbove, 1) >= TILE_OVERLAY_MIN_CELL_PX - 1e-9);
   assert.equal(shouldShowGrid(config, uppAtOrAbove, 1), true);
+});
+
+test("bandOverlayPrimitives: outer/inner feet rings convert to px via /upp, ring order preserved", () => {
+  const upp = 0.1; // 0.1 ft/px
+  const band = {
+    outer: [[0, 0], [10, 0], [10, 10], [0, 10]] as [number, number][],
+    inner: [[0.5, 0.5], [9.5, 0.5], [9.5, 9.5], [0.5, 9.5]] as [number, number][],
+  };
+  const { outer, inner } = bandOverlayPrimitives(band, upp);
+  assert.deepEqual(outer, [
+    { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 },
+  ]);
+  assert.deepEqual(inner, [
+    { x: 5, y: 5 }, { x: 95, y: 5 }, { x: 95, y: 95 }, { x: 5, y: 95 },
+  ]);
 });

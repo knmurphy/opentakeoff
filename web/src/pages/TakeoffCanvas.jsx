@@ -120,10 +120,11 @@ import { computeTileTakeoff } from "../lib/tileTakeoff.js";
 import { hasTileSetup, tileConfig } from "../lib/tileSetup.ts";
 import { solveTileLayout } from "../lib/tileSolve.ts";
 import { effectiveTileSetup } from "../lib/tileGeometry/optimize.ts";
-import { tileOverlayPrimitives, shouldShowGrid } from "../lib/tileOverlay.ts";
+import { tileOverlayPrimitives, bandOverlayPrimitives, shouldShowGrid } from "../lib/tileOverlay.ts";
 import { tileWarnings } from "../lib/tileQA.ts";
 import { tileLayoutSig } from "../lib/tileLayoutSig.ts";
 import { edgeExposures } from "../lib/tileEdges/expose.ts";
+import { bandRings } from "../lib/tileEdges/band.ts";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -278,7 +279,12 @@ const TOOL_VERB = {
 // the shape's own committed tile_layout (falling through to the condition
 // default per §4.1). ringFt mirrors tileTakeoff.js's own conversion byte
 // for byte (verts_norm -> feet via the shape's bitmap dims + upp) — the
-// two modules must never disagree about where a room's ring sits.
+// two modules must never disagree about where a room's ring sits. A band
+// (M7 Task 7.3, `tl.band`) re-scopes the FIELD solve to the band's inner
+// ring, mirroring tileTakeoff.js's `summarizeShape` byte for byte — this
+// duplicate solve must never disagree with the engine about where the
+// field starts. `edges`/the returned `ring_ft` stay keyed to the ROOM's
+// own ring (edge exposures are the room's walls, unaffected by a band).
 function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverride) {
   if (!cond || !dims || !(dims.w > 0) || !(upp > 0)) return null;
   if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) return null;
@@ -286,8 +292,14 @@ function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverrid
   const ring_ft = ringFt(s.verts_norm);
   const holes_ft = (s.verts_norm_holes || []).map(ringFt);
   const tl = s.tile_layout || {};
-  const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft, holes_ft, originOverride, rotationOverride });
-  const layout = solveTileLayout({ tile_setup: effective, ring_ft, holes_ft });
+  const bandCfg = tl.band;
+  let fieldRing_ft = ring_ft;
+  if (bandCfg && bandCfg.sku_id && Number(bandCfg.width_ft) > 0) {
+    const rings = bandRings({ ring_ft, holes_ft, offset_ft: Number(bandCfg.offset_ft) || 0, width_ft: bandCfg.width_ft });
+    if (rings) fieldRing_ft = rings.inner;
+  }
+  const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft: fieldRing_ft, holes_ft, originOverride, rotationOverride });
+  const layout = solveTileLayout({ tile_setup: effective, ring_ft: fieldRing_ft, holes_ft });
   const skus = cond.tile_setup?.skus || [];
   const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond.color || "#888";
   const overlay = tileOverlayPrimitives(layout, upp, skuColor);
@@ -8619,8 +8631,35 @@ export default function TakeoffCanvas() {
                       const ov = live || entry;
                       if (!shouldShowGrid(ov.config, entry.upp, tf.scale)) return null;
                       const s = tf.scale;
+                      // Interior band (M7 Task 7.3) — read the already-figured
+                      // `summary.band` off tileTakeoff.byShape (band placement
+                      // is independent of the live origin/rotation drag, so
+                      // this never needs the `live` override above) and draw
+                      // the outer-minus-inner annulus as one evenodd path,
+                      // filled with the band SKU's own color at an opacity
+                      // distinct from field tiles. Gated on the same
+                      // shouldShowGrid LOD check as the field (above).
+                      const bandSummary = tileTakeoff.byShape.get(entry.shapeId)?.band;
+                      const bandCond = condById[entry.conditionId];
+                      const bandColor = bandSummary
+                        ? (bandCond?.tile_setup?.skus || []).find((sk) => sk && sk.id === bandSummary.sku_id)?.color || bandCond?.color || "#888"
+                        : null;
+                      const bandPath = bandSummary
+                        ? (() => {
+                            const bp = bandOverlayPrimitives(bandSummary, entry.upp);
+                            const ring = (pts) => pts.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x},${pt.y}`).join(" ") + " Z";
+                            return `${ring(bp.outer)} ${ring(bp.inner)}`;
+                          })()
+                        : null;
                       return (
                         <g key={"tile" + entry.shapeId}>
+                          {bandPath && (
+                            <path d={bandPath} fillRule="evenodd" fill={bandColor} fillOpacity={0.4}
+                              stroke={bandColor} strokeOpacity={0.85} strokeWidth={1.6 / s}
+                              style={{ pointerEvents: "none" }}>
+                              <title>{`Band — ${bandSummary.tiles} tile${bandSummary.tiles === 1 ? "" : "s"} · ${fmtCheckLen(bandSummary.lf, units)}`}</title>
+                            </path>
+                          )}
                           {ov.tiles.map((t, i) => {
                             const rotDeg = (t.rot * 180) / Math.PI;
                             const isHole = t.cls === "hole";
@@ -9264,6 +9303,7 @@ export default function TakeoffCanvas() {
               })}
               selectedShape={selHasTile ? { id: selShape.id, tile_layout: selShape.tile_layout } : null}
               effectiveConfig={selEffectiveConfig}
+              roomSkus={selTileCond?.tile_setup?.skus || []}
               show={tileShow} onShow={setTileShow}
               onTileSetup={(condId, patch) => {
                 const c = condById[condId];

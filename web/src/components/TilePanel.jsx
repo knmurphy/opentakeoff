@@ -179,13 +179,24 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
 // default" clears just that field (a shallow-merge `{field: undefined}`
 // patch — shapeCommands.js `tileLayout` spreads `patch` over `tile_layout`,
 // so an explicit `undefined` leaves the key unset and reads fall through to
-// the condition default) without touching sibling override fields.
-function RoomOverride({ selectedShape, effectiveConfig, onTileLayout }) {
+// the condition default) without touching sibling override fields. The
+// interior band (M7 §3.4) is a THIRD per-room override on the same
+// `tile_layout` object, `{ sku_id, width_ft, offset_ft }`; unlike
+// origin/rotation it has no condition-level default to fall back to — a
+// room either has a band or it doesn't, so its own checkbox drives presence
+// rather than a "follow default" reset. `skus` is the selected shape's
+// condition's `tile_setup.skus` (threaded from the canvas, where the
+// condition is already resolved) — the band SKU picker's option list.
+function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
   const tl = selectedShape.tile_layout || {};
   const hasOriginOverride = Array.isArray(tl.origin);
   const hasRotationOverride = tl.rotation != null;
   const origin = hasOriginOverride ? tl.origin : effectiveConfig.origin;
   const rotation = hasRotationOverride ? tl.rotation : effectiveConfig.rotation_deg;
+  const band = tl.band || null;
+  const setBandField = (field, v) => onTileLayout(selectedShape.id, { band: { ...(band || {}), [field]: v } });
+  const enableBand = () => onTileLayout(selectedShape.id, { band: { sku_id: (skus && skus[0] && skus[0].id) || "", width_ft: 0.5, offset_ft: 0 } });
+  const removeBand = () => onTileLayout(selectedShape.id, { band: undefined });
 
   const ip = { padding: "3px 5px", border: "1px solid var(--ink-faint)", fontSize: 11.5, fontFamily: "var(--f-mono)" };
   const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
@@ -221,6 +232,28 @@ function RoomOverride({ selectedShape, effectiveConfig, onTileLayout }) {
             title="Clear this room's rotation override — it follows the condition default again">follow default</button>
         )}
       </div>
+      <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--ink-faint)" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "var(--ink-muted)" }}>
+          <input type="checkbox" checked={!!band} onChange={(e) => (e.target.checked ? enableBand() : removeBand())} />
+          Band (this room)
+        </label>
+        {band && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-end", marginTop: 6 }}>
+            <label style={fld}>SKU
+              <select value={band.sku_id || ""} onChange={(e) => setBandField("sku_id", e.target.value)} style={{ ...ip, width: 112 }}>
+                {(skus || []).map((sk) => <option key={sk.id} value={sk.id}>{sk.name || sk.id}</option>)}
+              </select>
+            </label>
+            <label style={fld}>Width (ft)
+              <input type="number" step="0.05" min="0" value={band.width_ft ?? 0.5} onChange={(e) => setBandField("width_ft", parseFloat(e.target.value) || 0)} style={{ ...ip, width: 56 }} />
+            </label>
+            <label style={fld}>Offset (ft)
+              <input type="number" step="0.05" min="0" value={band.offset_ft ?? 0} onChange={(e) => setBandField("offset_ft", parseFloat(e.target.value) || 0)} style={{ ...ip, width: 56 }} />
+            </label>
+            <button style={resetBtn} onClick={removeBand} title="Remove this room's band — clears the sku/width/offset override">remove band</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -253,6 +286,7 @@ export default function TilePanel({
   layouts, // [{ condId, tag, color, multiplier, ti }] — ti = computeTileTakeoff byCond entry
   selectedShape, // { id, tile_layout? } | null
   effectiveConfig, // resolved TileConfig for selectedShape, or null
+  roomSkus, // selectedShape's condition's tile_setup.skus — the band SKU picker's option list (M7 Task 7.3)
   show, onShow,
   onTileSetup, onTileLayout,
   warnings, onFocusWarning,
@@ -278,7 +312,7 @@ export default function TilePanel({
           <ConditionCard key={condId} condId={condId} tag={tag} color={color} multiplier={multiplier} ti={ti} onTileSetup={onTileSetup} />
         ))}
         {selectedShape && effectiveConfig && (
-          <RoomOverride selectedShape={selectedShape} effectiveConfig={effectiveConfig} onTileLayout={onTileLayout} />
+          <RoomOverride selectedShape={selectedShape} effectiveConfig={effectiveConfig} skus={roomSkus} onTileLayout={onTileLayout} />
         )}
         <QaList warnings={warnings} onFocusWarning={onFocusWarning} />
       </div>

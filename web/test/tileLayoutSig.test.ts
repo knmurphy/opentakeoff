@@ -143,3 +143,38 @@ test("tileLayoutSig: absence — a shape with no tile_layout and no holes still 
   assert.equal(typeof a, "string");
   assert.ok(a.length > 0);
 });
+
+test("tileLayoutSig: adding a shape.tile_layout.band flips the sig", () => {
+  const ts = mintTileSetup();
+  const skuId = ts.skus[0].id;
+  const a = tileLayoutSig(shape(), ts);
+  const b = tileLayoutSig(shape({ tile_layout: { band: { sku_id: skuId, width_ft: 1, offset_ft: 0 } } }), ts);
+  assert.notEqual(a, b);
+});
+
+test("tileLayoutSig: removing a shape.tile_layout.band flips the sig", () => {
+  const ts = mintTileSetup();
+  const skuId = ts.skus[0].id;
+  const withBand = tileLayoutSig(shape({ tile_layout: { band: { sku_id: skuId, width_ft: 1, offset_ft: 0 } } }), ts);
+  const withoutBand = tileLayoutSig(shape({ tile_layout: {} }), ts);
+  assert.notEqual(withBand, withoutBand);
+});
+
+test("tileLayoutSig: changing a band's width_ft, offset_ft, or sku_id each flips the sig", () => {
+  const ts = mintTileSetup();
+  const skuId = ts.skus[0].id;
+  const base = tileLayoutSig(shape({ tile_layout: { band: { sku_id: skuId, width_ft: 1, offset_ft: 0.5 } } }), ts);
+  const widerBand = tileLayoutSig(shape({ tile_layout: { band: { sku_id: skuId, width_ft: 1.5, offset_ft: 0.5 } } }), ts);
+  const deeperOffset = tileLayoutSig(shape({ tile_layout: { band: { sku_id: skuId, width_ft: 1, offset_ft: 0.75 } } }), ts);
+  const otherSku = tileLayoutSig(shape({ tile_layout: { band: { sku_id: "other-sku", width_ft: 1, offset_ft: 0.5 } } }), ts);
+  assert.notEqual(base, widerBand);
+  assert.notEqual(base, deeperOffset);
+  assert.notEqual(base, otherSku);
+});
+
+test("tileLayoutSig: an unrelated tile_setup change (sku color) does NOT flip the sig", () => {
+  const s = shape();
+  const ts1 = mintTileSetup();
+  const ts2: TileSetup = { ...ts1, skus: ts1.skus.map((sku) => ({ ...sku, color: "#00ff00" })) };
+  assert.equal(tileLayoutSig(s, ts1), tileLayoutSig(s, ts2));
+});

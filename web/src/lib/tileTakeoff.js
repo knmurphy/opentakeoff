@@ -15,6 +15,7 @@ import { orderTiles } from "./tileCalc/order.ts";
 import { reusePlan } from "./tileCalc/reuse.ts";
 import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
+import { bandRings } from "./tileEdges/band.ts";
 
 export { hasTileSetup, reusePlanForCondition };
 
@@ -23,6 +24,19 @@ export { hasTileSetup, reusePlanForCondition };
 // instead of {x,y} objects — tileSolve's ring_ft contract.
 function ringFt(verts, dims, upp) {
   return verts.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
+}
+
+// Sum of edge lengths of a CLOSED-implicitly OPEN ring (feet) — the band's
+// outer ring perimeter, in the same [x,y] tuple/feet space as `ring_ft`
+// (bandRings, like classify.ts/tileSolve.ts, never repeats the first point).
+function ringPerimeterFt(ring) {
+  let perimeter = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x0, y0] = ring[i];
+    const [x1, y1] = ring[(i + 1) % ring.length];
+    perimeter += Math.hypot(x1 - x0, y1 - y0);
+  }
+  return perimeter;
 }
 
 function consolidateCutRows(rows) {
@@ -97,9 +111,38 @@ function reusePlanForCondition(tile_setup, classified, reuseOpts) {
 // condition opted in (`purchase.reuse.enabled`) — a per-shape informational
 // figure; the condition-level `reuse`/`reuseOrder` figured once in
 // computeTileTakeoff's byCond finalize (Invariants) is the purchase figure.
+// `tile_layout.band` (M7 Task 7.2) is figured FIRST, before the field solve:
+// when present with a usable sku_id/width_ft, `bandRings` (tileEdges/band.ts,
+// pure) offsets the room ring inward. A non-null result re-scopes the FIELD
+// to the band's inner ring (both `effectiveTileSetup`'s origin search and
+// `solveTileLayout`'s classify pass take `rings.inner`, not the room ring —
+// the band consumes that perimeter area, so the field must stop there,
+// design §3.4) and the band itself is figured as a single-course linear run
+// (perimeter LF ÷ longest tile face, 4 miter corners) into `summary.band`. A
+// null result (room too small for the band) leaves the field solve untouched
+// against the original `ring_ft` and pushes an honest warning instead of
+// silently dropping the band. No `tile_layout.band` at all is byte-identical
+// to the pre-M7 behavior — no `band` key, field solves against `ring_ft`.
 function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
-  const solveSetup = effectiveTileSetup({ tile_setup, tile_layout, ring_ft, holes_ft });
-  const layout = solveTileLayout({ tile_setup: solveSetup, ring_ft, holes_ft });
+  const warnings = [layoutWarning(tile_setup)].filter(Boolean);
+  const bandCfg = tile_layout?.band;
+  let fieldRing_ft = ring_ft;
+  let band;
+  if (bandCfg && bandCfg.sku_id && Number(bandCfg.width_ft) > 0) {
+    const offset_ft = Number(bandCfg.offset_ft) || 0;
+    const rings = bandRings({ ring_ft, holes_ft, offset_ft, width_ft: bandCfg.width_ft });
+    if (rings) {
+      fieldRing_ft = rings.inner;
+      const bandSku = (tile_setup.skus || []).find((s) => s.id === bandCfg.sku_id) ?? primarySku(tile_setup);
+      const lf = ringPerimeterFt(rings.outer);
+      const bandTileLen_ft = Math.max(bandSku.w_in, bandSku.h_in) / 12;
+      band = { sku_id: bandCfg.sku_id, tiles: Math.ceil(lf / bandTileLen_ft), corner: 4, lf, outer: rings.outer, inner: rings.inner };
+    } else {
+      warnings.push(`Band skipped: room too small for a ${bandCfg.width_ft}ft band at ${offset_ft}ft offset.`);
+    }
+  }
+  const solveSetup = effectiveTileSetup({ tile_setup, tile_layout, ring_ft: fieldRing_ft, holes_ft });
+  const layout = solveTileLayout({ tile_setup: solveSetup, ring_ft: fieldRing_ft, holes_ft });
   const { classified } = layout;
   const counts = tileCounts(classified);
   const bySku = countsBySku(classified);
@@ -111,8 +154,8 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
     breakage_pct: tile_setup.purchase?.breakage_pct,
     attic_pct: tile_setup.purchase?.attic_pct,
   });
-  const warnings = [layoutWarning(tile_setup)].filter(Boolean);
-  const summary = { counts, bySku, grout, cutsheet, order, warnings, layout, ring_ft };
+  const summary = { counts, bySku, grout, cutsheet, order, warnings, layout, ring_ft: fieldRing_ft };
+  if (band) summary.band = band;
   const reuseOpts = tile_setup.purchase?.reuse;
   if (reuseOpts?.enabled) {
     summary.reuse = reusePlan({
@@ -177,6 +220,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
         classified: [],
         warnings: new Set(),
         shapeIds: [],
+        bandBySku: new Map(),
       };
       byCond.set(cond.id, agg);
     }
@@ -190,6 +234,17 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
     agg.classified.push(...summary.layout.classified);
     for (const w of summary.warnings) agg.warnings.add(w);
     agg.shapeIds.push(s.id);
+    if (summary.band) {
+      const id = summary.band.sku_id;
+      const totals = agg.bandBySku.get(id);
+      if (totals) {
+        totals.tiles += summary.band.tiles;
+        totals.corner += summary.band.corner;
+        totals.lf += summary.band.lf;
+      } else {
+        agg.bandBySku.set(id, { tiles: summary.band.tiles, corner: summary.band.corner, lf: summary.band.lf });
+      }
+    }
   }
 
   for (const agg of byCond.values()) {
@@ -217,6 +272,16 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
         attic_pct: agg.tile_setup.purchase?.attic_pct,
       });
     }
+    // Interior band (M7 Task 7.2): per-SKU band figures summed across every
+    // shape on the condition — a band SKU orders as its own line, deterministic
+    // by sku_id (design §3.4, Contract). No shape on the condition carried a
+    // band → `agg.band` stays absent (never an empty array).
+    if (agg.bandBySku.size) {
+      agg.band = Array.from(agg.bandBySku, ([sku_id, v]) => ({ sku_id, ...v })).sort((a, b) =>
+        a.sku_id < b.sku_id ? -1 : a.sku_id > b.sku_id ? 1 : 0,
+      );
+    }
+    delete agg.bandBySku;
     delete agg.classified;
   }
 

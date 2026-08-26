@@ -382,3 +382,126 @@ test("computeTileTakeoff: With-reuse pools offcuts across shapes on one conditio
   assert.ok(agg.reuse.wholeTiles < perShapeSum, "condition-level pooling must beat summing each room's independent reuse plan");
   assert.equal(agg.counts.safe, s1.counts.safe + s2.counts.safe, "Safe counts still sum additively across shapes");
 });
+
+// M7 Task 7.2 — interior band wired into the takeoff bridge (summarizeShape
+// + byCond finalize). A 4ft x 4ft room, 12x12in tile (no joint), pinned
+// origin ("start_full" — deterministic, matches the purchase-boxes test
+// above): a 1ft-wide band at 0ft offset erodes the room by
+// offset_ft+width_ft=1ft on every side, leaving a 2ft x 2ft field ring that
+// happens to land exactly on the 1ft tile grid (4 full tiles, 0 cut) — a
+// clean, deterministic comparison against the band-free 16-full baseline.
+// The band's outer ring is the room boundary itself (offset_ft=0), so its
+// perimeter is exactly the room's own 16ft perimeter (4 sides x 4ft).
+function makeBandCondition() {
+  const tile_setup = mintTileSetup();
+  tile_setup.skus[0].w_in = 12;
+  tile_setup.skus[0].h_in = 12;
+  tile_setup.skus[0].per_box = 8;
+  tile_setup.joint.width_in = 0;
+  tile_setup.edge_strategy = "start_full";
+  return { id: "condBand", finish_tag: "CT-3", multiplier: 1, tile_setup };
+}
+
+test("summarizeShape: a room WITH a band figures fewer field tiles than the same room without, and exposes summary.band", () => {
+  const cond = makeBandCondition();
+  const skuId = cond.tile_setup.skus[0].id;
+  const banded = { ...makeShape(cond.id), tile_layout: { band: { sku_id: skuId, width_ft: 1, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [banded], dimsFor, uppFor);
+  const summary = byShape.get(banded.id);
+  assert.ok(summary, "expected a byShape summary for the banded room");
+
+  // Band-free baseline for the same room/SKU/pattern (existing test above:
+  // "figures a 4x4ft room in 12x12 tile as 16 full tiles").
+  assert.equal(summary.counts.full, 4, "the field now classifies against the band's inner 2x2ft ring");
+  assert.ok(summary.counts.full < 16, "the band consumed the perimeter area the field used to cover");
+
+  assert.ok(summary.band, "expected a band figure on the summary");
+  assert.equal(summary.band.sku_id, skuId);
+  assert.ok(summary.band.tiles > 0);
+  assert.equal(summary.band.corner, 4);
+  assert.ok(Math.abs(summary.band.lf - 16) < 1e-6, `band lf ${summary.band.lf} should equal the room's own 16ft perimeter (offset_ft=0)`);
+});
+
+test("summarizeShape: no tile_layout.band => no summary.band key and field counts are byte-identical to tile_layout undefined", () => {
+  const condNoOverride = makeBandCondition();
+  condNoOverride.id = "condBandNoOverride";
+  const condEmptyOverride = makeBandCondition();
+  condEmptyOverride.id = "condBandEmptyOverride";
+
+  const shapeNoOverride = makeShape(condNoOverride.id); // no tile_layout field at all
+  const shapeEmptyOverride = { ...makeShape(condEmptyOverride.id), tile_layout: {} }; // present, but band absent
+
+  const outNoOverride = computeTileTakeoff([condNoOverride], [shapeNoOverride], dimsFor, uppFor).byShape.get(shapeNoOverride.id);
+  const outEmptyOverride = computeTileTakeoff([condEmptyOverride], [shapeEmptyOverride], dimsFor, uppFor).byShape.get(shapeEmptyOverride.id);
+
+  assert.equal("band" in outNoOverride, false);
+  assert.equal("band" in outEmptyOverride, false);
+  assert.deepEqual(outEmptyOverride.counts, outNoOverride.counts);
+  assert.deepEqual(outEmptyOverride.cutsheet, outNoOverride.cutsheet);
+  assert.deepEqual(outEmptyOverride.order, outNoOverride.order);
+  assert.deepEqual(outEmptyOverride.ring_ft, outNoOverride.ring_ft);
+});
+
+test("summarizeShape: a band wider than the room is withheld — summary.band absent, a 'too small' warning, field unchanged", () => {
+  const cond = makeBandCondition();
+  const skuId = cond.tile_setup.skus[0].id;
+  // width_ft=5 on a 4ft-square room: half the narrowest span is 2ft, so the
+  // inward buffer collapses (bandRings returns null) — the honest "withheld"
+  // posture (mcp instructions/plan): never silently drop the requested band.
+  const tooWide = { ...makeShape(cond.id), tile_layout: { band: { sku_id: skuId, width_ft: 5, offset_ft: 0 } } };
+
+  const { byShape } = computeTileTakeoff([cond], [tooWide], dimsFor, uppFor);
+  const summary = byShape.get(tooWide.id);
+  assert.ok(summary);
+  assert.equal(summary.band, undefined, "no band figure when the band collapses");
+  assert.equal(summary.counts.full, 16, "the field re-solves against the ORIGINAL ring_ft, unchanged");
+  assert.ok(
+    summary.warnings.some((w: string) => typeof w === "string" && w.includes("too small") && w.includes("5ft")),
+    `expected a room-too-small warning, got ${JSON.stringify(summary.warnings)}`,
+  );
+});
+
+const dimsForBand = (sheetId: string) => (sheetId === "bandSheetA" || sheetId === "bandSheetB" ? { w: 100, h: 100 } : null);
+const uppForBand = (sheetId: string) => (sheetId === "bandSheetA" || sheetId === "bandSheetB" ? 0.04 : null);
+
+function makeBandShape(id: string, condId: string, sheetId: string, skuId: string) {
+  return {
+    id,
+    sheet_id: sheetId,
+    condition_id: condId,
+    measure_role: "floor_area",
+    verts_norm: [[0, 0], [1, 0], [1, 1], [0, 1]],
+    tile_layout: { band: { sku_id: skuId, width_ft: 1, offset_ft: 0 } },
+  };
+}
+
+test("computeTileTakeoff: byCond.band aggregates per sku_id across two banded shapes", () => {
+  const cond = makeBandCondition();
+  const skuId = cond.tile_setup.skus[0].id;
+  const roomA = makeBandShape("bandRoomA", cond.id, "bandSheetA", skuId);
+  const roomB = makeBandShape("bandRoomB", cond.id, "bandSheetB", skuId);
+
+  const { byCond, byShape } = computeTileTakeoff([cond], [roomA, roomB], dimsForBand, uppForBand);
+  const agg = byCond.get(cond.id);
+  const s1 = byShape.get("bandRoomA");
+  const s2 = byShape.get("bandRoomB");
+  assert.ok(s1.band && s2.band, "expected both shapes to figure a band");
+
+  assert.ok(Array.isArray(agg.band), "expected a condition-level band array");
+  assert.equal(agg.band.length, 1, "both shapes share one sku_id, so one aggregated entry");
+  const entry = agg.band[0];
+  assert.equal(entry.sku_id, skuId);
+  assert.equal(entry.tiles, s1.band.tiles + s2.band.tiles);
+  assert.equal(entry.corner, s1.band.corner + s2.band.corner);
+  assert.ok(Math.abs(entry.lf - (s1.band.lf + s2.band.lf)) < 1e-6);
+});
+
+test("computeTileTakeoff: byCond.band is absent when no shape on the condition carries a band", () => {
+  const cond = makeBandCondition();
+  const shape = makeShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const agg = byCond.get(cond.id);
+  assert.ok(agg);
+  assert.equal("band" in agg, false);
+});
