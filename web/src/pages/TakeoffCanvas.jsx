@@ -597,6 +597,13 @@ export default function TakeoffCanvas() {
   const [tilePanelOpen, setTilePanelOpen] = useState(false); // docked Tile panel (setup + this room + QA)
   const [tileDragPreview, setTileDragPreview] = useState(null); // live origin-drag preview: {id, origin:[x,y] ft} for ONE shape, never written to `shapes` (tileLayout has no `prev` escape hatch — see beginTileOrigin)
   const tileDragRef = useRef(null);                       // live origin-drag gesture; commit is ONE tileLayout command on release
+  // While a vertex/edge/body drag is live, the shape re-renders every
+  // pointermove — which would rebuild + re-reconcile the thousands of tile
+  // <rect> nodes each frame (the grid shown is stale/frozen anyway). Hide the
+  // grid for the duration and redraw it on release ("stop rendering the
+  // pattern while adjusting, snap it back when done"). Set on first motion,
+  // cleared in onPointerUp.
+  const [geomDragging, setGeomDragging] = useState(false);
   const [agentLog, setAgentLog] = useState([]);           // streaming run status [{kind, text}]
   const [agentRunning, setAgentRunning] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false); // BYO-key config modal (ai.js seam)
@@ -1234,6 +1241,7 @@ export default function TakeoffCanvas() {
   // memo, so dragging never re-solves every OTHER room on the sheet.
   const tileOverlayByPanel = useMemo(() => {
     const byPanel = new Map();
+    if (geomDragging) return byPanel;   // adjusting geometry — grid hidden until release (redrawn fresh then)
     const tileConds = conditions.filter(hasTileSetup);
     if (!tileConds.length) return byPanel;
     const condMap = new Map(tileConds.map((c) => [c.id, c]));
@@ -1251,7 +1259,7 @@ export default function TakeoffCanvas() {
     }
     return byPanel;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tileOverlaySig (not `shapes`/`conditions`) is the real memo key (§3.7: persists across pure zoom); tileTakeoff supplies the reused solved layout and recomputes on the same edits
-  }, [tileOverlaySig, tileTakeoff, panelImgs, scales]);
+  }, [tileOverlaySig, tileTakeoff, panelImgs, scales, geomDragging]);
   // Cross-room QA (Task 4) — a 40-room job audited once, not one zoom at a
   // time. Same dimsFor/uppFor contract as computeTileTakeoff.
   const tileWarningsList = useMemo(
@@ -3900,6 +3908,7 @@ export default function TakeoffCanvas() {
       if (d.kind === "vertex" || d.kind === "edge" || d.kind === "move") {
         if (!d.moved && e.clientX === d.gx && e.clientY === d.gy) return;
         d.moved = true;
+        setGeomDragging(true);   // first motion of a geom drag — hide the tile grid render (redrawn on release)
         const sp = panelByKey(d.shape.sheet_id);
         let vn;
         if (d.kind === "vertex") {
@@ -4009,6 +4018,7 @@ export default function TakeoffCanvas() {
     if (dragRef.current) {
       const d = dragRef.current;
       dragRef.current = null;
+      setGeomDragging(false);   // drag released — let the tile grid render again (fresh solve)
       bumpIdle();
       // Commit-on-gesture-end: ONE geom command per drag, and only when the
       // geometry actually moved off the grab-time snapshot (a drag that snapped
