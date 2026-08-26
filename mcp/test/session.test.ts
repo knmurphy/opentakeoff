@@ -4,6 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Session, ANN_SCHEMA } from "../src/session.ts";
+import { z } from "zod";
+import { exportReportOutput } from "../src/outputs.ts";
 
 const PLAN = fileURLToPath(new URL("../../demo/sample-plan.pdf", import.meta.url));
 const KEY = "sample-plan.pdf";
@@ -373,6 +375,10 @@ test("exportReport: a tile_setup condition with a floor shape figures tile_goods
   s.editCondition("CT-1", { tile_setup: { pattern: "grid" } });
   const rep = s.exportReport();
   assert.equal(rep.tile_goods.length, 1);
+  // Pin the strict tile_goods z.object against a POPULATED row (conformance
+  // only ever exercises export_report tile-less) — a field rename in
+  // tileReportRows would fail this, not just production runtime.
+  z.object(exportReportOutput).parse(rep);
   const row = rep.tile_goods[0];
   assert.deepEqual(Object.keys(row), [
     "condition_id", "finish_tag", "multiplier", "full", "cut", "corner", "hole",

@@ -72,7 +72,7 @@ computation lands.
 | Rotation | `tile_setup.rotation` | panel, overlay | 5 |
 | Edge-cut strategy (full-corner / centered band / optimized) | `geometry/optimize.ts` | panel, overlay | 3 / 5 |
 | Offset optimizer — **balance cuts / avoid sub-½ slivers** (edge-aligned search) | `geometry/optimize.ts` | panel | 3 |
-| Mark a side as a "cut side" | `shape.tile_layout.cut_sides` | overlay (edge click) | 5 |
+| Mark a side as a "cut side" *(deferred — never shipped; removed from the model)* | — | overlay (edge click) | — |
 | Per-room override of origin/rotation | `shape.tile_layout` | overlay, panel | 5 |
 
 ### D. Cut accounting & purchase
@@ -360,7 +360,7 @@ glossiness?}], joint, grout }`.
   top** and rounds to whole boxes (`calc/order`, §3.3). Stripping all margin
   because the count is exact is more precise but less safe than a real PO.
 - **Per-room layout state** on `shape.tile_layout` `{ origin?, rotation?,
-  cut_sides?, edge_overrides?, wet_tags? }`, invalidated on the §3.7 hashes.
+  edge_overrides?, wet_tags? }`, invalidated on the §3.7 hashes.
 - Versioned additively into `takeoff_canvas.v1` + `report.v1`.
 
 ### 4.2 Canvas — focus-on-a-shape
