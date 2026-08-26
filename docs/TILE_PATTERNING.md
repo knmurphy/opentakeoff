@@ -87,12 +87,11 @@ trim derivation, and layout-derived waste.
 
 ### 2.1 `moshegluck/tiletakeoff` (forked: `knmurphy/tiletakeoff`) — the reference
 React + Vite, pure engine layer (no DOM) with an 82-engine-test Vitest suite (84
-total in `test/` once the 7 canvasUtils UI tests are counted). **License: not
-declared** — no LICENSE file, no `license` field in
-`package.json`, GitHub reports none. Treat it as proprietary until the author
-states one; it cannot be assumed Apache-2.0-compatible. This is the closest
-thing to what the feature wants, and it is worth reading
-line-by-line before designing. Its relevant modules:
+total in `test/` once the 7 canvasUtils UI tests are counted). We use it as a
+**functional reference only** — the feature set and algorithm approach a
+professional tiler shipped — and reimplement, not copy. This is the closest
+thing to what the feature wants, and it is worth reading line-by-line before
+designing. Its relevant modules:
 
 - **`engine/layouts.js`** — `generateLayout(poly, opts)` returns tile quads
   `{cx, cy, w, h, rot}` in feet (grout included). Six patterns: `grid`,
@@ -446,7 +445,6 @@ honest angled-pattern ordering.
 
 ### 7.4 Residual research gaps
 
-- `tiletakeoff` license is unresolved — needed before any code reuse.
 - Primary citations beyond the fork: Kaplan's Taprats (SourceForge) and his
   published PIC/Hankin work.
 - 2D nesting libraries for non-rectangular remnants (libnest2d, OR-Tools bin
@@ -476,12 +474,10 @@ Three product decisions came out of it, and one strategic fork remains open.
   confirmed as wanted. Versailles-style 3+ SKU modules are the same generator
   extended; v1 can start at two SKUs sharing a width.
 
-### 8.2 Strategic fork — build here, or build on `tiletakeoff`
+### 8.2 Role of `tiletakeoff` — a quiet functional reference
 
-The author is comfortable cloning `tiletakeoff` (built by a professional tiler)
-and enhancing it. **Blocker: it has no license** (no LICENSE file, no
-`package.json` `license` field) — default "all rights reserved," so it cannot be
-cloned into Apache-2.0 OpenTakeoff. Options: (a) ask `moshegluck` for a license,
-(b) fork it as a separate private experiment, or (c) reimplement its engine
-*approach* in OpenTakeoff — the domain model is the valuable part, and that is
-copied by reimplementation, not by cloning code. Unresolved; the user decides.
+`tiletakeoff` is a working reference for the *functions* a real tiler needs —
+the feature checklist (tile set, full/cut classification, cut redistribution,
+catalog) and the algorithm approach. We reimplement that approach in OpenTakeoff
+and do not cite the project as a dependency. The valuable part is the domain
+model; it transfers by learning and reimplementation, not by copying code.
