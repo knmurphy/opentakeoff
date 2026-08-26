@@ -77,8 +77,10 @@ Geometry rules (per role):
   height range a floor_area slab of that condition would get (`thickness_in/12`
   if set, else the nominal visual constant) — pinned, not left to the
   implementer. NEVER a boolean subtract at render time: standalone deducts are
-  standalone because `findCutoutParent` already refused at commit
-  (`cutout.js:26-35`) — re-running it can only double-process or re-refuse.
+  standalone because `findCutoutParent` already refused at commit (the guard:
+  `cutout.js:106-109`, returns null unless exactly one candidate touches; the
+  scope doctrine at `cutout.js:26-35`) — re-running it can only double-process
+  or re-refuse.
 - **`surface_area`** → vertical ribbon along the trace, `z ∈ [0, shape.height_ft]`
   (the shape snapshot — walls keep the height they were drawn at; reviewers
   confirmed this doctrine is exactly right).
@@ -90,11 +92,13 @@ Geometry rules (per role):
 - **`linear`, mode flush** (transition/reducer strip) → thin strip in the floor
   plane, `z ∈ [h_floor, h_floor + thickness_in/12]` — it sits ON the adjoining
   floor surface (z0 = the higher of the two adjoining slabs' tops when the
-  strip bridges floors of different `thickness_in` — its whole purpose; never
-  0, so it never coplanar-overlaps the floor beside it). Height =
-  `thickness_in` as thickness, not as a standing wall. This split is mandatory:
-  RB-1 base and TR-1 transition share `measure_role` and are physically
-  opposite installs.
+  strip bridges floors of different `thickness_in` — its whole purpose; looked
+  up via `origin.derived.between_shape_ids` on derived transitions
+  (`transitions.ts:250-253`), falling back to the nominal visual constant +
+  legend note for hand-traced flush strips with no linkage; never 0, so it
+  never coplanar-overlaps the floor beside it). Height = `thickness_in` as
+  thickness, not as a standing wall. This split is mandatory: RB-1 base and
+  TR-1 transition share `measure_role` and are physically opposite installs.
 - **`count`** → vertical post at the exact point, `z ∈ [0, extrude_h_ft]`
   (corner guard: spec height, e.g. 4'0").
 
@@ -123,9 +127,12 @@ literal world coordinates (Web3D B9).
 `count` conditions, in internal feet. **UI entry point, pinned:** a third
 `DimParamInput` on the existing param row beside H and T
 (`TakeoffsPanel.jsx:474-481`), with the same inches affordance H/T use
-(`units.ts` thickVal/dimInputStr patterns), shown only for conditions whose
-`extrude_mode` is `vertical` (base) or for `count` conditions — never for
-`surface_area` conditions, whose H control already owns height semantics.
+(`units.ts` thickVal/dimInputStr patterns). **Shown on every condition's param
+row unconditionally** — conditions are role-agnostic in the schema
+(`measure_role` lives on shapes), so there is no condition-level field to gate
+visibility on, and the H/T precedent is exactly this: T already renders for
+every condition and is inert where irrelevant. extrude_h_ft is likewise inert
+for conditions that never render vertical-linear or post geometry.
 Persisted on the condition; unknown-fields-pass-through is established
 convention (`materials.js:14-18`), so this is a comment-level schema addition,
 no migration. **Do not overload `height_ft`** — its single-purpose contract
@@ -133,15 +140,17 @@ no migration. **Do not overload `height_ft`** — its single-purpose contract
 `TakeoffsPanel.jsx:473` and MCP-exposed; a second consumer makes all of that
 documentation false.
 
-**`extrude_mode`** — `'vertical' | 'flush'` on linear conditions only (count
-shapes render as posts unconditionally — no `post` value exists until a
-consumer reads it). **Default when unset: `vertical`** — flush is the opt-in
-minority case; the geometry table dispatches unset as vertical so a
-user-created third linear condition (a second base product, another reducer
+**`extrude_mode`** — `'vertical' | 'flush'`, consumed only where the condition
+has `linear` shapes (count shapes render as posts unconditionally — no `post`
+value exists until a consumer reads it). **Default when unset: `vertical`** —
+flush is the opt-in minority case; the builder dispatches unset as vertical so
+a user-created third linear condition (a second base product, another reducer
 type) never lands in an undefined state. **UI entry point, pinned:** a
 two-state toggle beside the extrude_h_ft input on the same param row, after
-the `Style <select>` enum precedent at `TakeoffsPanel.jsx:466-472`. Shown for
-linear conditions only.
+the `Style <select>` enum precedent at `TakeoffsPanel.jsx:466-472`. Shown
+unconditionally, same reasoning as extrude_h_ft — inert where no linear shapes
+exist, so a brand-new reducer-type condition can reach `flush` before its
+first shape commits.
 
 **Seeds are part of this work, not already present:** `canvasConstants.js`
 FLOORING_DEFAULTS has no base/guard values today — the implementation ADDS
@@ -185,18 +194,24 @@ Renderer contract (all from the Web3D review):
 
 - **Draw calls:** merge geometry per condition into one BufferGeometry (one
   draw call per visible condition; slab and ribbon geometries normalized to a
-  shared position/normal attribute layout before `mergeGeometries`).
-  **Carve-outs, stated:** (1) standalone-deduct excluded volumes are pulled
-  OUT of the per-condition merge into one shared translucent-red batch —
-  alpha-blended material cannot share a draw call with the condition's opaque
-  geometry; (2) count posts get **one InstancedMesh per count-role condition**,
+  shared position/normal attribute layout before `mergeGeometries`; color
+  comes from the per-condition material, never vertex-baked, so no color
+  attribute joins the merge). **Carve-outs, stated:** (1) standalone-deduct
+  excluded volumes get **one translucent-red mesh per condition that owns a
+  standalone deduct, parented under that condition's Group** — alpha-blended
+  material cannot share a draw call with the condition's opaque geometry, and
+  per-condition parenting keeps explode and legend toggles working through
+  ordinary visibility/transform (a shared scene-wide batch would orphan the
+  red marker mid-explode and can't be condition-toggled without a rebuild);
+  (2) count posts get **one InstancedMesh per count-role condition**,
   parented under that condition's Group, with an instanceId→shapeId array
   kept alongside for future consumers (no raycast/picking in v1 — selection
-  isolation is 2D-selection-driven). Worst case ≈ #conditions + 1
-  excluded-volume batch + #count-conditions InstancedMeshes — still tens.
-  Explode is a per-condition `Group.position` update per drag tick, uniform
-  across slabs, ribbons, and each condition's post InstancedMesh — never a
-  rebuild.
+  isolation is 2D-selection-driven). Worst case ≈ #conditions +
+  #deduct-owning conditions + #count-conditions — still tens. Explode is a
+  per-condition `Group.position` update per drag tick, uniform across slabs,
+  ribbons, excluded-volume meshes, and each condition's post InstancedMesh —
+  never a rebuild. Legend condition-toggles set Group visibility, which
+  covers every carve-out for free.
 - **Export:** export handler calls `renderer.render(scene, camera)` then reads
   `canvas.toDataURL()` synchronously in the same call stack (or constructs
   with `preserveDrawingBuffer: true`). The PNG is composited with a footer
