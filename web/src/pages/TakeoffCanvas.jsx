@@ -2871,6 +2871,16 @@ export default function TakeoffCanvas() {
       const t = e.target.tagName;
       if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
       if (viewRef.current === "gallery") return;
+      // A pointer geometry drag is mid-gesture (dragRef armed): the totals/roll
+      // memos are frozen for that gesture, so a keyboard shape-mutation now
+      // (delete/undo/paste/dup) would land yet leave the panels showing
+      // pre-mutation figures until an unrelated render — and a delete could
+      // orphan the pointerup commit. Ignore shape shortcuts until the gesture
+      // commits on release; Escape and the rest stay live.
+      if (dragRef.current) {
+        const k = e.key.toLowerCase();
+        if (e.key === "Backspace" || e.key === "Delete" || ((e.metaKey || e.ctrlKey) && (k === "z" || k === "c" || k === "v" || k === "d"))) return;
+      }
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (poly.length) { dropLastPoint(); }
