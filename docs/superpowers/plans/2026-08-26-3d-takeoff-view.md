@@ -620,7 +620,7 @@ if (!(Number(aCond?.extrude_h_ft) > 0) && (cRole === "count" || (cRole === "line
 ```js
 const needH = !(Number(aCond?.extrude_h_ft) > 0);
 setCommitMsg(`Committed ${rows.length} EA under ${condById[activeCond]?.finish_tag || "condition"}${sw.includeSeed ? " — seed included" : ""}${skippedN ? ` · ${skippedN} excluded by label` : ""} · one undo step (${keyText("⌘Z")}).`
-  + (needH ? ` · set installed height (3D H) for ${aCond?.finish_tag} — the 3D view renders it` : ""));
+  + (needH ? ` · set installed height (3D H) for ${aCond?.finish_tag || "condition"} — the 3D view renders it` : ""));
 ```
 
 (One message, one slot — the reminder rides the success toast. `commitCount` has no competing `setCommitMsg` today, so its reminder is a plain call as written above.)
@@ -665,7 +665,7 @@ Renderer contracts the implementation must honor:
 - **Per-condition Groups:** merged slab+ribbon `BufferGeometry` per condition via `mergeGeometries` (position/normal only; color from the per-condition `MeshBasicMaterial`, never vertex-baked); `DoubleSide` on all materials; `transparent: true, opacity: 0.35` for `translucent` shapes — translucent and derived ribbons are separate merged meshes per condition (opacity is material state); **derived ribbons render at `opacity: 0.7`** (the derived-vs-hand-traced distinction; door gaps aren't drawn, so derived runs read as schematic).
 - **Excluded volumes:** one translucent-red `MeshBasicMaterial({ color: EXCLUDED_COLOR, transparent: true, opacity: 0.35, depthWrite: false })` mesh per deduct-owning condition, parented under that condition's Group.
 - **Posts:** per condition owning count shapes, `new THREE.CylinderGeometry(1, 1, 1, 12).rotateX(Math.PI / 2).translate(0, 0, 0.5)` — **CylinderGeometry's long axis is local Y; `rotateX` remaps it to local Z, then `translate` base-anchors z ∈ [0, 1]** — and per-instance `matrix = translate(pt[0], 0, pt[1]) · scale(1, 1, h)` via `setMatrixAt` (`pt` is the plain `[x, w]` array from `pt_ft`; `h` = the post's own `z1`, so per-shape overrides scale per instance).
-- **In-scene captions:** each `notes` entry with an `at` anchor (excluded areas) renders a `THREE.Sprite` with a canvas-texture label ("excluded area — see plan") at world `Vector3(at[0], z1, at[1])` — riding the TOP of the excluded volume it annotates; all `notes` also render as legend chips (HTML rail). Ribbon meshes call `buildRibbon(path_ft, mode === "flush" ? FLUSH_HALF_FT : RIBBON_HALF_FT)`.
+- **In-scene captions:** each `notes` entry with an `at` anchor (excluded areas) renders a `THREE.Sprite` with a canvas-texture label ("excluded area — see plan") at world `Vector3(at[0], z1, at[1])`, where `z1` comes from the scene's own excluded slab of the same tag (`scene.slabs.find(s => s.kind === "excluded" && s.tag === note.tag).z1` — unambiguous, one h-range per condition) — riding the TOP of the excluded volume it annotates; all `notes` also render as legend chips (HTML rail). Ribbon meshes call `buildRibbon(path_ft, mode === "flush" ? FLUSH_HALF_FT : RIBBON_HALF_FT)`.
 - **Legend toggles** set Group `.visible`. **Explode** (slider) sets each condition Group's `position.y = index * explode` — a transform, never a rebuild; UI disables section cut while `explode > 0` and vice versa. **Section cut:** one horizontal `THREE.Plane`, `renderer.localClippingEnabled = true`, the `clippingPlanes` array set on EVERY material (condition, excluded, post, sprite). **Framing:** fit-to-content (bounding sphere + FOV) on open, on legend toggle, and via a **reset-view button**; explode deliberately leaves framing static.
 - **Export:** button handler runs `renderer.render(scene, camera)` then reads `renderer.domElement.toDataURL("image/png")` in the same call stack; composites the image onto a 2D canvas with a footer strip — sheet label, scale, date, and verbatim: `schematic — not as-built; openings deducted, not shown; verify in field` — then downloads.
 - **Overlay chrome:** persistent (non-dismissible) honest-limitations label with the spec's verbatim text: "Schematic view — no wall thickness, no door frames, no casework, flat single-elevation floors, generic base profile, openings deducted-not-shown." **Unmount:** `renderer.dispose()`, `renderer.forceContextLoss()`, `controls.dispose()`, dispose every geometry/material/texture, null refs. **Resize:** `ResizeObserver` → `camera.aspect` + `camera.updateProjectionMatrix()` + `renderer.setSize()`; `setPixelRatio(Math.min(devicePixelRatio, 2))`. **Focus isolation:** when `focusIds` is non-null, each condition's merged geometry is built in two batches (shapeId in-set / out-of-set); the OUT-of-set batch is `.visible = false` — hidden, not dimmed (the spec's "unlinked shapes stay visible" is satisfied because `isolate3D` keeps unlinked shapes IN the set; there is no dimming tier). When `derived` and `translucent` are both true, the unset-height translucent bucket (0.35) wins; the unset-height note still fires so nothing is silently lost.
@@ -736,17 +736,17 @@ export function isolate3D(selectedId, shapes) {
 const View3D = React.lazy(() => import("../components/View3D.jsx"));
 // state: const [show3d, setShow3d] = useState(false);
 // at render scope:
-const active3dKey = focusPanel.key; // focusPanel never null once a sheet is open (panelByKey falls back to panels[0])
+const active3dKey = focusPanel.key; // focusPanel never null once a sheet is open (panelByKey falls back to panels[0]); active3dKey === focusPanel.key by construction, so use focusPanel directly for img dims — no re-lookup
 // toolbar, beside the Report toggle:
 <button onClick={() => (uppFor(active3dKey) ? setShow3d(true) : setCommitMsg("Set the sheet scale first — 3D is feet-true or nothing"))}
   title="3D view — this sheet's takeoff extruded (needs scale)">3D</button>
 // overlay (rendered when show3d):
-{show3d && panel3d && uppFor(active3dKey) && (
+{show3d && uppFor(active3dKey) && (
   <React.Suspense fallback={null}>
     <View3D
       shapes={visibleShapes.filter((s) => s.sheet_id === active3dKey)}
       conditions={conditions}
-      sheet={{ widthPx: panel3d.img.w, heightPx: panel3d.img.h, upp: uppFor(active3dKey) }}
+      sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
       focusIds={isolate3D(selectedId, visibleShapes.filter((s) => s.sheet_id === active3dKey))}
       sheetLabel={tabLabel(active3dKey)}
       onClose={() => setShow3d(false)} />
