@@ -48,8 +48,8 @@ Arithmetic ground truth for the fixture: `SHEET = {widthPx: 1000, heightPx: 2000
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildScene, toWorldFt, ringCCW, worldWindingCCW, buildRibbon,
-  NOMINAL_THICKNESS_FT, NOMINAL_HEIGHT_FT, EXCLUDED_COLOR, MITER_LIMIT,
+  buildScene, toWorldFt, ringCCW, worldWindingCCW, buildRibbon, nudgePath,
+  NOMINAL_THICKNESS_FT, NOMINAL_HEIGHT_FT, EXCLUDED_COLOR, MITER_LIMIT, RIBBON_HALF_FT,
 } from "../src/lib/scene3d.js";
 
 const SHEET = { widthPx: 1000, heightPx: 2000, upp: 0.05 };
@@ -287,7 +287,7 @@ test("linear flush: z0 = higher adjoining slab top via between_shape_ids; hand-t
 
 test("count → post at exact point; override wins", () => {
   const { posts } = buildScene({
-    sheet: SHEET, conditions: [{ id: "cG", finish_tag: "CG-1", color: "#0f766e", extrude_h_ft: 4 }],
+    sheet: SHEET, conditions: [{ id: "cG", finish_tag: "CG-1", color: "#0ea5e9", extrude_h_ft: 4 }],
     shapes: [{ id: "s5", sheet_id: "a", condition_id: "cG", measure_role: "count", verts_norm: [[0.25, 0.25]], computed: { count: 1 } }],
   });
   assert.deepEqual(posts[0].pt_ft, [12.5, -25]);
@@ -304,6 +304,30 @@ test("miter clamp: near-reversal joint bevels — all vertices within bbox + MIT
   assert.ok(r.positions.length >= 24, "two segments → two quads (12 floats each)");
   assert.ok(Math.max(...xs) <= 10 + TOL && Math.min(...xs) >= 0 - TOL, "no miter spike");
   assert.ok(Math.max(...ys) <= 0.05 + TOL && Math.min(...ys) >= 0 - TOL, "no miter spike (y)");
+});
+
+test("nudgePath displaces EVERY vertex, including the last (2-point run)", () => {
+  assert.deepEqual(nudgePath([[0, 0], [5, 0]], 0.02), [[0, 0.02], [5, 0.02]]);
+});
+
+test("coincident wall ribbons separate: surface trace vs hand-traced base differ at every index", () => {
+  const conds = [
+    { id: "cW", finish_tag: "WT-1", color: "#2563eb", height_ft: 4 },
+    { id: "cB", finish_tag: "RB-1", color: "#475569", extrude_h_ft: 1 / 3 },
+  ];
+  const wall: [number, number][] = [[0, 0], [0.1, 0]];
+  const { ribbons } = buildScene({
+    sheet: SHEET, conditions: conds,
+    shapes: [
+      { id: "w1", sheet_id: "a", condition_id: "cW", measure_role: "surface_area", verts_norm: wall, height_ft: 4, computed: {} },
+      { id: "b2", sheet_id: "a", condition_id: "cB", measure_role: "linear", verts_norm: wall, computed: {} },
+    ],
+  });
+  const w = ribbons.find((r) => r.shapeId === "w1")!;
+  const b = ribbons.find((r) => r.shapeId === "b2")!;
+  for (let i = 0; i < 2; i++) {
+    assert.ok(w.path_ft[i][0] !== b.path_ft[i][0] || w.path_ft[i][1] !== b.path_ft[i][1], `index ${i} separated`);
+  }
 });
 
 test("degenerate points filtered: duplicates and zero-length segments produce finite vertices only", () => {
@@ -490,9 +514,16 @@ export function insetRing(ring, dist) {
 // along its edge's left normal by delta — sign is the caller's role choice.
 export function nudgePath(path, delta) {
   return path.map((p, i) => {
-    const b = path[Math.min(i + 1, path.length - 1)];
-    const l = Math.hypot(b[0] - p[0], b[1] - p[1]) || 1;
-    return [p[0] + (-(b[1] - p[1]) / l) * delta, p[1] + ((b[0] - p[0]) / l) * delta];
+    // The LAST vertex has no next segment — offset along the PRECEDING
+    // segment's left normal (cycle-3 bug: with b === p the direction was the
+    // zero vector and the endpoint never moved; a 2-point wall run is the
+    // common case and must separate at BOTH ends).
+    const last = i === path.length - 1;
+    const a = last ? path[i - 1] : p;
+    const b = last ? p : path[i + 1];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l = Math.hypot(dx, dy) || 1;
+    return [p[0] + (-dy / l) * delta, p[1] + (dx / l) * delta];
   });
 }
 ```
@@ -510,8 +541,7 @@ export function nudgePath(path, delta) {
 - Test: `web/test/scene3d.test.ts` (append)
 
 **Interfaces:**
-- Produces: RB-1 gains `extrude_mode: "vertical", extrude_h_ft: 1/3`; TR-1 gains `extrude_mode: "flush"`; new seed entry `{ finish_tag: "CG-1", color: "#0f766e", hatch: "vert", waste_pct: 0, materials: [], extrude_h_ft: 4 }` (template shape — no `fill`; color deliberately distinct from ui.js SVG.positive #1f6b4a; remaining cosmetics are implementer's choice under the palette doctrine).
-
+- Produces: RB-1 gains `extrude_mode: "vertical", extrude_h_ft: 1/3`; TR-1 gains `extrude_mode: "flush"`; new seed entry `{ finish_tag: "CG-1", color: "#0ea5e9", hatch: "vert", waste_pct: 0, materials: [], extrude_h_ft: 4 }` (template shape — no `fill`; sky blue, deliberately distinct from ui.js SVG.positive #1f6b4a and from every existing seed color including teal SV-1 #0d9488; remaining cosmetics are implementer's choice under the palette doctrine).
 - [ ] **Step 1: Failing test**
 
 ```ts
@@ -539,10 +569,9 @@ test("seedConditions passes the new fields through instantiateTemplate", () => {
 ---
 
 ### Task 4: UI — param row controls, shape snapshot + override, reminder toast
-
 **Files:**
 - Modify: `web/src/components/TakeoffsPanel.jsx:478-482` (third DimParamInput + mode control after T)
-- Modify: `web/src/pages/TakeoffCanvas.jsx` — snapshot in BOTH count-commit paths (`commitSweep` `:4228-4233`, `commitCount` `:4242-4246`) and the linear commit path; `setShapeExtrude`/`clearShapeExtrude` beside `setShapeHeight` (`:6661-6676`); inspector override beside the surface-height field (`:8779-8792`); reminder via `setCommitMsg` (`:668-694`).
+- Modify: `web/src/pages/TakeoffCanvas.jsx` — snapshot in BOTH count-commit paths (`commitSweep` `:4228-4233`, `commitCount` `:4242-4246`) and `commitLinear` (`:4084`); `setShapeExtrude`/`clearShapeExtrude` beside `setShapeHeight` (`:6661-6676`); inspector override beside the surface-height field (`:8779-8792`); reminder via `setCommitMsg` (`:668-694`).
 
 **Interfaces:**
 - Produces: `onSetCondParam("extrude_h_ft", v)`, `onUpdateCond({ extrude_mode })` wiring; shape fields `extrude_h_ft?: number, extrude_override?: boolean`.
@@ -570,7 +599,7 @@ test("seedConditions passes the new fields through instantiateTemplate", () => {
 
 (Two-option segmented control, both choices visible, active highlighted — the Straight/Curve precedent at `TakeoffCanvas.jsx:8686-8700`. Both spans render unconditionally; conditions are role-agnostic and the fields are inert where irrelevant, exactly like T on a floor condition.)
 
-- [ ] **Step 2: Commit-path snapshots + reminder.** In `commitCount` (`:4242-4246`), `commitSweep`'s shape mapping (`:4228-4233`), and the linear commit path, add to the minted shape object (note: the active-condition binding in this scope is **`aCond`**, per `:4113`'s `aCond?.height_ft`):
+- [ ] **Step 2: Commit-path snapshots + reminder.** In `commitCount` (`:4242-4246`), `commitSweep`'s shape mapping (`:4228-4233`), and `commitLinear` (`:4084`), add to the minted shape object (note: the active-condition binding in this scope is **`aCond`**, per `:4113`'s `aCond?.height_ft`):
 
 ```js
 ...(Number(aCond?.extrude_h_ft) > 0 ? { extrude_h_ft: Number(aCond.extrude_h_ft) } : {}),
@@ -580,7 +609,7 @@ and the reminder (spec copy, verbatim) when the active condition has no installe
 
 ```js
 if (!(Number(aCond?.extrude_h_ft) > 0) && (cRole === "count" || (cRole === "linear" && (aCond?.extrude_mode || "vertical") === "vertical"))) {
-  setCommitMsg(`Set installed height for ${aCond.finish_tag} — the 3D view renders it`);
+  setCommitMsg(`Set installed height for ${aCond?.finish_tag} — the 3D view renders it`);
 }
 ```
 
@@ -590,9 +619,8 @@ if (!(Number(aCond?.extrude_h_ft) > 0) && (cRole === "count" || (cRole === "line
 
 ```js
 const needH = !(Number(aCond?.extrude_h_ft) > 0);
-setCommitMsg(`Committed ${rows.length} EA under ${aCond?.finish_tag ?? "…"} …`
-  + (needH ? ` · set installed height (3D H) for ${aCond.finish_tag} — the 3D view renders it` : ""));
-```
+setCommitMsg(`Committed ${rows.length} EA under ${condById[activeCond]?.finish_tag || "condition"}${sw.includeSeed ? " — seed included" : ""}${skippedN ? ` · ${skippedN} excluded by label` : ""} · one undo step (${keyText("⌘Z")}).`
+  + (needH ? ` · set installed height (3D H) for ${aCond?.finish_tag} — the 3D view renders it` : ""));
 
 (One message, one slot — the reminder rides the success toast. `commitCount` has no competing `setCommitMsg` today, so its reminder is a plain call as written above.)
 
@@ -732,7 +760,7 @@ Unscaled sheet: the button routes to the scale-gate toast (above) — the overla
 {show3d && <View3DGate onMount={() => onMenuDepth(true)} onUnmount={() => onMenuDepth(false)} />}
 ```
 
-or simply call `onMenuDepth(true)` in the effect that opens the overlay and `onMenuDepth(false)` in `onClose` — one open, one close, symmetric. Add a single-letter shortcut picked against the USER_GUIDE §15 table at implementation (O, A, R, L, S, C, D, H, N, K, V, G, M, F, Q are taken); document it in §15.
+or simply call `onMenuDepth(true)` in the effect that opens the overlay and `onMenuDepth(false)` in `onClose` — one open, one close, symmetric. Shortcut: **W** (not in the §15 taken set O, A, R, L, S, C, D, H, N, K, V, G, M, F, Q as of this plan; if a merged change has claimed W since, take the next free letter — §15 stays authoritative); register on `window` like every other tool letter and document in §15.
 - [ ] **Step 5: Docs.** README Features bullet; USER_GUIDE: new "3D view" section (open/gate, legend chips + captions, explode, section cut, export footer, limitations label, per-shape 3D-H override, **and the disclosed bevel-seam artifact: sharp near-reversal corners render beveled and may show a thin seam**) + §15 shortcut row; CHANGELOG entry; FEATURES.md row pointing at `scene3d.js`/`View3D.jsx`. **Step 6: `npm run check` green + full hand pass** (sample plan end-to-end: load, scale, trace, derive base, guards, open 3D, select a room → out-of-room linked shapes hide, export PNG with footer). **Step 7: Commit** `feat: 3D takeoff view — canvas integration, isolation, docs`.
 
 ---
