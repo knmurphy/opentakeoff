@@ -844,6 +844,8 @@ and [`mcp/README.md`](../mcp/README.md).
 
 Every shortcut in the app, verified against the code. Letter keys are suppressed while you're typing in a field and while a toolbar menu is open. `Ctrl` stands in for `⌘` on Windows and Linux throughout.
 
+Every shortcut below can be rebound in **Keyboard shortcuts…**, opened from the in-app `?` guide. Changes apply immediately and are saved in this browser (browser-global, not per-project). Some keys stay fixed and cannot be reassigned: hold `Space` (pan), hold `M` (dictation), hold `⇧` (angle lock), `⌥`- and `⇧`-click gestures, and digit keys `1`–`9` (condition palette). A chord already bound to another command is rejected rather than stealing that binding; reserved keys (`Esc`, `Backspace`, `Delete`, `Enter`) cannot be assigned as new bindings. On the canvas, `Esc` backs out one level through whatever is in progress; when nothing is left to clear—a stray `Esc`—the app drops to **Select**.
+
 ### Tools
 
 | Key | Tool |
@@ -880,7 +882,7 @@ Every shortcut in the app, verified against the code. Letter keys are suppressed
 | `⌫` / `Delete` | Pop the last placed point—then, in order: delete the picked One-Click vertex → drop the last One-Click region → delete the picked shape vertex → delete the selected shape → delete the selected markup → pop a calibrate/check point |
 | `⌘Z` | Mid-trace: pop the last point. Otherwise: **undo** |
 | `⇧⌘Z` | Redo |
-| `Esc` | Back out one level: clear the vertex pick first, then everything in progress (trace, proposal, calibration, check, selection, markup draft, armed stamp, zone) |
+| `Esc` | Back out one level: clear the vertex pick first, then everything in progress (trace, proposal, calibration, check, selection, markup draft, armed stamp, zone); drops to **Select** when nothing is left |
 | Hold `⇧` | Force the 45° angle lock at any cursor angle |
 | `Q` | Flip the ╱ Straight / ⌒ Curve switch mid-trace (Area, Cut Out, Line, Surface) |
 | `⌥`-click (Area / Cut Out / Line / Surface) | Place the *other* kind of point for one click—a bow point in Straight mode, a corner in Curve mode |

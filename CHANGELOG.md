@@ -2,6 +2,14 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-08-25 — your keys, your habit
+
+### Added
+- **Configurable keyboard shortcuts — every discrete shortcut is a named command.** **Keyboard shortcuts…** in the `?` guide opens a modal listing all 25 remappable commands (tools, navigation, edit, and the global `Esc`/`Enter`/delete-back ladder). Click a row, press a new chord, and the binding updates everywhere at once — toolbar labels, the guide tables, and every `keydown` handler read the same live keymap (`web/src/lib/keymap.ts`). Overrides persist browser-globally in IndexedDB (`keybindStore.js`, overrides-only shape); conflict policy is reject-never-steal, and reserved keys (`Esc`, `Backspace`, `Delete`, `Enter`) cannot be assigned as new bindings. Fixed (not in the modal): hold `Space` pan, hold `M` dictation, hold `⇧` angle lock, `⌥`- and `⇧`-click gestures, digits `1`–`9` for the condition palette, and scroll/zoom/pan gestures.
+
+### Changed
+- **`Esc` drops to Select when nothing is in progress.** The `escape` command's canvas handler keeps today's back-out ladder (vertex pick → One-Click selection → trace, proposal, calibration, check, selection, markup draft, armed stamp, zone). The refinement: clearing a live trace or other in-progress state stays in the current tool (clear-and-continue); only a truly stray `Esc` — nothing left to back out of — arms **Select**. Sweep cancel, guide close, gallery close, menu close, navigator back, and dictation discard keep their own handlers and do not switch tools.
+
 ## 2026-08-24 — the takeoff goes back into CAD
 
 ### Added
