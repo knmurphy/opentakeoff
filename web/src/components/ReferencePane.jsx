@@ -3,9 +3,10 @@
 // wheel/drag pan-zoom scoped to its element — panning/zooming this pane never
 // touches the primary pane's transform, and vice versa. Renders the referenced
 // sheet's BASE raster (Task 3) plus a read-only mirror of its committed shapes
-// (Task 5); crisp detail (Task 6) layers on later. It NEVER handles
-// measurement/keyboard/tools — no selection, no vertex handles, no click
-// handlers reach the shape overlay below.
+// (Task 5) plus a crisp DEEP-ZOOM detail layer (Task 6, engaged past
+// DETAIL_ENGAGE on this pane's OWN scale). It NEVER handles measurement/
+// keyboard/tools — no selection, no vertex handles, no click handlers reach
+// the shape overlay below.
 //
 // `refKey` arrives already validated by the caller (TakeoffCanvas): a
 // dangling/unresolvable refKey is reported as `null` here, not as a raw
@@ -16,11 +17,11 @@
 // the primary's `stackedShapes` — NOT scoped to the primary's sheetGroup, so
 // a shape on a sheet the primary isn't even displaying still mirrors here).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { MIN_SCALE, MAX_SCALE, SYNC_MS } from "../lib/canvasConstants";
+import { MIN_SCALE, MAX_SCALE, SYNC_MS, DETAIL_ENGAGE, GESTURE_MS } from "../lib/canvasConstants";
 import { HatchPattern } from "./hatches.jsx";
 import { renderShapeGlyph } from "./shapeGlyphs.jsx";
 
-export default function ReferencePane({ refKey, panelImg, paintBase, epoch, onFrame, shapes = [], conditions = [], condById = {}, darkMode = false, patId }) {
+export default function ReferencePane({ refKey, panelImg, paintBase, paintDetail, epoch, onFrame, shapes = [], conditions = [], condById = {}, darkMode = false, patId }) {
   const stageRef = useRef(null);
   const tfRef = useRef({ x: 0, y: 0, scale: 1 });
   const viewportRef = useRef(null);
@@ -53,11 +54,44 @@ export default function ReferencePane({ refKey, panelImg, paintBase, epoch, onFr
   // guard the primary pane's own stage keeps (TakeoffCanvas.jsx).
   useLayoutEffect(() => { applyTf(); });
 
+  // crisp deep-zoom detail layer (Task 6) — the reference-pane analog of the
+  // primary's tile-composited detail view (TakeoffCanvas.jsx's
+  // syncTilePanelsRef), driven by THIS pane's OWN tfRef/viewport rather than
+  // the primary's shared one. `paintDetail` is a TakeoffCanvas-owned callback
+  // (same pattern as `paintBase` above) that does the actual compositor call
+  // under the `ref::`-prefixed key — its own single-slot dedup/cancel state
+  // and the primary's per-drawKey Maps never touch the same storage, so an
+  // in-flight request here can't collide with or be cancelled by the
+  // primary's own detail-view bookkeeping (Task 3's isolation note: the
+  // `ref::` prefix is what makes them distinct opaque sheetKey strings).
+  const detailCanvasRef = useRef(null);
+  const detailTimerRef = useRef(0);
+  const runDetailSync = useCallback(() => {
+    const cv = detailCanvasRef.current;
+    const vp = viewportRef.current;
+    if (!cv || !vp || !refKey) return;
+    paintDetail(`ref::${refKey}`, cv, tfRef.current, vp.getBoundingClientRect());
+  }, [refKey, paintDetail]);
+  // GESTURE_MS quiet window — same settle cadence the primary's detail view
+  // waits for. A plain trailing debounce suffices here: unlike the primary's
+  // self-polling scheduleSync (which also has to reposition tiles on every
+  // tick for a pure pan), this pane's base layer rides its own CSS transform
+  // and needs no per-tick work — only the detail CROP waits for quiet.
+  const scheduleDetailSync = useCallback(() => {
+    clearTimeout(detailTimerRef.current);
+    detailTimerRef.current = setTimeout(runDetailSync, GESTURE_MS);
+  }, [runDetailSync]);
+  useEffect(() => () => clearTimeout(detailTimerRef.current), []);
+
   // fit-to-view when the framed sheet changes (or its dims resolve/change) —
   // deliberately NOT keyed on `epoch`: a repaint-only resync (the primary
   // pane's group changing under it, which tears down and reopens every
   // `ref::`-prefixed compositor entry) must not undo the user's own pan/zoom
-  // on this pane.
+  // on this pane. Declared BEFORE the structural detail-repaint effect below
+  // (same [refKey, ...] dependency) so a brand-new refKey lands its fresh fit
+  // scale/offset in tfRef before that effect reads it — the two fire in
+  // source order within one commit, and reading the pre-fit tfRef would crop
+  // the detail view against the WRONG (previous sheet's, or default) frame.
   useEffect(() => {
     const vp = viewportRef.current; const img = panelImg;
     if (!vp || !img) return;
@@ -66,6 +100,23 @@ export default function ReferencePane({ refKey, panelImg, paintBase, epoch, onFr
     tfRef.current = { scale: fitScale, x: (r.width - img.w * fitScale) / 2, y: (r.height - img.h * fitScale) / 2 };
     applyTf();
   }, [refKey, panelImg, applyTf]);
+
+  // Structural changes — sheet swap, a freshly-reopened compositor entry
+  // (epoch, after the primary's resetAll wiped every `ref::` entry), a
+  // dark-mode toggle — repaint immediately; none of these are gestures, so
+  // there's nothing worth debouncing.
+  useEffect(() => { runDetailSync(); }, [refKey, epoch, darkMode, runDetailSync]);
+  // A container resize (dragging the split ratio, docking a side panel)
+  // changes the viewport rect without touching tfRef — resync so the crop
+  // stays correctly bounded. Debounced like a gesture: a ratio drag fires
+  // many resize ticks in a row.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => scheduleDetailSync());
+    ro.observe(vp);
+    return () => ro.disconnect();
+  }, [scheduleDetailSync]);
 
   // Imperative addEventListener with { passive: false }, NOT the React
   // onWheel prop — React's synthetic wheel listener is registered passive
@@ -87,10 +138,11 @@ export default function ReferencePane({ refKey, panelImg, paintBase, epoch, onFr
       const cx = e.clientX - vp.left, cy = e.clientY - vp.top;
       tfRef.current = { scale: next, x: cx - (cx - t.x) * k, y: cy - (cy - t.y) * k };
       applyTf();
+      scheduleDetailSync(); // wheel-zoom is a gesture — wait for quiet, not per-tick
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [applyTf, refKey]);
+  }, [applyTf, refKey, scheduleDetailSync]);
 
   const onPointerDown = useCallback((e) => {
     if (e.button !== 0) return;
@@ -98,10 +150,11 @@ export default function ReferencePane({ refKey, panelImg, paintBase, epoch, onFr
     const move = (ev) => {
       tfRef.current = { ...tfRef.current, x: start.tx + (ev.clientX - start.x), y: start.ty + (ev.clientY - start.y) };
       applyTf();
+      scheduleDetailSync(); // drag-pan is a gesture too — same quiet-window rule
     };
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
-  }, [applyTf]);
+  }, [applyTf, scheduleDetailSync]);
 
   // paint the base raster into our own canvas whenever the sheet changes OR
   // the caller signals a fresh compositor entry (epoch) — e.g. after the
@@ -130,6 +183,15 @@ export default function ReferencePane({ refKey, panelImg, paintBase, epoch, onFr
             filling the stage. */}
         <canvas ref={canvasRef}
           style={{ position: "absolute", left: 0, top: 0, width: panelImg?.w, height: panelImg?.h, boxShadow: "0 2px 20px rgba(0,0,0,.18)" }} />
+        {/* detail layer (Task 6) — a crop of the visible region + margin
+            composited from cached tiles at the current zoom, exactly like the
+            primary pane's per-source detail canvases (TakeoffCanvas's
+            drawPanels detail layer); hidden until this pane's own zoom × dpr
+            crosses DETAIL_ENGAGE (paintReferenceDetail in TakeoffCanvas.jsx).
+            Position/size are set imperatively by the compositor's paintDetail
+            on each reveal, same as the primary's. */}
+        <canvas ref={detailCanvasRef}
+          style={{ position: "absolute", left: 0, top: 0, display: "none", pointerEvents: "none" }} />
         {/* Read-only shape mirror (Task 5). pointerEvents:none end to end —
             no selection, no vertex handles, no click/drag reaches a shape
             here. Sits in the SAME transformed stage as the base canvas above

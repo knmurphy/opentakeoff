@@ -261,6 +261,38 @@ const TOOL_VERB = {
 // The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
 // live in components/TakeoffsPanel.jsx — the panel is their only surface now.
 
+// Pure crop math for the detail view (Task 6, #86-family): the visible
+// region of surface `d` (in ITS OWN image px), intersected with any seam
+// clip, expanded by DETAIL_MARGIN, given the surface's own transform `t`
+// ({x,y,scale}) and its container's bounding rect `r` ({width,height}).
+// Shared by the primary's multi-panel detail sync (syncTilePanelsRef below,
+// one `d` per drawPanels entry, all under the SAME shared `t`/`r`) and the
+// reference pane's own single-surface detail sync (paintReferenceDetail
+// below, its OWN `t`/`r` — ReferencePane.jsx owns an independent transform
+// and viewport, never the primary's) — this is the one place either caller
+// could get the margin/clip math subtly wrong, so it exists exactly once.
+// Returns null when `d` is fully off-screen; the caller hides its canvas.
+function detailCropFor(t, r, d) {
+  const vx0 = d.clip ? Math.max(d.x, d.clip.x) : d.x;
+  const vy0 = d.clip ? Math.max(d.y, d.clip.y) : d.y;
+  const vx1 = d.clip ? Math.min(d.x + d.w, d.clip.x + d.clip.w) : d.x + d.w;
+  const vy1 = d.clip ? Math.min(d.y + d.h, d.clip.y + d.clip.h) : d.y + d.h;
+  let x0 = Math.max((-t.x) / t.scale, vx0) - d.x;
+  let y0 = Math.max((-t.y) / t.scale, vy0) - d.y;
+  let x1 = Math.min((r.width - t.x) / t.scale, vx1) - d.x;
+  let y1 = Math.min((r.height - t.y) / t.scale, vy1) - d.y;
+  if (x1 <= x0 || y1 <= y0) return null; // source off-screen
+  const mw = (x1 - x0) * DETAIL_MARGIN, mh = (y1 - y0) * DETAIL_MARGIN;
+  x0 = Math.max(0, x0 - mw); y0 = Math.max(0, y0 - mh);
+  x1 = Math.min(d.w, x1 + mw); y1 = Math.min(d.h, y1 + mh);
+  // Position bases are relative to the canvas's offset parent: the stage for
+  // a plain panel, the clipping wrapper for a stitch member (d.clip unset
+  // for the reference pane, so xBase/yBase collapse to d.x/d.y there).
+  const xBase = d.clip ? d.x - d.clip.x : d.x;
+  const yBase = d.clip ? d.y - d.clip.y : d.y;
+  return { x0, y0, x1, y1, xBase, yBase };
+}
+
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
   const [sheets, setSheets] = useState([]);
@@ -1870,21 +1902,61 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- docFor/getCompositor are stable; groupSig is the resetAll()-invalidation signal, same idiom as the group effect below
   }, [rawRefKey, groupSig]);
 
-  // Stable identity (empty deps, reads refs only) so ReferencePane's paint
-  // effect doesn't refire on every TakeoffCanvas render (e.g. a primary pan
-  // tick) — only on a real refKey/epoch change. Guards against a stale call
-  // for a since-changed refKey (drawKey no longer matches the latest resolve).
+  // Deliberately depends on `darkMode` (unlike the rest of this file's
+  // tile-paint calls, which read darkModeRef to stay stable across renders):
+  // ReferencePane's paint effect below re-fires when THIS callback's identity
+  // changes (it's a `paintBase`/`paintDetail` prop dependency), and that is
+  // the reference pane's ONLY dark-mode repaint signal — it isn't a member of
+  // `drawPanels`, so the primary's dark-toggle effect below never reaches its
+  // canvas. Closing over the fresh `darkMode` value (not the ref, which the
+  // primary's effect updates in a possibly-later-running sibling effect) also
+  // sidesteps any cross-effect ordering question about which fires first.
   const paintReferenceBase = useCallback((drawKey, canvasEl) => {
     if (!canvasEl) return;
     const d = refDimsRef.current;
     if (!d || `ref::${d.key}` !== drawKey) return;
-    getCompositor().paintBase(canvasEl, drawKey, d.w, d.h, darkModeRef.current);
-  }, []);
+    getCompositor().paintBase(canvasEl, drawKey, d.w, d.h, darkMode);
+  }, [darkMode]);
+
+  // Reference-pane analog of the primary's syncTilePanelsRef loop body (Task
+  // 6): composites the visible-region detail crop for the SINGLE `ref::`-
+  // prefixed surface, using detailCropFor (shared math, see its comment) and
+  // this pane's OWN transform/viewport rect instead of the primary's shared
+  // `tfRef`/container. Single-slot refs (one surface, not a Map) stand in for
+  // detailKeysRef/detailCancelsRef's per-drawKey entries. Stable modulo
+  // `darkMode` for the same reason paintReferenceBase is: it's the reference
+  // pane's only dark-mode repaint signal for this layer too.
+  const refDetailKeyRef = useRef(null);
+  const refDetailCancelRef = useRef(null);
+  const paintReferenceDetail = useCallback((drawKey, canvasEl, t, r) => {
+    if (!canvasEl) return;
+    const dims = refDimsRef.current;
+    if (!dims || `ref::${dims.key}` !== drawKey) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (t.scale * dpr <= DETAIL_ENGAGE) {
+      canvasEl.style.display = "none";
+      refDetailKeyRef.current = null;
+      return;
+    }
+    const d = { x: 0, y: 0, w: dims.w, h: dims.h, clip: null, drawKey };
+    const crop = detailCropFor(t, r, d);
+    if (!crop) { canvasEl.style.display = "none"; refDetailKeyRef.current = null; return; }
+    const { x0, y0, x1, y1, xBase, yBase } = crop;
+    const density = tileRequiredDensity(t.scale, dpr);
+    const renderKey = `${drawKey}|${x0.toFixed(1)},${y0.toFixed(1)}|${x1.toFixed(1)},${y1.toFixed(1)}|${density.toFixed(2)}|${darkMode ? 1 : 0}`;
+    if (renderKey === refDetailKeyRef.current) return;
+    refDetailKeyRef.current = renderKey;
+    try { refDetailCancelRef.current?.cancel(); } catch { /* done */ }
+    refDetailCancelRef.current = getCompositor().paintDetail(canvasEl, drawKey, xBase, x0, y0, x1, y1, density, darkMode, () => {}, yBase);
+  }, [darkMode]);
 
   // dark toggle: repaint the base layer of every already-loaded panel at the
   // new mode (the detail effect below also depends on darkMode, so it
   // repaints too). Tiles are cached PER MODE (tileCompositor.ts), so a
-  // toggle-back is instant once both variants have been seen once.
+  // toggle-back is instant once both variants have been seen once. The
+  // reference pane's own base/detail canvases are NOT drawPanels members —
+  // they repaint via paintReferenceBase/paintReferenceDetail's own `darkMode`
+  // dependency above, which is what re-fires ReferencePane's effects.
   useEffect(() => {
     darkModeRef.current = darkMode;
     if (status !== "ready") return;
@@ -1930,6 +2002,17 @@ export default function TakeoffCanvas() {
     detailCancelsRef.current.clear();
     detailKeysRef.current.clear();
     for (const [, cv] of detailCanvasRefs.current) cv.style.display = "none";
+    // Mirror for the reference pane's single-surface detail state (Task 6):
+    // resetAll() also invalidates its `ref::`-prefixed compositor entry (the
+    // reference-resolve effect below reopens it and bumps refEpoch), but
+    // WITHOUT this clear, paintReferenceDetail's render-key dedup could see
+    // the exact same computed renderKey after reopen — nothing about the
+    // reference's own transform/viewport changed, only the compositor was
+    // reset — and silently no-op, leaving a stale/blank detail canvas until
+    // the user's next gesture on that pane.
+    try { refDetailCancelRef.current?.cancel(); } catch { /* done */ }
+    refDetailCancelRef.current = null;
+    refDetailKeyRef.current = null;
     (async () => {
       // resolve one drawable source: doc → page → viewport at the FIXED logical scale
       const resolveSource = async (memberKey) => {
@@ -2185,20 +2268,9 @@ export default function TakeoffCanvas() {
         const cv = detailCanvasRefs.current.get(d.drawKey);
         if (!cv || !d.w) continue;
         const hide = () => { cv.style.display = "none"; detailKeysRef.current.delete(d.drawKey); };
-        // visible region of THIS source, in ITS image px (stage space minus its
-        // stage origin), intersected with the seam-visible box when clipped
-        const vx0 = d.clip ? Math.max(d.x, d.clip.x) : d.x;
-        const vy0 = d.clip ? Math.max(d.y, d.clip.y) : d.y;
-        const vx1 = d.clip ? Math.min(d.x + d.w, d.clip.x + d.clip.w) : d.x + d.w;
-        const vy1 = d.clip ? Math.min(d.y + d.h, d.clip.y + d.clip.h) : d.y + d.h;
-        let x0 = Math.max((-t.x) / t.scale, vx0) - d.x;
-        let y0 = Math.max((-t.y) / t.scale, vy0) - d.y;
-        let x1 = Math.min((r.width - t.x) / t.scale, vx1) - d.x;
-        let y1 = Math.min((r.height - t.y) / t.scale, vy1) - d.y;
-        if (x1 <= x0 || y1 <= y0) { hide(); continue; }         // source off-screen
-        const mw = (x1 - x0) * DETAIL_MARGIN, mh = (y1 - y0) * DETAIL_MARGIN;
-        x0 = Math.max(0, x0 - mw); y0 = Math.max(0, y0 - mh);
-        x1 = Math.min(d.w, x1 + mw); y1 = Math.min(d.h, y1 + mh);
+        const crop = detailCropFor(t, r, d);
+        if (!crop) { hide(); continue; }                         // source off-screen
+        const { x0, y0, x1, y1, xBase, yBase } = crop;
         // one composite per distinct crop — the sync loop re-fires this several
         // times around a settle with identical inputs
         const renderKey = `${d.drawKey}|${x0.toFixed(1)},${y0.toFixed(1)}|${x1.toFixed(1)},${y1.toFixed(1)}|${density.toFixed(2)}|${darkModeRef.current ? 1 : 0}`;
@@ -2209,10 +2281,6 @@ export default function TakeoffCanvas() {
         // three atomically on reveal — setting them here first would show a
         // correctly-positioned canvas with the OLD crop's (wrongly scaled)
         // pixels for a frame, which is its own flavor of flicker.
-        // Position bases are relative to the canvas's offset parent: the stage
-        // for a plain panel, the clipping wrapper for a stitch member.
-        const xBase = d.clip ? d.x - d.clip.x : d.x;
-        const yBase = d.clip ? d.y - d.clip.y : d.y;
         const cancel = getCompositor().paintDetail(cv, d.drawKey, xBase, x0, y0, x1, y1, density, darkModeRef.current, () => {}, yBase);
         detailCancelsRef.current.set(d.drawKey, cancel);
       }
@@ -2232,10 +2300,23 @@ export default function TakeoffCanvas() {
       if (document.visibilityState !== "visible") return;
       detailKeysRef.current.clear();
       setRepaintTick((n) => n + 1);
+      // Mirror for the reference pane (Task 6): repaintTick only drives
+      // syncTilePanelsRef, which walks `drawPanels` — the reference pane's
+      // single `ref::`-prefixed surface isn't a member, so a hidden-tab
+      // stall there has no OTHER retry path. Clear the dedup key (or a
+      // recomputed-identical renderKey would silently no-op, same failure
+      // shape as the resetAll case above) and bump refEpoch to actually
+      // re-fire ReferencePane's paint effects.
+      if (rawRefKey) {
+        try { refDetailCancelRef.current?.cancel(); } catch { /* done */ }
+        refDetailCancelRef.current = null;
+        refDetailKeyRef.current = null;
+        setRefEpoch((e) => e + 1);
+      }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, []);
+  }, [rawRefKey]);
 
   // the doc cache holds whole PDFs in the worker — tear it down when the
   // project view unmounts or the project changes. The tile compositor (its
@@ -9049,7 +9130,7 @@ export default function TakeoffCanvas() {
          onCollapse={() => setSplitView(null)}
          primary={primaryViewport}
          reference={splitView ? (
-           <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} epoch={refEpoch}
+           <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} paintDetail={paintReferenceDetail} epoch={refEpoch}
              shapes={refStackedShapes} conditions={conditions} condById={condById} darkMode={darkMode} patId={patId} />
          ) : null}
        />
