@@ -13,7 +13,7 @@
 // to fixed-width siblings (tool rail, docked panels), and absolute+inset:0
 // would paint over the whole flex row instead of just its own slot.
 import { useCallback, useRef } from "react";
-import { clampRatio } from "../lib/splitView";
+import { clampRatio, MIN_RATIO, MAX_RATIO } from "../lib/splitView";
 
 export default function SplitLayout({ orientation, ratio, onRatioChange, onFlip, onCollapse, primary, reference }) {
   const rootRef = useRef(null);
@@ -23,15 +23,22 @@ export default function SplitLayout({ orientation, ratio, onRatioChange, onFlip,
   const onDividerDown = useCallback((e) => {
     e.preventDefault();
     const root = rootRef.current;
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    // Task 8: dragging PAST the resizable range (not just to it — ratio is
+    // already clamped to [MIN_RATIO, MAX_RATIO] on the way in) reads as "the
+    // user wants this pane gone," the same idiom as dragging a native
+    // split/pane divider fully to an edge. Collapsing here ends the drag
+    // immediately (removes both listeners) rather than continuing to track
+    // a pointer the pane no longer exists to follow.
     const move = (ev) => {
       const r = root.getBoundingClientRect();
       const frac = vertical ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height;
+      if (frac < MIN_RATIO || frac > MAX_RATIO) { up(); onCollapse(); return; }
       onRatioChange(clampRatio(frac));
     };
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-  }, [vertical, onRatioChange]);
+  }, [vertical, onRatioChange, onCollapse]);
 
   const primaryPct = `${(ratio * 100).toFixed(3)}%`;
   const refPct = `${((1 - ratio) * 100).toFixed(3)}%`;
