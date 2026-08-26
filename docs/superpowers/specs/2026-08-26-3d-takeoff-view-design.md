@@ -214,8 +214,10 @@ Renderer contract (all from the Web3D review):
   ordinary visibility/transform (a shared scene-wide batch would orphan the
   red marker mid-explode and can't be condition-toggled without a rebuild);
   (2) count posts get **one InstancedMesh per condition that owns count
-  shapes**,
-  parented under that condition's Group, with an instanceId→shapeId array
+  shapes**, parented under that condition's Group, built from a unit-height
+  post geometry with per-instance z-scale = each shape's snapshotted
+  `extrude_h_ft` (condition default, or its per-shape override — per-shape
+  heights must not break instancing), with an instanceId→shapeId array
   kept alongside for future consumers (no raycast/picking in v1 — selection
   isolation is 2D-selection-driven). Worst case ≈ #conditions +
   #deduct-owning conditions + #count-conditions — still tens. Explode is a
