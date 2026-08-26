@@ -218,6 +218,44 @@ concept). What it does *not* have — and where OpenTakeoff still leads — is
 **waste % estimation is listed as future work**: no cut accounting, no offcut
 reuse, no trim/edge derivation. Its "materials" output is piece count + m² only.
 
+### 2.5 `pedrofuentes/TileCalculator` — the estimator-side layer, MIT, agent-friendly
+
+TypeScript + React 19 + Tailwind, SVG rendering, `polygon-clipping` for boolean
+geometry. **MIT-licensed**, with an `AGENTS.md` + `docs/ARCHITECTURE.md` written
+for AI agents, and a ~99%-line / 93%-branch tested pure pipeline. This is the
+closest prior art to the estimator-side layer the others lack, and it answers
+several §7 gaps directly:
+
+- **Auto-optimized grid offset** — the "origin solver" §7.3 called missing. It
+  searches *only* offsets where grid lines align to deck edges (the only offsets
+  that change the cut-tile count), so the minimize-cuts search is exact and fast
+  rather than a continuous scrub. Plus "mark a side as a cut side" to push
+  partial tiles to chosen edges.
+- **Two purchase numbers, named well:** *Safe* = full + one tile per cut
+  location (our "naive order"); *With reuse* = full + `ceil(totalCutArea /
+  tileArea)`, refined by edge/grain-aware **interlock** pairing. This is exactly
+  the "naive vs offcut pool" two-tier, and it confirms offcut reuse is a *second
+  number beside* the safe one, not a replacement.
+- **Borders per side with corner counts** — assign None / Trim / Fascia (or
+  custom) to each straight side; results give linear length, piece count, and
+  outside / inside corner counts (outside = convex vertex, inside = reflex).
+  This is axis B's trim derivation, already worked out.
+- **L-cut notches** — a cut-list row that is a full-extent tile with a
+  rectangular corner notch sawn out to wrap an inside corner (`12×12 · cut notch
+  4×3`). The concrete shape of "corner piece" for the cut sheet.
+- **Dimension basis** — whether the drawn dimensions are the *tile field* (trim
+  extends outward) or the *total footprint* (trim insets the field). The
+  trim-band / edge-cut-strategy question, named.
+- **`polygon-clipping`** (`mfogel`) — Martinez–Rueda boolean ops, the robust
+  library behind exact cell∩room intersection. Answers the §7.4 "industrial
+  nesting / robust boolean" gap: use this rather than hand-rolling
+  Sutherland–Hodgman.
+
+Its scope is decks/patios (rectangles → L/T/U via add/subtract) rather than
+plan-PDF takeoff, so the shape-building and scale-from-plan sides are ours to
+keep; but the tile grid, cut classification, border/corner derivation, and
+purchase math are directly the estimator-side engine we need to reimplement.
+
 ---
 
 ## 3. Feature taxonomy — the "advanced options" decomposed
