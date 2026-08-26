@@ -1905,6 +1905,7 @@ export default function TakeoffCanvas() {
     layerOverridesRef.current = lov;
     setLayerOverrides(lov);
     maskCacheRef.current.clear();
+    netCacheRef.current.clear();   // a snapshot/project load must not inherit the replaced project's per-sheet net (same-named sheet at same ftPx)
     // additive `stitches` (#161) — sanitize-gated like approvals; else-clear so a
     // snapshot load can't inherit the replaced project's composites. Sanitized
     // BEFORE group normalization: a solo stitch key in sheet_group is only a
@@ -2183,6 +2184,7 @@ export default function TakeoffCanvas() {
     maskCacheRef.current.clear();
     sheetStatsRef.current.clear();
     rasterMaskCacheRef.current.clear();
+    netCacheRef.current.clear();   // sheet+scale-keyed like the mask caches: a same-named sheet at the same ftPx must NOT inherit the prior project's net
     canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
     renderScalesRef.current.clear();
