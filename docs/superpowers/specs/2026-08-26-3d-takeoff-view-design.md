@@ -655,114 +655,168 @@ README Features bullet, FEATURES.md row, CHANGELOG. No MCP surface.
 - Bands on walls/transitions/counts — floor roll-goods conditions only.
 - Per-shape slab-thickness overrides (do not exist; not invented here).
 
-## Addendum (2026-08-26d, r4) — Picking, labels, finishes, grid, studio look
+## Addendum (2026-08-26d, r4 rev 2) — Picking, labels, finishes, grid, studio look
 
-Four shipped-together parts sharing one review cycle and one validation.
-Owner-directed increment; decisions below locked with the owner.
+Four shipped-together parts, one review cycle, one validation. (r1 of this
+addendum failed adversarial review FAIL×3 — convergent, vendored-three-
+verified findings; this rev folds in every one. Headline corrections:
+selection inside the overlay is DECOUPLED from the focus/rebuild/refit
+pipeline; raycasting is restricted to shapeRanges-carrying meshes with a
+full visibility-chain check; edges ride per-batch visibility, not the
+Group; texture tiling has ONE scale home + RepeatWrapping.)
+
+**Contract amendments (this section is the amendment):** the base spec's
+"(no raycast/picking in v1 — selection isolation is 2D-selection-driven)"
+is superseded by part A. r3's non-goal "any numbers in-scene (the Report
+owns numbers)" is NARROWED, not reversed: the label repeats numbers the 2D
+readout already shows for the selected shape (measured quantity, units-
+converted at this UI edge); it invents no new in-scene quantities — seam
+LF captions etc. remain non-goals.
 
 ### A — Click-to-select + floating info label
 
-- **Selection feeds the app's existing state**: View3D gains `onSelectShape`
-  → TakeoffCanvas's existing `selectShape(id | null)` (mutually exclusive
-  with markup selection, unchanged semantics). Closing the overlay keeps the
-  selection — the 2D canvas, isolate, and panels already agree.
+- **Selection is decoupled from focus while the overlay is open.** Today
+  `focusIds3d` is a live memo off `selectedId` and feeds the content
+  effect, which rebuilds everything and calls fitToContent — cold today
+  (the overlay blocks 2D selection), HOT the moment 3D clicks select.
+  Ruling: `focusIds3d` becomes a SNAPSHOT taken at overlay open (memo
+  keyed [show3d, active3dKey, shapes3d] — frozen while open; refreshed on
+  reopen). In-overlay clicks call `selectShape(id | null)` for the app's
+  shared selection state, and View3D receives the LIVE `selectedId` as a
+  separate prop that drives ONLY the label + a selection tint — never the
+  content effect, never fitToContent. Closing and reopening re-snapshots
+  focus from whatever is selected then (the documented select-first flow
+  still works exactly as USER_GUIDE §18 describes).
 - **Click-vs-drag**: fresh pointerdown/up discriminator on the renderer
-  canvas (OrbitControls owns capture; travel < 5 px AND < 400 ms = click).
-  Click empty space → `selectShape(null)` (2D parity).
-- **Picking through merged meshes** (the root fix): `addMesh` records
-  per-merge vertex ranges — `mesh.userData.shapeRanges = [{shapeId,
-  start, count}]` in merge order — and the raycaster maps
-  `intersection.faceIndex × 3 → shapeId`. Posts keep their existing
-  `userData.shapeIds` via `instanceId`. NO per-shape meshes: the draw-call
-  budget is untouched. Roll bands/seams, the plan plane, and the grid set
-  `userData.excludeFromPick` (raycast skips them; a click lands on the
-  owning slab).
+  canvas (OrbitControls owns capture): button === 0 AND travel < 5 px AND
+  < 400 ms = click. Right/middle never select.
+- **Picking — shapeRanges on merged meshes** (the root fix, and it is
+  PURE): scene3d.js gains `buildShapeRanges(items) → [{shapeId, start,
+  count}]` (accumulated vertex counts in merge order; non-indexed geometry
+  ONLY — assert `!geometry.index` where recorded and where resolved;
+  faceIndex×3 → ordinal → range is correct only on non-indexed meshes,
+  verified for ExtrudeGeometry + ribbonGeometry inputs) and
+  `resolveShapeAt(ranges, faceIndex) → shapeId | null` (null outside all
+  ranges — a guaranteed miss, not a wrong hit). addMesh records the ranges
+  in `mesh.userData.shapeRanges`. Posts keep `userData.shapeIds` via
+  instanceId.
+- **Raycast dispatch**: intersect ONLY objects carrying `shapeRanges` (or
+  the posts InstancedMesh) — a whitelist, not a blacklist; roll bands/
+  seams, plan plane, grid, edges, and caption sprites are unreachable by
+  construction. Additionally: `raycaster.params.Line.threshold = 0`
+  (default 1 world unit = 1 ft would swallow ribbon clicks even if a Line
+  ever entered the set), and every intersection must pass a FULL
+  visibility-chain check (walk `object → scene` testing `.visible`) —
+  three's raycaster tests layers, never visibility, and invisible geometry
+  must never select. Click resolving to nothing → `selectShape(null)`.
 - **One label, for the selected shape** (v1 — no hover, no per-shape
-  clutter): a DOM chip (not a sprite) at the shape's projected centroid,
-  reprojected in the EXISTING rAF loop (unconditional, verified). Content:
-  condition tag, role quantity from `shape.computed` (SF / LF / EA as the
-  role dictates), installed height or thickness, ×N if > 1. Hidden when the
-  shape is focus-hidden, legend-hidden, or behind the camera. Styled like a
-  plan note: mono tabular numerals, square corners, theme-aware, leader
-  line to the centroid.
+  clutter): a DOM chip at the shape's projected centroid, reprojected in
+  the EXISTING rAF loop. Content, in order: `shape.label` (the room
+  number) when present; condition tag; the role quantity from
+  `shape.computed`, formatted through the app's UNIT SYSTEM (`units.ts`
+  helpers — never hardcoded SF/LF; a metric project reads m²/m like every
+  other panel); height/thickness ONLY when a real value exists — when the
+  builder substituted a nominal fallback the label prints "nominal" or
+  omits the line (a placeholder never reads as installed data); ×N if > 1.
+  Hidden when the shape is legend-hidden, not in the visible scene, or
+  behind the camera. Styled like a plan note: mono tabular numerals,
+  square corners, theme-aware, leader line to the centroid.
 
 ### B — Manufacturer finish textures (runtime-only)
 
-- **Per-condition, floor slabs only** (`kind === "floor"` — NEVER excluded
-  volumes; deducts stay flat). Runtime state, not persisted (no .otk churn;
-  persistence is a separate future decision).
-- **Feet-true planar UVs, computed in the pure lib**: scene3d gains
-  `uvPlanar(verts_ft, periodFt)`; slabGeometry's UV attribute is populated
-  from world feet (x/period, w/period) instead of being deleted, ONLY when
-  a texture is active (untextured path unchanged — delete stays the default
-  so the untextured render is byte-identical to today).
+- **Per-condition, floor slabs only** (`kind === "floor"`; the condition
+  gate is DERIVED — conditions owning floor slabs in the built scene, the
+  activeConditions pattern — conditions are role-agnostic in the schema).
+  Never excluded volumes. Runtime state, not persisted.
+- **Tiling has ONE scale home**: scene3d gains `uvPlanar(verts_ft,
+  periodFt) → uv pairs` (world feet IN — the toWorldFt negation already
+  happened upstream; NO negation inside), and slabGeometry populates the
+  UV attribute from it ONLY when a texture is active (untextured path
+  byte-identical to today). `texture.repeat stays (1,1)`;
+  `wrapS = wrapT = THREE.RepeatWrapping` (required — ClampToEdge smears
+  instead of tiling); `colorSpace = SRGBColorSpace`.
 - **Material**: `map` on the existing per-condition floor material, tinted
-  by the condition color (`color` multiplies the map — conditions stay
-  distinguishable), sRGB colorSpace, repeat locked to `periodFt`. Panel
-  control per floor condition: load file (createObjectURL → Image →
-  CanvasTexture, the identity.js precedent), period input (default 3 ft),
-  clear. Disposal rides `material.map?.dispose()` in the existing walk.
+  by the RAW condition color (`color` multiplies the map; the pastel
+  toggle never washes the texture — it is the product). Panel control per
+  gated condition: load (createObjectURL → Image → CanvasTexture,
+  identity.js precedent INCLUDING its `revokeObjectURL` half — revoke on
+  clear, condition switch, and unmount; `dispose()` does not revoke),
+  period input (default 3 ft), clear.
 - **Export** includes textures as shown.
 
 ### C — Ground grid + axes
 
-- **Custom LineSegments** (GridHelper is fixed-color, no feet spacing): 1 ft
-  minor (faint), 10 ft major (strong), extent = fit bounds + margin, built
-  in the pure lib (`gridLines(bounds) → positions/colors pairs`,
-  node-testable). Axis lines: X in cobalt, Y in the danger red, through the
-  sheet origin.
-- `userData.excludeFromFit` + `excludeFromPick`, y = −0.045 (above the plan
-  paper, below slabs), renderOrder −1 (with the plan plane). Default ON,
-  toggle in the Environment section. Included in export as displayed.
-- **Theme prop**: View3D gains `isDark` from TakeoffCanvas; grid/axis/edge/
-  label colors pick `SVG` vs `SVG.dark` (the data already exists in ui.js).
+- **Custom LineSegments** (GridHelper's real gaps are uniform spacing and
+  a two-color-only palette — no minor/major, no per-axis colors): scene3d
+  gains `gridLines(bounds) → {positions, colors}` (1 ft minor faint,
+  10 ft major strong; extent = fit bounds + margin). Axes through the
+  sheet origin: X in cobalt, Y in a NEUTRAL slate — NEVER the danger red
+  (red means excluded area in this view; an axis must not wear bid
+  semantics).
+- `userData.excludeFromFit` + unreachable by picking (not a shapeRanges
+  carrier). y = −0.045 (above the paper, below slabs). Material:
+  `LineBasicMaterial` with `depthWrite: false` (the 0.005 ft paper gap is
+  within depth quantization at far zoom; no depth interaction at all is
+  cheaper than resolving it) — the grid draws early in the opaque pass
+  (low renderOrder) and slabs still occlude it by depth test. Clipping
+  carve-out stated: grid/axes do NOT carry the clipping planes — they sit
+  below any cut ≥ 0, and cutting the ground furniture would erase the
+  very reference the cut is measured against. Default ON, Environment
+  toggle, included in export as displayed. Theme via the new `isDark`
+  prop (`SVG` vs `SVG.dark`).
 
 ### D — Studio aesthetic (SketchUp-pastel, not photoreal)
 
 New **Environment** panel section (after Rolls): Backdrop / Pastel / Edges
 / Grid toggles. All non-persistent (per-open reset, like Plan/Rolls).
 
-- **Backdrop**: `scene.background` set per theme — light = paper-white→pale
-  cool-gray vertical gradient (CanvasTexture), dark = the HUD near-black.
-  The overlay div's accidental `var(--ink)` fallback stays for pre-mount.
-  **Export fix (required)**: the export canvas currently hardcodes
-  `#0d1526`; it must composite the actual scene background (gradient or
-  color) — the exported PNG finally matches the screen in both themes.
-- **Pastel fills**: floor/ribbon/post materials `color.lerp(white, 0.35)`
-  when ON (default ON — the aesthetic ask), toggle restores raw condition
-  colors (the PALETTE itself is untouched; this is a presentation blend,
-  and the legend swatches keep showing raw colors so the mapping stays
-  legible). Excluded volumes keep the danger read.
-- **Edges**: `EdgesGeometry` over each slab/ribbon geometry, `LineSegments`
-  in a darkened tone of the fill (`lerp(black, 0.35)`), linewidth 1
-  (platform cap, accepted), parented under the condition Group (explode/
-  legend/focus ride free), clipping planes shared, included in export.
-  Default ON.
-- **Non-goals (v1)**: fog (muds condition colors — MeshBasicMaterial opts
-  in by default; the regression risk outweighs the depth cue), contact
-  shadows (radial-gradient decal — future), any lit materials (the scene
-  stays unlit flat by design), label leader-line styling beyond v1 chip.
+- **Backdrop**: `scene.background` per theme — light = paper-white → pale
+  cool-gray vertical gradient (CanvasTexture, `colorSpace =
+  SRGBColorSpace` — WebGLBackground reads it; NoColorSpace washes the
+  gradient out), dark = HUD near-black. The overlay div's `var(--ink)`
+  stays as the pre-mount fallback. **Export fix (required)**: the export
+  canvas currently hardcodes `#0d1526`; it composites the actual scene
+  background so the PNG matches the screen in both themes.
+- **Pastel fills**: ALL shape materials (slabs, ribbons, posts, roll
+  bands/seams — uniform scene treatment) `color.lerp(white, 0.35)` when
+  ON (default ON), toggle restores raw condition colors. The PALETTE
+  itself is untouched; legend swatches keep raw colors; seam ink is exempt
+  (it exists for contrast); texture tint is exempt (part B). Excluded
+  volumes keep the danger read.
+- **Edges**: `EdgesGeometry` over each focus BATCH's merged geometry, the
+  LineSegments added as a CHILD of that batch mesh — visibility INHERITS
+  (focus isolation hides per-batch meshes, not Groups; a Group-child edge
+  line would ghost over hidden batches). Color = fill lerped toward black
+  0.35, pastel-lerped when Pastel is on. linewidth 1 (platform cap,
+  accepted). Clipping planes SHARED (edges are shape geometry). Included
+  in export. Default ON.
+- **Non-goals (v1)**: fog (MeshBasicMaterial opts in by default; it muds
+  condition colors — regression risk over depth cue), contact shadows
+  (radial-gradient decal — future), lit materials (scene stays unlit flat
+  by design), label leader-line styling beyond the v1 chip, hover.
 
-### Tests
+### Tests (scene3d.js homes; View3D stays untested per house practice)
 
-- scene3d: `uvPlanar` (period math, y negation convention);
-  `gridLines` (spacing, extent, axis colors as data); slab UV populated
-  only on the textured path.
-- Pure picking map: `shapeRanges` construction (merge order, counts sum to
-  vertex total), faceIndex→shapeId resolution incl. last-face edge.
-- No new React tests (headed validation covers interaction).
+- `uvPlanar` (period math from world feet, no negation, period 1 identity).
+- `gridLines` (spacing counts, extent margin, axis color entries present).
+- `buildShapeRanges` (merge-order accumulation; counts sum to the vertex
+  total) and `resolveShapeAt` (first/middle/last face, boundary ordinal,
+  out-of-range → null).
+- No slab-UV population test in the pure lib (the attribute write lives
+  in View3D's slabGeometry; the VALUES are uvPlanar's, already covered).
 
 ### Docs
 
-USER_GUIDE §18 (click-select, the label, Environment section incl.
-Backdrops/Pastel/Edges/Grid, finish textures per condition, all
-non-persistent; disclosures: textures runtime-only, not persisted),
-README Features bullet, FEATURES.md row, CHANGELOG. No MCP surface.
+USER_GUIDE §18 (click-select + label incl. units/nominal rules, the
+Environment section, finish textures incl. runtime-only disclosure,
+all non-persistent; the isolation flow paragraph updated for the frozen-
+focus ruling), README Features bullet, FEATURES.md row, CHANGELOG. No MCP.
 
 ### Non-goals (v1)
 
-- Hover highlighting (v1 is selected-label only).
-- Multi-select / box select.
-- Texture persistence in .otk; texture library per finish tag.
+- Hover highlighting; multi-select / box select.
+- Texture persistence (.otk) and per-finish-tag texture libraries.
 - Fog, contact shadows, lit materials, skyboxes.
+- In-overlay selection re-entering focus/isolation (frozen by design;
+  reopen re-snapshots).
 - 2D-canvas equivalents of any of this.
