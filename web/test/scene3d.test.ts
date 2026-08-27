@@ -295,6 +295,155 @@ test("isolate3D: selected floor + derived base + label-equal siblings; unlinked 
   assert.equal(isolate3D(null, shapes as any), null);
 });
 
+// ── isolate3D room membership (spec addendum 2026-08-26e, r5 rev 2) ────────
+
+const ROOM_A = { id: "fA", sheet_id: "a", label: "A", measure_role: "floor_area", verts_norm: [[0, 0], [0.2, 0], [0.2, 0.2], [0, 0.2]], computed: {} };
+const ROOM_B = { id: "fB", sheet_id: "a", label: "B", measure_role: "floor_area", verts_norm: [[0.2, 0], [0.4, 0], [0.4, 0.2], [0.2, 0.2]], computed: {} };
+const IN_A: [number, number] = [0.1, 0.1];
+const IN_B: [number, number] = [0.3, 0.1];
+const ON_WALL: [number, number] = [0.199, 0.1]; // inside both outsets — the shared-wall overlap
+const NO_ROOM: [number, number] = [0.6, 0.6];
+
+function sq(center: [number, number], half: number): [number, number][] {
+  const [cx, cy] = center;
+  return [[cx - half, cy - half], [cx + half, cy - half], [cx + half, cy + half], [cx - half, cy + half]];
+}
+
+test("isolate3D: deduct centroid strictly inside the resolved room joins", () => {
+  const ded = { id: "d1", measure_role: "deduct", verts_norm: sq(IN_A, 0.02), computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, ded] as any);
+  assert.equal(vis!.has("d1"), true);
+});
+
+test("isolate3D: deduct centroid strictly inside another room drops", () => {
+  const ded = { id: "d2", measure_role: "deduct", verts_norm: sq(IN_B, 0.02), computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, ded] as any);
+  assert.equal(vis!.has("d2"), false);
+});
+
+test("isolate3D: deduct centroid on the shared-wall overlap stays", () => {
+  const ded = { id: "d3", measure_role: "deduct", verts_norm: sq(ON_WALL, 0.001), computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, ded] as any);
+  assert.equal(vis!.has("d3"), true);
+});
+
+test("isolate3D: deduct centroid in no room stays", () => {
+  const ded = { id: "d4", measure_role: "deduct", verts_norm: sq(NO_ROOM, 0.02), computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, ded] as any);
+  assert.equal(vis!.has("d4"), true);
+});
+
+test("isolate3D: unlabeled unlinked floor_area centroid inside another room drops", () => {
+  const fx = { id: "fx", measure_role: "floor_area", verts_norm: sq(IN_B, 0.02), computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, fx] as any);
+  assert.equal(vis!.has("fx"), false);
+});
+
+test("isolate3D: unlabeled unlinked floor_area centroid inside the resolved room joins (a labeled sibling already joins via label)", () => {
+  const fx = { id: "fx", measure_role: "floor_area", verts_norm: sq(IN_A, 0.02), computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, fx] as any);
+  assert.equal(vis!.has("fx"), true);
+});
+
+test("isolate3D: graph-admitted shape stays admitted even when its geometry sits in another room (precedence)", () => {
+  const linked = { id: "l1", measure_role: "linear", verts_norm: sq(IN_B, 0.02), computed: {}, origin: { derived: { from_shape_id: "fA" } } };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, linked] as any);
+  assert.equal(vis!.has("l1"), true);
+});
+
+test("isolate3D: count point inside the resolved room joins", () => {
+  const cnt = { id: "c1", measure_role: "count", verts_norm: [IN_A], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, cnt] as any);
+  assert.equal(vis!.has("c1"), true);
+});
+
+test("isolate3D: count point inside another room drops", () => {
+  const cnt = { id: "c2", measure_role: "count", verts_norm: [IN_B], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, cnt] as any);
+  assert.equal(vis!.has("c2"), false);
+});
+
+test("isolate3D: count point on the shared-wall overlap stays", () => {
+  const cnt = { id: "c3", measure_role: "count", verts_norm: [ON_WALL], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, cnt] as any);
+  assert.equal(vis!.has("c3"), true);
+});
+
+test("isolate3D: 2-vertex run along one room's own wall joins", () => {
+  const run = { id: "r1", measure_role: "linear", verts_norm: [[0, 0.05], [0, 0.15]], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, run] as any);
+  assert.equal(vis!.has("r1"), true);
+});
+
+test("isolate3D: run strictly inside another room drops", () => {
+  const run = { id: "r2", measure_role: "surface_area", verts_norm: [[0.25, 0.05], [0.3, 0.05]], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, run] as any);
+  assert.equal(vis!.has("r2"), false);
+});
+
+test("isolate3D: run straddling both rooms stays", () => {
+  const run = { id: "r3", measure_role: "linear", verts_norm: [[0.1, 0.1], [0.3, 0.1]], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, run] as any);
+  assert.equal(vis!.has("r3"), true);
+});
+
+test("isolate3D: empty-verts run stays", () => {
+  const run = { id: "r4", measure_role: "surface_area", verts_norm: [], computed: {} };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, run] as any);
+  assert.equal(vis!.has("r4"), true);
+});
+
+test("isolate3D: transition selection resolves BOTH adjoining rooms — membership admits shapes in either", () => {
+  const tr = { id: "tr1", measure_role: "linear", verts_norm: [[0.19, 0.19], [0.21, 0.19]], computed: {}, origin: { derived: { between_shape_ids: ["fA", "fB"] } } };
+  const dInA = { id: "dInA", measure_role: "deduct", verts_norm: sq(IN_A, 0.02), computed: {} };
+  const dInB = { id: "dInB", measure_role: "deduct", verts_norm: sq(IN_B, 0.02), computed: {} };
+  const vis = isolate3D("tr1", [ROOM_A, ROOM_B, tr, dInA, dInB] as any);
+  assert.equal(vis!.has("dInA"), true);
+  assert.equal(vis!.has("dInB"), true);
+});
+
+test("isolate3D: selecting a derived base ring isolates the full room family (re-rooted walk, not the clicked member's own label)", () => {
+  const base = { id: "b1", measure_role: "linear", verts_norm: [[0.01, 0.01], [0.19, 0.01]], computed: {}, origin: { derived: { from_shape_id: "fA" } } };
+  const sibling = { id: "sib", label: "A", measure_role: "surface_area", verts_norm: sq(NO_ROOM, 0.02), computed: {} };
+  const vis = isolate3D("b1", [ROOM_A, ROOM_B, base, sibling] as any);
+  assert.equal(vis!.has("sib"), true);
+});
+
+test("isolate3D: room with a hole excludes a shape sitting in the hole (RAW hole test)", () => {
+  const roomWithHole = { ...ROOM_A, verts_norm_holes: [[[0.198, 0.05], [0.2, 0.05], [0.2, 0.15], [0.198, 0.15]]] };
+  const cnt = { id: "cHole", measure_role: "count", verts_norm: [[0.199, 0.1]], computed: {} };
+  const vis = isolate3D("fA", [roomWithHole, ROOM_B, cnt] as any);
+  assert.equal(vis!.has("cHole"), false);
+});
+
+test("isolate3D: concave deduct whose centroid falls outside its own ring falls back to vertex supermajority", () => {
+  const chevron = {
+    id: "concave",
+    measure_role: "deduct",
+    verts_norm: [
+      [0.01, 0.01], [0.09, 0.01], [0.09, 0.02], [1, 0.5], [1, 0.52], [0.09, 0.03], [0.09, 0.09], [0.01, 0.09],
+    ],
+    computed: {},
+  };
+  const vis = isolate3D("fA", [ROOM_A, ROOM_B, chevron] as any);
+  assert.equal(vis!.has("concave"), true);
+});
+
+test("isolate3D: <3-vertex room ring degrades (no throw); the room contributes no ring", () => {
+  const degenerateRoom = { id: "fDeg", sheet_id: "a", label: "D", measure_role: "floor_area", verts_norm: [[0, 0], [0.1, 0]], computed: {} };
+  const cnt = { id: "cDeg", measure_role: "count", verts_norm: [[0.05, 0.01]], computed: {} };
+  assert.doesNotThrow(() => isolate3D("fDeg", [degenerateRoom, cnt] as any));
+  const vis = isolate3D("fDeg", [degenerateRoom, cnt] as any);
+  assert.equal(vis!.has("cDeg"), true);
+});
+
+test("isolate3D: no-room selection falls back wholesale — legacy stay-visible semantics, membership never consulted", () => {
+  const wall = { id: "w1", measure_role: "linear", verts_norm: [[0, 0], [0.05, 0]], computed: {} };
+  const unlabeledFloor = { id: "f2", measure_role: "floor_area", verts_norm: sq(NO_ROOM, 0.02), computed: {} };
+  const vis = isolate3D("w1", [wall, unlabeledFloor] as any);
+  assert.equal(vis!.has("f2"), true);
+});
+
 // ── uvPlanar (spec addendum r4 rev 3, part B) ───────────────────────────────
 
 test("uvPlanar: period 1 is identity — world feet in, unscaled", () => {

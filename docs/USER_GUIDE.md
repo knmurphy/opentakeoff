@@ -1058,6 +1058,14 @@ fallback the chip says so. Clicking empty space deselects. While the view
 is open, the destructive keys (Delete, ⌘Z, Esc) pause so nothing changes
 underneath you.
 
+**What isolation means.** Selecting a shape before you open the view (or
+reopening with one selected) isolates its room: the room's own takeoff
+stays, derived base and transition runs follow their floors, and shapes
+strictly inside the room — thresholds, deducts, unlabelled floors, wall
+runs traced inside it — follow it too, wherever they came from. Runs
+sitting ON a shared wall join both rooms; runs straddling two rooms, and
+anything that can't be attributed, stay visible rather than guess.
+
 **Finishes.** Below Plan, a **Finishes** section lists every condition that
 owns floor area: load a manufacturer's texture image and it tiles onto
 that condition's slabs at a real-world period you set (default 3 ft),

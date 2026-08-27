@@ -51,6 +51,13 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   Environment section adds Backdrop (paper-white gradient or HUD dark — the Export
   PNG now carries the real backdrop with legible footer ink in both themes instead of
   a hardcoded navy), Pastel fills, and Edges rims.
+- **Room membership for 3D isolation.** Selecting a shape isolates its ROOM, not just
+  its links: thresholds, deducts, unlabelled floors, and wall runs are attributed by
+  point-in-polygon containment (normalized space, outset rings) — shapes inside the
+  room follow it, shapes inside other rooms drop, and ambiguous cases (shared walls,
+  straddles, unattributable geometry) stay visible rather than guess. Selecting a
+  transition isolates both adjoining rooms; selecting a derived base ring isolates the
+  whole room family.
 
 ## 2026-08-24 — the takeoff goes back into CAD
 
