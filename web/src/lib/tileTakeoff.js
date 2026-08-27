@@ -198,7 +198,12 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
     Object.entries(tile_layout?.edge_overrides || {}).map(([i, o]) => [i, o?.exposure]),
   );
   const exposures = edgeExposures({ ring_ft, overrides });
-  const byKind = trimTallies(exposures);
+  // Trim pieces are cut at the field SKU's long dimension (a 12×24 tile →
+  // 2 ft bullnose pieces), never the 1.0 ft fallback — that fallback is only
+  // for callers with no SKU on hand (borders.ts DEFAULT_PIECE_LF).
+  const fieldSku = primaryUsableSku(tile_setup);
+  const piece_lf = fieldSku ? Math.max(Number(fieldSku.w_in) || 0, Number(fieldSku.h_in) || 0) / 12 : 1.0;
+  const byKind = trimTallies(exposures, { piece_lf: piece_lf > 0 ? piece_lf : 1.0 });
   const corners = cornerTallies(ring_ft, exposures);
   summary.trim = {
     byKind,
@@ -365,12 +370,16 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
       agg.trimTotals.pieces += summary.trim.pieces;
       agg.trimTotals.corner_outside += summary.trim.corner_outside;
       agg.trimTotals.corner_inside += summary.trim.corner_inside;
-      agg.jointTotals.perimeter_lf += summary.joints.perimeter_lf;
-      agg.jointTotals.field_lf += summary.joints.field_lf;
-      agg.jointTotals.transition_lf += summary.joints.transition_lf;
-      agg.jointTotals.total_lf += summary.joints.total_lf;
-      agg.jointTotals.fieldGridSpacing_ft = summary.joints.fieldGridSpacing_ft;
     }
+    // Movement joints are pure ring geometry — every contributed shape adds its
+    // perimeter/field LF whether or not it carries a confirmed trim edge (the
+    // finalize `hasTrim` gate is what withholds the whole joint figure when NO
+    // shape on the condition had a confirmed trim edge).
+    agg.jointTotals.perimeter_lf += summary.joints.perimeter_lf;
+    agg.jointTotals.field_lf += summary.joints.field_lf;
+    agg.jointTotals.transition_lf += summary.joints.transition_lf;
+    agg.jointTotals.total_lf += summary.joints.total_lf;
+    agg.jointTotals.fieldGridSpacing_ft = summary.joints.fieldGridSpacing_ft;
   }
 
   for (const agg of byCond.values()) {
@@ -507,12 +516,16 @@ export function tileReportRows(tileByCond, rows) {
       // Trim + movement joints (M8 Task 8): trim/joint LF are purchase
       // figures (installed linear stock, order rounds by pieces) so they
       // scale by the condition ×N multiplier like Safe/boxes/grout; corner
-      // EA is an as-measured count of the room's own geometry, never ×N.
+      // EA is an as-measured count of the room's own geometry, never ×N. The
+      // per-kind breakdown scales the SAME way (its length_lf must sum to the
+      // ×N trim_lf beside it, and pieces are ordered per unit).
       trim_lf: ti.trim ? ti.trim.length_lf * mult : 0,
       corner_outside: ti.trim ? ti.trim.corner_outside : 0,
       corner_inside: ti.trim ? ti.trim.corner_inside : 0,
       joint_lf: ti.joints ? ti.joints.total_lf * mult : 0,
-      trim_by_kind: ti.trim ? ti.trim.byKind : [],
+      trim_by_kind: ti.trim
+        ? ti.trim.byKind.map((k) => ({ ...k, length_lf: k.length_lf * mult, pieces: k.pieces * mult }))
+        : [],
     });
   }
   return out;

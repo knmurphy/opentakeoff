@@ -906,6 +906,8 @@ test("tileReportRows: trim_lf (x mult), corner_outside/corner_inside (as-measure
   assert.equal(out[0].joint_lf, condSummary.joints.total_lf * 2);
   assert.ok(Array.isArray(out[0].trim_by_kind));
   assert.equal(out[0].trim_by_kind.length, 1);
+  assert.equal(out[0].trim_by_kind[0].length_lf, condSummary.trim.byKind[0].length_lf * 2);
+  assert.equal(out[0].trim_by_kind[0].pieces, condSummary.trim.byKind[0].pieces * 2);
 });
 
 test("computeTileTakeoff/tileReportRows: a no-trim/no-joints-confirmed room still figures with no NaN (keys absent or zero)", () => {
@@ -927,4 +929,28 @@ test("computeTileTakeoff/tileReportRows: a no-trim/no-joints-confirmed room stil
   assert.equal(out[0].joint_lf, 0);
   assert.deepEqual(out[0].trim_by_kind, []);
   assert.ok(!Number.isNaN(out[0].trim_lf));
+});
+
+test("summarizeShape: trim pieces are cut at the field SKU's long dimension (12x24 -> 2ft pieces, not 1ft)", () => {
+  const cond = makeTileCondition();
+  cond.tile_setup.skus[0].h_in = 24;   // 12x24 -> long face 2ft
+  const shape = makeShapeWithOverrides(cond.id, { 0: { exposure: "trim", confirmed: true } });
+  const { byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const summary = byShape.get("shapeTrim");
+  assert.ok(summary, "expected a byShape summary");
+  assert.equal(summary.trim.length_lf, 4);   // one 4ft edge
+  assert.equal(summary.trim.pieces, 2);      // ceil(4ft / 2ft) = 2, NOT ceil(4/1)=4
+});
+
+test("computeTileTakeoff: movement joints accumulate for EVERY room, not only trimmed rooms (mixed condition)", () => {
+  const cond = makeTileCondition();
+  const trimmed = makeShapeWithOverrides(cond.id, { 0: { exposure: "trim", confirmed: true } });
+  const untrimmed = { ...makeShape(cond.id), id: "untrimmed" };
+  const { byCond } = computeTileTakeoff([cond], [trimmed, untrimmed], dimsFor, uppFor);
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.ok(agg.joints, "hasTrim true (one trimmed room) => joints emitted");
+  // Both rooms are 4x4ft (perimeter 16ft each, field grid 0) => 32ft total.
+  assert.equal(agg.joints.perimeter_lf, 32);
+  assert.equal(agg.joints.total_lf, 32);
 });

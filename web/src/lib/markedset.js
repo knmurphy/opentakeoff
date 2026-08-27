@@ -925,7 +925,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
           // gives us the cut dimensions the overlay type doesn't carry.
           const cells = summary.layout.classified.filter((c) => c.cls !== "out");
           const { full, cut, corner, hole } = summary.counts;
-          tdraw(`${cond?.finish_tag || "Tile"} · ${full} full · ${cut} cut · ${corner} corner${hole ? ` · ${hole} hole` : ""}`, 14, 30 + row * 14, 8.5, muted);
+          tdraw(`${cond?.finish_tag || "Tile"} · ${full} full · ${cut} cut · ${corner} corner${hole ? ` · ${hole} hole` : ""}`, 14, 30 + row * 26, 8.5, muted);
           row++;
           for (let i = 0; i < overlay.tiles.length; i++) {
             const t = overlay.tiles[i];

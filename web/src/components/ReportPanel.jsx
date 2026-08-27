@@ -22,6 +22,7 @@ import { getAccessToken } from "../lib/google/auth.js";
 import { shapesDetail, shapesToCsv, shapesToJson } from "../lib/shapesExport.js";
 import { buildSheetDxf, dxfFileName, DXF_MIME } from "../lib/dxf.js";
 import { rfisToCsv, rfisToJson } from "../lib/rfi.js";
+import { csvEsc } from "../lib/csv.js";
 import { reportWorkbook, buildXlsx } from "../lib/xlsx.js";
 import { buildContribution, sendContribution, isContributeConfigured } from "../lib/contribute.js";
 import { activeTheme, saveActiveThemeFile, clearActiveTheme } from "../lib/reportTheme.js";
@@ -385,7 +386,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
     const lines = [header.join(",")];
     for (const r of tileCutRows) {
       for (const cut of r.cutsheet) {
-        lines.push([r.finish_tag, cut.w_in, cut.h_in, cut.count, cut.lShaped ? "yes" : "no", cut.corner ? "yes" : "no"].join(","));
+        lines.push([csvEsc(r.finish_tag), cut.w_in, cut.h_in, cut.count, cut.lShaped ? "yes" : "no", cut.corner ? "yes" : "no"].join(","));
       }
     }
     downloadText(`${baseName}_tile_cutsheet.csv`, lines.join("\n"), "text/csv");
