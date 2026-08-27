@@ -188,7 +188,7 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
 }
 
 // ── the whole takeoff, figured ──────────────────────────────────────────────
-// computeTileTakeoff(conditions, shapes, dimsFor, uppFor) →
+// computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache?) →
 //   { byCond: Map(condition_id → summary), byShape: Map(shape_id → summary) }
 //
 // dimsFor(sheetId) → {w,h}|null (bitmap px), uppFor(sheetId) → feet-per-px|null.
@@ -208,12 +208,28 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
 // computeRollTakeoff's orderFt/rollCount:
 // "the condition ×N multiplier applies at the report seam like every other
 // quantity" (rollTakeoff.js:100).
-export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
+export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
   const byCond = new Map();
   const byShape = new Map();
   const tileConds = (conditions || []).filter(hasTileSetup);
   if (!tileConds.length) return { byCond, byShape };
   const condById = new Map(tileConds.map((c) => [c.id, c]));
+
+  // Optional cross-render solve cache (perf #2). A shape's summary is a PURE
+  // function of (tile_setup, verts_norm, verts_norm_holes, scale, tile_layout);
+  // the key below is exactly those inputs, so a HIT guarantees byte-identical
+  // inputs and therefore a byte-identical solve — a reused summary can never
+  // diverge from a fresh figuring (the drawn==counted contract). tile_setup is
+  // stringified ONCE per condition. NUL separators can't occur inside a JSON
+  // number/array, so distinct field runs can never alias into one key.
+  //
+  // A cached summary (and its layout.classified cells) is reused BY REFERENCE
+  // across renders. Every downstream reader — byCond finalize below, the canvas
+  // overlay, tileQA, tileReportRows, the MCP snapshot — only READS it (audited).
+  // Keep it so: mutating a summary or a classified cell in place would silently
+  // corrupt the next render's reuse.
+  const setupSigById = cache ? new Map(tileConds.map((c) => [c.id, JSON.stringify(c.tile_setup)])) : null;
+  const seenShapeIds = cache ? new Set() : null;
 
   // get-or-create the condition aggregate — pulled out so a shape SKIPPED
   // below (unscaled sheet, degenerate ring) can still land its exclusion on
@@ -257,9 +273,24 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
       continue;
     }
 
-    const ring_ft = ringFt(s.verts_norm, dims, upp);
-    const holes_ft = (s.verts_norm_holes || []).map((ring) => ringFt(ring, dims, upp));
-    const summary = summarizeShape(cond.tile_setup, ring_ft, holes_ft, s.tile_layout);
+    let summary;
+    const sig = cache
+      ? setupSigById.get(cond.id) +
+        "\u0000" + upp + "\u0000" + dims.w + "\u0000" + dims.h +
+        "\u0000" + JSON.stringify(s.verts_norm) +
+        "\u0000" + JSON.stringify(s.verts_norm_holes || null) +
+        "\u0000" + JSON.stringify(s.tile_layout || null)
+      : null;
+    const cached = cache ? cache.get(s.id) : null;
+    if (cached && cached.sig === sig) {
+      summary = cached.summary;
+    } else {
+      const ring_ft = ringFt(s.verts_norm, dims, upp);
+      const holes_ft = (s.verts_norm_holes || []).map((ring) => ringFt(ring, dims, upp));
+      summary = summarizeShape(cond.tile_setup, ring_ft, holes_ft, s.tile_layout);
+      if (cache) cache.set(s.id, { sig, summary });
+    }
+    if (seenShapeIds) seenShapeIds.add(s.id);
     byShape.set(s.id, summary);
 
     const agg = aggFor(cond);
@@ -329,6 +360,13 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor) {
     }
     delete agg.bandBySku;
     delete agg.classified;
+  }
+
+  // Evict entries for shapes no longer figured this pass (deleted, re-tagged
+  // off floor_area, or moved onto an unscaled sheet) so the cache tracks the
+  // live tiled-shape set and never grows unbounded across a session.
+  if (cache) {
+    for (const id of cache.keys()) if (!seenShapeIds.has(id)) cache.delete(id);
   }
 
   return { byCond, byShape };

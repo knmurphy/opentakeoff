@@ -109,11 +109,18 @@ export function reusePlanForCondition(
   reuseOpts: { enabled?: boolean; sliver_threshold_in?: number; kerf_in?: number },
 ): ReusePlanResult;
 
+// The optional `cache` is a cross-render per-shape solve cache: computeTileTakeoff
+// reuses a shape's prior summary when its inputs (tile_setup/verts/scale/tile_layout)
+// are byte-identical, and prunes entries for shapes it no longer figures. Omit it
+// (MCP, tests) for the pure, un-cached behavior.
+export type TileTakeoffCache = Map<string, { sig: string; summary: TileShapeSummary }>;
+
 export function computeTileTakeoff(
   conditions: readonly unknown[],
   shapes: readonly unknown[],
   dimsFor: (sheetId: string) => { w: number; h: number } | null,
   uppFor: (sheetId: string) => number | null,
+  cache?: TileTakeoffCache,
 ): TileTakeoff;
 
 export function tileReportRows(

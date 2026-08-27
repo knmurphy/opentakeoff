@@ -1222,6 +1222,11 @@ export default function TakeoffCanvas() {
   // dimsFor/uppFor closures, same dep list (uppFor reads scales + a pinned
   // ref, never listed directly).
   const lastTileRef = useRef(null);
+  // Cross-render per-shape solve cache (perf #2): unchanged rooms are reused
+  // when any OTHER shape/condition ref changes, so an edit re-solves only the
+  // room that moved. Cleared on project/snapshot reset (shape ids are reused
+  // across projects). See computeTileTakeoff's cache doc.
+  const tileTakeoffCacheRef = useRef(new Map());
   const tileTakeoff = useMemo(
     () => {
       // A geometry drag rewrites `shapes` every pointermove with a transient,
@@ -1232,7 +1237,7 @@ export default function TakeoffCanvas() {
       // live — onPointerUp clears dragRef BEFORE the commit replaces `shapes`,
       // so the very next render figures fresh on the released geometry.
       if (isGeomDrag(dragRef.current) && lastTileRef.current) return lastTileRef.current;
-      const r = computeTileTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k));
+      const r = computeTileTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k), tileTakeoffCacheRef.current);
       lastTileRef.current = r;
       return r;
     },
@@ -1906,6 +1911,7 @@ export default function TakeoffCanvas() {
     setLayerOverrides(lov);
     maskCacheRef.current.clear();
     netCacheRef.current.clear();   // a snapshot/project load must not inherit the replaced project's per-sheet net (same-named sheet at same ftPx)
+    tileTakeoffCacheRef.current.clear();   // shape ids are reused across projects — a stale summary would misdraw/miscount the new project's room
     // additive `stitches` (#161) — sanitize-gated like approvals; else-clear so a
     // snapshot load can't inherit the replaced project's composites. Sanitized
     // BEFORE group normalization: a solo stitch key in sheet_group is only a
@@ -2185,6 +2191,7 @@ export default function TakeoffCanvas() {
     sheetStatsRef.current.clear();
     rasterMaskCacheRef.current.clear();
     netCacheRef.current.clear();   // sheet+scale-keyed like the mask caches: a same-named sheet at the same ftPx must NOT inherit the prior project's net
+    tileTakeoffCacheRef.current.clear();   // shape ids are reused across projects — a stale summary would misdraw/miscount the new project's room
     canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
     renderScalesRef.current.clear();

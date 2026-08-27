@@ -665,3 +665,91 @@ test("computeTileTakeoff: a zero-height sheet dims is excluded like a zero-width
   assert.ok(agg);
   assert.ok(agg.warnings.some((w: string) => w.includes("unscaled sheet")));
 });
+
+// ── per-shape solve cache (cross-render accelerator, opt-in 5th arg) ─────────
+// computeTileTakeoff takes an optional `cache` Map that lets it reuse a prior
+// figuring's per-shape summary whenever that shape's inputs are byte-identical
+// (tile_setup, verts_norm, verts_norm_holes, scale, tile_layout). It is a PURE
+// accelerator: results must be byte-identical to a fresh no-cache figuring, a
+// HIT must reuse the very same summary OBJECT (proving no re-solve), and every
+// input that changes the solve must MISS. This is the drawn==counted contract.
+test("computeTileTakeoff cache: hits are byte-identical to a fresh figuring and reuse the same summary object", () => {
+  const cond = makeTileCondition();
+  const a = makeRect("rA", cond.id, 0.05, 0.05);
+  const b = makeRect("rB", cond.id, 0.05, 0.4);
+  const shapes = [a, b];
+
+  const baseline = computeTileTakeoff([cond], shapes, dimsFor, uppFor);
+  const cache = new Map();
+  const pass1 = computeTileTakeoff([cond], shapes, dimsFor, uppFor, cache);
+  const pass2 = computeTileTakeoff([cond], shapes, dimsFor, uppFor, cache);
+
+  assert.deepStrictEqual(pass1.byShape, baseline.byShape, "cached pass1 byShape must equal a fresh no-cache figuring");
+  assert.deepStrictEqual(pass1.byCond, baseline.byCond, "cached pass1 byCond must equal a fresh no-cache figuring");
+  assert.deepStrictEqual(pass2.byShape, baseline.byShape, "an all-hit pass must still equal a fresh figuring");
+  assert.strictEqual(pass2.byShape.get("rA"), pass1.byShape.get("rA"), "a hit reuses the same summary object");
+  assert.strictEqual(pass2.byShape.get("rB"), pass1.byShape.get("rB"), "a hit reuses the same summary object");
+});
+
+test("computeTileTakeoff cache: a geometry edit re-solves only the edited shape; the other reuses its summary", () => {
+  const cond = makeTileCondition();
+  const a = makeRect("rA", cond.id, 0.05, 0.05);
+  const b = makeRect("rB", cond.id, 0.05, 0.4);
+  const cache = new Map();
+  const pass1 = computeTileTakeoff([cond], [a, b], dimsFor, uppFor, cache);
+
+  const bEdited = {
+    ...b,
+    verts_norm: [[0.05, 0.4], [0.9, 0.4], [0.9, 0.7], [0.05, 0.7]] as [number, number][],
+  };
+  const pass2 = computeTileTakeoff([cond], [a, bEdited], dimsFor, uppFor, cache);
+
+  assert.strictEqual(pass2.byShape.get("rA"), pass1.byShape.get("rA"), "the unedited shape reuses its cached summary");
+  assert.notStrictEqual(pass2.byShape.get("rB"), pass1.byShape.get("rB"), "the edited shape re-solves into a new summary");
+  const fresh = computeTileTakeoff([cond], [a, bEdited], dimsFor, uppFor);
+  assert.deepStrictEqual(pass2.byShape, fresh.byShape, "the edited-scene cached result must equal a fresh figuring");
+});
+
+test("computeTileTakeoff cache: a purchase-only tile_setup edit invalidates (no stale order/grout)", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const cache = new Map();
+  const pass1 = computeTileTakeoff([cond], [shape], dimsFor, uppFor, cache);
+  const order1 = pass1.byShape.get("shape1")!.order;
+
+  // Change ONLY purchase margins — geometry and tile size untouched. tileLayoutSig
+  // omits purchase, so keying on it would go stale here; the input-complete key must not.
+  const cond2 = { ...cond, tile_setup: { ...cond.tile_setup, purchase: { breakage_pct: 0.2, attic_pct: 0.15 } } };
+  const pass2 = computeTileTakeoff([cond2], [shape], dimsFor, uppFor, cache);
+  const order2 = pass2.byShape.get("shape1")!.order;
+
+  assert.notStrictEqual(pass2.byShape.get("shape1"), pass1.byShape.get("shape1"), "a setup edit must re-solve, not reuse");
+  assert.ok(order2.withMargin > order1.withMargin, "the higher margins must flow through, not be served stale");
+  const fresh = computeTileTakeoff([cond2], [shape], dimsFor, uppFor);
+  assert.deepStrictEqual(pass2.byShape, fresh.byShape);
+});
+
+test("computeTileTakeoff cache: a scale change (upp) re-solves even with identical verts", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const cache = new Map();
+  const pass1 = computeTileTakeoff([cond], [shape], dimsFor, uppFor, cache);
+  assert.equal(pass1.byShape.get("shape1")!.counts.full, 16, "4x4ft in 12in tile = 16 full");
+
+  const uppHalf = (sheetId: string) => (sheetId === "sheet1" ? 0.02 : null); // room now 2x2 ft
+  const pass2 = computeTileTakeoff([cond], [shape], dimsFor, uppHalf, cache);
+  assert.notStrictEqual(pass2.byShape.get("shape1"), pass1.byShape.get("shape1"), "a scale change must re-solve");
+  assert.equal(pass2.byShape.get("shape1")!.counts.full, 4, "2x2ft in 12in tile = 4 full");
+});
+
+test("computeTileTakeoff cache: a removed shape's entry is pruned", () => {
+  const cond = makeTileCondition();
+  const a = makeRect("rA", cond.id, 0.05, 0.05);
+  const b = makeRect("rB", cond.id, 0.05, 0.4);
+  const cache = new Map();
+  computeTileTakeoff([cond], [a, b], dimsFor, uppFor, cache);
+  assert.equal(cache.size, 2);
+  computeTileTakeoff([cond], [a], dimsFor, uppFor, cache);
+  assert.equal(cache.size, 1, "the removed shape's cache entry must be pruned");
+  assert.ok(cache.has("rA") && !cache.has("rB"));
+});

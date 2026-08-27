@@ -79,11 +79,38 @@ function takeoffCase(name: string, pattern: TilePattern, rooms: Verts[], budgetM
   return { name, budgetMs, run: () => { computeTileTakeoff([cond], shapes, dimsFor, uppFor); } };
 }
 
+// The perf #2 win: with a cross-render cache, an edit re-solves only the room
+// that changed. Prime a 4-room cache, then each timed call presents a fresh
+// geometry for room 0 (a MISS → one re-solve) while rooms 1-3 are byte-
+// identical (HITS). If the cache ever stops working, all four re-solve and
+// this collapses back toward the un-cached "grid · 4 rooms" cost, tripping the
+// budget — that regression is exactly what this case guards.
+function cacheEditCase(): Case {
+  const cond = { id: "c1", finish_tag: "CT-1", multiplier: 1, tile_setup: setup("grid") };
+  const base = [RECT, LSHAPE, RECT, LSHAPE];
+  const cache = new Map();
+  let k = 0;
+  const build = () => {
+    const eps = 1 + (k++ % 1000) * 1e-6; // nudge room 0 to a never-seen ring each call
+    return base.map((verts, i) => ({
+      id: "s" + i, condition_id: "c1", measure_role: "floor_area", sheet_id: "sh",
+      verts_norm: i === 0 ? verts.map(([x, y]): [number, number] => [x * eps, y * eps]) : verts,
+    }));
+  };
+  computeTileTakeoff([cond], build(), dimsFor, uppFor, cache); // prime rooms 1-3
+  return {
+    name: "grid · 4 rooms, cached (1 edit)",
+    budgetMs: 90, // ~5x the warm median; a broken cache re-solves all 4 (~130ms) and trips this
+    run: () => { computeTileTakeoff([cond], build(), dimsFor, uppFor, cache); },
+  };
+}
+
 const cases: Case[] = [
   takeoffCase("grid · rectangle", "grid", [RECT], 120),
   takeoffCase("grid · L-shape", "grid", [LSHAPE], 300),
   takeoffCase("grid · jogged comb", "grid", [JOGGED], 650),
   takeoffCase("grid · 4 rooms", "grid", [RECT, LSHAPE, RECT, LSHAPE], 700),
+  cacheEditCase(),
   takeoffCase("herringbone · 4 rooms", "herringbone", [RECT, LSHAPE, RECT, LSHAPE], 350),
   {
     name: "optimizeOrigin · jogged comb (grid, balanced)",
