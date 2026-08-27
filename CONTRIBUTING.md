@@ -80,6 +80,27 @@ The rules that come up:
 - **Say what a thing does before you say how it's built.** Refusals and limits
   are features here; state them plainly rather than burying them.
 
+
+## Tuning the 3D view
+
+The 3D look is deliberately a handful of constants, each trading one thing.
+Tune them deliberately; they are the whole style:
+
+|Constant|Where|Default|What it trades|
+|---|---|---|---|
+|`PASTEL_LERP`|`View3D.jsx`|0.35|Higher pushes fills further toward white under **Pastel**. Legend swatches always keep the raw condition colors, so raising it widens the gap between legend and scene.|
+|`ROLL_BAND_ALPHA`|`scene3d.js`|0.25|Opacity of the alternating lane bands. Higher = lanes read instantly but fight the plan underlay; lower = subtler than the seams that justify them.|
+|`ROLL_SEAM_HALF_FT`|`scene3d.js`|1/12 ft|Seam ink half-width (1″ total). Follows `FLUSH_HALF_FT`; wider starts to look like a real joint, not ink.|
+|`GRID_MARGIN_FT`|`scene3d.js`|10|Padding around content bounds for the ground grid. Smaller grids clip under the model's shadow-side; larger wastes frame.|
+
+All four ship in every screenshot under `docs/images/3d/` — retune, regenerate
+the fixture screenshots, and compare against the docs to see if the look drifted.
+Every 3D screenshot is reproducible: load `web/test/fixtures/3d-view-test.otk`
+(a project covering every 3D-relevant case — nominal vs. true slab thickness,
+derived base, transitions, wall ribbons, count posts with a per-shape override,
+a deduct, and two roll-goods rooms), regenerate it with
+`cd web && node test/fixtures/make-3d-test-project.mjs`.
+
 ## Architecture in one minute
 
 - **`web/src/pages/TakeoffCanvas.jsx`**—the canvas: pdf.js render, pan/zoom

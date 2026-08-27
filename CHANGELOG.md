@@ -2,6 +2,17 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-08-27 — 3D view documentation
+
+### Added
+- **Illustrated 3D walkthrough.** USER_GUIDE §18 opens with the working order on a
+  real bid — measure, look, fix — with reproducible screenshots (light + dark themes,
+  isolation, roll lanes) under `docs/images/3d/`, all captured from the bundled
+  `3d-view-test.otk` fixture. README gains the hero image and a walkthrough link, and
+  CONTRIBUTING gains a tuning reference for the four style constants
+  (`PASTEL_LERP`, `ROLL_BAND_ALPHA`, `ROLL_SEAM_HALF_FT`, `GRID_MARGIN_FT`) plus the
+  fixture-regeneration note.
+
 ## 2026-08-26 — 3D takeoff view
 
 ### Added

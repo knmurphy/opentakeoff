@@ -998,6 +998,43 @@ scale first — 3D is feet-true or nothing"—and the overlay never mounts. In a
 group, 3D opens on the *focused* panel's sheet (the one you last clicked); it never
 stitches sheets together.
 
+
+**The working order.** On a real bid the 3D view earns its keep in one loop —
+measure, look, fix:
+
+1. **Set the scale, commit the room.** 3D is feet-true or nothing, so the sheet
+   needs its scale first; then trace (or One-Click) the rooms you're pricing.
+2. **Open the view** — press `W` or the **3D** toolbar button. The first frame
+   is deliberately near-top-down, matching the sheet's orientation; drag to
+   orbit into an angle that shows the slabs' thickness and heights.
+3. **Click to identify.** Click any slab, wall run, or post and a chip floats
+   at its centroid with the room label, condition tag, and measured quantity in
+   your display units. A number that surprises you here is usually a trace
+   you want to re-check in 2D.
+4. **Isolate the room in question.** Select a shape on the sheet (Select tool,
+   `V`) and open 3D again — the scene scopes to that room's family: its floors,
+   the base and transitions derived from them, thresholds and deducts inside
+   it. Other rooms drop; anything ambiguous stays visible rather than guess.
+5. **Check the rolls against the Report.** With **Rolls** on, the figured lane
+   bands and seam ink sit right on the carpet slabs — the same cuts and seams
+   the 2D cut overlay and the Report price. Lane count looks wrong? Re-check
+   the room's roll setup before you order.
+6. **Export for the file.** **Export PNG** writes the view exactly as shown —
+   plan underlay, bands, backdrop — with a footer carrying the sheet, scale,
+   date, and the schematic caveat.
+
+![The 3D view with a slab selected — the floating chip reads its room, condition, and quantity](images/3d/light-3d-view.png)
+
+![The same sheet with a room isolated — other rooms drop, ambiguous shapes stay visible](images/3d/light-3d-isolation.png)
+
+![Roll lanes on a carpet condition — alternating bands with seam ink at every lane boundary](images/3d/light-3d-rolls.png)
+
+![Roll lanes up close — a single-lane room and an L-room's figured bands](images/3d/light-3d-rolls-zoom.png)
+
+![The 3D view in the dark theme](images/3d/dark-3d-view.png)
+
+The reference below covers every control in order.
+
 **What you're looking at.** Floors extrude as flat, opaque slabs at their condition's
 thickness (a nominal-thin placeholder plus a legend note when no thickness is set—so an
 unmeasured extrusion never reads as a real floor). Base and other linear runs extrude as ribbon walls at their

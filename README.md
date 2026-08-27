@@ -136,6 +136,9 @@ second use is not a side effect; see [the data layer](#the-data-layer--why-this-
   real-world scale, a ground grid with axes, and a studio Environment
   (Backdrop / Pastel / Edges) — plus legend
   toggles, explode, section cut, and a PNG export with a scale/date footer
+  ([walkthrough](docs/USER_GUIDE.md#18-3d-view)):
+
+  ![The 3D takeoff view — a selected slab identified by a floating chip](docs/images/3d/light-3d-view.png)
 
 Full history: [CHANGELOG.md](CHANGELOG.md) · every capability mapped to its code:
 [FEATURES.md](FEATURES.md)
