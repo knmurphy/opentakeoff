@@ -14,6 +14,7 @@
 // Explicitly EXCLUDED (out of the geometry-derived family entirely):
 //   - demo, floor-prep, mobilization
 import { round2 } from '../num.js';
+import { primaryUsableSku } from '../tileSetup.ts';
 
 export type LaborRom = {
 	weightedSf: number;
@@ -48,11 +49,12 @@ export function computeLaborRom(tileByCond: Map<string, any>): Map<string, Labor
 	const result = new Map<string, LaborRom>();
 	for (const [condId, summary] of tileByCond) {
 		const { tile_setup, counts, trim, joints } = summary;
-		const sku =
-			tile_setup.skus.find((s: { w_in: number; h_in: number }) => s.w_in != null && s.h_in != null) ??
-			tile_setup.skus[0];
+		// Route through the SOLE usable-SKU resolver — the field is tiled in the
+		// FIRST usable SKU (positive w×h), never a zero-size entry, so the size
+		// factor can never disagree with the field solve's own SKU choice.
+		const sku = primaryUsableSku(tile_setup);
+		const sf = sku ? sizeFactor(sku.w_in, sku.h_in) : 1.0;
 		const pf = patternFactor(tile_setup.pattern);
-		const sf = sizeFactor(sku.w_in, sku.h_in);
 		result.set(condId, {
 			weightedSf: round2(counts.keptArea_sf * pf * sf),
 			patternFactor: pf,

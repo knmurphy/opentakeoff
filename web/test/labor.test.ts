@@ -106,3 +106,18 @@ test('computeLaborRom: keeps multiple conditions keyed correctly', () => {
   // basketweave (1.4) * small (1.0) = 1.4 -> 10*1.4=14
   assert.equal(result.get('b')?.weightedSf, 14);
 });
+
+test('computeLaborRom: routes the field SKU through primaryUsableSku — a leading zero-size SKU is skipped', () => {
+  const byCond = new Map();
+  byCond.set('cond-1', {
+    // A zero-size entry first, then a real 12x24 large-format SKU. The sole
+    // resolver (positive w×h) must skip the zero entry; a naive non-null
+    // check would pick it and read sizeFactor(0,12)=1.0 instead of 1.3.
+    tile_setup: { pattern: 'grid', skus: [{ w_in: 0, h_in: 12 }, { w_in: 12, h_in: 24 }] },
+    counts: { full: 1, cut: 0, corner: 0, hole: 0, safe: 1, keptArea_sf: 50 },
+  });
+  const rom = computeLaborRom(byCond).get('cond-1');
+  assert.ok(rom);
+  assert.equal(rom.sizeFactor, 1.3);   // 12x24 is large-format; the 0x12 entry is not usable
+  assert.equal(rom.weightedSf, 65);    // 50 * 1.0 * 1.3
+});
