@@ -1048,6 +1048,30 @@ to the room, so the drawn seam can be shorter than the seam length the Report pr
 Rolls carry into the **Export** PNG as shown, and when they're visible the export footer
 picks up the same drawn-vs-priced seam caveat.
 
+**Click to identify.** Click any shape in the 3D view to select it — the
+selection carries back to the canvas when you close the view, but it never
+moves the camera or isolates mid-look: focus is frozen while the view is
+open and re-snapshots when you reopen it. A chip floats at the shape's
+centroid with its room label, condition tag, and measured quantity in the
+project's display units; where a height or thickness is the visual nominal
+fallback the chip says so. Clicking empty space deselects. While the view
+is open, the destructive keys (Delete, ⌘Z, Esc) pause so nothing changes
+underneath you.
+
+**Finishes.** Below Plan, a **Finishes** section lists every condition that
+owns floor area: load a manufacturer's texture image and it tiles onto
+that condition's slabs at a real-world period you set (default 3 ft),
+tinted by the condition color. Textures are for the look only — they live
+in this browser session and are never saved into the takeoff.
+
+**Environment.** Backdrop swaps the void for a studio backdrop — a
+paper-white gradient in the light theme, the HUD dark in dark; the
+**Export** PNG carries whichever backdrop is on screen. **Pastel** softens
+fills toward white (legend swatches keep the true colors), **Edges** draws
+thin rims on every shape, and **Grid** lays a 1 ft / 10 ft ground grid with
+a cobalt X axis and slate Y axis through the sheet origin. None persist
+between opens.
+
 **Limitations, always on screen.** A persistent, non-dismissible label states what this
 view is not: no wall thickness, no door frames, no casework, flat single-elevation
 floors, a generic base profile, and openings deducted from quantities but not modeled as

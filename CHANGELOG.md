@@ -37,6 +37,20 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   a concave notch clips to the room, so it can draw shorter than the seam length the Report
   prices. Rolls carry into the Export PNG, whose footer picks up the same drawn-vs-priced
   seam caveat when they're visible.
+- **Click-to-select in 3D.** Clicking a shape selects it (works through lane bands and
+  posts; invisible geometry is never selectable) and floats a chip at its centroid —
+  room label, condition tag, measured quantity in the project's display units, with
+  nominal fallback heights marked as nominal. Selecting never moves the camera:
+  focus isolation is frozen while the view is open and re-snapshots on reopen. The
+  destructive keys (Delete, ⌘Z, Esc) now pause while the view is open — fixing a
+  pre-existing bug where Backspace could delete a shape invisibly under the overlay
+  and Escape refit the camera mid-orbit.
+- **Finish textures, grid, and a studio look in 3D.** Per-condition manufacturer
+  texture images tile onto floor slabs at a real-world period (session-only, never
+  saved); a 1 ft / 10 ft ground grid with cobalt/slate axes anchors the sheet; and an
+  Environment section adds Backdrop (paper-white gradient or HUD dark — the Export
+  PNG now carries the real backdrop with legible footer ink in both themes instead of
+  a hardcoded navy), Pastel fills, and Edges rims.
 
 ## 2026-08-24 — the takeoff goes back into CAD
 
