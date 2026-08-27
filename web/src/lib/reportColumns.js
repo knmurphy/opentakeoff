@@ -252,6 +252,72 @@ export function rollColProfile(rollByCond) {
   }));
 }
 
+// ── Tile takeoff (M8) ────────────────────────────────────────────────────────
+// Values arrive via ctx.tileByCond (Map(condition_id → the per-condition tile
+// takeoff summary out of computeTileTakeoff)), the roll/spec/labor seam —
+// never as new row fields. Emitted only when at least one condition actually
+// figures a tile layout. full/cut/corner/area are as-measured (no ×N, they're
+// per-unit piece counts and the kept-area SF of ONE unit); safe/boxes/
+// with-margin/grout/trim/joint are purchase figures and scale ×N like every
+// other order quantity.
+export const TILE_FIELDS = [
+  { key: "tile:full", header: "Tile Full", get: (ti) => ti.counts.full },
+  { key: "tile:cut", header: "Tile Cut", get: (ti) => ti.counts.cut },
+  { key: "tile:corner", header: "Tile Corner", get: (ti) => ti.counts.corner },
+  { key: "tile:area_sf", header: "Tile Area SF", get: (ti) => round2(ti.counts.keptArea_sf) },
+  { key: "tile:safe", header: "Tile Safe", get: (ti, mult) => ti.counts.safe * mult },
+  { key: "tile:boxes", header: "Tile Boxes", get: (ti, mult) => ti.order.boxes * mult },
+  { key: "tile:with_margin", header: "Tile With Margin", get: (ti, mult) => round2(ti.order.withMargin * mult) },
+  { key: "tile:grout_bags", header: "Grout Bags", get: (ti, mult) => ti.grout.bags * mult },
+  { key: "tile:trim_lf", header: "Tile Trim LF", get: (ti, mult) => round2((ti.trim ? ti.trim.length_lf : 0) * mult) },
+  { key: "tile:joint_lf", header: "Tile Joint LF", get: (ti, mult) => round2((ti.joints ? ti.joints.total_lf : 0) * mult) },
+];
+
+export function tileColProfile(tileByCond) {
+  if (!(tileByCond instanceof Map) || !tileByCond.size) return [];
+  return TILE_FIELDS.map((f) => ({
+    key: f.key,
+    header: f.header,
+    defaultVisible: true,
+    tile: true,
+    get: (r, ctx) => {
+      const ti = ctx?.tileByCond?.get(r.id);
+      return ti ? f.get(ti, r.multiplier || 1) : "";
+    },
+  }));
+}
+
+// ── Labor ROM (M8) ───────────────────────────────────────────────────────────
+// Values arrive via ctx.laborRomByCond (Map(condition_id → computeLaborRom's
+// LaborRom, see tileCalc/labor.ts)). weightedSf/trimLf/jointLf are purchase-
+// posture quantities and scale ×N; patternFactor/sizeFactor are unitless
+// multipliers and cutEa/cornerEa are as-measured per-unit counts — none of
+// those four take the row multiplier.
+/** @typedef {import("./tileCalc/labor.js").LaborRom} LaborRom */
+export const LABOR_ROM_FIELDS = [
+  { key: "laborRom:weighted_sf", header: "Labor Weighted SF", get: (li, mult) => round2(li.weightedSf * mult) },
+  { key: "laborRom:pattern_factor", header: "Pattern Factor", get: (li) => li.patternFactor },
+  { key: "laborRom:size_factor", header: "Size Factor", get: (li) => li.sizeFactor },
+  { key: "laborRom:cut_ea", header: "Labor Cut EA", get: (li) => li.cutEa },
+  { key: "laborRom:corner_ea", header: "Labor Corner EA", get: (li) => li.cornerEa },
+  { key: "laborRom:trim_lf", header: "Labor Trim LF", get: (li, mult) => round2(li.trimLf * mult) },
+  { key: "laborRom:joint_lf", header: "Labor Joint LF", get: (li, mult) => round2(li.jointLf * mult) },
+];
+
+export function laborRomColProfile(laborRomByCond) {
+  if (!(laborRomByCond instanceof Map) || !laborRomByCond.size) return [];
+  return LABOR_ROM_FIELDS.map((f) => ({
+    key: f.key,
+    header: f.header,
+    defaultVisible: true,
+    laborRom: true,
+    get: (r, ctx) => {
+      const li = ctx?.laborRomByCond?.get(r.id);
+      return li ? f.get(li, r.multiplier || 1) : "";
+    },
+  }));
+}
+
 // Partition condition rows by one custom column's assigned value, for the
 // report's grouped view → [{ value: string|null, label, rows }]. Order:
 // vocabulary order first, then ad-hoc values (assigned strings missing from
