@@ -894,15 +894,26 @@ reach two floors) and the graph walk RE-ROOTS at the resolved rooms.)
   on-edge crossing noise; disclosed here so nobody re-derives
   eps from feet-true reasoning.) Holes are tested RAW: in-outer AND
   in-no-hole (geometry.js's own pattern).
-- **Point shapes — counts** (single vertex) and **closed rings —
-  deducts AND unlinked unlabeled floor_area** (representative point =
-  `centroid2`; if the centroid falls outside the shape's OWN ring —
-  concave chevron — fall back to the run-style vertex supermajority):
-  test the point against every floor's OUTSET ring. Exactly one resolved
-  room → join. Exactly one OTHER room (and no resolved room) → drop.
-  Else (no room, or 2+ rooms — the shared-wall overlap) → stay. Never
-  silently shrink: a threshold on a doorway or a corner guard on a
-  corner is ambiguous, not wrong.
+- **Point shapes — counts** (single vertex): test the point against
+  every floor's OUTSET ring. Exactly one resolved room → join. Exactly
+  one OTHER room (and no resolved room) → drop. Else (no room, or 2+
+  rooms — the shared-wall overlap) → stay. Never silently shrink: a
+  threshold on a doorway or a corner guard on a corner is ambiguous,
+  not wrong.
+- **Closed rings — deducts** (representative point = `centroid2`,
+  concave → vertex-supermajority fallback): same triage as counts —
+  a stray deduct in no room STAYS (it is an island, not a room).
+- **Closed rings — unlinked unlabeled floor_area** (same
+  representative): floors are DISJOINT — containment can only ever
+  attribute a floor to a room it is NESTED in; a floor that overlaps no
+  resolved room is simply another room, exactly like a labeled
+  other-room floor today. Triage: inside a resolved room (nested) →
+  join; in the outset overlap of resolved + other (ambiguous) → stay;
+  otherwise → DROP. (rev-3 correction, found in live validation: the
+  rev-2 'no room → stay' leg was unreachable-in-practice for floors —
+  disjoint rooms never contain one another — so unlabeled other-room
+  floors stayed visible and isolation was a no-op for them; the rev-2
+  unit fixture passed only because it nested a floor inside another.)
 - **Runs — undecorated `linear` + `surface_area`**: sample every vertex
   AND evenly spaced interior points along each segment (≈8 per segment —
   a 2-vertex run's endpoints sit ON walls; without interior samples the
@@ -924,8 +935,9 @@ reach two floors) and the graph walk RE-ROOTS at the resolved rooms.)
 
 Deduct inside resolved room joins; deduct inside other room drops;
 deduct on the shared-wall overlap stays; deduct in no room stays;
-unlabeled floor in other room drops; unlabeled floor inside the
-  resolved room joins (a labeled sibling already joins via label);
+unlabeled floor in another (disjoint) room drops — the case the rev-3
+  correction exists for; unlabeled floor nested inside the resolved room
+  joins; unlabeled floor in the outset overlap stays;
   graph-admitted shape stays admitted even when membership says other
   room (precedence); count inside joins / other-room
 drops / on-edge stays; 2-vertex run along one room's wall joins; run
