@@ -121,6 +121,7 @@ import { computeRollTakeoff, seamLfByShape } from "../lib/rollTakeoff.js";
 // origin/rotation/edge-override command every gesture below dispatches.
 import TilePanel from "../components/TilePanel.jsx";
 import { computeTileTakeoff } from "../lib/tileTakeoff.js";
+import { computeLaborRom } from "../lib/tileCalc/labor.ts";
 import { hasTileSetup, tileConfig } from "../lib/tileSetup.ts";
 import { solveTileLayout } from "../lib/tileSolve.ts";
 import { effectiveTileSetup } from "../lib/tileGeometry/optimize.ts";
@@ -1298,6 +1299,7 @@ export default function TakeoffCanvas() {
     [conditions, shapes, panelImgs, scales]
   );
   const tileByCond = tileTakeoff.byCond;
+  const laborRomByCond = useMemo(() => computeLaborRom(tileByCond), [tileByCond]);
   // §3.7 persist/reset key — every tiled floor shape's tileLayoutSig, joined.
   // Pure zoom/pan never touches verts_norm/tile_setup/tile_layout, so this
   // string is stable across them; a real geometry/setup/override edit flips
@@ -5633,6 +5635,7 @@ export default function TakeoffCanvas() {
         dark: darkMode, units, sheets: sheetMeta, shapes, markups: exportMarkups, approvals, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
+        uppFor: (k) => uppFor(k),
       });
       downloadBytes(filename, bytes);
       setCommitMsg(`Marked set downloaded — ${filename}`);
@@ -10372,6 +10375,7 @@ export default function TakeoffCanvas() {
           conditionColumns={conditionColumns} shapeLabels={shapeLabels}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown", scale_confirmed: scaleUnconfirmed[sheet_id] !== false }))}
           rollByCond={rollByCond}
+          tileByCond={tileByCond} tileByShape={tileTakeoff.byShape} laborRomByCond={laborRomByCond}
           provenanceCounters={provCounters}
           sheetLabel={(k) => tabLabel(k)}
           sheetDims={(k) => panelByKey(k)?.img}
