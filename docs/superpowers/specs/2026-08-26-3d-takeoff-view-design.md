@@ -655,7 +655,7 @@ README Features bullet, FEATURES.md row, CHANGELOG. No MCP surface.
 - Bands on walls/transitions/counts — floor roll-goods conditions only.
 - Per-shape slab-thickness overrides (do not exist; not invented here).
 
-## Addendum (2026-08-26d, r4 rev 2) — Picking, labels, finishes, grid, studio look
+## Addendum (2026-08-26d, r4 rev 3) — Picking, labels, finishes, grid, studio look
 
 Four shipped-together parts, one review cycle, one validation. (r1 of this
 addendum failed adversarial review FAIL×3 — convergent, vendored-three-
@@ -680,13 +680,28 @@ LF captions etc. remain non-goals.
   effect, which rebuilds everything and calls fitToContent — cold today
   (the overlay blocks 2D selection), HOT the moment 3D clicks select.
   Ruling: `focusIds3d` becomes a SNAPSHOT taken at overlay open (memo
-  keyed [show3d, active3dKey, shapes3d] — frozen while open; refreshed on
-  reopen). In-overlay clicks call `selectShape(id | null)` for the app's
-  shared selection state, and View3D receives the LIVE `selectedId` as a
-  separate prop that drives ONLY the label + a selection tint — never the
-  content effect, never fitToContent. Closing and reopening re-snapshots
+  keyed [show3d, active3dKey] ONLY — selectedId and shapes read from refs
+  at the moment the key flips; shapes3d must NOT be a key, or any mid-open
+  shape mutation re-snapshots from the live selectedId and re-enters the
+  pipeline; stale ids in a frozen Set are harmless — splitByFocus
+  partitions only existing items). In-overlay clicks call
+  `selectShape(id | null)` for the app's shared selection state, and
+  View3D receives the LIVE `selectedId` as a separate prop that drives
+  ONLY the label + a selection overlay — never the content effect, never
+  fitToContent. The selection overlay is a dedicated per-shape highlight
+  mesh (rebuilt in its own selectedId-keyed effect, brightened fill at
+  the shape's own geometry, excluding nothing) — NEVER a material tint,
+  because merged batches share one material per condition and a tint
+  would light up the whole condition. Closing and reopening re-snapshots
   focus from whatever is selected then (the documented select-first flow
   still works exactly as USER_GUIDE §18 describes).
+- **The destructive keyboard listener is gated while the overlay is
+  open** (pre-existing bug, surfaced by this review: Backspace/Delete/
+  ⌘Z/⌘⇧Z/Escape at TakeoffCanvas ~2855-2890 is NOT gated by show3d
+  today — Escape already refits the camera mid-orbit via the live focus
+  memo, and Backspace invisibly deletes the selected shape under the
+  fullscreen overlay). The listener returns early while show3d,
+  mirroring the menuDepth pattern; letter/digit gates unchanged.
 - **Click-vs-drag**: fresh pointerdown/up discriminator on the renderer
   canvas (OrbitControls owns capture): button === 0 AND travel < 5 px AND
   < 400 ms = click. Right/middle never select.
@@ -698,7 +713,12 @@ LF captions etc. remain non-goals.
   verified for ExtrudeGeometry + ribbonGeometry inputs) and
   `resolveShapeAt(ranges, faceIndex) → shapeId | null` (null outside all
   ranges — a guaranteed miss, not a wrong hit). addMesh records the ranges
-  in `mesh.userData.shapeRanges`. Posts keep `userData.shapeIds` via
+  in `mesh.userData.shapeRanges` ONLY at the picking call sites —
+  slab/ribbon/excluded batches (an opt-in parameter). Roll band/seam
+  meshes are addMesh products built from INDEXED ShapeGeometry: they never
+  carry ranges (the non-indexed assert would fire, and indexed faceIndex
+  math nulls every click), so they stay unreachable by construction as
+  the dispatch whitelist requires. Posts keep `userData.shapeIds` via
   instanceId.
 - **Raycast dispatch**: intersect ONLY objects carrying `shapeRanges` (or
   the posts InstancedMesh) — a whitelist, not a blacklist; roll bands/
@@ -728,11 +748,14 @@ LF captions etc. remain non-goals.
   gate is DERIVED — conditions owning floor slabs in the built scene, the
   activeConditions pattern — conditions are role-agnostic in the schema).
   Never excluded volumes. Runtime state, not persisted.
-- **Tiling has ONE scale home**: scene3d gains `uvPlanar(verts_ft,
+- **Tiling has ONE scale home**: scene3d gains `uvPlanar(pts_ft,
   periodFt) → uv pairs` (world feet IN — the toWorldFt negation already
   happened upstream; NO negation inside), and slabGeometry populates the
   UV attribute from it ONLY when a texture is active (untextured path
-  byte-identical to today). `texture.repeat stays (1,1)`;
+  byte-identical to today). CRITICAL seam: uvPlanar is fed the BUILT
+  GEOMETRY's own position (x, w) pairs, PER GEOMETRY VERTEX — not the
+  ring pairs (ExtrudeGeometry duplicates ring vertices for caps and
+  walls; a ring-length attribute is short and broken). `texture.repeat stays (1,1)`;
   `wrapS = wrapT = THREE.RepeatWrapping` (required — ClampToEdge smears
   instead of tiling); `colorSpace = SRGBColorSpace`.
 - **Material**: `map` on the existing per-condition floor material, tinted
