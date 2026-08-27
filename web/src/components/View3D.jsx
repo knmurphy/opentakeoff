@@ -845,7 +845,7 @@ export default function View3D({
     }
     host.add(mesh);
     highlightRef.current = mesh;
-  }, [selectedId, built]);
+  }, [selectedId, built, texState]); // texState: a texture change rebuilds the batches and disposes the old highlight's host — re-create it (refit-free; this effect never calls fitToContent)
 
   // Legend toggles: visibility only, then refit (visible content changed).
   useEffect(() => {

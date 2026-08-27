@@ -2879,10 +2879,9 @@ export default function TakeoffCanvas() {
       const t = e.target.tagName;
       if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
       if (viewRef.current === "gallery") return;
-      // The 3D overlay owns its own destructive keys (Backspace deletes the
-      // selected 3D pick, Escape closes it) — without this gate Backspace
+      // While the 3D overlay is open these destructive keys PAUSE — the
+      // overlay has no key handlers of its own; without this gate Backspace
       // invisibly deleted the 2D-selected shape UNDER the fullscreen overlay
-      // and Escape refit the camera mid-orbit via the live focus memo
       // (pre-existing bug, addendum r4 rev 3 part A). show3dRef.current, not
       // the show3d closure: this effect's dep array below has no show3d, so
       // a closure read would be stale and this gate would no-op.
