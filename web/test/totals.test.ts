@@ -131,12 +131,14 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   // quantities stay RAW feet, the export says which system the user was
   // reading); roll_goods appended after that (#136, always emitted, empty
   // without roll-goods conditions); tile_goods appended last (Task 8,
-  // always emitted, empty without tile-goods conditions)
+  // always emitted, empty without tile-goods conditions); labor_rom appended
+  // last (M8, always emitted, empty without labor figures)
   assert.deepEqual(Object.keys(j),
-    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns", "shape_labels", "by_label", "units", "display_units", "roll_goods", "tile_goods"]);
+    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns", "shape_labels", "by_label", "units", "display_units", "roll_goods", "tile_goods", "labor_rom"]);
   assert.equal(j.display_units, "imperial");
   assert.deepEqual(j.roll_goods, []);   // #136 — always emitted; empty when nothing carries a roll_setup
   assert.deepEqual(j.tile_goods, []);   // Task 8 — always emitted; empty when nothing carries a tile_setup
+  assert.deepEqual(j.labor_rom, []);    // M8 — always emitted; empty without labor figures
   // rfis[] appends after markups (additive v1); linked_markups/linked_sheets derived
   assert.deepEqual(Object.keys(j.rfis[0]),
     ["id", "number", "subject", "question", "status", "to", "priority", "cost_impact", "schedule_impact",
@@ -185,6 +187,14 @@ test("reportJson: tile_goods rides through verbatim; a non-array coerces to [] (
   // @ts-expect-error — intentionally malformed input; reportJson must coerce, not throw
   assert.deepEqual(reportJson({ tileGoods: "corrupt" }).tile_goods, []);
   assert.deepEqual(reportJson({}).tile_goods, [], "omitted -> always emitted empty");
+});
+
+test("reportJson: labor_rom rides through verbatim; a non-array coerces to [] (M8)", () => {
+  const rows = [{ condition_id: "ct", finish_tag: "CT-1", multiplier: 1, weighted_sf: 130, pattern_factor: 1.0, size_factor: 1.3, cut_ea: 6, corner_ea: 2, trim_lf: 10, joint_lf: 40 }];
+  assert.deepEqual(reportJson({ laborRom: rows }).labor_rom, rows);
+  // @ts-expect-error — intentionally malformed input; reportJson must coerce, not throw
+  assert.deepEqual(reportJson({ laborRom: "corrupt" }).labor_rom, []);
+  assert.deepEqual(reportJson({}).labor_rom, [], "omitted -> always emitted empty");
 });
 
 test("reportJson: by_sheet rows serialize round2-ed — incl. ea — with key order intact", () => {
