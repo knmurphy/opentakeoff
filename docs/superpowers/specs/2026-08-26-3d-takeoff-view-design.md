@@ -290,9 +290,18 @@ future work, not folded in silently.
 
 Derived base rings render slightly translucent/dashed relative to hand-traced
 runs, and the caveat survives export via the footer strip — a caveat that lives
-only in UI chrome does not survive a screenshot, and a photoreal base running
-through a double-door reads as "the tool doesn't know where doors are," not as
-a disclosed limit.
+only in UI chrome does not survive a screenshot.
+
+**Owner ruling (2026-08-26, post-ship):** the "base running through a
+double-door reads as 'the tool doesn't know where doors are'" framing
+overstated the problem. The takeoff already breaks linear measurement AROUND
+doors — LF deducts at openings, so the quantities never measure through
+them — and geometry only continues where flooring or base legitimately wraps
+into the adjoining area, in which case a continuous run is the CORRECT
+picture. Continuous ribbons are not a fidelity gap; the footer caveat
+("openings deducted, not shown") remains a quantity disclosure, not an
+apology. The `gaps_norm` slot below stays reserved for a DIFFERENT future
+want (rendering the door gap itself for presentation), not to fix an error.
 
 Future slot, additive, no migration: linear shapes gain `gaps_norm:
 { start, end }[]`; `derive_base` accepts positioned openings (point-on-ring +
@@ -345,7 +354,9 @@ established practice beyond AGENTS.md's literal three). No MCP surfaces.
 
 ## Explicit non-goals / future work
 
-- Positioned door openings (`gaps_norm` + derive_base extension).
+- Positioned door openings (`gaps_norm` + derive_base extension) —
+  presentation-only per the 2026-08-26 owner ruling above (quantities
+  already break at doors; continuous wrap-through is correct as drawn).
 - Point-in-polygon room membership for unlabeled shapes.
 - Roll-seam rendering from `rollgoods.js` figured layouts — **promoted to v1
   by addendum 2026-08-26c (r3)**.
