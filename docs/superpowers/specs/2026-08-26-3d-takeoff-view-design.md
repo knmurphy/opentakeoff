@@ -361,7 +361,8 @@ established practice beyond AGENTS.md's literal three). No MCP surfaces.
   v1 by addendum 2026-08-26e (r5)**.
 - Roll-seam rendering from `rollgoods.js` figured layouts — **promoted to v1
   by addendum 2026-08-26c (r3)**.
-- Vertical section cuts.
+- Vertical section cuts — **shipped in v1** (the section-cut slider;
+  this ledger entry predates the build).
 - MCP view verb — requires headless-browser architecture, specced separately.
 - Stitch panels / elevation data of any kind.
 
