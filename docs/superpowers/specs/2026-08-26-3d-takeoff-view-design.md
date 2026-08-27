@@ -463,7 +463,7 @@ CHANGELOG (amend the existing 2026-08-26 entry if it lands in the same PR).
 - Plan-skin state persistence (resets to on/paper/0.4 per open).
 - Plan in the 2D-canvas report or any MCP surface.
 
-## Addendum (2026-08-26c, r3 rev 2) — Roll-good lanes on the slabs
+## Addendum (2026-08-26c, r3 rev 3) — Roll-good lanes on the slabs
 
 The figured roll layout (rollgoods.js) rendered onto the 3D floor slabs:
 alternating lane bands + explicit seam lines at lane boundaries, so the
@@ -479,8 +479,9 @@ not exist and are not invented here.)
 ### Field glossary (rollgoods strips — all sheet FEET)
 
 - `coverMin`/`coverMax` — the lane's COVERAGE slab: finished goods, exact
-  tiling by the cursor (`coverMax[i] == coverMin[i+1]` at every interior
-  boundary, by construction). Bands are built from these.
+  tiling by the cursor (`coverMax[i] == coverMin[i+1]` between LANE-ADJACENT
+  strips; a dropped lane's span has no floor, so surviving neighbors gap).
+  Bands are built from these.
 - `laneMin`/`laneMax` — the PHYSICAL cut piece, coverage ± seam/wall/door
   expansion. Adjacent pieces OVERLAP by 2×seam allowance — that overlap IS
   the seam. The 2D cut overlay draws these; 3D bands deliberately do not
@@ -503,20 +504,23 @@ not exist and are not invented here.)
   computation feeding both views. A sibling memo derives the 3D payload:
   `rolls3d = useMemo(() => join strips+seams to the BUILT slabs,
   [rollByCond, shapes3d])` — strips join by `srcId == shapeId` so a band
-  emits only where its owning slab exists (layer-hidden rooms have strips
-  but no slab; no floating stripes). The memo is REQUIRED: an inline
+  emits only where its owning slab exists (rooms on other sheets have
+  strips but no slab — rollByCond spans every sheet while shapes3d is the
+  active sheet; no floating stripes). The memo is REQUIRED: an inline
   filter hands View3D a fresh array identity per parent render and rebuilds
   the scene mid-orbit (the documented camera-reset trap; the shapes3d
   pattern exists for exactly this). Sheet switch rides shapes3d identity.
 - **buildScene input contract AMENDED** (this section is the amendment):
-  buildScene gains `rolls: { bands, seams }` where each band is
-  `{poly, z, tag, shapeId, condId, laneIndex}` (poly = world-space flat
-  polygon) and each seam is `{a, b, z, tag, shapeId, condId}` — or the
-  pure lib may consume sheet-feet strips and return both arrays in its
-  OUTPUT schema alongside slabs/ribbons/posts/notes; either way the seam
-  derivation itself lives in rollgoods.js (next to `seamLfBySrc`, single
-  source of truth for "where lanes meet") and scene3d never imports the
-  engine. View3D adds the rolls payload to the sceneResult useMemo deps.
+  buildScene gains `rolls: { bands, seams }` in SHEET FEET, where each band
+  is `{poly, z, tag, shapeId, condId, laneIndex}` (poly = flat polygon,
+  pre-clipped) and each seam is `{poly, z, tag, shapeId, condId}` (thin
+  pre-clipped polygon). ALL clipping/derivation happens upstream in
+  rollgoods helpers called from the rolls3d memo — bands via
+  `clipRingToLaneSlab`, seams via the new seam-segment helper next to
+  `seamLfBySrc` (single source of truth for "where lanes meet") — so
+  scene3d only maps sheet-feet polys → world (the toWorldFt transform) and
+  NEVER imports the engine. View3D adds the rolls payload to the
+  sceneResult useMemo deps.
 - **Bands — coverage polygons, roll material palette.** Per lane:
   `clipRingToLaneSlab(ring, laneAxis, coverMin, coverMax)` (the engine's
   own render-only footprint clip — concave rooms notch correctly instead
@@ -528,18 +532,30 @@ not exist and are not invented here.)
   MeshBasicMaterial, and C-over-C alpha composites to C — condition-color
   bands are mathematically invisible. PARITY: odd `laneIndex` lanes emit a
   band, even lanes emit nothing (an alpha-0 quad is pure rasterization
-  waste); the stripe reads as band-vs-slab contrast.
+  waste); the stripe reads as band-vs-slab contrast. EXCEPTION: a
+  single-lane room (laneCount === 1) bands lane 0 — there is nothing to
+  alternate against, and leaving small rooms unbanded would read as "not
+  figured" (with a 12-ft roll, any room ≤ ~11.5 ft wide is single-lane;
+  small offices and corridors are common).
 - **Seams — thin ribbon quads, dark ink.** At each interior COVERAGE
   boundary (`coverMax[i]`, guarded by `b.laneIndex === a.laneIndex + 1`;
   a dropped lane leaves NO seam — array-consecutive ≠ lane-adjacent),
   spanning the overlap of the two lanes' DE-OVERAGED run extents — the
-  exact interval seamLfBySrc sums. Rendered as flat ribbon quads
-  (buildRibbon's plan-view pattern; `THREE.Line` linewidth is capped at
-  1 device px on most platforms and unreadable at whole-floor framing),
-  half-width `ROLL_SEAM_HALF_FT` (the FLUSH_HALF_FT = 1/12 ft precedent),
-  color a pinned dark neutral ink constant contrasting with both slab fill
-  and band tint. Single-lane rooms emit no seam (nothing adjacent) —
-  correct, not a miss.
+  exact interval seamLfBySrc sums — then FOOTPRINT-CLIPPED via a thin
+  `clipRingToLaneSlab` pass centered on the boundary: the de-overaged
+  extents are min/max BOUNDS, and a lane bridging a concave notch would
+  otherwise stripe dark ink across the void — the exact artifact the bands
+  rule forbids. Consequence, disclosed: when a notch intervenes the DRAWN
+  seam is shorter than the priced seam LF (seamLfBySrc prices the bridged
+  bounds — existing engine behavior, not relitigated). Rendered as flat
+  quads (buildRibbon's plan-view pattern; `THREE.Line` linewidth is capped
+  at 1 device px on most platforms and unreadable at whole-floor framing),
+  half-width `ROLL_SEAM_HALF_FT` (the FLUSH_HALF_FT = 1/12 ft precedent).
+  INK is LUMINANCE-AWARE, chosen at build time from the owning slab's
+  condition color (known when the material is minted): dark slab → light
+  ink, light slab → dark ink — a fixed dark ink vanishes against the
+  PALETTE's near-black `#1f2937`. Single-lane rooms emit no seam (nothing
+  adjacent) — correct, not a miss.
 - **Height**: band z = seam z = the owning slab's z1 + eps, joined per
   strip via srcId → that shape's slab. z1 is the condition's
   `thickness_in/12` (nominal fallback) — there is NO per-shape slab
@@ -554,11 +570,17 @@ not exist and are not invented here.)
   1, seams 2, both after the plan plane's −1. Coplanar transparent
   primitives never rely on distance sort.
 - **Parenting + batching (a stated carve-out, like excluded volumes)**:
-  one MERGED band mesh + one MERGED seam mesh per roll-goods condition,
-  parented under that condition's Group — explode (Group.position) and
-  legend toggles (Group.visible) ride for free; a scene-child batch would
-  strand stripes at deck height mid-explode and keep bands lit for
-  legend-hidden conditions. Merged-per-condition keeps the draw-call
+  MERGED band/seam meshes per roll-goods condition, parented under that
+  condition's Group AND routed through the same addMesh → splitByFocus
+  path as every other role — explode (Group.position), legend toggles
+  (Group.visible), AND selection isolation (focusIds hides out-of-set
+  geometry per shapeId) all ride for free; a scene-child batch would
+  strand stripes at deck height mid-explode, keep bands lit for
+  legend-hidden conditions, and float other rooms' stripes over the plan
+  skin while their focus-hidden slabs are invisible — the ordinary
+  select-a-room-then-open-3D flow. splitByFocus's in-set/out-of-set
+  merged-mesh split applies verbatim (payloads already carry shapeId;
+  worst case 4 meshes per roll-goods condition). This keeps the draw-call
   budget in the parent's "still tens" regime (one mesh per strip is
   hundreds of calls on a 100-room sheet). The Rolls checkbox is a
   VISIBILITY-ONLY walk over the band/seam meshes (the plan-controls
@@ -575,7 +597,9 @@ not exist and are not invented here.)
   ignore slab holes (existing 2D behavior) — bands stripe across holes;
   bands show the COVERAGE slab (finished goods) while the 2D cut overlay
   shows PHYSICAL pieces (which overlap by seam allowance and tuck past
-  walls) — both correct, deliberately different questions.
+  walls) — both correct, deliberately different questions; a seam drawn
+  across a concave notch clips to the room, so drawn seam length can be
+  shorter than the priced seam LF when a notch intervenes.
 - **Scope**: floor_area roll-goods conditions only; no deduct bands; ×N
   multiplier never duplicates geometry (existing ruling); included in
   EXPORT PNG; control resets to ON per overlay open (non-persistent).
@@ -583,7 +607,7 @@ not exist and are not invented here.)
 ### Constants (named, no magic numbers)
 
 `ROLL_BAND_ALPHA = 0.25` · `ROLL_BAND_EPS_FT = 1/48` ·
-`ROLL_SEAM_HALF_FT = 1/12` · `ROLL_SEAM_COLOR` (dark neutral ink) ·
+`ROLL_SEAM_HALF_FT = 1/12` · `ROLL_SEAM_INK_DARK` / `ROLL_SEAM_INK_LIGHT` (luminance-aware pair) ·
 `ROLL_BAND_RENDER_ORDER = 1` · `ROLL_SEAM_RENDER_ORDER = 2`
 
 ### Tests
