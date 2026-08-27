@@ -654,3 +654,115 @@ README Features bullet, FEATURES.md row, CHANGELOG. No MCP surface.
 - Roll direction chosen IN the 3D view (condition roll_setup is authority).
 - Bands on walls/transitions/counts — floor roll-goods conditions only.
 - Per-shape slab-thickness overrides (do not exist; not invented here).
+
+## Addendum (2026-08-26d, r4) — Picking, labels, finishes, grid, studio look
+
+Four shipped-together parts sharing one review cycle and one validation.
+Owner-directed increment; decisions below locked with the owner.
+
+### A — Click-to-select + floating info label
+
+- **Selection feeds the app's existing state**: View3D gains `onSelectShape`
+  → TakeoffCanvas's existing `selectShape(id | null)` (mutually exclusive
+  with markup selection, unchanged semantics). Closing the overlay keeps the
+  selection — the 2D canvas, isolate, and panels already agree.
+- **Click-vs-drag**: fresh pointerdown/up discriminator on the renderer
+  canvas (OrbitControls owns capture; travel < 5 px AND < 400 ms = click).
+  Click empty space → `selectShape(null)` (2D parity).
+- **Picking through merged meshes** (the root fix): `addMesh` records
+  per-merge vertex ranges — `mesh.userData.shapeRanges = [{shapeId,
+  start, count}]` in merge order — and the raycaster maps
+  `intersection.faceIndex × 3 → shapeId`. Posts keep their existing
+  `userData.shapeIds` via `instanceId`. NO per-shape meshes: the draw-call
+  budget is untouched. Roll bands/seams, the plan plane, and the grid set
+  `userData.excludeFromPick` (raycast skips them; a click lands on the
+  owning slab).
+- **One label, for the selected shape** (v1 — no hover, no per-shape
+  clutter): a DOM chip (not a sprite) at the shape's projected centroid,
+  reprojected in the EXISTING rAF loop (unconditional, verified). Content:
+  condition tag, role quantity from `shape.computed` (SF / LF / EA as the
+  role dictates), installed height or thickness, ×N if > 1. Hidden when the
+  shape is focus-hidden, legend-hidden, or behind the camera. Styled like a
+  plan note: mono tabular numerals, square corners, theme-aware, leader
+  line to the centroid.
+
+### B — Manufacturer finish textures (runtime-only)
+
+- **Per-condition, floor slabs only** (`kind === "floor"` — NEVER excluded
+  volumes; deducts stay flat). Runtime state, not persisted (no .otk churn;
+  persistence is a separate future decision).
+- **Feet-true planar UVs, computed in the pure lib**: scene3d gains
+  `uvPlanar(verts_ft, periodFt)`; slabGeometry's UV attribute is populated
+  from world feet (x/period, w/period) instead of being deleted, ONLY when
+  a texture is active (untextured path unchanged — delete stays the default
+  so the untextured render is byte-identical to today).
+- **Material**: `map` on the existing per-condition floor material, tinted
+  by the condition color (`color` multiplies the map — conditions stay
+  distinguishable), sRGB colorSpace, repeat locked to `periodFt`. Panel
+  control per floor condition: load file (createObjectURL → Image →
+  CanvasTexture, the identity.js precedent), period input (default 3 ft),
+  clear. Disposal rides `material.map?.dispose()` in the existing walk.
+- **Export** includes textures as shown.
+
+### C — Ground grid + axes
+
+- **Custom LineSegments** (GridHelper is fixed-color, no feet spacing): 1 ft
+  minor (faint), 10 ft major (strong), extent = fit bounds + margin, built
+  in the pure lib (`gridLines(bounds) → positions/colors pairs`,
+  node-testable). Axis lines: X in cobalt, Y in the danger red, through the
+  sheet origin.
+- `userData.excludeFromFit` + `excludeFromPick`, y = −0.045 (above the plan
+  paper, below slabs), renderOrder −1 (with the plan plane). Default ON,
+  toggle in the Environment section. Included in export as displayed.
+- **Theme prop**: View3D gains `isDark` from TakeoffCanvas; grid/axis/edge/
+  label colors pick `SVG` vs `SVG.dark` (the data already exists in ui.js).
+
+### D — Studio aesthetic (SketchUp-pastel, not photoreal)
+
+New **Environment** panel section (after Rolls): Backdrop / Pastel / Edges
+/ Grid toggles. All non-persistent (per-open reset, like Plan/Rolls).
+
+- **Backdrop**: `scene.background` set per theme — light = paper-white→pale
+  cool-gray vertical gradient (CanvasTexture), dark = the HUD near-black.
+  The overlay div's accidental `var(--ink)` fallback stays for pre-mount.
+  **Export fix (required)**: the export canvas currently hardcodes
+  `#0d1526`; it must composite the actual scene background (gradient or
+  color) — the exported PNG finally matches the screen in both themes.
+- **Pastel fills**: floor/ribbon/post materials `color.lerp(white, 0.35)`
+  when ON (default ON — the aesthetic ask), toggle restores raw condition
+  colors (the PALETTE itself is untouched; this is a presentation blend,
+  and the legend swatches keep showing raw colors so the mapping stays
+  legible). Excluded volumes keep the danger read.
+- **Edges**: `EdgesGeometry` over each slab/ribbon geometry, `LineSegments`
+  in a darkened tone of the fill (`lerp(black, 0.35)`), linewidth 1
+  (platform cap, accepted), parented under the condition Group (explode/
+  legend/focus ride free), clipping planes shared, included in export.
+  Default ON.
+- **Non-goals (v1)**: fog (muds condition colors — MeshBasicMaterial opts
+  in by default; the regression risk outweighs the depth cue), contact
+  shadows (radial-gradient decal — future), any lit materials (the scene
+  stays unlit flat by design), label leader-line styling beyond v1 chip.
+
+### Tests
+
+- scene3d: `uvPlanar` (period math, y negation convention);
+  `gridLines` (spacing, extent, axis colors as data); slab UV populated
+  only on the textured path.
+- Pure picking map: `shapeRanges` construction (merge order, counts sum to
+  vertex total), faceIndex→shapeId resolution incl. last-face edge.
+- No new React tests (headed validation covers interaction).
+
+### Docs
+
+USER_GUIDE §18 (click-select, the label, Environment section incl.
+Backdrops/Pastel/Edges/Grid, finish textures per condition, all
+non-persistent; disclosures: textures runtime-only, not persisted),
+README Features bullet, FEATURES.md row, CHANGELOG. No MCP surface.
+
+### Non-goals (v1)
+
+- Hover highlighting (v1 is selected-label only).
+- Multi-select / box select.
+- Texture persistence in .otk; texture library per finish tag.
+- Fog, contact shadows, lit materials, skyboxes.
+- 2D-canvas equivalents of any of this.
