@@ -357,7 +357,8 @@ established practice beyond AGENTS.md's literal three). No MCP surfaces.
 - Positioned door openings (`gaps_norm` + derive_base extension) —
   presentation-only per the 2026-08-26 owner ruling above (quantities
   already break at doors; continuous wrap-through is correct as drawn).
-- Point-in-polygon room membership for unlabeled shapes.
+- Point-in-polygon room membership for unlabeled shapes — **promoted to
+  v1 by addendum 2026-08-26e (r5)**.
 - Roll-seam rendering from `rollgoods.js` figured layouts — **promoted to v1
   by addendum 2026-08-26c (r3)**.
 - Vertical section cuts.
@@ -847,63 +848,94 @@ focus ruling), README Features bullet, FEATURES.md row, CHANGELOG. No MCP.
   reopen re-snapshots).
 - 2D-canvas equivalents of any of this.
 
-## Addendum (2026-08-26e, r5) — Room membership for selection isolation
+## Addendum (2026-08-26e, r5 rev 2) — Room membership for selection isolation
 
 Closes the v1 honest-scope hole: unlinked shapes (hand-traced wall runs,
-unlabeled counts, stray deducts) currently ALWAYS stay visible during
-isolation because they cannot be attributed. Now they are attributed by
-point-in-polygon room membership. Pure, confined to `isolate3D`
-(scene3dScope.js), zero React changes — the frozen-snapshot contract at
-the sole call site (TakeoffCanvas ~1187) is untouched, and membership is
-computed in NORMALIZED verts space (scale-free, no upp).
+unlabeled counts, stray deducts, unlabeled floors) currently ALWAYS stay
+visible during isolation because they cannot be attributed. Now they are
+attributed by point-in-polygon room membership. Pure, confined to
+`isolate3D` (scene3dScope.js), zero React changes — the frozen-snapshot
+contract at the sole call site (TakeoffCanvas ~1187) is untouched, and
+membership is computed in NORMALIZED verts space (scale-free, no upp).
+
+**Contract amendment (this section is the amendment):** the base spec's
+v1 honest-scope paragraph ("Unlinked shapes ... stay visible regardless —
+the point-in-polygon membership primitive and its shared-wall tie-break
+are named future work") is superseded by this addendum.
+
+(Round 1 failed adversarial review FAIL×3; this rev folds in every
+finding. Key corrections: rings are tested OUTSET, not inset — an inset
+dead zone hugs every wall and would leave the headline case (runs traced
+on wall linework) unattributed; every rule gets a full three-way triage
+(join / drop-in-other-room / stay) — a rule with only join+stay is a
+no-op because both render visible; room resolution is a SET (transitions
+reach two floors) and the graph walk RE-ROOTS at the resolved rooms.)
 
 ### Decisions (locked)
 
-- **Room resolution**: the selected shape, if `floor_area`, IS the room;
-  otherwise the room is the floor reachable via `origin.derived`
-  (`from_shape_id` / `between_shape_ids` — same links the set builder
-  already walks). If selection resolves to NO room (e.g., a hand-traced
-  wall selected directly), fall back to today's semantics entirely —
-  membership never fabricates a room.
-- **Membership tests** (existing primitives only: `pointInPoly`
-  geometry.js:197, `centroid2` scene3d.js, `insetRing` scene3d.js):
-  - `count`: its single point.
-  - `deduct`: ring centroid. A deduct inside the resolved room joins the
-    set; a deduct inside a DIFFERENT room now drops (that is the point of
-    isolation); a deduct inside no room stays (never silently shrink).
-  - Undecorated `linear` + `surface_area` (wall runs): sample points
-    along the path (every vertex, or ~8 evenly spaced for long runs),
-    tested against the room ring INSET by `eps = 1% of the ring bbox's
-    min dimension` (insetRing — pushes the boundary off the shared wall
-    so on-edge crossing-number noise cannot flip sides). Supermajority
-    ≥ 60% inside → member; otherwise the run STAYS VISIBLE (ambiguous
-    straddles degrade to today's behavior — a wrong exclusive owner is
-    worse than an extra visible run).
-- **Holes**: membership requires in-outer-ring AND in-no-hole
-  (`verts_norm_holes`), mirroring geometry.js's own hole-subtraction
-  pattern — a shaft inside a donut room belongs to no one.
-- **Existing graph rules unchanged**: origin.derived links and
-  label-equality siblings still ride; membership only replaces the
-  blanket "unlinked always stays" clause.
+- **Room resolution — a SET**: the selected shape, if `floor_area`, is
+  the room; otherwise ALL floors reachable via `origin.derived`
+  (`from_shape_id` and every id in `between_shape_ids` — a transition
+  resolves BOTH adjoining rooms). If selection resolves to NO room
+  (e.g., a hand-traced wall selected directly), fall back to today's
+  semantics entirely — membership never fabricates a room.
+- **The graph walk RE-ROOTS at the resolved rooms**: derived links and
+  label-equality siblings are walked from the ROOM FLOOR(S), not the
+  selected shape — selecting a base ring or transition isolates the full
+  room family, not just the clicked member.
+- **Ring adjustment — OUTSET by eps** (`insetRing(ring, -eps)`,
+  node-verified safe on y-down normalized rings incl. reflex corners):
+  eps = 1% of the ring bbox's min dimension. Outset pushes the
+  containment boundary PAST the wall line, so runs traced on the wall
+  linework (the dominant case) attribute; a point in the 2-eps overlap
+  of two adjacent rooms' outsets is ambiguous by construction. (Push-off
+  is 0.7–1x eps and anisotropic across axes by sheet aspect ratio — both
+  far above on-edge crossing noise; disclosed here so nobody re-derives
+  eps from feet-true reasoning.) Holes are tested RAW: in-outer AND
+  in-no-hole (geometry.js's own pattern).
+- **Point shapes — counts** (single vertex) and **closed rings —
+  deducts AND unlinked unlabeled floor_area** (representative point =
+  `centroid2`; if the centroid falls outside the shape's OWN ring —
+  concave chevron — fall back to the run-style vertex supermajority):
+  test the point against every floor's OUTSET ring. Exactly one resolved
+  room → join. Exactly one OTHER room (and no resolved room) → drop.
+  Else (no room, or 2+ rooms — the shared-wall overlap) → stay. Never
+  silently shrink: a threshold on a doorway or a corner guard on a
+  corner is ambiguous, not wrong.
+- **Runs — undecorated `linear` + `surface_area`**: sample every vertex
+  AND evenly spaced interior points along each segment (≈8 per segment —
+  a 2-vertex run's endpoints sit ON walls; without interior samples the
+  headline case never attributes). Membership = ≥60% of samples inside
+  the resolved rooms' outset rings → join; else ≥60% inside other
+  rooms' outset rings → drop; else (on-wall-shared, straddling, no
+  room) → stay. Zero samples (empty/degenerate verts) → stay. A shared-
+  wall run joins BOTH rooms — never a wrong exclusive owner.
+- **Existing graph rules unchanged** in shape, re-rooted per above.
 - **Inherited limit, stated**: pointInPoly is even-odd, correct for
-  simple polygons — the same assumption every other containment use in
-  the app already makes. No new risk.
+  simple polygons — the assumption every other containment use already
+  makes.
 
 ### Tests (extend the isolate3D suite, web/test/scene3d.test.ts)
 
-Deduct inside selected room joins; deduct inside other room drops;
-deduct inside no room stays; count point inside/outside; wall run on one
-room's side (supermajority) joins; wall run straddling near-evenly
-stays; selected non-floor resolves its room via derived link; selection
-with no room falls back wholesale; room with a hole excludes a shape in
-the hole; <3-vertex room ring degrades (no throw).
+Deduct inside resolved room joins; deduct inside other room drops;
+deduct on the shared-wall overlap stays; deduct in no room stays;
+unlabeled floor in other room drops; count inside joins / other-room
+drops / on-edge stays; 2-vertex run along one room's wall joins; run
+strictly inside another room drops; straddling run stays; empty-verts
+run stays; transition selection resolves BOTH rooms (family + membership
+against either); selecting a derived base ring isolates the full room
+family (re-rooted walk); room with a hole excludes a shape in the hole;
+concave deduct falls back to vertex supermajority; <3-vertex room ring
+degrades (no throw); no-room selection falls back wholesale.
 
 ### Docs
 
-USER_GUIDE §18 (isolation paragraph: unlinked shapes now follow the room
-they sit in; straddling runs and unattributable shapes stay visible),
-CHANGELOG. README/FEATURES already describe isolation generically — no
-change unless review says otherwise. No MCP surface.
+USER_GUIDE §18 (isolation paragraph: shapes strictly inside a room
+follow it; runs on shared walls join both; straddles and unattributable
+shapes stay visible), FEATURES.md (the 3D row's isolation parenthetical
+is updated — it currently pins the superseded stay-visible rule),
+CHANGELOG. No README change (it does not describe isolation). No MCP
+surface.
 
 ### Non-goals (v1)
 
