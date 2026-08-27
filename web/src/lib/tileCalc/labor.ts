@@ -67,3 +67,47 @@ export function computeLaborRom(tileByCond: Map<string, any>): Map<string, Labor
 	}
 	return result;
 }
+
+// The additive labor_rom block for opentakeoff.report.v1 — mirrors
+// rollReportRows/tileReportRows exactly (rows = conditionTotals output,
+// finish_tag and multiplier come from there so the block can never disagree
+// with the table). ×N applies to the scaled quantities (weightedSf, trimLf,
+// jointLf — labor scales with unit count); pattern_factor/size_factor/
+// cut_ea/corner_ea are as-measured and NOT multiplied (they describe the
+// field, not the purchase).
+type ConditionRow = { id: string; finish_tag?: string; multiplier?: number };
+type LaborRomReportRow = {
+	condition_id: string;
+	finish_tag: string | undefined;
+	multiplier: number;
+	weighted_sf: number;
+	pattern_factor: number;
+	size_factor: number;
+	cut_ea: number;
+	corner_ea: number;
+	trim_lf: number;
+	joint_lf: number;
+};
+
+export function laborRomReportRows(laborRomByCond: Map<string, LaborRom> | null | undefined, rows: unknown): LaborRomReportRow[] {
+	if (!laborRomByCond || !laborRomByCond.size || !Array.isArray(rows)) return [];
+	const out: LaborRomReportRow[] = [];
+	for (const r of rows as ConditionRow[]) {
+		const li = laborRomByCond.get(r.id);
+		if (!li) continue;
+		const mult = r.multiplier || 1;
+		out.push({
+			condition_id: r.id,
+			finish_tag: r.finish_tag,
+			multiplier: mult,
+			weighted_sf: round2(li.weightedSf * mult),
+			pattern_factor: li.patternFactor,
+			size_factor: li.sizeFactor,
+			cut_ea: li.cutEa,
+			corner_ea: li.cornerEa,
+			trim_lf: round2(li.trimLf * mult),
+			joint_lf: round2(li.jointLf * mult),
+		});
+	}
+	return out;
+}

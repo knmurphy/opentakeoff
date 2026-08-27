@@ -485,9 +485,9 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
  *   conditionColumns?: Array<{id: string, name: string, values: string[]}>,
  *   attrsByCond?: Map<any, object>|null, shapeLabels?: string[],
  *   byLabel?: Array<{value: string|null, rows: any[]}>, displayUnits?: string,
- *   rollGoods?: any[], tileGoods?: any[]}} args
+ *   rollGoods?: any[], tileGoods?: any[], laborRom?: any[]}} args
  */
-export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null, shapeLabels = [], byLabel = [], displayUnits = "imperial", rollGoods = [], tileGoods = [] }) {
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null, shapeLabels = [], byLabel = [], displayUnits = "imperial", rollGoods = [], tileGoods = [], laborRom = [] }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   // destructuring defaults don't apply to an explicit null, and both values can
   // trace back to a corrupted payload — coerce (and drop malformed items) so
@@ -591,6 +591,14 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     // emitted; empty for projects with no tile-setup conditions, so every
     // pre-Task-8 export round-trips byte-identically except this one key.
     tile_goods: Array.isArray(tileGoods) ? tileGoods : [],
+    // labor_rom APPENDS last (additive-only v1, M8 Task 8 part 1): one row
+    // per tileCalc/labor.ts condition — the figured weighted labor SF and
+    // pattern/size factors/driver counts (see labor.ts's
+    // laborRomReportRows), ×N applied to the scaled figures like every
+    // other reported quantity. Always emitted; empty for projects with no
+    // labor-ROM conditions, so every pre-Task-8-part-1 export round-trips
+    // byte-identically except this one key.
+    labor_rom: Array.isArray(laborRom) ? laborRom : [],
   };
 }
 

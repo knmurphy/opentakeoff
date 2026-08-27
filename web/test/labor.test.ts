@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { patternFactor, sizeFactor, computeLaborRom } from '../src/lib/tileCalc/labor.ts';
+import { patternFactor, sizeFactor, computeLaborRom, laborRomReportRows } from '../src/lib/tileCalc/labor.ts';
+import { reportJson } from '../src/lib/totals.js';
 
 test('patternFactor: grid/brick_50/brick_33 are 1.0', () => {
   assert.equal(patternFactor('grid'), 1.0);
@@ -120,4 +121,59 @@ test('computeLaborRom: routes the field SKU through primaryUsableSku — a leadi
   assert.ok(rom);
   assert.equal(rom.sizeFactor, 1.3);   // 12x24 is large-format; the 0x12 entry is not usable
   assert.equal(rom.weightedSf, 65);    // 50 * 1.0 * 1.3
+});
+
+test('laborRomReportRows: null/empty inputs return []', () => {
+  assert.deepEqual(laborRomReportRows(null, [{ id: 'c1' }]), []);
+  assert.deepEqual(laborRomReportRows(new Map(), [{ id: 'c1' }]), []);
+  assert.deepEqual(laborRomReportRows(new Map([['c1', { weightedSf: 1, patternFactor: 1, sizeFactor: 1, cutEa: 0, cornerEa: 0, trimLf: 0, jointLf: 0 }]]), null), []);
+});
+
+test('laborRomReportRows: emits matched rows, skips absent, applies multiplier to scaled fields only', () => {
+  const laborRomByCond = new Map([
+    ['c1', { weightedSf: 100, patternFactor: 1.2, sizeFactor: 1.3, cutEa: 5, cornerEa: 2, trimLf: 10, jointLf: 4 }],
+  ]);
+  const rows = [
+    { id: 'c1', finish_tag: 'FT-1', multiplier: 3 },
+    { id: 'c2', finish_tag: 'FT-2', multiplier: 1 },
+  ];
+  const out = laborRomReportRows(laborRomByCond, rows);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0], {
+    condition_id: 'c1',
+    finish_tag: 'FT-1',
+    multiplier: 3,
+    weighted_sf: 300,
+    pattern_factor: 1.2,
+    size_factor: 1.3,
+    cut_ea: 5,
+    corner_ea: 2,
+    trim_lf: 30,
+    joint_lf: 12,
+  });
+});
+
+test('laborRomReportRows: defaults missing multiplier to 1', () => {
+  const laborRomByCond = new Map([
+    ['c1', { weightedSf: 50, patternFactor: 1, sizeFactor: 1, cutEa: 0, cornerEa: 0, trimLf: 0, jointLf: 0 }],
+  ]);
+  const out = laborRomReportRows(laborRomByCond, [{ id: 'c1', finish_tag: 'FT-1' }]);
+  assert.equal(out[0].multiplier, 1);
+  assert.equal(out[0].weighted_sf, 50);
+});
+
+test('reportJson: labor_rom defaults to [] and leaves the rest unchanged', () => {
+  const withLabor = reportJson({ rows: [{ id: 'c1', finish_tag: 'FT-1' }] });
+  assert.deepEqual(withLabor.labor_rom, []);
+  const baseline = reportJson({ rows: [{ id: 'c1', finish_tag: 'FT-1' }] });
+  const { labor_rom, ...rest } = withLabor;
+  const { labor_rom: labor_rom2, ...rest2 } = baseline;
+  assert.deepEqual(rest, rest2);
+});
+
+test('reportJson: passes through supplied labor_rom array', () => {
+  const rows = [{ id: 'c1', finish_tag: 'FT-1' }];
+  const laborRom = [{ condition_id: 'c1', finish_tag: 'FT-1', weighted_sf: 42 }];
+  const out = reportJson({ rows, laborRom });
+  assert.deepEqual(out.labor_rom, laborRom);
 });
