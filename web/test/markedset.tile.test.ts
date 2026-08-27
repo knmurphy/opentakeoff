@@ -132,7 +132,7 @@ test("marked set: no uppFor (every caller today) exports byte-identical — no t
   // cover + sheet S1 + sheet S2, no RFI page, no tile page
   assert.equal(out.getPageCount(), 3);
   for (let i = 0; i < 3; i++) {
-    assert.doesNotMatch(tjText(await decodedContentStream(bytes, i)), /Tile layout/);
+    assert.doesNotMatch(tjText(await decodedContentStream(bytes, i)), /TILE LAYOUT/);
   }
 });
 
@@ -155,17 +155,25 @@ test("marked set: a tiled sheet gains exactly one new 'Tile layout' page, scaled
 
   // the tile page is appended right after S1's own marked-up page (index 1)
   const tileText = tjText(await decodedContentStream(tiled.bytes, 2));
-  assert.match(tileText, /Tile layout/);
+  assert.match(tileText, /TILE LAYOUT/);
   assert.match(tileText, /Sheet 1/);
-  // S2 carries no tile work — no second "Tile layout" page anywhere
+  // S2 carries no tile work — no second "TILE LAYOUT" page anywhere
   const allText = await Promise.all([0, 1, 2, 3].map(async (i) => tjText(await decodedContentStream(tiled.bytes, i))));
-  assert.equal(allText.filter((t) => /Tile layout/.test(t)).length, 1);
+  assert.equal(allText.filter((t) => /TILE LAYOUT/.test(t)).length, 1);
 
   // (c) the tile page draws at least the 16 full-tile grid cells a 4x4ft
   // room tiled 12x12in (0 joint) solves to (matches tileTakeoff.test.ts's
   // own assertion on the identical fixture: counts.full === 16).
   const cellCount = closedPathCount(await decodedContentStream(tiled.bytes, 2));
   assert.ok(cellCount >= 16, `expected >= 16 drawn tile cells, got ${cellCount}`);
+
+  // (d) the redesigned shop-drawing furniture landed: the floating legend
+  // card, the per-room title block ("FIELD" header strip + "TRIM" row —
+  // the trim-edge figure's own marker, cheap to assert without decoding
+  // the drawn line geometry itself).
+  assert.match(tileText, /LEGEND/);
+  assert.match(tileText, /FIELD/);
+  assert.match(tileText, /TRIM/);
 });
 
 test("marked set: an unscaled sheet (uppFor returns null) never gets a tile page even with tile work", async () => {
