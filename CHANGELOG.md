@@ -18,6 +18,14 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   label states what the view is not (no wall thickness, no door frames, no casework,
   generic base profile), and sharp near-reversal corners are disclosed to render with a
   beveled seam rather than a clean miter.
+- **Plan underlay in 3D.** A dimmed ground plane sits under the geometry — the sheet's own
+  page, rendered fresh on a white background, laid flat at reduced opacity (on by default,
+  40%). The dark theme never inverts it: the underlay is always the white page, optionally
+  tinted. A **Plan** panel block controls it — **Show plan** toggles it, **Tint** washes it
+  in a light cobalt rather than the raw white, and an opacity slider dials it — none of
+  which persist between sessions. The underlay is baked into the **Export** PNG exactly as
+  shown. Side-by-side stitched sheet groups show no underlay, by design: there's no single
+  source page for a joined surface.
 
 ## 2026-08-24 — the takeoff goes back into CAD
 

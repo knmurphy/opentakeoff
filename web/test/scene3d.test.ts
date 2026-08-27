@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildScene, toWorldFt, ringCCW, worldWindingCCW, buildRibbon, nudgePath,
+  buildScene, toWorldFt, planPlane, ringCCW, worldWindingCCW, buildRibbon, nudgePath,
   NOMINAL_THICKNESS_FT, NOMINAL_HEIGHT_FT, EXCLUDED_COLOR, MITER_LIMIT, RIBBON_HALF_FT,
 } from "../src/lib/scene3d.js";
 import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
@@ -18,6 +18,14 @@ const SQ_NORM: [number, number][] = [[0, 0], [0.1, 0], [0.1, 0.05], [0, 0.05]];
 test("toWorldFt: feet scale, y flipped", () => {
   const w = toWorldFt(SQ_NORM, SHEET);
   assert.deepEqual(w, [[0, 0], [5, 0], [5, -5], [0, -5]]);
+});
+
+test("planPlane: half-extents and centers from sheet px/upp", () => {
+  assert.deepEqual(planPlane(SHEET), { wFt: 50, hFt: 100, cx: 25, cw: -50 });
+});
+
+test("planPlane: unscaled sheet throws the scale-gate refusal", () => {
+  assert.throws(() => planPlane({ ...SHEET, upp: null }), /scale/i);
 });
 
 test("winding: y-flip inverts orientation; ringCCW restores CCW-in-world", () => {

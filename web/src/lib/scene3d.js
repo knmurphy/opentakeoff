@@ -17,6 +17,13 @@ export function toWorldFt(verts_norm, sheet) {
   return verts_norm.map(([nx, ny]) => [nx * sheet.widthPx * sheet.upp, -(ny * sheet.heightPx * sheet.upp) || 0]);
 }
 
+export function planPlane(sheet) {
+  if (!(sheet.upp > 0)) throw new Error("Set the sheet scale first — 3D is feet-true or nothing.");
+  const wFt = sheet.widthPx * sheet.upp;
+  const hFt = sheet.heightPx * sheet.upp;
+  return { wFt, hFt, cx: wFt / 2, cw: -hFt / 2 };
+}
+
 export function worldWindingCCW(ring) {
   let a = 0;
   for (let i = 0; i < ring.length; i++) {

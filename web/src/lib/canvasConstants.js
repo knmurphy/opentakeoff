@@ -22,6 +22,7 @@ export const QUALITY_CEILING = 8.0;                  // hard cap on render scale
 export const MAX_CANVAS_DIM  = 16384;                // safe max side for a single canvas (Chrome/Firefox/Safari desktop)
 export const MAX_CANVAS_AREA = 16384 * 16384 * 0.9;  // per-canvas pixel cap — the DETAIL view's density factor uses this
 export const MAX_PANEL_AREA  = 28e6;                 // base-raster pixel budget per panel (~112MB RGBA; 4-up ≈ 450MB)
+export const PLAN_SKIN_MAX_DIM = 4096;               // GPU texture long-side cap for the 3D plan backdrop (MAX_CANVAS_* above are on-canvas budgets, not texture-upload limits)
 // Detail view: once zoomed past the base raster's 1:1 IN DEVICE PIXELS, we overlay a
 // crop of JUST the visible region, re-rendered from the PDF vectors at the current zoom —
 // the way desktop CAD viewers do. Crispness becomes unbounded (up to the per-region canvas cap)

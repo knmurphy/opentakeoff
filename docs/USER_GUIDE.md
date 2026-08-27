@@ -1006,7 +1006,17 @@ condition's H; count items place as unit posts at their point, scaled to height.
 visible as what's in it. Every condition gets its own **legend chip**—click one to hide or
 show that condition's geometry, refitting the camera to what's left visible. Scene notes
 (openings deducted, nominal-thickness fallbacks, and similar caveats already surfaced in
-2D) reappear here as in-scene captions and legend entries.
+2D) reappear here as in-scene captions and legend entries. Under all of it sits a dimmed
+**plan underlay**—the sheet's own page, rendered fresh on a white background, laid flat as
+a ground plane at reduced opacity. It's the paper itself, not a re-tinted copy: the dark
+theme never inverts it. A side-by-side group's stitched sheets show no underlay by design—
+there's no single source page for a joined surface.
+
+**The Plan panel.** Under the **Plan** heading: **Show plan** toggles the underlay
+(on by default, at 40% opacity); **Tint** washes it in a light cobalt rather than the raw
+white page; and an opacity slider dials the underlay from invisible to solid. None of
+these settings are remembered between sessions—every 3D view opens with the underlay on,
+untinted, at 40%. The underlay is included when you **Export** the view to PNG.
 
 **Isolating a room.** Select a shape on the 2D sheet first (Select tool, `V`), then open
 3D: the scene highlights that shape's room—itself, anything derived from it (base run,
@@ -1021,7 +1031,8 @@ glance. **Section cut** slices the scene with a single movable plane—explode a
 cut are mutually exclusive; picking one disables the other. A **reset view** button
 reframes on the current visible content. **Export** renders the current view to a PNG
 with a footer—sheet label, the sheet's scale, today's date, and a caveat line ("schematic
-— not as-built; openings deducted, not shown; verify in field").
+— not as-built; openings deducted, not shown; verify in field")—with the plan underlay
+baked in exactly as shown.
 
 **Limitations, always on screen.** A persistent, non-dismissible label states what this
 view is not: no wall thickness, no door frames, no casework, flat single-elevation

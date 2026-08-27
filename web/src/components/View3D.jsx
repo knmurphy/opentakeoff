@@ -7,14 +7,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { buildScene, buildRibbon, RIBBON_HALF_FT, FLUSH_HALF_FT, EXCLUDED_COLOR } from "../lib/scene3d.js";
+import { buildScene, buildRibbon, RIBBON_HALF_FT, FLUSH_HALF_FT, EXCLUDED_COLOR, planPlane } from "../lib/scene3d.js";
 import { STANDARD_SCALES } from "../lib/sheets.ts";
-import { Z, S } from "../lib/ui.js";
+import { Z, S, SVG } from "../lib/ui.js";
 
 const LIMITATIONS_TEXT =
   "Schematic view — no wall thickness, no door frames, no casework, flat single-elevation floors, generic base profile, openings deducted-not-shown.";
 const EXPORT_FOOTER = "schematic — not as-built; openings deducted, not shown; verify in field";
 const MAX_EXPLODE_FT = 6;
+const PLAN_SKIN_OPACITY = 0.4;
+const PLAN_SKIN_DROPOPEN_FT = 0.05;
+const PLAN_SKIN_RENDER_ORDER = -1;
+const PLAN_SKIN_TINT = new THREE.Color(SVG.cobalt).lerp(new THREE.Color("#ffffff"), 0.6);
 const EMPTY_SCENE = { slabs: [], ribbons: [], posts: [], notes: [] }; // stable fallback — never a fresh object per render
 
 // Unit post primitive, base-anchored along +Y (this renderer's "up" axis, per
@@ -110,7 +114,7 @@ function computeVisibleBox(root) {
   root.updateMatrixWorld(true);
   const box = new THREE.Box3();
   const walk = (obj) => {
-    if (!obj.visible) return;
+    if (!obj.visible || obj.userData.excludeFromFit) return;
     if (obj.isInstancedMesh) {
       obj.computeBoundingBox();
       box.union(obj.boundingBox.clone().applyMatrix4(obj.matrixWorld));
@@ -170,15 +174,19 @@ function makeCaptionSprite(text) {
   return sprite;
 }
 
-export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel, onClose }) {
+export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel, onClose, planSkin }) {
   const mountRef = useRef(null);
   const engineRef = useRef(null); // { renderer, camera, scene, controls, plane }
   const groupsRef = useRef(new Map()); // conditionId -> Group
   const orderRef = useRef([]); // conditionId order, for explode
+  const planeRef = useRef(null); // plan-skin mesh, a direct scene child — covered by the mount effect's disposeObject3D(threeScene) walk on unmount
   const [hidden, setHidden] = useState(() => new Set());
   const [explode, setExplode] = useState(0);
   const [cut, setCut] = useState(null);
   const [cutOn, setCutOn] = useState(false);
+  const [planOn, setPlanOn] = useState(true);
+  const [planTint, setPlanTint] = useState(false);
+  const [planOpacity, setPlanOpacity] = useState(PLAN_SKIN_OPACITY);
 
   const sceneResult = useMemo(() => {
     try { return { data: buildScene({ shapes, conditions, sheet }) }; }
@@ -245,6 +253,37 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
       groups.clear();
     };
   }, []);
+
+  // Plan skin: rebuilds the textured floor plane whenever the source canvas
+  // or sheet geometry changes. Runs after the mount effect so the guard
+  // below absorbs a first mount that already carries a planSkin prop.
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (planeRef.current) {
+      engine.scene.remove(planeRef.current);
+      disposeObject3D(planeRef.current);
+      planeRef.current = null;
+    }
+    if (!planSkin) return;
+    const { wFt, hFt, cx, cw } = planPlane(sheet);
+    const geo = new THREE.PlaneGeometry(wFt, hFt).rotateX(-Math.PI / 2);
+    const tex = new THREE.CanvasTexture(planSkin.canvas);
+    tex.flipY = false;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = Math.min(8, engine.renderer.capabilities.getMaxAnisotropy());
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: planOpacity, depthWrite: false, side: THREE.FrontSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(cx, -PLAN_SKIN_DROPOPEN_FT, cw);
+    mesh.renderOrder = PLAN_SKIN_RENDER_ORDER;
+    mesh.userData.excludeFromFit = true;
+    mesh.visible = planOn;
+    engine.scene.add(mesh);
+    planeRef.current = mesh;
+    // planOn/planOpacity read once at build time as the mesh's initial
+    // values — the control effect below owns their live updates in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planSkin, sheet.widthPx, sheet.heightPx, sheet.upp]);
 
   // Content: rebuild per-condition Groups from the scene + focus split. A
   // transform-only state change (hidden/explode/cut) never lands here.
@@ -333,6 +372,15 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
     engine.plane.constant = cutOn && explode === 0 && cut != null ? cut : 1e6;
   }, [cut, cutOn, explode]);
 
+  // Plan skin controls: mutate the existing mesh in place, never a rebuild.
+  useEffect(() => {
+    const m = planeRef.current;
+    if (!m) return;
+    m.visible = planOn;
+    m.material.color.set(planTint ? PLAN_SKIN_TINT : "#ffffff");
+    m.material.opacity = planOpacity;
+  }, [planOn, planTint, planOpacity]);
+
   const resetView = () => { const e = engineRef.current; if (e) fitToContent(e.camera, e.controls, e.scene); };
 
   const exportPng = () => {
@@ -386,6 +434,21 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
                 </label>
               ))}
               {!activeConditions.length && <div style={{ fontSize: 12, color: "var(--ink-muted)" }}>Nothing measured on this sheet.</div>}
+            </div>
+
+            <div style={S.panelSection}>
+              <div style={S.monoLabel}>Plan</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5 }}>
+                <input type="checkbox" checked={planOn} onChange={(e) => setPlanOn(e.target.checked)} />
+                Show plan
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5 }}>
+                <input type="checkbox" checked={planTint} disabled={!planOn} onChange={(e) => setPlanTint(e.target.checked)} />
+                Tint
+              </label>
+              <input type="range" min={0} max={1} step={0.05} value={planOpacity} disabled={!planOn}
+                onChange={(e) => setPlanOpacity(Number(e.target.value))} style={{ width: "100%" }} />
+              <div style={S.monoReadout}>{Math.round(planOpacity * 100)}%</div>
             </div>
 
             <div style={S.panelSection}>

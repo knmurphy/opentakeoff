@@ -129,8 +129,9 @@ second use is not a side effect; see [the data layer](#the-data-layer--why-this-
   ([docs/VOICE.md](docs/VOICE.md))
 - **3D view**—press `W` (or the **3D** toolbar button) on a scaled sheet to extrude the
   committed takeoff into a schematic, feet-true three.js scene: floors, walls, and base
-  as their real heights, legend toggles, explode, section cut, and a PNG export with a
-  scale/date footer
+  as their real heights, a dimmed plan underlay (the sheet's own page, on by default at
+  40% opacity, with Show plan / Tint / opacity controls) under the geometry, legend
+  toggles, explode, section cut, and a PNG export with a scale/date footer
 
 Full history: [CHANGELOG.md](CHANGELOG.md) · every capability mapped to its code:
 [FEATURES.md](FEATURES.md)

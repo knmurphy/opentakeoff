@@ -134,7 +134,7 @@ import { getTheme, toggleTheme, onThemeChange } from "../lib/theme.js";
 // (renderBudget.test.ts covers autoRenderScale) pending a follow-up cleanup
 // pass once the tile path has proven itself in production.
 import {
-  PANEL_GAP, DETAIL_ENGAGE, DETAIL_MARGIN, MAX_CANVAS_DIM, MAX_CANVAS_AREA, SYNC_MS, GESTURE_MS, SNAP_CELL,
+  PANEL_GAP, DETAIL_ENGAGE, DETAIL_MARGIN, MAX_CANVAS_DIM, MAX_CANVAS_AREA, SYNC_MS, GESTURE_MS, SNAP_CELL, PLAN_SKIN_MAX_DIM,
   MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, HL_INKS, HL_SIZES,
 } from "../lib/canvasConstants.js";
 import { uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
@@ -716,6 +716,8 @@ export default function TakeoffCanvas() {
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [showRevisions, setShowRevisions] = useState(false); // Revisions overlay (save / compare any two, buy-list deltas, CSV, auto-banked restore)
   const [show3d, setShow3d] = useState(false); // 3D view overlay (lazy — see View3D import above)
+  const [planSkin, setPlanSkin] = useState(null); // { canvas, sheetKey } — 3D plan-skin raster (async one-shot pageObj.render, keyed to the sheet)
+  const planSkinSeqRef = useRef(0);
   const [importRows, setImportRows] = useState(null);        // Import-from-schedule approval rows (null = dialog closed)
   const [scheduleAnchor, setScheduleAnchor] = useState(null); // first marquee corner for the "schedule" tool — ISOLATED from poly so it can never leak into a measure shape
   // ── the Symbol tool (#264) — same two-click marquee idiom as schedule ─────
@@ -1118,6 +1120,36 @@ export default function TakeoffCanvas() {
     if (show3d && !uppFor(active3dKey)) setShow3d(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor reads scales (listed) + renderScalesRef pinned to RENDER_SCALE
   }, [show3d, active3dKey, scales]);
+  // Plan-skin: one-shot raster of the active sheet as the 3D ground-plane
+  // backdrop texture (View3D consumes it as a CanvasTexture). Keyed to
+  // [show3d, active3dKey] and cleared SYNCHRONOUSLY on every key change —
+  // the stale-canvas guard lives at the View3D mount below (planSkin is
+  // only passed through when sheetKey still matches active3dKey), so this
+  // effect only needs to keep the eventual setPlanSkin from a superseded
+  // render from landing (the seq check after the await). Stitched sheet
+  // groups get NO backdrop by design: pageObjsRef is keyed by MEMBER sheet
+  // keys, never the group key, so the `!pageObj` guard below leaves
+  // planSkin null for them (documented no-backdrop degradation, USER_GUIDE
+  // §18) rather than raster the wrong page.
+  useEffect(() => {
+    setPlanSkin(null);
+    if (!show3d) return;
+    const seq = ++planSkinSeqRef.current;
+    const pageObj = pageObjsRef.current.get(active3dKey);
+    const img = focusPanel.img;
+    if (!pageObj || !img.w) return;
+    const rs = renderScalesRef.current.get(active3dKey) || RENDER_SCALE;
+    const factor = Math.min(1, PLAN_SKIN_MAX_DIM / img.w, PLAN_SKIN_MAX_DIM / img.h);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.w * factor);
+    canvas.height = Math.round(img.h * factor);
+    (async () => {
+      await pageObj.render({ canvasContext: canvas.getContext("2d"), viewport: pageObj.getViewport({ scale: rs * factor }), background: "#ffffff" }).promise;
+      if (seq !== planSkinSeqRef.current) return;
+      setPlanSkin({ canvas, sheetKey: active3dKey });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pageObjsRef/renderScalesRef are refs (read live, not deps); focusPanel.img is derived from active3dKey
+  }, [show3d, active3dKey]);
   // Stable per-render props for View3D — filtering visibleShapes inline in
   // JSX built a fresh array every render, so an unrelated parent re-render
   // (a mousemove-driven state update, a panel resize) looked to View3D like
@@ -9132,6 +9164,7 @@ export default function TakeoffCanvas() {
               shapes={shapes3d}
               conditions={conditions}
               sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
+              planSkin={planSkin && planSkin.sheetKey === active3dKey ? planSkin : null}
               focusIds={focusIds3d}
               sheetLabel={tabLabel(active3dKey)}
               onClose={() => setShow3d(false)}
