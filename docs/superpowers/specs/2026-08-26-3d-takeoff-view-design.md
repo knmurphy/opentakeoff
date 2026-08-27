@@ -353,9 +353,7 @@ established practice beyond AGENTS.md's literal three). No MCP surfaces.
 - MCP view verb — requires headless-browser architecture, specced separately.
 - Stitch panels / elevation data of any kind.
 
----
-
-## Addendum (2026-08-26b) — Plan-skin ground plane
+## Addendum (2026-08-26b, r2) — Plan-skin ground plane
 
 The sheet's own raster as the ground under the 3D geometry, so slabs sit on a
 recognizable plan instead of a void. v1's stated milestone is a **fidelity
@@ -368,14 +366,18 @@ is future work, gated on that read.
   canvas (coarse placeholder; dark mode bakes an inversion into its pixels —
   same ruling as `ensureRasterMask` / `agentViewRegion`). `background:
   "#ffffff"` unconditionally; the app theme never touches this render.
-- **Prominence**: dimmed — the plan is context, not competition. Opacity 0.4,
-  fixed in v1 (no slider).
+- **Prominence**: dimmed by default (`PLAN_SKIN_OPACITY = 0.4`), with an
+  opacity slider (0–1) in the panel — the fidelity read needs to attribute
+  "can't read the plan" to the raster, not to a locked dim.
 - **Export PNG**: included, WYSIWYG (it's in the scene, so it rides the same
   `render()` the export already does).
-- **Paper vs tinted**: a visible in-overlay control, default **paper** (white
-  sheet as drawn — light-table effect). Tinted = GPU-side material color
-  multiply (`#1f3fc7` at low intensity), never a re-render.
-- **Toggle**: "Plan" checkbox in the overlay panel, default ON.
+- **Paper vs tinted**: a visible in-overlay control, default **paper**.
+  Tinted is NOT a multiply (a multiply against white paper then composited
+  on the black void erases the plan: `#1f3fc7`·α lands near-black) — it is a
+  lerp: `new THREE.Color(SVG.cobalt).lerp(white, 0.6)` as a named constant
+  `PLAN_SKIN_TINT`, a light-cobalt wash that keeps paper luminance.
+- **Toggle**: "Plan" checkbox in the overlay panel, default ON. None of the
+  plan controls persist (reset per open).
 
 ### Architecture
 
@@ -385,49 +387,78 @@ Three seams, mirroring the three-layer doctrine:
    `{ wFt: widthPx*upp, hFt: heightPx*upp, cx: wFt/2, cw: -hFt/2 }` —
    already-final world values (the `[x, up, −y]` contract; View3D negates
    nothing). `w∈[−hFt, 0]` because image row 0 maps to w=0.
-2. **TakeoffCanvas** — when `show3d` opens, an async one-shot render:
-   `factor = min(1, PLAN_SKIN_MAX_DIM/w, PLAN_SKIN_MAX_DIM/h)` with a NEW
-   named constant `PLAN_SKIN_MAX_DIM = 4096` in `canvasConstants.js` (the
-   existing MAX_CANVAS_* are on-canvas budgets, wrong tool; 4096 RGBA ≈ 64 MB
-   GPU, universally supported; 2048 reads soft on E-sheets at grazing angles;
-   8192+ is not worth it for a backdrop). Render into an offscreen canvas,
-   stale-guarded by a monotonic seq ref (the `renderSeqRef` idiom, 1848-1849)
-   so a slow render can't land on a switched sheet. Passed to View3D as a
-   prop keyed for identity-stability (state-held canvas + the sheet's
-   primitives, mirroring how `sheet` survives being a fresh literal at 9134 —
-   View3D's consumer keys on primitives, never object identity).
+2. **TakeoffCanvas** — a render effect keyed on the pair `(show3d,
+   active3dKey)` (fires on open AND on sheet switch while open; never while
+   closed): `factor = min(1, PLAN_SKIN_MAX_DIM/w, PLAN_SKIN_MAX_DIM/h)` with
+   a NEW named constant `PLAN_SKIN_MAX_DIM = 4096` in `canvasConstants.js`
+   (the existing MAX_CANVAS_* are on-canvas budgets, wrong tool; 4096 RGBA ≈
+   64 MB GPU, universally supported, readable at grazing angles). Render into
+   an offscreen canvas, stale-guarded by a monotonic seq ref (the
+   `renderSeqRef` idiom, 1848-1849). **Invalidation contract**: skin state is
+   `{ canvas, sheetKey }`, set synchronously to null on any `(show3d,
+   active3dKey)` transition, then filled by the guarded render — a late
+   render for a departed sheet is dropped, and a sheet switch can never
+   stretch the old sheet's raster across new world dims.
 3. **View3D** — a DEDICATED effect (not the content-rebuild effect, which
-   churns per shape edit and would re-upload the texture): builds
-   `PlaneGeometry(wFt, hFt)` + `CanvasTexture` + `MeshBasicMaterial({ map,
-   transparent: true, opacity: 0.4, depthWrite: false, side: DoubleSide })`,
-   positioned `(cx, −0.05, cw)`, `renderOrder = −1` (translucent-under-
-   translucent sort insurance), and — critically — **no `clippingPlanes`**
-   (section cut must not slice the backdrop; localClipping is opt-in per
-   material). Toggled by material.visible for the on/off checkbox; tint swaps
-   `material.color` white ↔ `#1f3fc7·0.35`. Cleanup calls `disposeObject3D`
-   (it disposes `material.map`; a bare `scene.remove` would leak the texture).
+   churns per shape edit and would re-upload the texture), keyed on
+   `planSkin?.sheetKey` + the sheet's primitives; removes + disposes the
+   existing plane BEFORE adding the new one (no ghost overlap). Geometry:
+   `new THREE.PlaneGeometry(wFt, hFt).rotateX(−π/2)` — up-facing normal,
+   **FrontSide** (from below the ground the plane is simply not drawn; a
+   DoubleSide back-face would mirror the plan and veil the takeoff from
+   underneath). Texture pairing — **this is the pinned orientation ruling**:
+   with `rotateX(−π/2)`, default `CanvasTexture.flipY = true` mirrors the
+   plan north-south; the contract is `texture.flipY = false` so image row 0
+   (top) lands at w=0 and image column 0 (left) at x=0. Also pinned:
+   `texture.colorSpace = THREE.SRGBColorSpace` (0.185's SRGB output default
+   washes the raster out otherwise), `texture.anisotropy = min(8,
+   renderer.capabilities.getMaxAnisotropy())` (grazing-angle blur), material
+   `MeshBasicMaterial({ map, transparent: true, opacity, depthWrite: false,
+   side: THREE.FrontSide })` — **no `clippingPlanes`** (section cut must not
+   slice the backdrop; localClipping is opt-in per material) — position
+   `(cx, −0.05, cw)` per `planPlane`, `renderOrder = −1` (drawn first in the
+   transparent pass regardless of center-distance sort). Cleanup calls
+   `disposeObject3D` (it disposes `material.map`; a bare `scene.remove`
+   leaks the texture).
 
 ### Framing ruling
 
 The full-sheet plane would enlarge `fitToContent`'s bounding box and zoom the
-takeout out on open — a behavior change to today's "reframes on visible
-content" contract. **The plane is excluded from the fit walk**
+takeoff out on open. **The plane is excluded from the fit walk**
 (`userData.excludeFromFit`, skipped in `computeVisibleBox`): the plan is a
 backdrop; framing stays geometry-driven.
+
+### Named constants (no magic numbers)
+
+`PLAN_SKIN_MAX_DIM = 4096` → `canvasConstants.js` (beside MAX_CANVAS_*).
+`PLAN_SKIN_OPACITY = 0.4`, `PLAN_SKIN_DROPOPEN_FT = 0.05`,
+`PLAN_SKIN_RENDER_ORDER = -1`, `PLAN_SKIN_TINT` (lerp of `SVG.cobalt` toward
+white 0.6) → View3D module consts (the `MAX_EXPLODE_FT` precedent) — except
+nothing here is pure-testable beyond `planPlane`, which stays the only
+scene3d.js addition.
 
 ### Testing
 
 - `scene3d.test.ts`: `planPlane(SHEET)` → `{wFt:50, hFt:100, cx:25, cw:−50}`
   (SHEET 1000×2000×0.05) — pins the w-negative-half orientation that the
-  texture's v-flip depends on.
-- Canvas verified by hand, headed, with pixel evidence: plan visible under
-  slabs at default settings, toggle + tint controls work, alignment spot-check
-  vs the 2D sheet (same plan features under the same shapes), export PNG
-  includes the plan, dark app theme does NOT invert the paper.
+  flipY=false ruling depends on.
+- Canvas verified by hand, headed, with pixel evidence: plan visible AROUND
+  and BETWEEN shapes (the slabs themselves are opaque — "plan visible under
+  slabs" is unachievable and not a bullet); toggle, opacity, and paper/tint
+  controls work; alignment spot-check vs the 2D sheet (same plan features
+  beside the same shapes, plan NOT mirrored); sheet switch while the overlay
+  is open swaps the raster with no ghost; export PNG includes the plan; dark
+  app theme does not invert the paper.
+
+### Docs sync
+
+USER_GUIDE §18 (Plan checkbox + opacity + paper/tint controls, default-on
+paper backdrop, non-persistent), README Features bullet, FEATURES.md row,
+CHANGELOG (amend the existing 2026-08-26 entry if it lands in the same PR).
 
 ### Non-goals (v1)
 
 - Detail-view (vector) re-render as the texture source — gated on the
   fidelity read this v1 exists to produce.
-- Opacity slider; plan-skin state persistence (resets to on/paper per open).
+- Plan-skin state persistence (resets to on/paper/0.4 per open).
 - Plan in the 2D-canvas report or any MCP surface.
