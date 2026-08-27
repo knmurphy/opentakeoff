@@ -352,3 +352,82 @@ established practice beyond AGENTS.md's literal three). No MCP surfaces.
 - Vertical section cuts.
 - MCP view verb — requires headless-browser architecture, specced separately.
 - Stitch panels / elevation data of any kind.
+
+---
+
+## Addendum (2026-08-26b) — Plan-skin ground plane
+
+The sheet's own raster as the ground under the 3D geometry, so slabs sit on a
+recognizable plan instead of a void. v1's stated milestone is a **fidelity
+read**: is the base raster enough to orient the estimator? Detail-view re-render
+is future work, gated on that read.
+
+### Product decisions (locked with the owner)
+
+- **Source**: one fresh `pageObj.render` of the full page — never the panel
+  canvas (coarse placeholder; dark mode bakes an inversion into its pixels —
+  same ruling as `ensureRasterMask` / `agentViewRegion`). `background:
+  "#ffffff"` unconditionally; the app theme never touches this render.
+- **Prominence**: dimmed — the plan is context, not competition. Opacity 0.4,
+  fixed in v1 (no slider).
+- **Export PNG**: included, WYSIWYG (it's in the scene, so it rides the same
+  `render()` the export already does).
+- **Paper vs tinted**: a visible in-overlay control, default **paper** (white
+  sheet as drawn — light-table effect). Tinted = GPU-side material color
+  multiply (`#1f3fc7` at low intensity), never a re-render.
+- **Toggle**: "Plan" checkbox in the overlay panel, default ON.
+
+### Architecture
+
+Three seams, mirroring the three-layer doctrine:
+
+1. **Pure** — `planPlane(sheet)` in `scene3d.js`, next to `toWorldFt`:
+   `{ wFt: widthPx*upp, hFt: heightPx*upp, cx: wFt/2, cw: -hFt/2 }` —
+   already-final world values (the `[x, up, −y]` contract; View3D negates
+   nothing). `w∈[−hFt, 0]` because image row 0 maps to w=0.
+2. **TakeoffCanvas** — when `show3d` opens, an async one-shot render:
+   `factor = min(1, PLAN_SKIN_MAX_DIM/w, PLAN_SKIN_MAX_DIM/h)` with a NEW
+   named constant `PLAN_SKIN_MAX_DIM = 4096` in `canvasConstants.js` (the
+   existing MAX_CANVAS_* are on-canvas budgets, wrong tool; 4096 RGBA ≈ 64 MB
+   GPU, universally supported; 2048 reads soft on E-sheets at grazing angles;
+   8192+ is not worth it for a backdrop). Render into an offscreen canvas,
+   stale-guarded by a monotonic seq ref (the `renderSeqRef` idiom, 1848-1849)
+   so a slow render can't land on a switched sheet. Passed to View3D as a
+   prop keyed for identity-stability (state-held canvas + the sheet's
+   primitives, mirroring how `sheet` survives being a fresh literal at 9134 —
+   View3D's consumer keys on primitives, never object identity).
+3. **View3D** — a DEDICATED effect (not the content-rebuild effect, which
+   churns per shape edit and would re-upload the texture): builds
+   `PlaneGeometry(wFt, hFt)` + `CanvasTexture` + `MeshBasicMaterial({ map,
+   transparent: true, opacity: 0.4, depthWrite: false, side: DoubleSide })`,
+   positioned `(cx, −0.05, cw)`, `renderOrder = −1` (translucent-under-
+   translucent sort insurance), and — critically — **no `clippingPlanes`**
+   (section cut must not slice the backdrop; localClipping is opt-in per
+   material). Toggled by material.visible for the on/off checkbox; tint swaps
+   `material.color` white ↔ `#1f3fc7·0.35`. Cleanup calls `disposeObject3D`
+   (it disposes `material.map`; a bare `scene.remove` would leak the texture).
+
+### Framing ruling
+
+The full-sheet plane would enlarge `fitToContent`'s bounding box and zoom the
+takeout out on open — a behavior change to today's "reframes on visible
+content" contract. **The plane is excluded from the fit walk**
+(`userData.excludeFromFit`, skipped in `computeVisibleBox`): the plan is a
+backdrop; framing stays geometry-driven.
+
+### Testing
+
+- `scene3d.test.ts`: `planPlane(SHEET)` → `{wFt:50, hFt:100, cx:25, cw:−50}`
+  (SHEET 1000×2000×0.05) — pins the w-negative-half orientation that the
+  texture's v-flip depends on.
+- Canvas verified by hand, headed, with pixel evidence: plan visible under
+  slabs at default settings, toggle + tint controls work, alignment spot-check
+  vs the 2D sheet (same plan features under the same shapes), export PNG
+  includes the plan, dark app theme does NOT invert the paper.
+
+### Non-goals (v1)
+
+- Detail-view (vector) re-render as the texture source — gated on the
+  fidelity read this v1 exists to produce.
+- Opacity slider; plan-skin state persistence (resets to on/paper per open).
+- Plan in the 2D-canvas report or any MCP surface.
