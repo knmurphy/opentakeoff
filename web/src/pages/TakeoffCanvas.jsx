@@ -1144,9 +1144,11 @@ export default function TakeoffCanvas() {
     canvas.width = Math.round(img.w * factor);
     canvas.height = Math.round(img.h * factor);
     (async () => {
-      await pageObj.render({ canvasContext: canvas.getContext("2d"), viewport: pageObj.getViewport({ scale: rs * factor }), background: "#ffffff" }).promise;
-      if (seq !== planSkinSeqRef.current) return;
-      setPlanSkin({ canvas, sheetKey: active3dKey });
+      try {
+        await pageObj.render({ canvasContext: canvas.getContext("2d"), viewport: pageObj.getViewport({ scale: rs * factor }), background: "#ffffff" }).promise;
+        if (seq !== planSkinSeqRef.current) return;
+        setPlanSkin({ canvas, sheetKey: active3dKey });
+      } catch { /* backdrop is best-effort — a failed raster just means no underlay */ }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pageObjsRef/renderScalesRef are refs (read live, not deps); focusPanel.img is derived from active3dKey
   }, [show3d, active3dKey]);

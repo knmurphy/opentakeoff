@@ -273,6 +273,7 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = Math.min(8, engine.renderer.capabilities.getMaxAnisotropy());
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: planOpacity, depthWrite: false, side: THREE.FrontSide });
+    mat.color.set(planTint ? PLAN_SKIN_TINT : "#ffffff");
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(cx, -PLAN_SKIN_DROPOPEN_FT, cw);
     mesh.renderOrder = PLAN_SKIN_RENDER_ORDER;
