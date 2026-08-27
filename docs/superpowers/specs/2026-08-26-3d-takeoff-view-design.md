@@ -347,8 +347,8 @@ established practice beyond AGENTS.md's literal three). No MCP surfaces.
 
 - Positioned door openings (`gaps_norm` + derive_base extension).
 - Point-in-polygon room membership for unlabeled shapes.
-- Roll-seam rendering from `rollgoods.js` figured layouts (cheap, real value,
-  not v1).
+- Roll-seam rendering from `rollgoods.js` figured layouts — **promoted to v1
+  by addendum 2026-08-26c (r3)**.
 - Vertical section cuts.
 - MCP view verb — requires headless-browser architecture, specced separately.
 - Stitch panels / elevation data of any kind.
@@ -463,74 +463,148 @@ CHANGELOG (amend the existing 2026-08-26 entry if it lands in the same PR).
 - Plan-skin state persistence (resets to on/paper/0.4 per open).
 - Plan in the 2D-canvas report or any MCP surface.
 
-## Addendum (2026-08-26c, r3) — Roll-good lanes on the slabs
+## Addendum (2026-08-26c, r3 rev 2) — Roll-good lanes on the slabs
 
 The figured roll layout (rollgoods.js) rendered onto the 3D floor slabs:
 alternating lane bands + explicit seam lines at lane boundaries, so the
 estimator reads WHERE the goods run and WHERE seams fall, in the same view
-they already trust for heights and transitions. The spec's future-work
-ledger called this "cheap, real value"; the scout confirmed it — no new
-persisted state, no schema change, no migration.
+they already trust for heights and transitions. No new persisted state, no
+schema change, no migration. (r1 of this addendum failed adversarial
+review — three personas, convergent findings; this rev folds in every one.
+Key corrections: seams anchor at COVERAGE boundaries, not physical-piece
+bounds; spans use DE-OVERAGED run extents; bands wear the roll material
+palette, not the condition color; per-shape slab-thickness overrides do
+not exist and are not invented here.)
 
-### Product decisions (locked with the owner)
+### Field glossary (rollgoods strips — all sheet FEET)
 
-- **Data flow — prop, not a second engine call.** TakeoffCanvas already
-  computes the whole layout live (`rollTakeoff` useMemo, the same object the
-  2D roll overlay renders from). Pass its per-condition strips — filtered to
-  the active sheet's shapes — into View3D as a new prop; buildScene projects
-  them to world. ONE layout computation feeds 2D and 3D; scene3d never
-  imports the rollgoods engine (a second call site could drift from the 2D
-  overlay on memo-key differences — the overlay is the authority).
-- **Geometry — bands + seams, both derived from the same strips array.**
-  Each strip already carries coverMin/coverMax (lane bounds) and
-  runMin/runMax (in-room run) in FEET, sheet-relative — the same origin
-  `toWorldFt` uses (with its Y negation). Render per strip: a flat band
-  quad at slab top + ε (z-fight guard), fill = condition color at low
-  alpha, ALTERNATING strip parity (odd lanes at ~0.25 alpha, even at 0 —
-  the stripe reads as direction without hiding the plan skin); a seam line
-  at each INTERIOR lane boundary (laneMax[i] == laneMin[i+1]) spanning the
-  overlap of the two lanes' run extents — the same lane-boundary + overlap
-  math `seamLfBySrc` sums today, emitted as a segment instead of a scalar.
-  Single-lane rooms emit no seam (nothing adjacent) — correct, not a miss.
-- **Seam segment derivation lives in rollgoods.js**, next to
-  `seamLfBySrc` — single source of truth for "where lanes meet". New pure
-  helper emits `{a:[x,y], b:[x,y]}` per seam in sheet feet; rollTakeoff
-  threads it; scene3d only maps feet→world. node:test-able end to end.
-- **Manual cut overrides ride for free.** `shape.roll_layout` overrides
-  mutate strip run extents, and segments derive from strip extents — the 3D
-  seams reflect overrides with zero extra wiring.
-- **Height/parity rules**: bands and seams sit at the OWNING slab's top
-  (per-shape, not per-condition — a 50 ft per-shape slab override lifts its
-  own seams); no clipping planes (section cut slices slabs, the cut edges
-  show bands' cross-section as empty — disclosed, not faked); included in
-  EXPORT PNG; NOT duplicated by ×N multiplier (multiplier never duplicates
-  geometry — existing ruling); excluded volumes (deducts) get no bands
-  (rollTakeoff filters floor_area only).
-- **Control: a "Rolls" checkbox** in the overlay panel next to the plan
-  controls, default ON, non-persistent (resets per open). No opacity slider
-  v1 — band alpha is fixed; if the read demands it, later.
-- **Disclosed limits** (one note in the overlay when rolls are shown and a
-  condition has roll_setup): roll cuts ignore slab holes (existing 2D
-  behavior, rollTakeoff.js:93) — bands stripe across holes; the note says
-  so. A seam through a hole region renders through it; same disclosure.
+- `coverMin`/`coverMax` — the lane's COVERAGE slab: finished goods, exact
+  tiling by the cursor (`coverMax[i] == coverMin[i+1]` at every interior
+  boundary, by construction). Bands are built from these.
+- `laneMin`/`laneMax` — the PHYSICAL cut piece, coverage ± seam/wall/door
+  expansion. Adjacent pieces OVERLAP by 2×seam allowance — that overlap IS
+  the seam. The 2D cut overlay draws these; 3D bands deliberately do not
+  (alternating parity must not double-tint the overlap zone).
+- `runMin`/`runMax` — the lane's run extent INCLUDING wall/door overage
+  ("material that tucks past the room"). The IN-ROOM extent is
+  `runMin + minOverageFt … runMax − maxOverageFt` — the same de-overaged
+  interval `seamLfBySrc` sums ("a weld does not run up the wall"). Both
+  band runs and seam spans use the de-overaged interval, so drawn seams
+  agree with the seam LF the Report prices. Manual `shape.roll_layout`
+  cut overrides replace run values wholesale via `applyStripOverrides`;
+  the helper inherits whatever seamLfBySrc sees post-override.
+- `laneIndex` — the lane's ordinal. Parity and adjacency key on THIS, not
+  array position (a dropped lane makes them differ).
+
+### Product decisions (locked)
+
+- **Data flow — prop, not a second engine call.** TakeoffCanvas's
+  `rollTakeoff` useMemo (the 2D overlay's own source) stays the ONE layout
+  computation feeding both views. A sibling memo derives the 3D payload:
+  `rolls3d = useMemo(() => join strips+seams to the BUILT slabs,
+  [rollByCond, shapes3d])` — strips join by `srcId == shapeId` so a band
+  emits only where its owning slab exists (layer-hidden rooms have strips
+  but no slab; no floating stripes). The memo is REQUIRED: an inline
+  filter hands View3D a fresh array identity per parent render and rebuilds
+  the scene mid-orbit (the documented camera-reset trap; the shapes3d
+  pattern exists for exactly this). Sheet switch rides shapes3d identity.
+- **buildScene input contract AMENDED** (this section is the amendment):
+  buildScene gains `rolls: { bands, seams }` where each band is
+  `{poly, z, tag, shapeId, condId, laneIndex}` (poly = world-space flat
+  polygon) and each seam is `{a, b, z, tag, shapeId, condId}` — or the
+  pure lib may consume sheet-feet strips and return both arrays in its
+  OUTPUT schema alongside slabs/ribbons/posts/notes; either way the seam
+  derivation itself lives in rollgoods.js (next to `seamLfBySrc`, single
+  source of truth for "where lanes meet") and scene3d never imports the
+  engine. View3D adds the rolls payload to the sceneResult useMemo deps.
+- **Bands — coverage polygons, roll material palette.** Per lane:
+  `clipRingToLaneSlab(ring, laneAxis, coverMin, coverMax)` (the engine's
+  own render-only footprint clip — concave rooms notch correctly instead
+  of striping over floor that isn't there) × the de-overaged run interval,
+  as a flat polygon at the owning slab's z1 + `ROLL_BAND_EPS_FT`. Fill =
+  `rollColorForType(summary.material)` — the material-true palette, the
+  2D overlay's own convention ("cuts never mimic a condition's takeoff
+  look"). NOT the condition color: slabs are opaque condition-color
+  MeshBasicMaterial, and C-over-C alpha composites to C — condition-color
+  bands are mathematically invisible. PARITY: odd `laneIndex` lanes emit a
+  band, even lanes emit nothing (an alpha-0 quad is pure rasterization
+  waste); the stripe reads as band-vs-slab contrast.
+- **Seams — thin ribbon quads, dark ink.** At each interior COVERAGE
+  boundary (`coverMax[i]`, guarded by `b.laneIndex === a.laneIndex + 1`;
+  a dropped lane leaves NO seam — array-consecutive ≠ lane-adjacent),
+  spanning the overlap of the two lanes' DE-OVERAGED run extents — the
+  exact interval seamLfBySrc sums. Rendered as flat ribbon quads
+  (buildRibbon's plan-view pattern; `THREE.Line` linewidth is capped at
+  1 device px on most platforms and unreadable at whole-floor framing),
+  half-width `ROLL_SEAM_HALF_FT` (the FLUSH_HALF_FT = 1/12 ft precedent),
+  color a pinned dark neutral ink constant contrasting with both slab fill
+  and band tint. Single-lane rooms emit no seam (nothing adjacent) —
+  correct, not a miss.
+- **Height**: band z = seam z = the owning slab's z1 + eps, joined per
+  strip via srcId → that shape's slab. z1 is the condition's
+  `thickness_in/12` (nominal fallback) — there is NO per-shape slab
+  thickness override in the schema and this addendum does not invent one.
+  `ROLL_BAND_EPS_FT = 1/48` (≈0.25 in): above depth precision at sheet
+  scale, below the nominal slab thickness (1/24 ft) — the tempting borrow
+  `PLAN_SKIN_DROPOPEN_FT = 0.05` is LARGER than a nominal slab is thick
+  and would visibly hover.
+- **Depth/renderOrder discipline**: bands and seams are transparent
+  (`depthWrite: false` on both — three's default true would make a band
+  at slab-top+eps swallow equal-depth seam fragments), renderOrder bands
+  1, seams 2, both after the plan plane's −1. Coplanar transparent
+  primitives never rely on distance sort.
+- **Parenting + batching (a stated carve-out, like excluded volumes)**:
+  one MERGED band mesh + one MERGED seam mesh per roll-goods condition,
+  parented under that condition's Group — explode (Group.position) and
+  legend toggles (Group.visible) ride for free; a scene-child batch would
+  strand stripes at deck height mid-explode and keep bands lit for
+  legend-hidden conditions. Merged-per-condition keeps the draw-call
+  budget in the parent's "still tens" regime (one mesh per strip is
+  hundreds of calls on a 100-room sheet). The Rolls checkbox is a
+  VISIBILITY-ONLY walk over the band/seam meshes (the plan-controls
+  pattern — mutate in place, never a rebuild); folding it into the
+  content-effect deps triggers fitToContent and re-frames the camera on a
+  cosmetic toggle.
+- **Clipping**: bands and seams carry the SAME shared clippingPlanes array
+  as every other material (the parent's EVERY-material ruling). The
+  floating-stripe-over-cut-away-slab artifact the no-clip variant
+  manufactures is worse than the empty cross-section it tries to avoid.
+  Cross-section disclosure stays: a cut through a band shows its edge as
+  empty — schematic, not as-built.
+- **Disclosed limits** (overlay note when Rolls is shown): roll cuts
+  ignore slab holes (existing 2D behavior) — bands stripe across holes;
+  bands show the COVERAGE slab (finished goods) while the 2D cut overlay
+  shows PHYSICAL pieces (which overlap by seam allowance and tuck past
+  walls) — both correct, deliberately different questions.
+- **Scope**: floor_area roll-goods conditions only; no deduct bands; ×N
+  multiplier never duplicates geometry (existing ruling); included in
+  EXPORT PNG; control resets to ON per overlay open (non-persistent).
+
+### Constants (named, no magic numbers)
+
+`ROLL_BAND_ALPHA = 0.25` · `ROLL_BAND_EPS_FT = 1/48` ·
+`ROLL_SEAM_HALF_FT = 1/12` · `ROLL_SEAM_COLOR` (dark neutral ink) ·
+`ROLL_BAND_RENDER_ORDER = 1` · `ROLL_SEAM_RENDER_ORDER = 2`
 
 ### Tests
 
-- rollgoods: seam-segment helper — ns and ew lane axes, overlap interval,
-  single-lane room (no seam), manual-override extents honored.
-- scene3d: strips→world mapping — Y negation vs rollgoods' +y, band parity,
-  seam at interior boundaries only, per-shape height override lifts its own
-  seams.
+- rollgoods seam-segment helper: ns + ew lane axes; interior coverage
+  boundary; laneIndex-adjacency guard (dropped lane → no seam);
+  de-overaged span; single-lane room → no seam; manual overrides honored.
+- scene3d: strips→world mapping (Y negation vs rollgoods' +y); band parity
+  on laneIndex; band z = owning slab z1 + eps (join by srcId); clipRing
+  footprint (concave notch not striped); seam only at interior boundaries.
+- No-band-without-slab: strip whose shapeId has no built slab emits nothing.
 
 ### Docs sync
 
-USER_GUIDE §18 (Rolls checkbox + what bands/seams mean + the holes
-disclosure), README Features bullet, FEATURES.md row, CHANGELOG. No MCP
-surface.
+USER_GUIDE §18 (Rolls checkbox; bands = coverage/material palette; seams =
+coverage boundaries; the coverage-vs-cut-piece and holes disclosures),
+README Features bullet, FEATURES.md row, CHANGELOG. No MCP surface.
 
 ### Non-goals (v1)
 
 - Seam LF captions / any numbers in-scene (the Report owns numbers).
-- Roll direction chosen IN the 3D view (the condition's roll_setup is the
-  authority; change it in the panel).
+- Roll direction chosen IN the 3D view (condition roll_setup is authority).
 - Bands on walls/transitions/counts — floor roll-goods conditions only.
+- Per-shape slab-thickness overrides (do not exist; not invented here).
