@@ -212,7 +212,13 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
   const byCond = new Map();
   const byShape = new Map();
   const tileConds = (conditions || []).filter(hasTileSetup);
-  if (!tileConds.length) return { byCond, byShape };
+  // No tile conditions at all → no tiled shape can be live, so any cached
+  // summaries are dead. Clear here too (the eviction loop below is unreachable
+  // on this early return) to honor "the cache tracks the live tiled-shape set".
+  if (!tileConds.length) {
+    if (cache) cache.clear();
+    return { byCond, byShape };
+  }
   const condById = new Map(tileConds.map((c) => [c.id, c]));
 
   // Optional cross-render solve cache (perf #2). A shape's summary is a PURE

@@ -753,3 +753,17 @@ test("computeTileTakeoff cache: a removed shape's entry is pruned", () => {
   assert.equal(cache.size, 1, "the removed shape's cache entry must be pruned");
   assert.ok(cache.has("rA") && !cache.has("rB"));
 });
+
+test("computeTileTakeoff cache: removing every tile condition clears the cache (no dead entries retained)", () => {
+  const cond = makeTileCondition();
+  const a = makeRect("rA", cond.id, 0.05, 0.05);
+  const b = makeRect("rB", cond.id, 0.05, 0.4);
+  const cache = new Map();
+  computeTileTakeoff([cond], [a, b], dimsFor, uppFor, cache);
+  assert.equal(cache.size, 2);
+  // de-tile: the only condition loses its tile_setup — no tiled shape can be live.
+  const carpet = { id: cond.id, finish_tag: "CPT-1", multiplier: 1 };
+  const { byShape } = computeTileTakeoff([carpet], [a, b], dimsFor, uppFor, cache);
+  assert.equal(byShape.size, 0);
+  assert.equal(cache.size, 0, "no tile conditions => the cache must hold no dead entries");
+});
