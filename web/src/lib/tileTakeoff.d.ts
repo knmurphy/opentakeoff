@@ -9,6 +9,8 @@ import type { TileCounts } from "./tileCalc/tiles.ts";
 import type { TileOrder } from "./tileCalc/order.ts";
 import type { CutRow } from "./tileCalc/cutsheet.ts";
 import type { ReusePlanResult } from "./tileCalc/reuse.ts";
+import type { TrimTally } from "./tileCalc/borders.ts";
+import type { JointTally } from "./tileCalc/joints.ts";
 import type { TileLayout } from "./tileSolve.ts";
 import type { Classified } from "./tileGeometry/classify.ts";
 
@@ -39,6 +41,17 @@ export type TileConditionBand = {
   lf: number;
 };
 
+// Per-shape/per-condition trim tally (M8 Task 8, summarizeShape / byCond
+// finalize) — confirmed-only edge exposures grouped by kind, plus the
+// corner EA cornerTallies derives from the same confirmed edge set.
+export type TileTrimSummary = {
+  byKind: TrimTally[];
+  length_lf: number;
+  pieces: number;
+  corner_outside: number;
+  corner_inside: number;
+};
+
 // One shape's figured tile summary — the byShape value. Raw measured
 // geometry, never multiplied.
 export type TileShapeSummary = {
@@ -52,6 +65,8 @@ export type TileShapeSummary = {
   ring_ft: [number, number][];
   band?: TileShapeBand;
   reuse?: ReusePlanResult;
+  trim: TileTrimSummary;
+  joints: JointTally;
 };
 
 // One condition's aggregated tile summary — the byCond value. Counts are
@@ -68,7 +83,10 @@ export type TileConditionSummary = {
   reuse?: ReusePlanResult;
   reuseOrder?: TileOrder;
   band?: TileConditionBand[];
+  trim?: TileTrimSummary;
+  joints?: JointTally;
 };
+
 
 export type TileTakeoff = {
   byCond: Map<string, TileConditionSummary>;
@@ -99,6 +117,11 @@ export type TileReportRow = {
   reuse_downgraded: string | null;
   cutsheet: CutRow[];
   warnings: string[];
+  trim_lf: number;
+  corner_outside: number;
+  corner_inside: number;
+  joint_lf: number;
+  trim_by_kind: TrimTally[];
 };
 
 export function hasTileSetup(c: unknown): boolean;

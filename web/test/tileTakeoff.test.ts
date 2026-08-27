@@ -767,3 +767,164 @@ test("computeTileTakeoff cache: removing every tile condition clears the cache (
   assert.equal(byShape.size, 0);
   assert.equal(cache.size, 0, "no tile conditions => the cache must hold no dead entries");
 });
+
+// ── M8 Task 8: trim + movement-joint wiring (design §3.4/§3.3) ──────────────
+// Trim/joints ride the FULL room ring (the same `ring_ft` TakeoffCanvas.jsx's
+// tileOverlayForShape hands edgeExposures — not the band-eroded field ring),
+// so a room's edge_overrides drive the exact same exposures the overlay inks.
+function makeShapeWithOverrides(condId: string, edge_overrides: Record<number, { exposure: string; confirmed: boolean }> | undefined) {
+  return {
+    id: "shapeTrim",
+    sheet_id: "sheet1",
+    condition_id: condId,
+    measure_role: "floor_area",
+    verts_norm: [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ],
+    tile_layout: edge_overrides ? { edge_overrides } : undefined,
+  };
+}
+
+test("summarizeShape (via byShape): a confirmed trim edge override reports trim LF == that edge's length; no override reports 0", () => {
+  const cond = makeTileCondition();
+  const shapeNoOverride = makeShapeWithOverrides(cond.id, undefined);
+  const { byShape: byShapeNone } = computeTileTakeoff([cond], [shapeNoOverride], dimsFor, uppFor);
+  const noneSummary = byShapeNone.get("shapeTrim");
+  assert.ok(noneSummary, "expected a byShape summary");
+  assert.equal(noneSummary.trim.length_lf, 0);
+  assert.equal(noneSummary.trim.pieces, 0);
+  assert.deepEqual(noneSummary.trim.byKind, []);
+
+  const shapeWithOverride = makeShapeWithOverrides(cond.id, { 0: { exposure: "trim", confirmed: true } });
+  const { byShape } = computeTileTakeoff([cond], [shapeWithOverride], dimsFor, uppFor);
+  const summary = byShape.get("shapeTrim");
+  assert.ok(summary, "expected a byShape summary");
+  assert.equal(summary.trim.length_lf, 4);
+  assert.ok(summary.trim.pieces > 0);
+});
+
+test("summarizeShape: two trim edges of the same kind merge into one byKind row with summed LF", () => {
+  const cond = makeTileCondition();
+  const shape = makeShapeWithOverrides(cond.id, {
+    0: { exposure: "trim", confirmed: true },
+    1: { exposure: "trim", confirmed: true },
+  });
+  const { byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const summary = byShape.get("shapeTrim");
+  assert.ok(summary, "expected a byShape summary");
+  assert.equal(summary.trim.byKind.length, 1);
+  assert.equal(summary.trim.byKind[0].exposure, "trim");
+  assert.equal(summary.trim.byKind[0].length_lf, 8);
+});
+
+test("summarizeShape: corner_outside/corner_inside come from cornerTallies over confirmed edges", () => {
+  const cond = makeTileCondition();
+  // All four edges of the 4x4 square trimmed => 4 convex (outside) corners.
+  const shape = makeShapeWithOverrides(cond.id, {
+    0: { exposure: "trim", confirmed: true },
+    1: { exposure: "trim", confirmed: true },
+    2: { exposure: "trim", confirmed: true },
+    3: { exposure: "trim", confirmed: true },
+  });
+  const { byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const summary = byShape.get("shapeTrim");
+  assert.ok(summary, "expected a byShape summary");
+  assert.equal(summary.trim.corner_outside, 4);
+  assert.equal(summary.trim.corner_inside, 0);
+
+  // Only two ADJACENT edges trimmed => exactly one corner (their shared vertex).
+  const shape2 = makeShapeWithOverrides(cond.id, {
+    0: { exposure: "trim", confirmed: true },
+    1: { exposure: "trim", confirmed: true },
+  });
+  const { byShape: byShape2 } = computeTileTakeoff([cond], [shape2], dimsFor, uppFor);
+  const summary2 = byShape2.get("shapeTrim");
+  assert.ok(summary2, "expected a byShape summary");
+  assert.equal(summary2.trim.corner_outside, 1);
+  assert.equal(summary2.trim.corner_inside, 0);
+});
+
+// A 30ft x 30ft room (>= 24ft field-grid spacing) placed on a dedicated
+// sheet/scale so the movement-joint field grid actually fires.
+const dimsForJoints = (sheetId: string) => (sheetId === "sheetJoints" ? { w: 100, h: 100 } : null);
+const uppForJoints = (sheetId: string) => (sheetId === "sheetJoints" ? 0.3 : null);
+function makeJointsShape(condId: string) {
+  return {
+    id: "shapeJoints",
+    sheet_id: "sheetJoints",
+    condition_id: condId,
+    measure_role: "floor_area",
+    verts_norm: [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ],
+  };
+}
+
+test("summarizeShape: joints.total_lf == perimeter + field for a room >= 24ft (field_lf > 0); == perimeter for a small room (field_lf == 0)", () => {
+  const cond = makeTileCondition();
+  const bigShape = makeJointsShape(cond.id);
+  const { byShape: byShapeBig } = computeTileTakeoff([cond], [bigShape], dimsForJoints, uppForJoints);
+  const bigSummary = byShapeBig.get("shapeJoints");
+  assert.ok(bigSummary, "expected a byShape summary");
+  assert.equal(bigSummary.joints.perimeter_lf, 120);
+  assert.ok(bigSummary.joints.field_lf > 0, "a 30x30ft room must have a nonzero field grid");
+  assert.equal(bigSummary.joints.total_lf, bigSummary.joints.perimeter_lf + bigSummary.joints.field_lf);
+
+  const smallShape = makeShape(cond.id);
+  const { byShape: byShapeSmall } = computeTileTakeoff([cond], [smallShape], dimsFor, uppFor);
+  const smallSummary = byShapeSmall.get(smallShape.id);
+  assert.ok(smallSummary, "expected a byShape summary");
+  assert.equal(smallSummary.joints.field_lf, 0);
+  assert.equal(smallSummary.joints.total_lf, smallSummary.joints.perimeter_lf);
+});
+
+test("tileReportRows: trim_lf (x mult), corner_outside/corner_inside (as-measured), joint_lf (x mult) are carried", () => {
+  const cond = makeTileCondition();
+  cond.multiplier = 2;
+  const shape = makeShapeWithOverrides(cond.id, {
+    0: { exposure: "trim", confirmed: true },
+    1: { exposure: "trim", confirmed: true },
+  });
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const rows = [{ id: cond.id, finish_tag: "CT-1", multiplier: 2 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+
+  const condSummary = byCond.get(cond.id);
+  assert.ok(condSummary, "expected a byCond summary");
+  assert.ok(condSummary.trim, "expected a condition trim aggregate");
+  assert.ok(condSummary.joints, "expected a condition joints aggregate");
+  assert.equal(out[0].trim_lf, condSummary.trim.length_lf * 2);
+  assert.equal(out[0].corner_outside, condSummary.trim.corner_outside);
+  assert.equal(out[0].corner_inside, condSummary.trim.corner_inside);
+  assert.equal(out[0].joint_lf, condSummary.joints.total_lf * 2);
+  assert.ok(Array.isArray(out[0].trim_by_kind));
+  assert.equal(out[0].trim_by_kind.length, 1);
+});
+
+test("computeTileTakeoff/tileReportRows: a no-trim/no-joints-confirmed room still figures with no NaN (keys absent or zero)", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const condSummary = byCond.get(cond.id);
+  assert.ok(condSummary, "expected a byCond summary");
+  // No shape carried a confirmed trim edge => trim/joints absent on byCond,
+  // mirroring the band absent-when-empty convention.
+  assert.equal(condSummary.trim, undefined);
+  assert.equal(condSummary.joints, undefined);
+
+  const rows = [{ id: cond.id, finish_tag: "CT-1", multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out[0].trim_lf, 0);
+  assert.equal(out[0].corner_outside, 0);
+  assert.equal(out[0].corner_inside, 0);
+  assert.equal(out[0].joint_lf, 0);
+  assert.deepEqual(out[0].trim_by_kind, []);
+  assert.ok(!Number.isNaN(out[0].trim_lf));
+});

@@ -7,6 +7,9 @@
 // multiplier convention (applied at the report seam, not on measured
 // geometry). Keep pure — no React or DOM.
 import { hasTileSetup, primaryUsableSku } from "./tileSetup.ts";
+import { edgeExposures } from "./tileEdges/expose.ts";
+import { trimTallies, cornerTallies } from "./tileCalc/borders.ts";
+import { movementJoints } from "./tileCalc/joints.ts";
 import { solveTileLayout } from "./tileSolve.ts";
 import { tileCounts, countsBySku } from "./tileCalc/tiles.ts";
 import { tileGroutBags } from "./tileCalc/grout.ts";
@@ -184,6 +187,27 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
       kerf_in: reuseOpts.kerf_in,
     });
   }
+  // Trim + movement joints (M8 Task 8, design §3.4/§3.3) — read the ROOM's
+  // own full ring (the `ring_ft` param, never the band-eroded `fieldRing_ft`)
+  // so a shape's edge_overrides drive the exact same exposures
+  // TakeoffCanvas.jsx's tileOverlayForShape hands edgeExposures (drawn ==
+  // counted). Confirmed-only (trimTallies' default) — an unconfirmed
+  // suggestion never auto-commits to a bid line (§3.4). transitions_lf stays
+  // 0: wiring material-transition runs into the joint LF is out of scope here.
+  const overrides = Object.fromEntries(
+    Object.entries(tile_layout?.edge_overrides || {}).map(([i, o]) => [i, o?.exposure]),
+  );
+  const exposures = edgeExposures({ ring_ft, overrides });
+  const byKind = trimTallies(exposures);
+  const corners = cornerTallies(ring_ft, exposures);
+  summary.trim = {
+    byKind,
+    length_lf: byKind.reduce((sum, k) => sum + k.length_lf, 0),
+    pieces: byKind.reduce((sum, k) => sum + k.pieces, 0),
+    corner_outside: corners.outside,
+    corner_inside: corners.inside,
+  };
+  summary.joints = movementJoints({ ring_ft });
   return summary;
 }
 
@@ -254,6 +278,10 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
         warnings: new Set(),
         shapeIds: [],
         bandBySku: new Map(),
+        trimByKind: new Map(),
+        trimTotals: { length_lf: 0, pieces: 0, corner_outside: 0, corner_inside: 0 },
+        jointTotals: { perimeter_lf: 0, field_lf: 0, transition_lf: 0, total_lf: 0, fieldGridSpacing_ft: 0 },
+        hasTrim: false,
         excluded: { unscaled: 0, degenerate: 0 },
       };
       byCond.set(cond.id, agg);
@@ -321,6 +349,28 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
         agg.bandBySku.set(id, { tiles: summary.band.tiles, corner: summary.band.corner, lf: summary.band.lf });
       }
     }
+    if (summary.trim.byKind.length) {
+      agg.hasTrim = true;
+      for (const k of summary.trim.byKind) {
+        const existing = agg.trimByKind.get(k.exposure);
+        if (!existing) {
+          agg.trimByKind.set(k.exposure, { length_lf: k.length_lf, pieces: k.pieces, finish_neighbor: k.finish_neighbor, sharedNeighbor: true });
+        } else {
+          existing.length_lf += k.length_lf;
+          existing.pieces += k.pieces;
+          if (existing.finish_neighbor !== k.finish_neighbor) existing.sharedNeighbor = false;
+        }
+      }
+      agg.trimTotals.length_lf += summary.trim.length_lf;
+      agg.trimTotals.pieces += summary.trim.pieces;
+      agg.trimTotals.corner_outside += summary.trim.corner_outside;
+      agg.trimTotals.corner_inside += summary.trim.corner_inside;
+      agg.jointTotals.perimeter_lf += summary.joints.perimeter_lf;
+      agg.jointTotals.field_lf += summary.joints.field_lf;
+      agg.jointTotals.transition_lf += summary.joints.transition_lf;
+      agg.jointTotals.total_lf += summary.joints.total_lf;
+      agg.jointTotals.fieldGridSpacing_ft = summary.joints.fieldGridSpacing_ft;
+    }
   }
 
   for (const agg of byCond.values()) {
@@ -365,6 +415,30 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
       );
     }
     delete agg.bandBySku;
+    // Trim + movement joints (M8 Task 8, design §3.4/§3.3): absent when no
+    // shape on the condition carried a confirmed trim edge, mirroring the
+    // band absent-when-empty convention — a no-trim room never reports a
+    // fabricated trim/joint line.
+    if (agg.hasTrim) {
+      const byKind = Array.from(agg.trimByKind, ([exposure, g]) => ({
+        exposure,
+        length_lf: g.length_lf,
+        pieces: g.pieces,
+        ...(g.sharedNeighbor && g.finish_neighbor !== undefined ? { finish_neighbor: g.finish_neighbor } : {}),
+      })).sort((a, b) => a.exposure.localeCompare(b.exposure));
+      agg.trim = {
+        byKind,
+        length_lf: agg.trimTotals.length_lf,
+        pieces: agg.trimTotals.pieces,
+        corner_outside: agg.trimTotals.corner_outside,
+        corner_inside: agg.trimTotals.corner_inside,
+      };
+      agg.joints = { ...agg.jointTotals };
+    }
+    delete agg.trimByKind;
+    delete agg.trimTotals;
+    delete agg.jointTotals;
+    delete agg.hasTrim;
     delete agg.classified;
   }
 
@@ -430,6 +504,15 @@ export function tileReportRows(tileByCond, rows) {
       reuse_downgraded: reuseEnabled && ti.reuse.downgraded ? ti.reuse.downgraded : null,
       cutsheet: ti.cutsheet,
       warnings: ti.warnings,
+      // Trim + movement joints (M8 Task 8): trim/joint LF are purchase
+      // figures (installed linear stock, order rounds by pieces) so they
+      // scale by the condition ×N multiplier like Safe/boxes/grout; corner
+      // EA is an as-measured count of the room's own geometry, never ×N.
+      trim_lf: ti.trim ? ti.trim.length_lf * mult : 0,
+      corner_outside: ti.trim ? ti.trim.corner_outside : 0,
+      corner_inside: ti.trim ? ti.trim.corner_inside : 0,
+      joint_lf: ti.joints ? ti.joints.total_lf * mult : 0,
+      trim_by_kind: ti.trim ? ti.trim.byKind : [],
     });
   }
   return out;
