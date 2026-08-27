@@ -518,6 +518,20 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
                   {laborCols.map(colCheckbox)}
                 </>
               )}
+              {/* roll-goods figured columns — order LF / rolls / seam LF */}
+              {rollCols.length > 0 && (
+                <>
+                  <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Roll goods</div>
+                  {rollCols.map(colCheckbox)}
+                </>
+              )}
+              {/* tile takeoff column — the PO-line order quantity, opt-in */}
+              {tileCols.length > 0 && (
+                <>
+                  <div style={{ borderTop: "1px solid var(--ink-faint)", margin: "8px 0 4px", paddingTop: 6, fontFamily: "var(--f-mono)", fontSize: 9.5, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-muted)" }}>Tile</div>
+                  {tileCols.map(colCheckbox)}
+                </>
+              )}
               <p style={{ margin: "8px 0 0", fontSize: 11, color: "var(--ink-muted)" }}>Also applies to the CSV export. Grouping by a custom column always exports that column.</p>
             </div>
           )}

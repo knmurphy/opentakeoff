@@ -279,10 +279,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
   doc.setCreator("OpenTakeoff");
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  // shop-drawing readouts (tile layout page) — Courier/Courier-Bold keep
-  // every numeric value tabular/mono without embedding a font program.
-  const courier = await doc.embedFont(StandardFonts.Courier);
-  const courierBold = await doc.embedFont(StandardFonts.CourierBold);
+  // shop-drawing readouts (tile layout page) — Courier/Courier-Bold keep every
+  // numeric value tabular/mono without embedding a font program. Declared here
+  // but embedded LAZILY on the first tile page (embedFont registers the font
+  // dict in the saved PDF even when unused, which would break the
+  // byte-identical-when-no-tile-page invariant).
+  let courier = null;
+  let courierBold = null;
   const ink = dark ? rgb(0.93, 0.92, 0.89) : rgb(0.13, 0.12, 0.1);
   const muted = dark ? rgb(0.63, 0.61, 0.56) : rgb(0.42, 0.4, 0.36);
   const cobalt = dark ? rgb(0.45, 0.56, 1) : rgb(...hex(COBALT));   // brighter on near-black
@@ -920,6 +923,8 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const shapesHere = shapesBy.get(sh.key) || [];
       const { byShape: tileByShape } = computeTileTakeoff(conditions, shapesHere, () => ({ w: W, h: H }), () => tileUpp);
       if (tileByShape.size) {
+        courier ??= await doc.embedFont(StandardFonts.Courier);
+        courierBold ??= await doc.embedFont(StandardFonts.CourierBold);
         const tilePg = doc.addPage([pg.getWidth(), pg.getHeight()]);
         tilePg.setRotation(chipRot);
         if (dark) tilePg.drawRectangle({ x: 0, y: 0, width: pg.getWidth(), height: pg.getHeight(), color: rgb(...DARK_BG) });
