@@ -333,6 +333,26 @@ test("isolate3D: deduct centroid in no room stays", () => {
   assert.equal(vis!.has("d4"), true);
 });
 
+test("isolate3D: unlabeled floor DISJOINT from every room drops (r5 rev 3 — rooms never contain one another)", () => {
+  // two disjoint rooms; selecting one must drop the other's unlabeled floor
+  const A = sq([0.10, 0.10], 0.20);
+  const B = sq([0.60, 0.60], 0.20);
+  const floorA = { id: "fa", measure_role: "floor_area", verts_norm: A, computed: {} };
+  const floorB = { id: "fb", measure_role: "floor_area", verts_norm: B, computed: {} };
+  const vis = isolate3D("fa", [floorA, floorB] as any);
+  assert.ok(vis!.has("fa"), "selected room visible");
+  assert.ok(!vis!.has("fb"), "disjoint unlabeled other-room floor drops");
+});
+
+test("isolate3D: unlabeled floor nested inside the resolved room joins; wall-overlap floor stays (r5 rev 3 triage)", () => {
+  const A = sq([0.10, 0.10], 0.40);
+  const nested = sq([0.20, 0.20], 0.10);
+  const floorA = { id: "fa", measure_role: "floor_area", verts_norm: A, computed: {} };
+  const closet = { id: "cl", measure_role: "floor_area", verts_norm: nested, computed: {} };
+  const vis = isolate3D("fa", [floorA, closet] as any);
+  assert.ok(vis!.has("cl"), "nested unlabeled floor joins the room");
+});
+
 test("isolate3D: unlabeled unlinked floor_area centroid inside another room drops", () => {
   const fx = { id: "fx", measure_role: "floor_area", verts_norm: sq(IN_B, 0.02), computed: {} };
   const vis = isolate3D("fA", [ROOM_A, ROOM_B, fx] as any);

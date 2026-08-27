@@ -98,6 +98,29 @@ function containingFloors(x, y, floors, outsets, excludeId) {
 // Single representative point: exactly one resolved room contains it → join;
 // exactly one OTHER room (and no resolved room) → drop; else (no room, or
 // 2+ rooms — the shared-wall overlap) → stay. Never silently shrink.
+// Floors are disjoint: overlap with the resolved room's outset (nested or
+// wall-shared) is the ONLY way an unlinked floor joins or stays; hitting no
+// room at all means it is another room — drop (r5 rev 3).
+function classifyFloorRing(shape, floors, outsets, roomIds) {
+  const ring = shape.verts_norm || [];
+  if (ring.length === 0) return "drop"; // no geometry to attribute — another room by default
+  const floorTriage = (x, y) => {
+    const hits = containingFloors(x, y, floors, outsets, shape.id);
+    if (hits.some((id) => roomIds.has(id))) return hits.length > 1 ? "stay" : "join"; // outset overlap with another room = ambiguous
+    return "drop";
+  };
+  const [cx, cy] = centroid2(ring);
+  if (pointInPoly(cx, cy, ring)) return floorTriage(cx, cy);
+  // concave ring (centroid outside its own polygon): vertex supermajority, same triage
+  let inResolved = 0, overlap = 0;
+  for (const [x, y] of ring) {
+    const hits = containingFloors(x, y, floors, outsets, shape.id);
+    if (hits.some((id) => roomIds.has(id))) { inResolved++; if (hits.length > 1) overlap++; }
+  }
+  if (inResolved / ring.length >= RUN_SAMPLE_FRACTION) return overlap ? "stay" : "join";
+  return "drop";
+}
+
 function classifyPoint(x, y, floors, outsets, roomIds, excludeId) {
   const hits = containingFloors(x, y, floors, outsets, excludeId);
   if (hits.length !== 1) return "stay";
@@ -164,8 +187,12 @@ function classifyShape(shape, floors, outsets, roomIds) {
       // Graph admission already caught label/derived matches to a resolved
       // room; reaching here with a label or a derived link means it belongs
       // to a different room — default drop. Only unlinked, unlabeled floors
-      // get point-in-polygon triage.
-      return shape.label || shape.origin?.derived ? "drop" : classifyClosedRing(shape, floors, outsets, roomIds);
+      // get point-in-polygon triage — and floors are DISJOINT (spec r5 rev
+      // 3): containment can only attribute a floor to a room it is NESTED
+      // in, so a floor hitting NO room is simply another room → DROP, not
+      // stay (the rev-2 stay leg was unreachable-in-practice and left
+      // unlabeled other-room floors visible — live validation catch).
+      return shape.label || shape.origin?.derived ? "drop" : classifyFloorRing(shape, floors, outsets, roomIds);
     case "linear":
     case "surface_area":
       // Same reasoning: a derived (decorated) run that graph admission
