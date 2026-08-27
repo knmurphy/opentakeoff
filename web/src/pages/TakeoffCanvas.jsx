@@ -5600,7 +5600,11 @@ export default function TakeoffCanvas() {
   // includeMarkups (from the ReportPanel checkbox, default true) is ORTHOGONAL to
   // the canvas layer-hide (showMarkups): only this flag drops markups from the
   // PDF. Off → pass []; the RFI-only export still works (empty-guard unaffected).
-  async function exportMarkedSet(includeMarkups = true) {
+  // includeTilePattern (from the ReportPanel "Include tile pattern" checkbox,
+  // default off) is what turns the optional tile shop-drawing page(s) ON —
+  // passing uppFor is the whole trigger (markedset skips tile pages when it's
+  // absent). Off → the marked set is byte-identical to the pre-tile export.
+  async function exportMarkedSet(includeMarkups = true, includeTilePattern = false) {
     try {
       setCommitMsg("Building the marked set…");
       const exportMarkups = includeMarkups ? markups : [];
@@ -5635,7 +5639,7 @@ export default function TakeoffCanvas() {
         dark: darkMode, units, sheets: sheetMeta, shapes, markups: exportMarkups, approvals, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
-        uppFor: (k) => uppFor(k),
+        ...(includeTilePattern ? { uppFor: (k) => uppFor(k) } : {}),
       });
       downloadBytes(filename, bytes);
       setCommitMsg(`Marked set downloaded — ${filename}`);

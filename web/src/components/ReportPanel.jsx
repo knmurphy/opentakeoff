@@ -6,7 +6,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
 import ToolMenu from "./ToolMenu.jsx";
 import { conditionTotals, grandTotals, sheetTotals, sheetGroupedRows, labelGroupedRows, authorGroupedRows, sheetLabelGroupedRows, round2, totalsToCsv, downloadText, materialsSummary, reportJson, hasMultipliers, BY_SHEET_BASE_NOTE } from "../lib/totals.js";
-import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, laborColProfile, rollColProfile, tileColProfile, laborRomColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf, applyUnits } from "../lib/reportColumns.js";
+import { TABLE_PROFILE, CSV_PROFILE, colGetter, customColProfile, specColProfile, laborColProfile, rollColProfile, tileColProfile, partitionRowsBy, forceIncludeGroupCol, loadColPrefs, saveColPrefs, loadGroupBy, saveGroupBy, visibleCols, floorPerimeterLf, applyUnits } from "../lib/reportColumns.js";
 import { rollReportRows, seamLfByShape } from "../lib/rollTakeoff.js";
 import { tileReportRows } from "../lib/tileTakeoff.js";
 import { laborRomReportRows } from "../lib/tileCalc/labor.ts";
@@ -94,6 +94,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // whether the Marked Set PDF carries the markups. Default on; ORTHOGONAL to the
   // canvas markup-layer hide — that never changes the export, only this does.
   const [includeMarkups, setIncludeMarkups] = useState(true);
+  // include the optional tile-pattern shop-drawing page(s) in the marked set.
+  // Default off — the shop drawing is a fabricator's/installer's extra, not
+  // part of the distribution PDF's default content.
+  const [includeTilePattern, setIncludeTilePattern] = useState(false);
   // bumped by the Project info modal on every company/branding save, so the
   // print masthead re-reads (a cheap localStorage parse + one meta-KV load)
   const [identityRev, setIdentityRev] = useState(0);
@@ -149,11 +153,10 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // tile columns (M8) — figured piece counts/order quantities beside the
   // measured quantities, appended after roll (frozen 13 → built-in opt-ins →
   // custom → spec → labor → roll → tile), present only when at least one
-  // condition figures a tile layout.
+  // condition figures a tile layout. Tile's ONLY table column is the PO-line
+  // order quantity (default-hidden); the rest of the tile figure lives in the
+  // TilePanel, JSON, cut-sheet CSV, and the shop-drawing page.
   const tileCols = tileColProfile(tileByCond);
-  // labor ROM columns (M8) — appended after tile (… → tile → labor ROM),
-  // present only when at least one condition figures a labor ROM.
-  const laborRomCols = laborRomColProfile(laborRomByCond);
   // metric display converts AT THE DESCRIPTOR (applyUnits): headers swap to
   // m²/m, the SY column retires, and every dimensioned getter/foot wraps in
   // the converter — renderCell and the tfoot below need no unit awareness.
@@ -161,7 +164,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   // inside totalsToCsv/reportWorkbook so each output has ONE conversion site.
   const M = units === "metric";
   const AU = areaUnit(units), LU = lenUnit(units);
-  const tableCols = applyUnits(visibleCols([...TABLE_PROFILE, ...customCols, ...specCols, ...laborCols, ...rollCols, ...tileCols, ...laborRomCols], colPrefs), units);
+  const tableCols = applyUnits(visibleCols([...TABLE_PROFILE, ...customCols, ...specCols, ...laborCols, ...rollCols, ...tileCols], colPrefs), units);
   // group-by choice: "" (none) | "sheet" | a custom column id; normalized
   // ONCE per render and used everywhere (select value AND partitioning) — a
   // stale colId must fall back to None, never reach the select or the
@@ -175,7 +178,7 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
   const groupBy = groupByRaw === "sheet" || (groupByRaw === "label" && shapeLabels.length > 0) || (groupByRaw === "author" && hasAuthors) || conditionColumns.some((cc) => cc.id === groupByRaw) ? groupByRaw : "";
   // grouping force-includes its column in the CSV/XLSX even when hidden in
   // the picker (D7) — a grouped report's export always carries its grouping
-  const csvCols = forceIncludeGroupCol(visibleCols([...CSV_PROFILE, ...customCols, ...specCols, ...laborCols, ...rollCols, ...tileCols, ...laborRomCols], colPrefs), customCols, groupBy);
+  const csvCols = forceIncludeGroupCol(visibleCols([...CSV_PROFILE, ...customCols, ...specCols, ...laborCols, ...rollCols, ...tileCols], colPrefs), customCols, groupBy);
   const perimByCond = useMemo(() => floorPerimeterLf(shapes), [shapes]);
   // custom-column values reach the getters through ctx, never as row fields
   // (conditionTotals rows are spread into the contribution payload)
@@ -642,7 +645,8 @@ export default function ReportPanel({ projectName, onProjectName, conditions, sh
               "divider",
               { section: "Marked set" },
               ...(markups.length > 0 ? [{ id: "inc-markups", label: "Include markups", checked: includeMarkups, stayOpen: true, title: "Include your markups (clouds, callouts, notes, highlights) in the Marked Set PDF. Independent of the canvas layer toggle.", onSelect: () => setIncludeMarkups((v) => !v) }] : []),
-              { id: "marked-set", icon: "document", label: `Download marked set${markedSetDark ? " ☾" : ""}`, disabled: !rows.length && (!includeMarkups || !markups.length) && !rfis.length, title: `Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`, onSelect: () => onMarkedSet(includeMarkups) },
+              ...(tileByShape && tileByShape.size > 0 ? [{ id: "inc-tile-pattern", label: "Include tile pattern", checked: includeTilePattern, stayOpen: true, title: "Add a to-scale tile shop-drawing page per tiled sheet — the solved grid with cut dimensions, finished-edge trim, and a title block. Independent of the report's tile columns.", onSelect: () => setIncludeTilePattern((v) => !v) }] : []),
+              { id: "marked-set", icon: "document", label: `Download marked set${markedSetDark ? " ☾" : ""}`, disabled: !rows.length && (!includeMarkups || !markups.length) && !rfis.length, title: `Distribution PDF — marked sheets with the takeoff burned in, plus a legend cover${markedSetDark ? " (dark, following your view)" : ""}`, onSelect: () => onMarkedSet(includeMarkups, includeTilePattern) },
             ] : []),
           ]}
         />
