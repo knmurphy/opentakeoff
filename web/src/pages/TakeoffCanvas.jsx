@@ -106,7 +106,7 @@ import RollPanel from "../components/RollPanel.jsx";
 // per-layer Auto/Wall/Off overrides that feed the mask's role short-circuit.
 import LayerPanel from "../components/LayerPanel.jsx";
 import { rollColorForType } from "../lib/rollgoods.js";
-import { computeRollTakeoff, seamLfByShape } from "../lib/rollTakeoff.js";
+import { computeRollTakeoff, seamLfByShape, buildRollBands } from "../lib/rollTakeoff.js";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -162,6 +162,7 @@ import { computeShapeMetrics, needsMetrics } from "../lib/shapeMetrics.js";
 import { fmtCheckLen, parseLenInput, checkVerdict, M_PER_FT, areaVal, areaUnit, lenVal, lenUnit, calInputToFeet, heightVal, heightUnit, heightInputToFeet, heightStep, dimInputStr, dimLabel } from "../lib/units";
 import * as panelGeom from "../lib/panelGeometry.js";
 import { isolate3D } from "../lib/scene3dScope.js";
+import { NOMINAL_THICKNESS_FT } from "../lib/scene3d.js";
 
 // 3D takeoff view — lazy: three.js + its addons only load once a user opens it.
 const View3D = React.lazy(() => import("../components/View3D.jsx"));
@@ -1183,6 +1184,29 @@ export default function TakeoffCanvas() {
   // the HUD, the project roll-up, and a zone check agree with the Report on
   // what the layout welds.
   const seamCtx = useMemo(() => ({ seamByShape: seamLfByShape(rollByCond) }), [rollByCond]);
+  // Roll-lane bands/seams for the 3D view — the figured layout joined onto
+  // the ACTIVE sheet's built slabs. entries come from rollByCond.byCond
+  // (condId/tag/material/strips); ringsBySrc is threaded straight out of
+  // rollTakeoff (the exact feet ring the layout used); slabZBySrc is keyed
+  // by shapeId off shapes3d — the active-sheet-only slice already filtered
+  // for View3D — so a strip on another sheet, or a shape scene3d didn't
+  // build a slab for, naturally emits nothing (buildRollBands' own rule).
+  // Same shapes3d pattern as focusIds3d above: memoized, never an inline
+  // filter at the mount (camera-reset trap).
+  const rolls3d = useMemo(() => {
+    const condById3d = new Map(conditions.map((c) => [c.id, c]));
+    const entries = [...rollByCond.entries()].map(([condId, ri]) => ({
+      condId, tag: condById3d.get(condId)?.finish_tag || "?", material: ri.material, strips: ri.strips,
+    }));
+    const slabZBySrc = new Map();
+    for (const s of shapes3d) {
+      if (s.measure_role !== "floor_area") continue;
+      const c = condById3d.get(s.condition_id);
+      if (!c) continue;
+      slabZBySrc.set(s.id, Number(c.thickness_in) > 0 ? c.thickness_in / 12 : NOMINAL_THICKNESS_FT);
+    }
+    return buildRollBands(entries, rollTakeoff.ringsBySrc, slabZBySrc);
+  }, [rollByCond, shapes3d, conditions, rollTakeoff]);
 
   // Cut drag (#136) — the self-contained element-drag pattern (the panel-resize
   // handle's): the cut's own <g> opts into pointer events in edit mode, captures
@@ -9168,6 +9192,7 @@ export default function TakeoffCanvas() {
               sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
               planSkin={planSkin && planSkin.sheetKey === active3dKey ? planSkin : null}
               focusIds={focusIds3d}
+              rolls={rolls3d}
               sheetLabel={tabLabel(active3dKey)}
               onClose={() => setShow3d(false)}
             />

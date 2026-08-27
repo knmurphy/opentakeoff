@@ -16,9 +16,18 @@
 //                                     per-shape override at 50 ft (unmistakable
 //                                     spike proving per-instance instancing)
 //   DED-1  standalone deduct        → red "excluded area" volume + caption
+//   RC-1   roll-goods carpet (2 rooms, roll_setup on the condition):
+//            small room  11×8 ft   → single lane (< 11.5 ft n=1 cap) — banded,
+//                                     no seam, parity check
+//            L room      30×20 ft,
+//            10×8 ft notch          → multi-lane bands + seams; the notch
+//                                     corner must NOT be striped (concave clip)
 //
-// Geometry is synthetic rectangles in normalized sheet coords — the 3D view
-// doesn't care what the plan drawing shows underneath.
+// Geometry is synthetic rectangles (plus one L-shaped hexagon) in normalized
+// sheet coords — the 3D view doesn't care what the plan drawing shows
+// underneath. Roll-goods room sizes are chosen against REAL feet (see
+// FT_PER_NORM_X/Y below) so the single-lane case is provably under the
+// roll-goods engine's n=1 cap, not just visually small.
 
 import { zipSync, strToU8 } from "fflate";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -39,6 +48,32 @@ const DEDUCT = rect(0.24, 0.32, 0.28, 0.36); // inside Room A, standalone (never
 const WALL_A_NORTH = [[0.22, 0.30], [0.42, 0.30]]; // Room A's top edge, left→right
 const TRANSITION = [[0.42, 0.38], [0.42, 0.50]];   // the A|B shared wall
 
+// Roll-goods rooms are placed by REAL feet, not eyeballed normalized units, so
+// the single-lane case is provably under the engine's n=1 cap (rollgoods.js
+// computeLaneCount: capacity(n=1) = roll_width_ft*12 - 2*wall_overage_in =
+// 144 - 6 = 138in = 11.5ft, for the roll_setup defaults minted below). The
+// demo sheet's MediaBox is 3024×2160pt; sheets.ts rasters at RENDER_SCALE=2
+// (72pt/in → 144dpi), so dims.w=6048px, dims.h=4320px, and rollTakeoff.js
+// maps verts_norm → feet as norm * dims.* * UP.
+const FT_PER_NORM_X = 6048 * UP; // 336 ft per normalized x unit
+const FT_PER_NORM_Y = 4320 * UP; // 240 ft per normalized y unit
+const nx = (ft) => ft / FT_PER_NORM_X;
+const ny = (ft) => ft / FT_PER_NORM_Y;
+const ROLL_SINGLE_X0 = 0.68, ROLL_SINGLE_Y0 = 0.30;
+// 11×8 ft — both extents under the 11.5 ft cap, so it comes out single-lane
+// (n=1) no matter which axis the roll_setup "auto" direction picks.
+const ROLL_SINGLE = rect(ROLL_SINGLE_X0, ROLL_SINGLE_Y0, ROLL_SINGLE_X0 + nx(11), ROLL_SINGLE_Y0 + ny(8));
+const ROLL_L_X0 = 0.68, ROLL_L_Y0 = 0.40;
+const ROLL_L_X1 = ROLL_L_X0 + nx(30), ROLL_L_Y1 = ROLL_L_Y0 + ny(20); // 30×20 ft outer envelope
+const ROLL_L_XN = ROLL_L_X1 - nx(10), ROLL_L_YN = ROLL_L_Y0 + ny(8);  // 10×8 ft notch cut from the top-right corner
+// L-shaped hexagon (concave at [ROLL_L_XN, ROLL_L_YN]) — wide enough (30 ft)
+// to force multiple lanes, so headed validation can confirm the notch corner
+// stays unstriped (the payload builder's footprint clip) alongside the seams.
+const ROLL_L = [
+  [ROLL_L_X0, ROLL_L_Y0], [ROLL_L_XN, ROLL_L_Y0], [ROLL_L_XN, ROLL_L_YN],
+  [ROLL_L_X1, ROLL_L_YN], [ROLL_L_X1, ROLL_L_Y1], [ROLL_L_X0, ROLL_L_Y1],
+];
+
 const mk = (over) => ({ id: over.id, sheet_id: SHEET, computed: {}, label: null, origin: null, ...over });
 
 const conditions = [
@@ -49,6 +84,9 @@ const conditions = [
   { id: "cnd-t-wt", finish_tag: "WT-1", color: "#2563eb", fill: "#2563eb", hatch: "grid", multiplier: 1, waste_pct: 10, height_ft: 4, materials: [] },
   { id: "cnd-t-cg", finish_tag: "CG-1", color: "#0ea5e9", fill: "#0ea5e9", hatch: "vert", multiplier: 1, waste_pct: 0, extrude_h_ft: 4, materials: [] },
   { id: "cnd-t-ded", finish_tag: "DED-1", color: "#b03a26", fill: "#b03a26", hatch: "cross", multiplier: 1, waste_pct: 0, extrude_h_ft: 3, materials: [] },
+  // roll-goods opt-in: roll_setup present = carpet lanes/seams on the 3D slab
+  { id: "cnd-t-rc", finish_tag: "RC-1", color: "#8a5a2b", fill: "#8a5a2b", hatch: "speckle", multiplier: 1, waste_pct: 8, materials: [],
+    roll_setup: { material: "carpet", roll_width_ft: 12, roll_length_ft: 0, seam_allowance_in: 2, wall_overage_in: 3, doorway_overage_in: 1, direction: "auto", price_unit: "sy" } },
 ];
 
 const lf = (v) => Math.round(v * 100) / 100; // stand-in quantities — recomputed on load/edit anyway
@@ -77,6 +115,14 @@ const shapes = [
   // standalone (never-reconciled) deduct inside Room A → excluded volume + caption
   mk({ id: "shp-t-ded", condition_id: "cnd-t-ded", measure_role: "deduct", verts_norm: DEDUCT,
        computed: { area_sf: 25, perimeter_lf: 20 } }),
+  // small single-lane room (11×8 ft, both under the 11.5 ft n=1 cap) — one
+  // band, no seam; parity check for the roll-goods lane payload
+  mk({ id: "shp-t-rollSingle", condition_id: "cnd-t-rc", measure_role: "floor_area", verts_norm: ROLL_SINGLE,
+       computed: { area_sf: 88, perimeter_lf: 38 } }),
+  // L-shaped room (30×20 ft envelope, 10×8 ft notch) — multi-lane bands +
+  // seams; the notch corner must render unstriped (concave footprint clip)
+  mk({ id: "shp-t-rollL", condition_id: "cnd-t-rc", measure_role: "floor_area", verts_norm: ROLL_L,
+       computed: { area_sf: 520, perimeter_lf: 116 } }),
 ];
 
 const takeoff = {

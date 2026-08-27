@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildScene, toWorldFt, planPlane, ringCCW, worldWindingCCW, buildRibbon, nudgePath,
+  buildScene, toWorldFt, planPlane, ringCCW, worldWindingCCW, buildRibbon, nudgePath, rollsToWorld,
   NOMINAL_THICKNESS_FT, NOMINAL_HEIGHT_FT, EXCLUDED_COLOR, MITER_LIMIT, RIBBON_HALF_FT,
 } from "../src/lib/scene3d.js";
 import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
@@ -68,6 +68,43 @@ test("holes carried as holes_ft, wound opposite to outer", () => {
 
 test("unscaled sheet throws the scale-gate refusal", () => {
   assert.throws(() => buildScene({ sheet: { ...SHEET, upp: null }, conditions: [COND], shapes: [] }), /scale/i);
+});
+
+// ── buildScene rolls contract (spec addendum r3 rev 3) ──────────────────────
+// scene3d only maps sheet-feet polys → world here — [x, −y], no scaling, fold
+// −0 to +0 — the parity/clip/z-join logic lives upstream in rollTakeoff.js.
+
+test("buildScene: rolls omitted → {bands:[],seams:[]}, never a TypeError on built.rolls", () => {
+  const { rolls } = buildScene({ sheet: SHEET, conditions: [COND], shapes: [] });
+  assert.deepEqual(rolls, { bands: [], seams: [] });
+});
+
+test("buildScene/rollsToWorld: sheet-feet → world is [x, −y] only — no upp scaling, unlike toWorldFt", () => {
+  const rolls = {
+    bands: [{ poly: [{ x: 2, y: 3 }, { x: 5, y: 3 }, { x: 5, y: 7 }], z: 0.1, fill: "#c9a876", tag: "CPT-1", shapeId: "r1", condId: "c1", laneIndex: 1 }],
+    seams: [{ poly: [{ x: 2, y: 0.5 }, { x: 2, y: 4 }], z: 0.1, tag: "CPT-1", shapeId: "r1", condId: "c1" }],
+  };
+  const { rolls: out } = buildScene({ sheet: SHEET, conditions: [COND], shapes: [], rolls });
+  // upp=0.05 here: a scaling bug (e.g. reusing toWorldFt on feet) would shrink
+  // these to fractions of a foot — asserting the RAW feet values catches it.
+  assert.deepEqual(out.bands[0].poly, [[2, -3], [5, -3], [5, -7]]);
+  assert.deepEqual(out.seams[0].poly, [[2, -0.5], [2, -4]]);
+  assert.deepEqual(
+    { fill: out.bands[0].fill, tag: out.bands[0].tag, shapeId: out.bands[0].shapeId, condId: out.bands[0].condId, laneIndex: out.bands[0].laneIndex, z: out.bands[0].z },
+    { fill: "#c9a876", tag: "CPT-1", shapeId: "r1", condId: "c1", laneIndex: 1, z: 0.1 },
+    "every non-geometric field passes through unchanged",
+  );
+});
+
+test("buildScene/rollsToWorld: −0 folds to +0, like toWorldFt", () => {
+  const rolls = { bands: [], seams: [{ poly: [{ x: 1, y: 0 }], z: 0, tag: "t", shapeId: "s", condId: "c" }] };
+  const { rolls: out } = buildScene({ sheet: SHEET, conditions: [COND], shapes: [], rolls });
+  assert.ok(Object.is(out.seams[0].poly[0][1], 0), "not -0");
+});
+
+test("rollsToWorld: bare function mirrors buildScene's mapping and tolerates a missing bands/seams array", () => {
+  assert.deepEqual(rollsToWorld({ bands: [{ poly: [{ x: 1, y: 2 }] }] }), { bands: [{ poly: [[1, -2]] }], seams: [] });
+  assert.deepEqual(rollsToWorld(undefined), { bands: [], seams: [] });
 });
 
 test("reconciled deduct (cuts_shape_id) renders as nothing", () => {

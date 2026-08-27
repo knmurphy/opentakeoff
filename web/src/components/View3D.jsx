@@ -7,19 +7,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { buildScene, buildRibbon, RIBBON_HALF_FT, FLUSH_HALF_FT, EXCLUDED_COLOR, planPlane } from "../lib/scene3d.js";
+import {
+  buildScene, buildRibbon, RIBBON_HALF_FT, FLUSH_HALF_FT, EXCLUDED_COLOR, planPlane,
+  ROLL_BAND_ALPHA, ROLL_SEAM_INK_DARK, ROLL_SEAM_INK_LIGHT, ROLL_BAND_RENDER_ORDER, ROLL_SEAM_RENDER_ORDER,
+} from "../lib/scene3d.js";
 import { STANDARD_SCALES } from "../lib/sheets.ts";
+import { luminance } from "../lib/lineStyles.js";
 import { Z, S, SVG } from "../lib/ui.js";
 
 const LIMITATIONS_TEXT =
   "Schematic view — no wall thickness, no door frames, no casework, flat single-elevation floors, generic base profile, openings deducted-not-shown.";
 const EXPORT_FOOTER = "schematic — not as-built; openings deducted, not shown; verify in field";
+// Roll-good lane disclosures (spec addendum r3 rev 3): the overlay note shown
+// while Rolls is on, and the narrower seam-only caveat appended to the
+// EXPORT PNG footer when a roll band/seam is actually visible in the render.
+const ROLLS_LIMITS_TEXT =
+  "Roll cuts ignore slab holes — bands stripe across holes (existing 2D behavior). Bands show the coverage slab (finished goods) while the 2D cut overlay shows physical cut pieces (which overlap by seam allowance and tuck past walls) — both correct, deliberately different questions. A seam drawn across a concave notch clips to the room, so drawn seam length can be shorter than the priced seam LF when a notch intervenes.";
+const ROLLS_EXPORT_CAVEAT = "rolls: drawn seam length may be shorter than the priced seam LF across a concave notch";
 const MAX_EXPLODE_FT = 6;
 const PLAN_SKIN_OPACITY = 0.4;
 const PLAN_SKIN_DROPOPEN_FT = 0.05;
 const PLAN_SKIN_RENDER_ORDER = -1;
 const PLAN_SKIN_TINT = new THREE.Color(SVG.cobalt).lerp(new THREE.Color("#ffffff"), 0.6);
-const EMPTY_SCENE = { slabs: [], ribbons: [], posts: [], notes: [] }; // stable fallback — never a fresh object per render
+const EMPTY_SCENE = { slabs: [], ribbons: [], posts: [], notes: [], rolls: { bands: [], seams: [] } }; // stable fallback — never a fresh object per render
 
 // Unit post primitive, base-anchored along +Y (this renderer's "up" axis, per
 // the Vector3(x, up, w) contract every other mesh here honors), radius 1 —
@@ -43,6 +53,19 @@ function slabGeometry(slab) {
   const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false, curveSegments: 1 });
   geo.rotateX(-Math.PI / 2);
   geo.translate(0, slab.z0, 0);
+  geo.deleteAttribute("uv");
+  return geo;
+}
+
+// Roll bands/seams: pre-clipped flat polygons (the engine's clipRingToLaneSlab
+// output) at slab-top+eps — same (x,-w) winding + rotateX(-90) convention as
+// slabGeometry (lands (x, up, w)), but NO extrusion: a coverage/seam stripe
+// is a flat decal, not a volume.
+function rollPolyGeometry(entry) {
+  const shape = new THREE.Shape(entry.poly.map(([x, w]) => new THREE.Vector2(x, -w)));
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, entry.z, 0);
   geo.deleteAttribute("uv");
   return geo;
 }
@@ -93,13 +116,23 @@ function mergeToGeometry(geoms) {
   return merged;
 }
 
-function addMesh(group, items, toGeo, material, focusIds) {
+// renderOrder is an ADDITIVE optional param (existing callers omit it and
+// keep three's default 0) — the roll bands/seams content effect uses it to
+// stack coplanar transparent stripes (bands under seams) without depth-sort.
+// Returns the created {mesh, focusVisible} entries so a caller can later
+// re-apply a visibility-only toggle (e.g. the Rolls checkbox) without a
+// rebuild.
+function addMesh(group, items, toGeo, material, focusIds, renderOrder) {
+  const created = [];
   for (const { list, visible } of splitByFocus(items, focusIds)) {
     if (!list.length) continue;
     const mesh = new THREE.Mesh(mergeToGeometry(list.map(toGeo)), material);
     mesh.visible = visible;
+    if (renderOrder != null) mesh.renderOrder = renderOrder;
     group.add(mesh);
+    created.push({ mesh, focusVisible: visible });
   }
+  return created;
 }
 
 function disposeObject3D(root) {
@@ -174,12 +207,13 @@ function makeCaptionSprite(text) {
   return sprite;
 }
 
-export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel, onClose, planSkin }) {
+export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel, onClose, planSkin, rolls }) {
   const mountRef = useRef(null);
   const engineRef = useRef(null); // { renderer, camera, scene, controls, plane }
   const groupsRef = useRef(new Map()); // conditionId -> Group
   const orderRef = useRef([]); // conditionId order, for explode
   const planeRef = useRef(null); // plan-skin mesh, a direct scene child — covered by the mount effect's disposeObject3D(threeScene) walk on unmount
+  const rollMeshesRef = useRef([]); // {mesh, focusVisible}[] — rebuilt with content, walked by the Rolls-toggle effect (visibility-only, never a rebuild)
   const [hidden, setHidden] = useState(() => new Set());
   const [explode, setExplode] = useState(0);
   const [cut, setCut] = useState(null);
@@ -187,12 +221,13 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
   const [planOn, setPlanOn] = useState(true);
   const [planTint, setPlanTint] = useState(false);
   const [planOpacity, setPlanOpacity] = useState(PLAN_SKIN_OPACITY);
+  const [rollsOn, setRollsOn] = useState(true); // non-persistent — resets to ON each time the overlay opens (fresh mount)
 
   const sceneResult = useMemo(() => {
-    try { return { data: buildScene({ shapes, conditions, sheet }) }; }
+    try { return { data: buildScene({ shapes, conditions, sheet, rolls }) }; }
     catch (err) { return { error: err.message }; }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sheet is scale-gated on its own primitives
-  }, [shapes, conditions, sheet.widthPx, sheet.heightPx, sheet.upp]);
+  }, [shapes, conditions, sheet.widthPx, sheet.heightPx, sheet.upp, rolls]);
   const built = sceneResult.data || EMPTY_SCENE;
 
   const shapeCond = useMemo(() => new Map(shapes.map((s) => [s.id, s.condition_id])), [shapes]);
@@ -294,6 +329,7 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
     const { scene: threeScene, plane, camera, controls } = engine;
     for (const g of groupsRef.current.values()) { threeScene.remove(g); disposeObject3D(g); }
     groupsRef.current.clear();
+    rollMeshesRef.current = [];
     orderRef.current = activeConditions.map((c) => c.id);
     const clippingPlanes = [plane];
 
@@ -329,6 +365,26 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
           group.add(inst);
         }
       }
+      // Roll-good bands/seams: merged mesh per family, parented under this
+      // condition's Group via the addMesh -> splitByFocus path (shapeId-
+      // keyed — worst case 4 meshes/cond). fill/ink are condition-level
+      // (one material per roll-goods condition), so a single merged mesh per
+      // family+focus-batch is correct.
+      const bands = built.rolls.bands.filter((b) => b.condId === cond.id);
+      const seams = built.rolls.seams.filter((s) => s.condId === cond.id);
+      if (bands.length) {
+        const bandMat = new THREE.MeshBasicMaterial({
+          color: bands[0].fill, side: THREE.DoubleSide, transparent: true, opacity: ROLL_BAND_ALPHA, depthWrite: false, clippingPlanes,
+        });
+        rollMeshesRef.current.push(...addMesh(group, bands, rollPolyGeometry, bandMat, focusIds, ROLL_BAND_RENDER_ORDER));
+      }
+      if (seams.length) {
+        const ink = luminance(cond.color) < 0.5 ? ROLL_SEAM_INK_LIGHT : ROLL_SEAM_INK_DARK;
+        const seamMat = new THREE.MeshBasicMaterial({
+          color: ink, side: THREE.DoubleSide, transparent: true, depthWrite: false, clippingPlanes,
+        });
+        rollMeshesRef.current.push(...addMesh(group, seams, rollPolyGeometry, seamMat, focusIds, ROLL_SEAM_RENDER_ORDER));
+      }
       threeScene.add(group);
       groupsRef.current.set(cond.id, group);
     }
@@ -347,9 +403,10 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
     }
 
     for (const [id, group] of groupsRef.current) group.visible = !hidden.has(id);
+    for (const { mesh, focusVisible } of rollMeshesRef.current) mesh.visible = focusVisible && rollsOn;
     fitToContent(camera, controls, threeScene);
-    // hidden intentionally excluded — a rebuild re-applies its current value
-    // from closure; legend toggles alone never trigger this effect.
+    // hidden/rollsOn intentionally excluded — a rebuild re-applies their
+    // current values from closure; toggling either alone never lands here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built, focusIds, activeConditions, shapeCond, conditions]);
 
@@ -360,6 +417,14 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
     for (const [id, group] of groupsRef.current) group.visible = !hidden.has(id);
     fitToContent(engine.camera, engine.controls, engine.scene);
   }, [hidden]);
+
+  // Rolls toggle: visibility only, mutate in place (the plan-controls
+  // pattern) — never a content rebuild or fitToContent (a cosmetic toggle
+  // must not reframe the camera). Re-applies each mesh's OWN focus-derived
+  // visibility so toggling back ON never un-hides an out-of-focus batch.
+  useEffect(() => {
+    for (const { mesh, focusVisible } of rollMeshesRef.current) mesh.visible = focusVisible && rollsOn;
+  }, [rollsOn]);
 
   // Explode: a per-group transform, never a rebuild; framing stays static.
   useEffect(() => {
@@ -389,9 +454,13 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
     if (!engine) return;
     engine.renderer.render(engine.scene, engine.camera);
     const raw = engine.renderer.domElement.toDataURL("image/png"); // same call stack as render()
+    // A roll band/seam mesh's OWN .visible already folds rollsOn and focus
+    // isolation; its parent condition Group's .visible folds the legend
+    // toggle — both must hold for a stripe to actually be in the picture.
+    const rollsVisible = rollMeshesRef.current.some(({ mesh }) => mesh.visible && (!mesh.parent || mesh.parent.visible));
     const img = new Image();
     img.onload = () => {
-      const footerH = 46;
+      const footerH = rollsVisible ? 64 : 46;
       const canvas = document.createElement("canvas");
       canvas.width = img.width; canvas.height = img.height + footerH;
       const ctx = canvas.getContext("2d");
@@ -402,6 +471,7 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
       const scaleLabel = STANDARD_SCALES.find((s) => Math.abs(s.upp - sheet.upp) < 1e-9)?.label || `${sheet.upp} ft/px`;
       ctx.fillText(`${sheetLabel || "sheet"} · ${scaleLabel} · ${new Date().toLocaleDateString()}`, 14, img.height + 18);
       ctx.fillText(EXPORT_FOOTER, 14, img.height + 36);
+      if (rollsVisible) ctx.fillText(ROLLS_EXPORT_CAVEAT, 14, img.height + 54);
       const a = document.createElement("a");
       a.href = canvas.toDataURL("image/png");
       a.download = `${sheetLabel || "sheet"}-3d.png`;
@@ -450,6 +520,14 @@ export default function View3D({ shapes, conditions, sheet, focusIds, sheetLabel
               <input type="range" min={0} max={1} step={0.05} value={planOpacity} disabled={!planOn}
                 onChange={(e) => setPlanOpacity(Number(e.target.value))} style={{ width: "100%" }} />
               <div style={S.monoReadout}>{Math.round(planOpacity * 100)}%</div>
+            </div>
+
+            <div style={S.panelSection}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12.5 }}>
+                <input type="checkbox" checked={rollsOn} onChange={(e) => setRollsOn(e.target.checked)} />
+                Rolls
+              </label>
+              {rollsOn && <div style={{ fontSize: 11, color: "var(--ink-muted)", lineHeight: 1.5, marginTop: 4 }}>{ROLLS_LIMITS_TEXT}</div>}
             </div>
 
             <div style={S.panelSection}>

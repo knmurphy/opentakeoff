@@ -20,7 +20,7 @@
 //     reads 0 — not a guess — when nothing has laid the condition out yet.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { seamLfBySrc, seamLfForStrips, layoutRingStrips, defaultRollSetup } from "../src/lib/rollgoods.js";
+import { seamLfBySrc, seamLfForStrips, seamSegmentsBySrc, layoutRingStrips, defaultRollSetup } from "../src/lib/rollgoods.js";
 import { computeRollTakeoff, seamLfByShape, rollReportRows, mintRollSetup } from "../src/lib/rollTakeoff.js";
 import { conditionTotals, sheetGroupedRows } from "../src/lib/totals.js";
 
@@ -103,6 +103,80 @@ test("seamLfForStrips: empty and malformed input answer 0 rather than throwing",
   assert.equal(seamLfForStrips([]), 0);
   assert.equal(seamLfForStrips(null as any), 0);
   assert.equal(seamLfBySrc(undefined as any).size, 0);
+});
+
+// ── seamSegmentsBySrc — the geometric twin: same rule, drawable segments ────
+
+test("seamSegmentsBySrc (ns): boundary at coverMax, de-overaged span, endpoints run along y", () => {
+  const ring = [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 30 }, { x: 0, y: 30 }];
+  const strips = layoutRingStrips({ id: "r", ring }, "ns", {
+    rollWidthFt: 12, seamAllowanceIn: 2, wallOverageIn: 3, doorwayOverageIn: 0,
+  });
+  const segs = [...seamSegmentsBySrc(strips).get("r")!];
+  assert.equal(segs.length, 1);
+  const [seg] = segs;
+  assert.equal(seg.laneAxis, "x", "ns tiles lanes across x");
+  assert.equal(seg.boundary, strips[0].coverMax, "the COVERAGE cursor, not the physical-overlap midpoint");
+  assert.deepEqual([seg.runLo, seg.runHi], [0, 30], "the same de-overaged span seamLfForStrips sums");
+  assert.deepEqual(seg.a, [seg.boundary, 0]);
+  assert.deepEqual(seg.b, [seg.boundary, 30]);
+});
+
+test("seamSegmentsBySrc (ew): boundary on y, endpoints run along x", () => {
+  const ring = [{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 20 }, { x: 0, y: 20 }];
+  const strips = layoutRingStrips({ id: "r", ring }, "ew", {
+    rollWidthFt: 12, seamAllowanceIn: 2, wallOverageIn: 3, doorwayOverageIn: 0,
+  });
+  const segs = [...seamSegmentsBySrc(strips).get("r")!];
+  assert.equal(segs.length, 1);
+  const [seg] = segs;
+  assert.equal(seg.laneAxis, "y", "ew tiles lanes across y");
+  assert.equal(seg.boundary, strips[0].coverMax);
+  assert.deepEqual([seg.runLo, seg.runHi], [0, 30]);
+  assert.deepEqual(seg.a, [0, seg.boundary]);
+  assert.deepEqual(seg.b, [30, seg.boundary]);
+});
+
+test("seamSegmentsBySrc: laneIndex-adjacency guard — a dropped middle lane leaves no segment", () => {
+  const strips = [
+    { srcId: "r", laneIndex: 0, laneAxis: "x", coverMin: 0, coverMax: 10, runMin: 0, runMax: 20, minOverageFt: 0, maxOverageFt: 0 },
+    { srcId: "r", laneIndex: 2, laneAxis: "x", coverMin: 20, coverMax: 30, runMin: 0, runMax: 20, minOverageFt: 0, maxOverageFt: 0 },
+  ];
+  assert.equal(seamSegmentsBySrc(strips).size, 0, "array-consecutive is not lane-adjacent once a lane is dropped");
+});
+
+test("seamSegmentsBySrc: single-lane room emits no segment — nothing to seam against", () => {
+  const ring = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 30 }, { x: 0, y: 30 }];
+  const strips = layoutRingStrips({ id: "r", ring }, "ns",
+    { rollWidthFt: 12, seamAllowanceIn: 2, wallOverageIn: 3, doorwayOverageIn: 0 });
+  assert.equal(strips.length, 1);
+  assert.equal(seamSegmentsBySrc(strips).size, 0);
+});
+
+test("seamSegmentsBySrc: an L-shaped room's segment run-clamps to where its lanes actually face each other", () => {
+  const ring = [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 15 }, { x: 11, y: 15 }, { x: 11, y: 30 }, { x: 0, y: 30 }];
+  const strips = layoutRingStrips({ id: "L", ring }, "ns", {
+    rollWidthFt: 12, seamAllowanceIn: 2, wallOverageIn: 3, doorwayOverageIn: 0,
+  });
+  assert.equal(strips.length, 2);
+  const segs = [...seamSegmentsBySrc(strips).get("L")!];
+  assert.equal(segs.length, 1);
+  assert.deepEqual([segs[0].runLo, segs[0].runHi], [0, 15]);
+});
+
+test("seamSegmentsBySrc: manual per-cut overrides shift the segment span (the engine's own override plumbing)", () => {
+  const shapes = [rect("wide", "sv", 5, 5, 20, 30, {
+    roll_layout: { laneCount: 2, lanes: { 0: { runMin: 9.75, runMax: 35.25 } } },
+  })];
+  const { byCond } = computeRollTakeoff(conds(), shapes, dimsFor, uppFor);
+  const segs = [...seamSegmentsBySrc(byCond.get("sv").strips).get("wide")!];
+  assert.deepEqual([[segs[0].runLo, segs[0].runHi]], [[10, 35]], "lane 0's overridden run narrows the overlap from [5,35] to [10,35]");
+});
+
+test("seamSegmentsBySrc: empty and malformed input answer an empty map, never throwing", () => {
+  assert.equal(seamSegmentsBySrc([]).size, 0);
+  assert.equal(seamSegmentsBySrc(null as any).size, 0);
+  assert.equal(seamSegmentsBySrc(undefined as any).size, 0);
 });
 
 // ── the takeoff wiring ──────────────────────────────────────────────────────

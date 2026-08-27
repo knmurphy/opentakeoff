@@ -26,6 +26,17 @@ All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
   which persist between sessions. The underlay is baked into the **Export** PNG exactly as
   shown. Side-by-side stitched sheet groups show no underlay, by design: there's no single
   source page for a joined surface.
+- **Roll-good lanes in 3D.** Roll-goods floors (broadloom carpet, sheet vinyl, sheet rubber)
+  render the same figured cut layout the 2D roll panel already computes straight onto their
+  slabs — alternating lane bands in the roll material's own palette, with a seam line at
+  every lane boundary in ink chosen for contrast against that slab's color. A **Rolls**
+  checkbox beside the Plan controls (on by default) toggles visibility only — never a camera
+  reframe — and a note discloses three simplifications while it's on: cuts ignore slab
+  holes, so bands still stripe across one; a band is the coverage slab while the 2D cut
+  overlay is the physical cut piece — both correct, different questions; and a seam crossing
+  a concave notch clips to the room, so it can draw shorter than the seam length the Report
+  prices. Rolls carry into the Export PNG, whose footer picks up the same drawn-vs-priced
+  seam caveat when they're visible.
 
 ## 2026-08-24 — the takeoff goes back into CAD
 

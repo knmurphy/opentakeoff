@@ -10,11 +10,38 @@ export const EXCLUDED_COLOR = "#b03a26";    // ui.js SVG.danger literal
 export const MITER_LIMIT = 4;               // miter offset × ribbon half-width before bevel fallback
 export const RIBBON_HALF_FT = 1 / 24;       // vertical ribbon half-width
 export const FLUSH_HALF_FT = 1 / 12;        // flush strip half-width
+// Roll-good lane rendering (spec addendum r3 rev 3): bands stripe alternating
+// coverage lanes at the material palette; seams are thin ink ribbons at lane
+// boundaries. Both live above the slab top by ROLL_BAND_EPS_FT — above depth
+// precision at sheet scale, below a nominal slab's thickness (never hover).
+export const ROLL_BAND_ALPHA = 0.25;
+export const ROLL_BAND_EPS_FT = 1 / 48;
+export const ROLL_SEAM_HALF_FT = 1 / 12;    // the FLUSH_HALF_FT precedent
+export const ROLL_SEAM_INK_DARK = "#2a2a2a";
+export const ROLL_SEAM_INK_LIGHT = "#e8e8e8";
+export const ROLL_BAND_RENDER_ORDER = 1;
+export const ROLL_SEAM_RENDER_ORDER = 2;
 
 export function toWorldFt(verts_norm, sheet) {
   // `|| 0` folds IEEE-754 −0 to +0 — ny === 0 otherwise yields −0, which
   // assert/strict deepEqual (SameValue) distinguishes from 0 and fails tests.
   return verts_norm.map(([nx, ny]) => [nx * sheet.widthPx * sheet.upp, -(ny * sheet.heightPx * sheet.upp) || 0]);
+}
+
+// Sheet-feet → world for a pre-clipped roll payload polygon: a bare [x, −y]
+// negation, NOT toWorldFt's convention (that one takes NORMALIZED verts and
+// scales by sheet.widthPx/heightPx*upp — feeding it feet would double-scale).
+// All clipping/derivation already happened upstream in rollTakeoff.js's
+// buildRollBands; this only maps coordinate spaces, so scene3d stays engine-
+// and unit-free of the roll-goods domain.
+function rollPolyToWorld(poly) {
+  return (poly || []).map((p) => [p.x, -p.y || 0]); // `|| 0` folds −0, same as toWorldFt
+}
+export function rollsToWorld(rolls) {
+  return {
+    bands: (rolls?.bands || []).map((b) => ({ ...b, poly: rollPolyToWorld(b.poly) })),
+    seams: (rolls?.seams || []).map((s) => ({ ...s, poly: rollPolyToWorld(s.poly) })),
+  };
 }
 
 export function planPlane(sheet) {
@@ -36,7 +63,16 @@ export function worldWindingCCW(ring) {
 export const ringCCW = (ring) => (worldWindingCCW(ring) ? ring : [...ring].reverse());
 export const ringCW = (ring) => (worldWindingCCW(ring) ? [...ring].reverse() : ring);
 
-export function buildScene({ shapes, conditions, sheet }) {
+// rolls: sheet-feet band/seam payloads (see rollTakeoff.buildRollBands); loose
+// object typing on purpose — the payload contract lives in the pure builder.
+/**
+ * @param {object} opts
+ * @param {any} opts.shapes
+ * @param {any} opts.conditions
+ * @param {any} opts.sheet
+ * @param {{ bands?: object[]; seams?: object[] }} [opts.rolls]
+ */
+export function buildScene({ shapes, conditions, sheet, rolls = { bands: [], seams: [] } }) {
   if (!(sheet.upp > 0)) throw new Error("Set the sheet scale first — 3D is feet-true or nothing.");
   const condById = new Map(conditions.map((c) => [c.id, c]));
   const slabs = [], ribbons = [], posts = [], notes = [];
@@ -111,7 +147,7 @@ export function buildScene({ shapes, conditions, sheet }) {
       if (!(h > 0)) note("unset-height", c.finish_tag, `${c.finish_tag} has no installed height set — shown at nominal`);
     }
   }
-  return { slabs, ribbons, posts, notes };
+  return { slabs, ribbons, posts, notes, rolls: rollsToWorld(rolls) };
 }
 
 // Quad strip along an open path. θ = interior angle at a joint between the

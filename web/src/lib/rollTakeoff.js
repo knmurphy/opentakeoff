@@ -17,8 +17,9 @@
 import {
   isRollType, defaultRollSetup, computeRollLayout, rollLayoutOrderLengthFt,
   rollLayoutRollCount, rollCutNumbers, rollQtyForUnit, roundUpToInch,
-  seamLfBySrc, seamLfForStrips,
+  seamLfBySrc, seamLfForStrips, seamSegmentsBySrc, clipRingToLaneSlab, rollColorForType,
 } from "./rollgoods.js";
+import { ROLL_BAND_EPS_FT, ROLL_SEAM_HALF_FT } from "./scene3d.js";
 import { round2 } from "./num.js";
 
 // A condition is roll goods iff it carries a usable roll_setup. Corrupt
@@ -85,7 +86,8 @@ export function stripSheetRect(strip, upp) {
 
 // ── the whole takeoff, figured ──────────────────────────────────────────────
 // computeRollTakeoff(conditions, shapes, dimsFor, uppFor) →
-//   { byCond: Map(condition_id → summary), cutsBySheet: Map(sheet_id → cut[]) }
+//   { byCond: Map(condition_id → summary), cutsBySheet: Map(sheet_id → cut[]),
+//     ringsBySrc: Map(shape_id → ring[{x,y}...] in sheet FEET) }
 //
 // dimsFor(sheetId) → {w,h}|null (bitmap px), uppFor(sheetId) → feet-per-px|null.
 // Shapes on unscaled/unrendered sheets are skipped — a ring needs real feet.
@@ -105,8 +107,9 @@ export function stripSheetRect(strip, upp) {
 export function computeRollTakeoff(conditions, shapes, dimsFor, uppFor) {
   const byCond = new Map();
   const cutsBySheet = new Map();
+  const ringsBySrc = new Map();
   const rollConds = (conditions || []).filter(hasRollSetup);
-  if (!rollConds.length) return { byCond, cutsBySheet };
+  if (!rollConds.length) return { byCond, cutsBySheet, ringsBySrc };
   const shapeById = new Map(shapes.map((s) => [s.id, s]));
   for (const c of rollConds) {
     const rs = c.roll_setup;
@@ -117,7 +120,9 @@ export function computeRollTakeoff(conditions, shapes, dimsFor, uppFor) {
       if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) continue;
       const dims = dimsFor(s.sheet_id), upp = uppFor(s.sheet_id);
       if (!dims || !(dims.w > 0) || !(upp > 0)) continue;
-      items.push({ id: s.id, name: s.label || "", ring: s.verts_norm.map(([nx, ny]) => ({ x: nx * dims.w * upp, y: ny * dims.h * upp })) });
+      const ring = s.verts_norm.map(([nx, ny]) => ({ x: nx * dims.w * upp, y: ny * dims.h * upp }));
+      items.push({ id: s.id, name: s.label || "", ring });
+      ringsBySrc.set(s.id, ring);
     }
     if (!items.length) continue;
     const layout = computeRollLayout(items, config, collectRollOverrides(shapes));
@@ -151,7 +156,7 @@ export function computeRollTakeoff(conditions, shapes, dimsFor, uppFor) {
       });
     }
   }
-  return { byCond, cutsBySheet };
+  return { byCond, cutsBySheet, ringsBySrc };
 }
 
 // ── report seam ─────────────────────────────────────────────────────────────
@@ -199,4 +204,78 @@ export function seamLfByShape(rollByCond) {
     ri.seamByShape.forEach((lf, shapeId) => out.set(shapeId, (out.get(shapeId) || 0) + lf));
   });
   return out;
+}
+
+// ── rolls payload builder (3D lane bands + seams) ───────────────────────────
+// buildRollBands(entries, ringBySrc, slabZBySrc) → {bands, seams} — the pure
+// join of the figured layout onto the BUILT 3D slabs (spec addendum r3 rev
+// 3). entries = [{condId, tag, material, strips}], one per roll-goods
+// condition (rollTakeoff.byCond, joined by the caller's memo). ringBySrc and
+// slabZBySrc are keyed by shape/srcId — ringBySrc from this module's own
+// ringsBySrc (the exact feet ring the layout used), slabZBySrc from the
+// caller's built slabs (condition thickness_in/12, nominal fallback). A strip
+// whose srcId has no slabZBySrc entry emits NOTHING — no band/seam without a
+// built slab (a room on another sheet, or a slab that failed to build).
+//
+// Bands: the COVERAGE polygon per lane — clipRingToLaneSlab (the engine's own
+// footprint clip) against the lane's [coverMin, coverMax] AND the strip's
+// de-overaged run interval, so a concave room notches correctly instead of
+// striping over floor that isn't there. PARITY: odd laneIndex bands; a
+// single-lane room (laneCount === 1) bands its one lane (nothing to
+// alternate against). z sits eps above the owning slab's top, joined by
+// srcId. Fill is the roll MATERIAL palette (rollColorForType) — never the
+// condition color (an opaque slab under an equal-color band is invisible).
+//
+// Seams: from seamSegmentsBySrc (single source of truth for "where lanes
+// meet"), each interior coverage boundary → a thin ROLL_SEAM_HALF_FT-wide
+// strip, footprint-clipped the same way and run-clamped to the segment's
+// overlap — so a seam bridging a concave notch clips to the room rather than
+// drawing ink across the void (disclosed: drawn length can then read shorter
+// than the priced seamLfBySrc figure, which prices the bridged bounds).
+export function buildRollBands(entries, ringBySrc, slabZBySrc) {
+  const bands = [], seams = [];
+  const slabZFor = (srcId) => (slabZBySrc && typeof slabZBySrc.get === "function" ? slabZBySrc.get(srcId) : undefined);
+  const ringFor = (srcId) => (ringBySrc && typeof ringBySrc.get === "function" ? ringBySrc.get(srcId) : undefined);
+
+  for (const entry of entries || []) {
+    const { condId, tag, material, strips } = entry || {};
+    const fill = rollColorForType(material);
+    for (const strip of strips || []) {
+      const slabZ = slabZFor(strip.srcId);
+      if (!(slabZ != null)) continue;                    // no band without a built slab
+      const laneCount = strip.laneCount || 1;
+      if (!(laneCount === 1 || (strip.laneIndex || 0) % 2 === 1)) continue; // parity, single-lane exception
+      const ring = ringFor(strip.srcId);
+      if (!ring) continue;
+      const runLo = strip.runMin + (strip.minOverageFt || 0);
+      const runHi = strip.runMax - (strip.maxOverageFt || 0);
+      if (!(runHi > runLo)) continue;
+      const laneAxis = strip.laneAxis;
+      const runAxis = laneAxis === "x" ? "y" : "x";
+      const poly = clipRingToLaneSlab(
+        clipRingToLaneSlab(ring, laneAxis, strip.coverMin, strip.coverMax),
+        runAxis, runLo, runHi
+      );
+      if (poly.length < 3) continue;
+      bands.push({ poly, z: slabZ + ROLL_BAND_EPS_FT, fill, tag, shapeId: strip.srcId, condId, laneIndex: strip.laneIndex });
+    }
+
+    const segByShape = seamSegmentsBySrc(strips);
+    for (const [srcId, segs] of segByShape) {
+      const slabZ = slabZFor(srcId);
+      if (!(slabZ != null)) continue;                    // no seam without a built slab
+      const ring = ringFor(srcId);
+      if (!ring) continue;
+      for (const seg of segs) {
+        const runAxis = seg.laneAxis === "x" ? "y" : "x";
+        const poly = clipRingToLaneSlab(
+          clipRingToLaneSlab(ring, seg.laneAxis, seg.boundary - ROLL_SEAM_HALF_FT, seg.boundary + ROLL_SEAM_HALF_FT),
+          runAxis, seg.runLo, seg.runHi
+        );
+        if (poly.length < 3) continue;
+        seams.push({ poly, z: slabZ + ROLL_BAND_EPS_FT, tag, shapeId: srcId, condId });
+      }
+    }
+  }
+  return { bands, seams };
 }

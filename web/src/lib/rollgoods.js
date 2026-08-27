@@ -237,6 +237,53 @@ export function seamLfForStrips(strips) {
   return Math.round(total * 100) / 100;
 }
 
+/**
+ * Seam SEGMENTS per source ring — the geometric twin of `seamLfBySrc`: same
+ * grouping (by `srcId`), same lane-order sort, same lane-adjacency guard, same
+ * de-overaged-overlap span — but instead of summing a length, it returns the
+ * segment itself so a renderer can draw it. `boundary` is the COVERAGE cursor
+ * between lane-adjacent strips (`a.coverMax`, which equals `b.coverMin` by
+ * construction) and `laneAxis` is carried explicitly (not re-derived from the
+ * endpoints) so a footprint clip consumes stated data. `a`/`b` are the
+ * segment's two endpoints in sheet feet as `[x, y]`, running along the
+ * run axis at `runLo`/`runHi`.
+ *
+ * @param {any[]} strips layoutRingStrips/computeRollLayout output
+ * @returns {Map<any, {boundary:number, laneAxis:string, runLo:number, runHi:number, a:[number,number], b:[number,number]}[]>}
+ *   srcId → segments in lane order; srcIds with no segment are omitted (a
+ *   single-lane room, or every pair either non-adjacent or non-overlapping).
+ */
+export function seamSegmentsBySrc(strips) {
+  const bySrc = new Map();
+  for (const st of strips || []) {
+    if (!bySrc.has(st.srcId)) bySrc.set(st.srcId, []);
+    bySrc.get(st.srcId).push(st);
+  }
+  const out = new Map();
+  for (const [srcId, laneList] of bySrc) {
+    const lanes = [...laneList].sort((a, b) => (a.laneIndex || 0) - (b.laneIndex || 0));
+    const segments = [];
+    for (let i = 0; i + 1 < lanes.length; i++) {
+      const a = lanes[i], b = lanes[i + 1];
+      if ((b.laneIndex || 0) !== (a.laneIndex || 0) + 1) continue;   // a dropped lane leaves no segment
+      const aLo = a.runMin + (a.minOverageFt || 0), aHi = a.runMax - (a.maxOverageFt || 0);
+      const bLo = b.runMin + (b.minOverageFt || 0), bHi = b.runMax - (b.maxOverageFt || 0);
+      const runLo = Math.max(aLo, bLo), runHi = Math.min(aHi, bHi);
+      if (!(runHi > runLo)) continue;                                // skip empty overlap
+      const boundary = a.coverMax;
+      const laneAxis = a.laneAxis;
+      const runAxis = laneAxis === "x" ? "y" : "x";
+      const pt = (runV) => {
+        const p = {}; p[laneAxis] = boundary; p[runAxis] = runV;
+        return [p.x, p.y];
+      };
+      segments.push({ boundary, laneAxis, runLo, runHi, a: pt(runLo), b: pt(runHi) });
+    }
+    if (segments.length) out.set(srcId, segments);
+  }
+  return out;
+}
+
 // ── skyline bottom-left nesting (default / reset placement) ──────────────────
 // seqById (optional): { [stripId]: number } — a MANUAL order the estimator chose.
 // Cuts with a seq pack first, in that order; the rest fall back to the default

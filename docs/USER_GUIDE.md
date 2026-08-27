@@ -1034,6 +1034,20 @@ with a footer—sheet label, the sheet's scale, today's date, and a caveat line 
 — not as-built; openings deducted, not shown; verify in field")—with the plan underlay
 baked in exactly as shown.
 
+**The Rolls checkbox.** Beside the Plan controls, a **Rolls** checkbox (on by default)
+bands roll-goods floors—broadloom carpet, sheet vinyl, sheet rubber—in the roll
+material's own palette, with a seam line drawn at every lane boundary in ink chosen to
+read against that slab's color. It's the same figured cuts and seams the roll layout
+already computes for the 2D cut overlay, read straight off the floor. Toggling it only
+shows or hides the bands and seams—never a camera reframe. While it's on, a note
+discloses three simplifications: roll cuts ignore slab holes, so a band still stripes
+across one; a band is the coverage slab (finished goods), while the 2D cut overlay is
+the physical cut piece (which overlaps its neighbor by the seam allowance and tucks past
+the walls)—both correct, different questions; and a seam crossing a concave notch clips
+to the room, so the drawn seam can be shorter than the seam length the Report prices.
+Rolls carry into the **Export** PNG as shown, and when they're visible the export footer
+picks up the same drawn-vs-priced seam caveat.
+
 **Limitations, always on screen.** A persistent, non-dismissible label states what this
 view is not: no wall thickness, no door frames, no casework, flat single-elevation
 floors, a generic base profile, and openings deducted from quantities but not modeled as

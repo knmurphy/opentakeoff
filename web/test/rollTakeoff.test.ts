@@ -13,9 +13,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   hasRollSetup, mintRollSetup, rollConfig, collectRollOverrides,
-  computeRollTakeoff, rollReportRows, stripSheetRect,
+  computeRollTakeoff, rollReportRows, stripSheetRect, buildRollBands,
 } from "../src/lib/rollTakeoff.js";
 import { conditionTotals } from "../src/lib/totals.js";
+import { ROLL_BAND_EPS_FT, ROLL_SEAM_HALF_FT } from "../src/lib/scene3d.js";
 
 // A 20×14-ft room drawn on a 1000×1000-px sheet at upp = 0.05 ft/px:
 // 20 ft = 400 px wide (x), 14 ft = 280 px tall (y), anchored at (100, 100) px.
@@ -131,4 +132,118 @@ test("rollReportRows: ×N applies like every reported quantity; only figured con
   );
   assert.ok(!("price" in r) && !("cost" in r), "quantities only — no dollars, ever");
   assert.deepEqual(rollReportRows(null, []), []);
+});
+
+// ── ringsBySrc threading ─────────────────────────────────────────────────────
+
+test("computeRollTakeoff threads out ringsBySrc — the same feet ring the layout used, keyed by shape id", () => {
+  const conds = [{ id: "cpt", finish_tag: "CPT-1", roll_setup: mintRollSetup("carpet") }];
+  const { ringsBySrc } = computeRollTakeoff(conds, [room("r1", "cpt")], dimsFor, uppFor);
+  assert.equal(ringsBySrc.size, 1);
+  assert.deepEqual(ringsBySrc.get("r1"), [
+    { x: 5, y: 5 }, { x: 25, y: 5 }, { x: 25, y: 19 }, { x: 5, y: 19 },
+  ]);
+  assert.deepEqual([...computeRollTakeoff([], [], dimsFor, uppFor).ringsBySrc], [], "no roll conditions → an empty map, never a throw");
+});
+
+// ── buildRollBands — the rolls payload builder (spec addendum r3 rev 3) ─────
+
+function shoelaceArea(poly: { x: number; y: number }[]) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(a) / 2;
+}
+
+test("buildRollBands: parity — even laneIndex skipped, odd banded; z joined by srcId via slabZBySrc; material palette fill", () => {
+  const conds = [{ id: "cpt", finish_tag: "CPT-1", roll_setup: { ...mintRollSetup("carpet"), direction: "ns" } }];
+  const { byCond, ringsBySrc } = computeRollTakeoff(conds, [room("r1", "cpt")], dimsFor, uppFor);
+  const ri = byCond.get("cpt");
+  assert.equal(ri.strips.length, 2, "20 ft across a 12-ft roll = 2 lanes");
+  const entries = [{ condId: "cpt", tag: "CPT-1", material: "carpet", strips: ri.strips }];
+  const { bands } = buildRollBands(entries, ringsBySrc, new Map([["r1", 0.5]]));
+  assert.equal(bands.length, 1, "only the odd lane bands — the alternating-stripe rule");
+  const [band] = bands;
+  assert.equal(band.laneIndex, 1);
+  assert.ok(Math.abs(band.z - (0.5 + ROLL_BAND_EPS_FT)) < 1e-9, "z = owning slab z1 + eps");
+  assert.deepEqual(
+    { shapeId: band.shapeId, condId: band.condId, tag: band.tag, fill: band.fill },
+    { shapeId: "r1", condId: "cpt", tag: "CPT-1", fill: "#c9a876" },
+  );
+});
+
+test("buildRollBands: single-lane exception — laneCount===1 bands its one lane (nothing to alternate against)", () => {
+  const conds = [{ id: "sv", finish_tag: "SV-1", roll_setup: { ...mintRollSetup("sheet_vinyl"), direction: "ns" } }];
+  // 10 ft wide, 30 ft tall — one lane off a 12-ft roll (mirrors seamLf.test.ts's single-lane fixture)
+  const shapes = [{
+    id: "r2", condition_id: "sv", sheet_id: "s1", measure_role: "floor_area",
+    verts_norm: [[0.1, 0.1], [0.3, 0.1], [0.3, 0.7], [0.1, 0.7]],
+    computed: { area_sf: 300, perimeter_lf: 80 },
+  }];
+  const { byCond, ringsBySrc } = computeRollTakeoff(conds, shapes, dimsFor, uppFor);
+  const ri = byCond.get("sv");
+  assert.equal(ri.strips.length, 1, "single lane");
+  const entries = [{ condId: "sv", tag: "SV-1", material: "sheet_vinyl", strips: ri.strips }];
+  const { bands } = buildRollBands(entries, ringsBySrc, new Map([["r2", 0]]));
+  assert.equal(bands.length, 1, "single-lane exception — nothing to alternate against");
+  assert.equal(bands[0].laneIndex, 0);
+});
+
+test("buildRollBands: no band/seam without a built slab — a strip whose srcId has no slabZBySrc entry emits nothing", () => {
+  const conds = [{ id: "cpt", finish_tag: "CPT-1", roll_setup: { ...mintRollSetup("carpet"), direction: "ns" } }];
+  const { byCond, ringsBySrc } = computeRollTakeoff(conds, [room("r1", "cpt")], dimsFor, uppFor);
+  const ri = byCond.get("cpt");
+  const entries = [{ condId: "cpt", tag: "CPT-1", material: "carpet", strips: ri.strips }];
+  const { bands, seams } = buildRollBands(entries, ringsBySrc, new Map());
+  assert.equal(bands.length, 0);
+  assert.equal(seams.length, 0);
+});
+
+test("buildRollBands: seam is footprint-clipped to ~2×ROLL_SEAM_HALF_FT wide, run-clamped to the de-overaged overlap, z joined like a band", () => {
+  const conds = [{ id: "cpt", finish_tag: "CPT-1", roll_setup: { ...mintRollSetup("carpet"), direction: "ns" } }];
+  const { byCond, ringsBySrc } = computeRollTakeoff(conds, [room("r1", "cpt")], dimsFor, uppFor);
+  const ri = byCond.get("cpt");
+  const entries = [{ condId: "cpt", tag: "CPT-1", material: "carpet", strips: ri.strips }];
+  const { seams } = buildRollBands(entries, ringsBySrc, new Map([["r1", 0]]));
+  assert.equal(seams.length, 1, "one interior lane boundary");
+  const [seam] = seams;
+  const xs = seam.poly.map((p: any) => p.x), ys = seam.poly.map((p: any) => p.y);
+  const width = Math.max(...xs) - Math.min(...xs);
+  assert.ok(Math.abs(width - 2 * ROLL_SEAM_HALF_FT) < 1e-6, `seam width ${width} ≈ 2×ROLL_SEAM_HALF_FT`);
+  assert.ok(Math.abs(Math.min(...ys) - 5) < 1e-6 && Math.abs(Math.max(...ys) - 19) < 1e-6, "run-clamped to the room's own [5,19] extent");
+  assert.ok(Math.abs(seam.z - (0 + ROLL_BAND_EPS_FT)) < 1e-9, "z = owning slab z1 + eps, same rule as a band");
+  assert.equal(seam.shapeId, "r1");
+  assert.equal(seam.condId, "cpt");
+  assert.equal(seam.tag, "CPT-1");
+  assert.ok(!("fill" in seam), "seams carry no fill — ink is chosen at render time from the slab's luminance");
+});
+
+test("buildRollBands: clipRingToLaneSlab footprint-clips a band — a concave notch is excised, not striped over as a plain rectangle", () => {
+  // A rectangle with a rectangular notch bitten into the odd (banded) lane's
+  // own x-range, mid-run (y 10–20 of 30) — a naive bounding-box band would
+  // stripe straight across the notch; the footprint clip must not.
+  const notchedRing = [
+    { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 15, y: 10 },
+    { x: 15, y: 20 }, { x: 20, y: 20 }, { x: 20, y: 30 }, { x: 0, y: 30 },
+  ];
+  const toNorm = (p: { x: number; y: number }): [number, number] => [p.x / 50, p.y / 50];
+  const notchedShape = {
+    id: "notch", condition_id: "cpt", sheet_id: "s1", measure_role: "floor_area",
+    verts_norm: notchedRing.map(toNorm),
+    computed: { area_sf: 20 * 30 - 5 * 10, perimeter_lf: 0 },
+  };
+  const conds = [{ id: "cpt", finish_tag: "CPT-1", roll_setup: { ...mintRollSetup("carpet"), direction: "ns" } }];
+  const { byCond, ringsBySrc } = computeRollTakeoff(conds, [notchedShape], dimsFor, uppFor);
+  const ri = byCond.get("cpt");
+  const lane1 = ri.strips.find((s: any) => s.laneIndex === 1);
+  assert.ok(lane1, "the notched room still needs 2 lanes off a 12-ft roll");
+  const entries = [{ condId: "cpt", tag: "CPT-1", material: "carpet", strips: ri.strips }];
+  const { bands } = buildRollBands(entries, ringsBySrc, new Map([["notch", 0]]));
+  const band = bands.find((b: any) => b.laneIndex === 1);
+  assert.ok(band, "the odd lane bands");
+  const area = shoelaceArea(band!.poly);
+  const bboxArea = (lane1.coverMax - lane1.coverMin) * 30; // the naive (wrong) bounding rectangle
+  assert.ok(area < bboxArea - 40, `clipped area ${area} must exclude the 50-sf notch (bbox ${bboxArea}), not stripe over it`);
 });
