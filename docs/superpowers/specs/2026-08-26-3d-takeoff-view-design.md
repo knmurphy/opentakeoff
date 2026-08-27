@@ -462,3 +462,75 @@ CHANGELOG (amend the existing 2026-08-26 entry if it lands in the same PR).
   fidelity read this v1 exists to produce.
 - Plan-skin state persistence (resets to on/paper/0.4 per open).
 - Plan in the 2D-canvas report or any MCP surface.
+
+## Addendum (2026-08-26c, r3) — Roll-good lanes on the slabs
+
+The figured roll layout (rollgoods.js) rendered onto the 3D floor slabs:
+alternating lane bands + explicit seam lines at lane boundaries, so the
+estimator reads WHERE the goods run and WHERE seams fall, in the same view
+they already trust for heights and transitions. The spec's future-work
+ledger called this "cheap, real value"; the scout confirmed it — no new
+persisted state, no schema change, no migration.
+
+### Product decisions (locked with the owner)
+
+- **Data flow — prop, not a second engine call.** TakeoffCanvas already
+  computes the whole layout live (`rollTakeoff` useMemo, the same object the
+  2D roll overlay renders from). Pass its per-condition strips — filtered to
+  the active sheet's shapes — into View3D as a new prop; buildScene projects
+  them to world. ONE layout computation feeds 2D and 3D; scene3d never
+  imports the rollgoods engine (a second call site could drift from the 2D
+  overlay on memo-key differences — the overlay is the authority).
+- **Geometry — bands + seams, both derived from the same strips array.**
+  Each strip already carries coverMin/coverMax (lane bounds) and
+  runMin/runMax (in-room run) in FEET, sheet-relative — the same origin
+  `toWorldFt` uses (with its Y negation). Render per strip: a flat band
+  quad at slab top + ε (z-fight guard), fill = condition color at low
+  alpha, ALTERNATING strip parity (odd lanes at ~0.25 alpha, even at 0 —
+  the stripe reads as direction without hiding the plan skin); a seam line
+  at each INTERIOR lane boundary (laneMax[i] == laneMin[i+1]) spanning the
+  overlap of the two lanes' run extents — the same lane-boundary + overlap
+  math `seamLfBySrc` sums today, emitted as a segment instead of a scalar.
+  Single-lane rooms emit no seam (nothing adjacent) — correct, not a miss.
+- **Seam segment derivation lives in rollgoods.js**, next to
+  `seamLfBySrc` — single source of truth for "where lanes meet". New pure
+  helper emits `{a:[x,y], b:[x,y]}` per seam in sheet feet; rollTakeoff
+  threads it; scene3d only maps feet→world. node:test-able end to end.
+- **Manual cut overrides ride for free.** `shape.roll_layout` overrides
+  mutate strip run extents, and segments derive from strip extents — the 3D
+  seams reflect overrides with zero extra wiring.
+- **Height/parity rules**: bands and seams sit at the OWNING slab's top
+  (per-shape, not per-condition — a 50 ft per-shape slab override lifts its
+  own seams); no clipping planes (section cut slices slabs, the cut edges
+  show bands' cross-section as empty — disclosed, not faked); included in
+  EXPORT PNG; NOT duplicated by ×N multiplier (multiplier never duplicates
+  geometry — existing ruling); excluded volumes (deducts) get no bands
+  (rollTakeoff filters floor_area only).
+- **Control: a "Rolls" checkbox** in the overlay panel next to the plan
+  controls, default ON, non-persistent (resets per open). No opacity slider
+  v1 — band alpha is fixed; if the read demands it, later.
+- **Disclosed limits** (one note in the overlay when rolls are shown and a
+  condition has roll_setup): roll cuts ignore slab holes (existing 2D
+  behavior, rollTakeoff.js:93) — bands stripe across holes; the note says
+  so. A seam through a hole region renders through it; same disclosure.
+
+### Tests
+
+- rollgoods: seam-segment helper — ns and ew lane axes, overlap interval,
+  single-lane room (no seam), manual-override extents honored.
+- scene3d: strips→world mapping — Y negation vs rollgoods' +y, band parity,
+  seam at interior boundaries only, per-shape height override lifts its own
+  seams.
+
+### Docs sync
+
+USER_GUIDE §18 (Rolls checkbox + what bands/seams mean + the holes
+disclosure), README Features bullet, FEATURES.md row, CHANGELOG. No MCP
+surface.
+
+### Non-goals (v1)
+
+- Seam LF captions / any numbers in-scene (the Report owns numbers).
+- Roll direction chosen IN the 3D view (the condition's roll_setup is the
+  authority; change it in the panel).
+- Bands on walls/transitions/counts — floor roll-goods conditions only.
