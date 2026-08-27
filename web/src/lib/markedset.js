@@ -20,6 +20,11 @@
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 import { approvalInk, approvalTally, APPROVAL_R } from "./approvals.js";
+// Tile layout sheet (M8, report/export integration): the SOLVED grid a
+// tiled floor shape already carries in its tileTakeoff summary, drawn to
+// scale — never re-measured or re-solved here.
+import { computeTileTakeoff } from "./tileTakeoff.js";
+import { tileOverlayPrimitives } from "./tileOverlay.ts";
 
 // The cover's author line (#314), pure for the node runner: named authors
 // sorted, unattributed counted last, null when NO shape carries an author so
@@ -228,7 +233,13 @@ function invertPixels(cv) {
   ctx.restore();
 }
 
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial" }) {
+// `uppFor(sheetKey) => feet-per-image-px | null` (new, optional; default a
+// no-op) is the ONE piece of tile-page scale info `sheets` doesn't carry —
+// dims come from the sheet's own vpR bitmap (W,H, already computed per
+// sheet below) at the SAME normalization verts_norm uses. A caller that
+// never supplies it (every caller today) exports byte-identical: no tile
+// page can ever be added without a real per-sheet scale.
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial", uppFor = () => null }) {
   // display-unit edge (lib/units contract): quantities arrive as internal feet;
   // metric converts at the drawn string only — legend rows, by-sheet rows, and
   // the per-shape chips. ASCII "m2" (Helvetica WinAnsi has no superscript 2).
@@ -881,6 +892,71 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       ? `${sh.label} · stitched composite (${sh.stitch.members.map((m) => m.label || m.key).join(" + ")}) · marked set`
       : `${sh.label} · marked set`;
     text(stamp, 14, 20, 8, muted);
+    // ── tile layout sheet (M8) — one NEW page per tiled sheet, titled
+    // "Tile layout — <sheet label>", drawing every floor_area shape's
+    // SOLVED tile grid to scale. Reuses THIS sheet's own toPage/chipRot
+    // (identical frame as the marked-up sheet above, via computeTileTakeoff
+    // scoped to this sheet's own shapes + dims + upp) and tileOverlayPrimitives
+    // (the SAME geometry the canvas overlay draws) — never re-measures or
+    // re-solves, only draws what computeTileTakeoff already figured.
+    const tileUpp = uppFor(sh.key);
+    if (tileUpp > 0) {
+      const shapesHere = shapesBy.get(sh.key) || [];
+      const { byShape: tileByShape } = computeTileTakeoff(conditions, shapesHere, () => ({ w: W, h: H }), () => tileUpp);
+      if (tileByShape.size) {
+        const tilePg = doc.addPage([pg.getWidth(), pg.getHeight()]);
+        tilePg.setRotation(chipRot);
+        if (dark) tilePg.drawRectangle({ x: 0, y: 0, width: pg.getWidth(), height: pg.getHeight(), color: rgb(...DARK_BG) });
+        const tdraw = (t, x, y, size, colorRgb, fnt = font) => {
+          const [px, py] = toPage(x, y);
+          tilePg.drawText(winAnsiSafe(t), { x: px, y: py, size, font: fnt, color: colorRgb, rotate: chipRot });
+        };
+        tdraw(`Tile layout — ${sh.label}`, 14, 30, 13, dark ? ink : rgb(...hex(COBALT)), bold);
+        let row = 1;
+        for (const s of shapesHere) {
+          const summary = tileByShape.get(s.id);
+          if (!summary) continue;
+          const cond = condById[s.condition_id];
+          const skus = cond?.tile_setup?.skus || [];
+          const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond?.color || "#888";
+          const overlay = tileOverlayPrimitives(summary.layout, tileUpp, skuColor);
+          // classified filtered the SAME way tileOverlayPrimitives filters
+          // internally (skip "out"), so cells[i] <-> overlay.tiles[i] by index —
+          // gives us the cut dimensions the overlay type doesn't carry.
+          const cells = summary.layout.classified.filter((c) => c.cls !== "out");
+          const { full, cut, corner, hole } = summary.counts;
+          tdraw(`${cond?.finish_tag || "Tile"} · ${full} full · ${cut} cut · ${corner} corner${hole ? ` · ${hole} hole` : ""}`, 14, 30 + row * 14, 8.5, muted);
+          row++;
+          for (let i = 0; i < overlay.tiles.length; i++) {
+            const t = overlay.tiles[i];
+            const cell = cells[i];
+            const hw = t.w / 2, hh = t.h / 2;
+            const cosr = Math.cos(t.rot), sinr = Math.sin(t.rot);
+            const corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([lx, ly]) => [t.cx + lx * cosr - ly * sinr, t.cy + lx * sinr + ly * cosr]);
+            const col = rgb(...hex(t.color));
+            if (t.cls === "full") {
+              tilePg.drawSvgPath(svgPath(corners), { x: 0, y: 0, color: col, opacity: 0.08, borderColor: col, borderWidth: 0.5, borderOpacity: 0.85 });
+            } else if (t.cls === "hole") {
+              // hole-straddled: flagged with a muted dashed outline, no fill
+              tilePg.drawSvgPath(svgPath(corners), { x: 0, y: 0, borderColor: muted, borderWidth: 0.5, borderOpacity: 0.5, borderDashArray: [1.5, 1.5] });
+            } else {
+              // cut / corner — flagged distinctly (corner in deduct-red, cut in
+              // sku color), both dashed to read as "not a full tile" at a glance
+              const emph = t.cls === "corner" ? rgb(...hex(DEDUCT_RED)) : col;
+              tilePg.drawSvgPath(svgPath(corners), {
+                x: 0, y: 0, color: emph, opacity: 0.14, borderColor: emph, borderWidth: 0.9, borderOpacity: 0.95,
+                borderDashArray: t.cls === "corner" ? [1, 1.2] : [3, 1.6],
+              });
+              // dimension label only when the cell reads big enough on the
+              // page to hold it (ptScale: image px -> pt, this sheet's own)
+              if (cell?.cut && Math.hypot(t.w, t.h) * ptScale > 16) {
+                tdraw(`${Math.round(cell.cut.w_in)}×${Math.round(cell.cut.h_in)}"`, t.cx, t.cy - 3 / ptScale, 5.5, dark ? ink : muted);
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   // small tool credit on the LAST page only — the subtle parent credit shown in
