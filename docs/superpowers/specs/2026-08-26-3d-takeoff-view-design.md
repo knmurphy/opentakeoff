@@ -689,8 +689,11 @@ LF captions etc. remain non-goals.
   View3D receives the LIVE `selectedId` as a separate prop that drives
   ONLY the label + a selection overlay — never the content effect, never
   fitToContent. The selection overlay is a dedicated per-shape highlight
-  mesh (rebuilt in its own selectedId-keyed effect, brightened fill at
-  the shape's own geometry, excluding nothing) — NEVER a material tint,
+  mesh (rebuilt in its own effect keyed [selectedId, built] so a mid-open
+  scene rebuild refreshes it; brightened fill at the shape's own geometry;
+  parented under the shape's focus-batch mesh so the visibility chain —
+  legend hide, focus isolation — INHERITS, the edges ruling applied again)
+  — NEVER a material tint,
   because merged batches share one material per condition and a tint
   would light up the whole condition. Closing and reopening re-snapshots
   focus from whatever is selected then (the documented select-first flow
