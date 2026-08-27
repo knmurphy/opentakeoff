@@ -889,8 +889,9 @@ reach two floors) and the graph walk RE-ROOTS at the resolved rooms.)
   containment boundary PAST the wall line, so runs traced on the wall
   linework (the dominant case) attribute; a point in the 2-eps overlap
   of two adjacent rooms' outsets is ambiguous by construction. (Push-off
-  is 0.7–1x eps and anisotropic across axes by sheet aspect ratio — both
-  far above on-edge crossing noise; disclosed here so nobody re-derives
+  is ~0.7–1x eps at rectilinear/obtuse corners (less at acute ones) and
+  anisotropic across axes by sheet aspect ratio — always far above
+  on-edge crossing noise; disclosed here so nobody re-derives
   eps from feet-true reasoning.) Holes are tested RAW: in-outer AND
   in-no-hole (geometry.js's own pattern).
 - **Point shapes — counts** (single vertex) and **closed rings —
@@ -911,6 +912,10 @@ reach two floors) and the graph walk RE-ROOTS at the resolved rooms.)
   room) → stay. Zero samples (empty/degenerate verts) → stay. A shared-
   wall run joins BOTH rooms — never a wrong exclusive owner.
 - **Existing graph rules unchanged** in shape, re-rooted per above.
+  PRECEDENCE: graph rules (derived links, label equality) admit a shape
+  BEFORE membership is consulted; membership's join and stay both render
+  visible, so its only observable power over a graph-admitted shape is
+  nil — it governs exactly the shapes the graph rules do NOT admit.
 - **Inherited limit, stated**: pointInPoly is even-odd, correct for
   simple polygons — the assumption every other containment use already
   makes.
@@ -919,7 +924,10 @@ reach two floors) and the graph walk RE-ROOTS at the resolved rooms.)
 
 Deduct inside resolved room joins; deduct inside other room drops;
 deduct on the shared-wall overlap stays; deduct in no room stays;
-unlabeled floor in other room drops; count inside joins / other-room
+unlabeled floor in other room drops; unlabeled floor inside the
+  resolved room joins (a labeled sibling already joins via label);
+  graph-admitted shape stays admitted even when membership says other
+  room (precedence); count inside joins / other-room
 drops / on-edge stays; 2-vertex run along one room's wall joins; run
 strictly inside another room drops; straddling run stays; empty-verts
 run stays; transition selection resolves BOTH rooms (family + membership
