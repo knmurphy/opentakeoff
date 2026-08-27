@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildScene, toWorldFt, planPlane, ringCCW, worldWindingCCW, buildRibbon, nudgePath, rollsToWorld,
   NOMINAL_THICKNESS_FT, NOMINAL_HEIGHT_FT, EXCLUDED_COLOR, MITER_LIMIT, RIBBON_HALF_FT,
+  uvPlanar, gridLines, buildShapeRanges, resolveShapeAt, assertNonIndexed, GRID_MARGIN_FT,
 } from "../src/lib/scene3d.js";
 import { FLOORING_DEFAULTS } from "../src/lib/canvasConstants.js";
 import { seedConditions } from "../src/lib/canvasUtil.js";
@@ -292,4 +293,131 @@ test("isolate3D: selected floor + derived base + label-equal siblings; unlinked 
   assert.equal(vis!.has("w1"), true);  // unlinked stays visible (spec)
   assert.equal(vis!.has("f2"), false); // linked to another room → dropped
   assert.equal(isolate3D(null, shapes as any), null);
+});
+
+// ── uvPlanar (spec addendum r4 rev 3, part B) ───────────────────────────────
+
+test("uvPlanar: period 1 is identity — world feet in, unscaled", () => {
+  assert.deepEqual(uvPlanar([[3, 6], [-2, 0.5]], 1), [[3, 6], [-2, 0.5]]);
+});
+
+test("uvPlanar: period scales uv by 1/period, no negation, per geometry vertex", () => {
+  assert.deepEqual(uvPlanar([[3, 6], [9, -12]], 3), [[1, 2], [3, -4]]);
+});
+
+// ── gridLines (spec addendum r4 rev 3, part C) ──────────────────────────────
+
+test("gridLines: 1 ft minor spacing fills the padded extent on both axes", () => {
+  const g = gridLines({ minX: 0, maxX: 5, minZ: 0, maxZ: 5 });
+  // extent = [-10, 15] on each axis inclusive of both ends → 26 integer lines
+  // per axis (minor + major + the one axis line), 52 total line segments.
+  assert.equal(g.positions.length / 6, 52);
+  assert.equal(g.colors.length, g.positions.length);
+});
+
+test("gridLines: extent = bounds padded by GRID_MARGIN_FT on every side", () => {
+  const g = gridLines({ minX: 0, maxX: 5, minZ: 0, maxZ: 5 });
+  const xStarts = [];
+  for (let i = 0; i < g.positions.length; i += 6) xStarts.push(g.positions[i]);
+  assert.ok(xStarts.includes(-GRID_MARGIN_FT));
+  assert.ok(xStarts.includes(5 + GRID_MARGIN_FT));
+  assert.ok(!xStarts.includes(-GRID_MARGIN_FT - 1));
+});
+
+test("gridLines: 10 ft major lines differ from 1 ft minor lines; every 10 ft multiple matches", () => {
+  const g = gridLines({ minX: 0, maxX: 20, minZ: 0, maxZ: 0 });
+  const colorOfXLine = (x: number) => {
+    for (let i = 0; i < g.positions.length; i += 6) {
+      if (g.positions[i] === x && g.positions[i + 2] === -GRID_MARGIN_FT) return g.colors.slice(i, i + 3);
+    }
+    return null;
+  };
+  const minor = colorOfXLine(1);
+  const major = colorOfXLine(10);
+  assert.notDeepEqual(minor, major);
+  assert.deepEqual(colorOfXLine(20), major); // 20 is also a 10 ft multiple
+  assert.deepEqual(colorOfXLine(-10), major); // negative multiples count too
+});
+
+test("gridLines: axis entries present — sheet X (world z=0) cobalt, sheet Y (world x=0) slate, distinct from grid + each other", () => {
+  const g = gridLines({ minX: -3, maxX: 3, minZ: -3, maxZ: 3 });
+  const colorOfFirstPoint = (x1: number, z1: number) => {
+    for (let i = 0; i < g.positions.length; i += 6) {
+      if (g.positions[i] === x1 && g.positions[i + 1] === 0 && g.positions[i + 2] === z1) return g.colors.slice(i, i + 3);
+    }
+    return null;
+  };
+  const yAxis = colorOfFirstPoint(0, -13);  // x=0 line, starts at exMinZ
+  const xAxis = colorOfFirstPoint(-13, 0);  // z=0 line, starts at exMinX
+  const grid = colorOfFirstPoint(1, -13);   // an ordinary minor line
+  assert.ok(yAxis && xAxis && grid);
+  assert.notDeepEqual(yAxis, xAxis);
+  assert.notDeepEqual(yAxis, grid);
+  assert.notDeepEqual(xAxis, grid);
+});
+
+test("gridLines: isDark selects the dark theme color pair (theme decided at render/call time)", () => {
+  const light = gridLines({ minX: 0, maxX: 0, minZ: 0, maxZ: 0 });
+  const dark = gridLines({ minX: 0, maxX: 0, minZ: 0, maxZ: 0 }, true);
+  assert.deepEqual(light.positions, dark.positions);
+  assert.notDeepEqual(light.colors, dark.colors);
+});
+
+// ── buildShapeRanges / resolveShapeAt (spec addendum r4 rev 3, part A) ──────
+
+const geo = (count: number) => ({ attributes: { position: { count } } }); // non-indexed: no .index
+
+test("buildShapeRanges: merge-order accumulation; counts sum to the vertex total", () => {
+  const items = [
+    { shapeId: "a", geometry: geo(9) },
+    { shapeId: "b", geometry: geo(6) },
+    { shapeId: "c", geometry: geo(3) },
+  ];
+  const ranges = buildShapeRanges(items);
+  assert.deepEqual(ranges, [
+    { shapeId: "a", start: 0, count: 9 },
+    { shapeId: "b", start: 9, count: 6 },
+    { shapeId: "c", start: 15, count: 3 },
+  ]);
+  assert.equal(ranges.reduce((s, r) => s + r.count, 0), 18);
+});
+
+test("buildShapeRanges: !geometry.index assert fires at RECORD time", () => {
+  assert.throws(
+    () => buildShapeRanges([{ shapeId: "a", geometry: { index: {}, attributes: { position: { count: 3 } } } }]),
+    /indexed/i,
+  );
+});
+
+test("assertNonIndexed: the same guard fires at RESOLVE time (the View3D raycast call site)", () => {
+  assert.doesNotThrow(() => assertNonIndexed(geo(3)));
+  assert.throws(() => assertNonIndexed({ index: {} }), /indexed/i);
+});
+
+test("resolveShapeAt: first/middle/last face resolve to the owning shapeId", () => {
+  const ranges = buildShapeRanges([
+    { shapeId: "a", geometry: geo(9) }, // faces 0,1,2 → ordinals 0,3,6
+    { shapeId: "b", geometry: geo(6) }, // faces 3,4 → ordinals 9,12
+    { shapeId: "c", geometry: geo(3) }, // face 5 → ordinal 15
+  ]);
+  assert.equal(resolveShapeAt(ranges, 0), "a"); // first face overall
+  assert.equal(resolveShapeAt(ranges, 2), "a"); // last face of the first shape
+  assert.equal(resolveShapeAt(ranges, 3), "b"); // first face of the middle shape
+  assert.equal(resolveShapeAt(ranges, 4), "b"); // last face of the middle shape
+  assert.equal(resolveShapeAt(ranges, 5), "c"); // last face overall
+});
+
+test("resolveShapeAt: boundary ordinal resolves to the range it starts, not the one before", () => {
+  const ranges = buildShapeRanges([
+    { shapeId: "a", geometry: geo(9) },
+    { shapeId: "b", geometry: geo(6) },
+  ]);
+  assert.equal(resolveShapeAt(ranges, 2), "a"); // ordinal 6, last face still inside a
+  assert.equal(resolveShapeAt(ranges, 3), "b"); // ordinal 9 === b.start exactly
+});
+
+test("resolveShapeAt: out-of-range faceIndex → null, a guaranteed miss not a wrong hit", () => {
+  const ranges = buildShapeRanges([{ shapeId: "a", geometry: geo(9) }]);
+  assert.equal(resolveShapeAt(ranges, 3), null); // ordinal 9, past the only range
+  assert.equal(resolveShapeAt(ranges, -1), null);
 });

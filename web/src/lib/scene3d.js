@@ -21,6 +21,20 @@ export const ROLL_SEAM_INK_DARK = "#2a2a2a";
 export const ROLL_SEAM_INK_LIGHT = "#e8e8e8";
 export const ROLL_BAND_RENDER_ORDER = 1;
 export const ROLL_SEAM_RENDER_ORDER = 2;
+// Ground grid + axes (spec addendum r4 rev 3, part C): custom LineSegments,
+// not GridHelper (no minor/major split, no per-axis colors there). Extent =
+// the fit bounds padded by this margin so the grid always outruns content.
+export const GRID_MARGIN_FT = 10;
+export const GRID_MINOR_STEP_FT = 1;
+export const GRID_MAJOR_STEP_FT = 10;
+export const GRID_MINOR_COLOR = "#d8dce3";      // 1 ft lines, faint — light theme
+export const GRID_MINOR_COLOR_DARK = "#1f2430"; // 1 ft lines, faint — dark theme
+export const GRID_MAJOR_COLOR = "#aab0bd";      // 10 ft lines, strong — light theme
+export const GRID_MAJOR_COLOR_DARK = "#3a4152"; // 10 ft lines, strong — dark theme
+export const GRID_AXIS_COBALT = "#1f3fc7";      // ui.js SVG.cobalt literal — sheet X axis (world z=0)
+export const GRID_AXIS_COBALT_DARK = "#3f8cff"; // ui.js SVG.dark.cobalt literal
+export const GRID_AXIS_SLATE = "#5b6472";       // minted neutral slate — sheet Y axis (world x=0); ui.js SVG has no slate entry
+export const GRID_AXIS_SLATE_DARK = "#8a93a3";  // minted neutral slate, dark theme
 
 export function toWorldFt(verts_norm, sheet) {
   // `|| 0` folds IEEE-754 −0 to +0 — ny === 0 otherwise yields −0, which
@@ -274,4 +288,107 @@ export function nudgePath(path, delta) {
     const l = Math.hypot(dx, dy) || 1;
     return [p[0] + (-dy / l) * delta, p[1] + (dx / l) * delta];
   });
+}
+
+// ── Picking — shapeRanges on merged meshes (spec addendum r4 rev 3, part A) ─
+// addMesh merges each condition's per-shape geometries (list.map(toGeo)) into
+// one batched mesh via three's BufferGeometryUtils; buildShapeRanges records
+// where each source shape landed in the merged, NON-INDEXED vertex buffer so
+// a later raycast faceIndex can resolve back to a shapeId. Non-indexed only:
+// faceIndex×3 → vertex ordinal → range membership holds ONLY when every
+// triangle's 3 vertices are unique entries in the position buffer (three's
+// earcut/ExtrudeGeometry/ribbon output is non-indexed already) — an indexed
+// geometry's faceIndex maps through the index buffer instead, and silently
+// resolves to the wrong shape (or none). The guard below fires at BOTH call
+// sites that assume this: RECORD time here in buildShapeRanges, and RESOLVE
+// time at the View3D raycast handler, before it hands intersection.faceIndex
+// to resolveShapeAt — one assertion, two guarded entry points.
+export function assertNonIndexed(geometry, where) {
+  if (geometry.index) throw new Error(`${where || "scene3d"}: indexed geometry unsupported (buildShapeRanges/resolveShapeAt assume non-indexed)`);
+}
+
+// items: the {shapeId, geometry}-pair list addMesh holds after list.map(toGeo)
+// — NOT three scene items (a slab's geometry is earcut/ExtrudeGeometry output,
+// not the group holding it). Counts come from the geometry's OWN vertex count
+// (geometry.attributes.position.count), not any prior per-shape metadata.
+export function buildShapeRanges(items) {
+  const ranges = [];
+  let start = 0;
+  for (const { shapeId, geometry } of items) {
+    assertNonIndexed(geometry, "buildShapeRanges");
+    const count = geometry.attributes.position.count;
+    ranges.push({ shapeId, start, count });
+    start += count;
+  }
+  return ranges;
+}
+
+// faceIndex×3 is the ordinal of a face's FIRST vertex in the merged buffer
+// (three triangle faces are 3 consecutive, unshared vertices in non-indexed
+// geometry); resolveShapeAt walks the recorded ranges to find which shape
+// owns that ordinal. Outside every range → null, a guaranteed miss rather
+// than a wrong hit.
+export function resolveShapeAt(ranges, faceIndex) {
+  const ordinal = faceIndex * 3;
+  for (const r of ranges) {
+    if (ordinal >= r.start && ordinal < r.start + r.count) return r.shapeId;
+  }
+  return null;
+}
+
+// ── Manufacturer texture UV tiling (spec addendum r4 rev 3, part B) ─────────
+// ONE scale home for tiling math. ptsFt are the BUILT GEOMETRY's own (x, w)
+// position pairs, PER GEOMETRY VERTEX — never ring pairs (ExtrudeGeometry
+// duplicates ring vertices for caps and walls; a ring-length UV attribute is
+// short and silently misaligned). World feet IN: the toWorldFt negation
+// already happened upstream — NO negation here. period 1 = identity (uv ===
+// the input feet, unscaled) — the untextured path stays byte-identical.
+export function uvPlanar(ptsFt, periodFt) {
+  const p = periodFt || 1;
+  return ptsFt.map(([x, w]) => [x / p, w / p]);
+}
+
+// ── Ground grid + axes (spec addendum r4 rev 3, part C) ─────────────────────
+// Custom LineSegments data, not GridHelper (no minor/major split, no
+// per-axis colors there). bounds are world-plane feet {minX, maxX, minZ,
+// maxZ} (the ground XZ plane; View3D positions the returned mesh at
+// y = −0.045, above the paper and below slabs — this pure builder never
+// touches height). Extent pads bounds by GRID_MARGIN_FT on every side so the
+// grid always outruns fit content. positions/colors are flat, 3 components
+// per vertex (paired per line segment) — ready for a BufferAttribute without
+// further shaping. Axes run through the sheet origin: the sheet X axis is
+// world z=0 (cobalt), the sheet Y axis is world x=0 (the minted neutral
+// slate — NEVER the danger red, which means excluded area in this view).
+// isDark selects the theme pair; callers re-invoke per render since a theme
+// flip can't be baked into a memoized default.
+function hexToRgb01(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+export function gridLines(bounds, isDark = false) {
+  const { minX, maxX, minZ, maxZ } = bounds;
+  const exMinX = minX - GRID_MARGIN_FT, exMaxX = maxX + GRID_MARGIN_FT;
+  const exMinZ = minZ - GRID_MARGIN_FT, exMaxZ = maxZ + GRID_MARGIN_FT;
+  const minor = hexToRgb01(isDark ? GRID_MINOR_COLOR_DARK : GRID_MINOR_COLOR);
+  const major = hexToRgb01(isDark ? GRID_MAJOR_COLOR_DARK : GRID_MAJOR_COLOR);
+  const cobalt = hexToRgb01(isDark ? GRID_AXIS_COBALT_DARK : GRID_AXIS_COBALT);
+  const slate = hexToRgb01(isDark ? GRID_AXIS_SLATE_DARK : GRID_AXIS_SLATE);
+  const positions = [];
+  const colors = [];
+  const push = (x1, z1, x2, z2, rgb) => {
+    positions.push(x1, 0, z1, x2, 0, z2);
+    colors.push(...rgb, ...rgb);
+  };
+  // Lines parallel to Z (fixed x), spanning the padded z extent.
+  for (let x = Math.ceil(exMinX); x <= exMaxX; x++) {
+    if (x === 0) { push(0, exMinZ, 0, exMaxZ, slate); continue; }
+    push(x, exMinZ, x, exMaxZ, x % GRID_MAJOR_STEP_FT === 0 ? major : minor);
+  }
+  // Lines parallel to X (fixed z), spanning the padded x extent.
+  for (let z = Math.ceil(exMinZ); z <= exMaxZ; z++) {
+    if (z === 0) { push(exMinX, 0, exMaxX, 0, cobalt); continue; }
+    push(exMinX, z, exMaxX, z, z % GRID_MAJOR_STEP_FT === 0 ? major : minor);
+  }
+  return { positions, colors };
 }

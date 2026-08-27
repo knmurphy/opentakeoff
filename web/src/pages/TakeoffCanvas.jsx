@@ -717,6 +717,13 @@ export default function TakeoffCanvas() {
   const [showReport, setShowReport] = useState(false);  // Reports overlay (STACK-style breakdown + export)
   const [showRevisions, setShowRevisions] = useState(false); // Revisions overlay (save / compare any two, buy-list deltas, CSV, auto-banked restore)
   const [show3d, setShow3d] = useState(false); // 3D view overlay (lazy — see View3D import above)
+  // Render-body-synced mirror (the dsRef pattern at ~404) for the destructive
+  // keydown listener below (~2855): that effect's dep array has no show3d, so
+  // a closure read of the state would be stale, and an effect-synced ref
+  // would also lag one render behind the open/close flip. Read via
+  // show3dRef.current inside onKey only.
+  const show3dRef = useRef(show3d);
+  show3dRef.current = show3d;
   const [planSkin, setPlanSkin] = useState(null); // { canvas, sheetKey } — 3D plan-skin raster (async one-shot pageObj.render, keyed to the sheet)
   const planSkinSeqRef = useRef(0);
   const [importRows, setImportRows] = useState(null);        // Import-from-schedule approval rows (null = dialog closed)
@@ -1158,10 +1165,26 @@ export default function TakeoffCanvas() {
   // (a mousemove-driven state update, a panel resize) looked to View3D like
   // a new `shapes`/`focusIds` identity and rebuilt the whole scene + reset
   // the camera underneath the user mid-orbit. Memoized here so the overlay
-  // only rebuilds when the actual inputs (shapes, the active sheet, or the
-  // selection) change.
+  // only rebuilds when the actual inputs (shapes or the active sheet) change.
   const shapes3d = useMemo(() => visibleShapes.filter((s) => s.sheet_id === active3dKey), [visibleShapes, active3dKey]);
-  const focusIds3d = useMemo(() => isolate3D(selectedId, shapes3d), [selectedId, shapes3d]);
+  // focusIds3d is a SNAPSHOT keyed [show3d, active3dKey] ONLY (addendum r4
+  // rev 3, part A) — NOT a live memo off selectedId/shapes3d. A live memo
+  // feeds the content effect, which rebuilds everything and calls
+  // fitToContent; that's cold while the overlay blocks 2D selection but goes
+  // HOT the instant a 3D click selects, refitting the camera mid-orbit under
+  // an in-overlay pick. shapes3d must NOT be a key either, or a mid-open
+  // shape mutation would re-snapshot off the live selectedId and re-enter
+  // the pipeline. selectedId/shapes3d are read from refs synced in the
+  // RENDER BODY (the dsRef precedent at ~404) rather than an effect, which
+  // would lag one render behind the key flip. Stale ids in the frozen Set
+  // are harmless — splitByFocus partitions only existing items. View3D gets
+  // the LIVE selectedId as a separate prop that drives only the label +
+  // selection overlay, never this snapshot.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const shapes3dRef = useRef(shapes3d);
+  shapes3dRef.current = shapes3d;
+  const focusIds3d = useMemo(() => isolate3D(selectedIdRef.current, shapes3dRef.current), [show3d, active3dKey]);
   // keep the agent's capability closures reading LIVE state across their awaits
   useEffect(() => {
     agentStateRef.current = { panels, scales, scaleSources, detectedScales, conditions, status };
@@ -2856,6 +2879,14 @@ export default function TakeoffCanvas() {
       const t = e.target.tagName;
       if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
       if (viewRef.current === "gallery") return;
+      // The 3D overlay owns its own destructive keys (Backspace deletes the
+      // selected 3D pick, Escape closes it) — without this gate Backspace
+      // invisibly deleted the 2D-selected shape UNDER the fullscreen overlay
+      // and Escape refit the camera mid-orbit via the live focus memo
+      // (pre-existing bug, addendum r4 rev 3 part A). show3dRef.current, not
+      // the show3d closure: this effect's dep array below has no show3d, so
+      // a closure read would be stale and this gate would no-op.
+      if (show3dRef.current) return;
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (poly.length) { dropLastPoint(); }
@@ -9192,8 +9223,12 @@ export default function TakeoffCanvas() {
               sheet={{ widthPx: focusPanel.img.w, heightPx: focusPanel.img.h, upp: uppFor(active3dKey) }}
               planSkin={planSkin && planSkin.sheetKey === active3dKey ? planSkin : null}
               focusIds={focusIds3d}
+              onSelectShape={selectShape}
+              selectedId={selectedId}
               rolls={rolls3d}
               sheetLabel={tabLabel(active3dKey)}
+              isDark={theme === "dark"}
+              units={units}
               onClose={() => setShow3d(false)}
             />
           </React.Suspense>
