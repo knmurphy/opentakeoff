@@ -513,6 +513,8 @@ The **Snap** toggle pulls your cursor onto true PDF endpoints—real corners ext
 
 The top-right readout tracks the armed tool: totals for the tracing tools, `W × H · SF · SY` for Rectangle, wall SF at the condition height for Surface Area, and running One-Click selection totals. Any run or side that reaches **12′ turns the chip amber**—the roll-width warning rides every tool that measures a length.
 
+Under the condition total sits **MEASUREMENTS**—a numbered tally, in draw order, of every linear run and wall on the active condition across the open sheets. A linear run reads its length (`01 47.2 LF linear`); a wall reads the tape math (`03 39.1 LF × 8 ft = 313.1 SF`), using that wall's own height where one is set and the condition height otherwise. The lines add up to the totals above them, so a wall-tile number can be checked line by line without opening the panel. Metric reports convert each line (`11.9 m × 2.44 m = 29.1 m²`). Floor areas and counts are not listed—their check is the shape itself.
+
 ---
 
 ## 6. One-Click Area
@@ -626,11 +628,11 @@ One more distinction: **Undo last shape** (Edit menu) and `⌫`-with-nothing-in-
 
 ## 9. Markups, stamps, and RFIs
 
-The markup layer is communication, never quantity: clouds, callouts, notes, highlighter ink, and stamps live on a separate layer the totals never count. The left dock (rail buttons on the canvas's right edge) carries three tabs—**Markups**, **Stamps**, **RFIs**.
+The markup layer is communication, never quantity: clouds, callouts, notes, highlighter ink, images, and stamps live on a separate layer the totals never count. The left dock (rail buttons on the canvas's right edge) carries three tabs—**Markups**, **Stamps**, **RFIs**.
 
 ### The markup tools
 
-The **Markup** menu holds six tools:
+The **Markup** menu holds seven tools:
 
 - **Highlighter** (`H`)—freehand marker ink. Press and **drag to paint**, stroke after stroke, no dialog between them. While it's armed, a style popover hangs under the menu: five inks (yellow default), **F / M / B** tip sizes, and a **chisel or round** nib—remembered per browser. Because press-drag paints, press-drag panning is off while the highlighter is armed; pan with `Space`-drag, middle-drag, or right-drag. Strokes stick to their sheet, scale like real ink, and are real objects: with Select, click one (it glows), drag to move it, `⌫` deletes it.
 - **Revision cloud**—two corner clicks; the cloud lands immediately, then an optional note editor opens (`Esc` keeps the cloud, skips the note). Clouds can carry a **Rev △** revision number from the panel.
@@ -638,8 +640,9 @@ The **Markup** menu holds six tools:
 - **Text note**—one click, type in place. Empty text doesn't commit.
 - **Highlight box**—two corners, done.
 - **Dimension line** (`N`)—a standalone dimension string for the width or height the plan never printed: click one end, a live length chip follows the cursor, click the other end. It lands as a line with end ticks labeled with the measured length at the sheet's scale (`12'-6"`), tied to nothing—no condition, no quantity, only the sheet's scale. It needs that scale set (the first click refuses otherwise, same as the measure tools) and won't span sheets. Double-click it to add a note after the length; it prints on the Marked Set like any markup.
+- **Image**—a picture on the sheet, two ways. Arm the tool and **marquee a region** of the plan (two corner clicks) to capture it as a floating screenshot; or click **Upload image…** in the Markups panel to place a **PNG or JPEG** from your machine (a spec-sheet clip, a site photo). Either way it lands centered, and with Select you **drag to move it** and **drag the bottom-right handle to resize** (the proportions stay locked). Images downscale to a sensible size on the way in, so a huge file won't bloat your project; an SVG isn't accepted (only pixels). Images burn into the Marked Set PDF like any markup, rotated sheets included.
 
-Every markup is editable after the fact: with Select, click to select it, drag to move it, **double-click to edit its text in place**. The Markups panel lists them all with an edit pencil, a **color** row (auto or any palette color), **line style** and **weight** controls, and a **Hide layer / Show layer** toggle for the whole layer. (Markup moves are plain edits, not undo steps—the `⌘Z` stack is for measured shapes.)
+Every markup is editable after the fact: with Select, click to select it, drag to move it, **double-click to edit its text in place** (an image carries no text—it's select-only). The Markups panel lists them all with an edit pencil, a **color** row (auto or any palette color), **line style** and **weight** controls, and a **Hide layer / Show layer** toggle for the whole layer. (Markup moves are plain edits, not undo steps—the `⌘Z` stack is for measured shapes.) A large image sits over what it covers—much like a highlight box—so if you can't click a shape beneath one, move the image aside. Images travel **with** the takeoff: they save to your browser, ride the JSON export/import, and sync to your team folder along with the rest of the annotations.
 
 ### Stamps
 
