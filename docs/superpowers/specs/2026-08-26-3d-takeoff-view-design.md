@@ -469,9 +469,9 @@ The figured roll layout (rollgoods.js) rendered onto the 3D floor slabs:
 alternating lane bands + explicit seam lines at lane boundaries, so the
 estimator reads WHERE the goods run and WHERE seams fall, in the same view
 they already trust for heights and transitions. No new persisted state, no
-schema change, no migration. (r1 of this addendum failed adversarial
-review — three personas, convergent findings; this rev folds in every one.
-Key corrections: seams anchor at COVERAGE boundaries, not physical-piece
+schema change, no migration. (adversarial review ran three
+rounds — r1 FAIL×3, r2 mixed, r3 PASS×3; this text folds in every
+finding. Key corrections from the cycle: seams anchor at COVERAGE boundaries, not physical-piece
 bounds; spans use DE-OVERAGED run extents; bands wear the roll material
 palette, not the condition color; per-shape slab-thickness overrides do
 not exist and are not invented here.)
@@ -512,14 +512,17 @@ not exist and are not invented here.)
   pattern exists for exactly this). Sheet switch rides shapes3d identity.
 - **buildScene input contract AMENDED** (this section is the amendment):
   buildScene gains `rolls: { bands, seams }` in SHEET FEET, where each band
-  is `{poly, z, tag, shapeId, condId, laneIndex}` (poly = flat polygon,
-  pre-clipped) and each seam is `{poly, z, tag, shapeId, condId}` (thin
+  is `{poly, z, fill, tag, shapeId, condId, laneIndex}` (poly = flat
+  polygon, pre-clipped; fill = the rollColorForType material color,
+  resolved upstream so scene3d stays engine-free) and each seam is `{poly, z, tag, shapeId, condId}` (thin
   pre-clipped polygon). ALL clipping/derivation happens upstream in
   rollgoods helpers called from the rolls3d memo — bands via
   `clipRingToLaneSlab`, seams via the new seam-segment helper next to
   `seamLfBySrc` (single source of truth for "where lanes meet") — so
-  scene3d only maps sheet-feet polys → world (the toWorldFt transform) and
-  NEVER imports the engine. View3D adds the rolls payload to the
+  scene3d only maps sheet-feet polys → world — a `[x, −y]` negation, the
+  toWorldFt convention WITHOUT its norm→feet scaling (toWorldFt itself
+  takes verts_norm; feeding it feet double-scales) — and NEVER imports
+  the engine. View3D adds the rolls payload to the
   sceneResult useMemo deps.
 - **Bands — coverage polygons, roll material palette.** Per lane:
   `clipRingToLaneSlab(ring, laneAxis, coverMin, coverMax)` (the engine's
@@ -548,8 +551,9 @@ not exist and are not invented here.)
   rule forbids. Consequence, disclosed: when a notch intervenes the DRAWN
   seam is shorter than the priced seam LF (seamLfBySrc prices the bridged
   bounds — existing engine behavior, not relitigated). Rendered as flat
-  quads (buildRibbon's plan-view pattern; `THREE.Line` linewidth is capped
-  at 1 device px on most platforms and unreadable at whole-floor framing),
+  polygons triangulated like the slab footprints (`THREE.Line` linewidth
+  is capped at 1 device px on most platforms and unreadable at
+  whole-floor framing),
   half-width `ROLL_SEAM_HALF_FT` (the FLUSH_HALF_FT = 1/12 ft precedent).
   INK is LUMINANCE-AWARE, chosen at build time from the owning slab's
   condition color (known when the material is minted): dark slab → light
@@ -602,7 +606,10 @@ not exist and are not invented here.)
   shorter than the priced seam LF when a notch intervenes.
 - **Scope**: floor_area roll-goods conditions only; no deduct bands; ×N
   multiplier never duplicates geometry (existing ruling); included in
-  EXPORT PNG; control resets to ON per overlay open (non-persistent).
+  EXPORT PNG — and when rolls are visible in the export, the footer strip
+  gains the drawn-vs-priced seam caveat (caveats that matter to the bid
+  survive the screenshot; the Openings doctrine); control resets to ON per
+  overlay open (non-persistent).
 
 ### Constants (named, no magic numbers)
 
@@ -615,10 +622,14 @@ not exist and are not invented here.)
 - rollgoods seam-segment helper: ns + ew lane axes; interior coverage
   boundary; laneIndex-adjacency guard (dropped lane → no seam);
   de-overaged span; single-lane room → no seam; manual overrides honored.
-- scene3d: strips→world mapping (Y negation vs rollgoods' +y); band parity
-  on laneIndex; band z = owning slab z1 + eps (join by srcId); clipRing
-  footprint (concave notch not striped); seam only at interior boundaries.
-- No-band-without-slab: strip whose shapeId has no built slab emits nothing.
+- rolls payload builder (pure, rollTakeoff-adjacent — parity, z-join,
+  clipping, emission gate all live HERE): band parity on laneIndex with
+  the laneCount===1 exception (single-lane room bands lane 0); band z =
+  owning slab z1 + eps (join by srcId); clipRing footprint (concave notch
+  not striped); seam footprint-clipped to the ring; no band without a
+  built slab (strip whose shapeId is absent from shapes3d emits nothing).
+- scene3d: sheet-feet→world mapping only (y negation vs rollgoods' +y) —
+  payload pass-through, no parity/clip logic here.
 
 ### Docs sync
 
