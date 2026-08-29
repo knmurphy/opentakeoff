@@ -132,26 +132,34 @@ repeat-unit painting. The wall strip reuses all of that unchanged.
 
 ### 3.4 Reconciliation invariant (the compatibility Kevin asked for)
 The engine tiles the **full** L×H strip (Slice A does not carve trim reveals out of the
-field — see below), and cells are **module-footprint** (tile + its joint) that partition
-the ring. So `Σ kept-field module area == L × H`, which is **identically** the measured
-`area_sf` (`shapeMetrics.js:29`, `totals.js:49` → `wall_sf`) — **exact on the module
-basis, no tolerance needed.** *(scope M4, domain C1 resolved by choosing the module basis
-+ additive trim.)*
+field). Two distinct reconciliation statements — the earlier draft wrongly merged them
+into a false "exact module-partition" claim (the engine emits **tile-footprint** area, not
+module-footprint: `classify.ts:373` `areaFull_sf = quad.w*quad.h` with grout excluded,
+`keptArea_sf` sums tile∩ring — no module-area quantity exists). Corrected: *(re-review CV-1)*
 
-**Trim is additive, not carved (Slice A modeling choice).** Movement-joint and edge
-profiles physically occupy a reveal (~profile width), but Slice A tiles the full field
-and counts trim as **separate additive LF/EA line items** (§5). This slightly
-**over-counts** field tile by `Σ trim_reveal_w × H` — a *conservative* error (you never
-order short), documented and acceptable; exact trim-reveal deduction from the field is
-deferred. This keeps reconciliation exact **and** never under-orders. *(domain C1)*
+1. **Extent identity (EXACT, geometric — the real "same math" guarantee).** The tiled
+   region *is* the measured wall: `wallStripRing` has area `L × H`, and
+   `L×H == area_sf` by construction (`shapeMetrics.js:29` `area_sf = openLen·upp·height`;
+   `totals.js:49` → `wall_sf`). This needs **no engine output and no new computation** — it
+   is the guarantee that the tiled surface covers exactly the SF the estimator measured.
+2. **Coverage check (BOUNDED by the grout fraction).** The engine's `keptArea_sf` is
+   **tile-face** area (grout-excluded), so `keptArea_sf ≈ area_sf × (w·h)/((w+j)(h+j))` —
+   it is *less* than `area_sf` by the grout fraction, expected and correct. The test is a
+   **formula with a defined tolerance**: `keptArea_sf` within a small % (edge-cut partial
+   coverage) of `area_sf × tileArea/moduleArea` — **not** `== area_sf`, and **not** a fuzzy
+   "±1 tile." This is the number grout can't make trivially-true or reliably-false. *(scope M4)*
 
-**Net vs gross reporting.** The exact reconciliation is on the **module footprint**
-(cells partition the ring). A separate **net tile face SF** (field minus grout) is a
-reported number, *not* the reconciliation basis — so grout fraction can't make the
-flagship invariant trivially-true or reliably-false. *(scope M4)*
+**Trim is additive for LF, a conversion for pieces (no coverage change).** Coverage stays
+full (every slot gets a piece). Movement-joint / edge **profiles** are counted as
+**additive LF** and physically occupy a reveal (~profile width) Slice A does not carve out
+— a small *conservative* over-count of field tile (`Σ profile_reveal_w × H`), never short;
+exact reveal deduction deferred. **Bullnose** is **not additive and not a coverage change**
+— it *swaps the SKU* of an existing edge slot from field tile to bullnose (§5), so the
+extent identity (1) is untouched; only the piece BOM splits field↔bullnose. **Miter** is a
+labor line on the field piece (no coverage change). *(domain C1, re-review MV-1)*
 
-**Hole-free only.** This invariant holds for a wall **without openings**; walls with
-doors/windows over-order until M11 adds opening deductions (§2, §12, §11.7). *(scope M7)*
+**Hole-free only.** These hold for a wall **without openings**; walls with doors/windows
+over-order until M11 adds opening deductions (§2, §12, §11.9). *(scope M7)*
 
 ---
 
@@ -201,8 +209,8 @@ oppositely at the two corner kinds. Wrap ≠ "flow blindly straight through ever
   source (`…conventions.md:50,58,137`).
 
 Per-run default (`wall_corner_mode`, §8) with a **per-corner override** (§8
-`corner_overrides`; the override wins over the herringbone default). Per-corner adjust is
-a Slice B interaction (on the elevation); Slice A exposes the per-run default. *(scope N3)*
+`wall_corner_overrides`; the override wins over the herringbone default). Per-corner adjust
+is a Slice B interaction (on the elevation); Slice A exposes the per-run default. *(scope N3)*
 
 ### 4.3 Inside/outside classification
 At each *non-collinear* interior vertex, the cross-product of incoming/outgoing edges
@@ -258,7 +266,7 @@ converted, not double-counted:** *(domain M2)*
 | Corner / edge | `wall_edge_finish` | What is ordered for that slot | Extra trim line |
 |---|---|---|---|
 | Outside corner / exposed edge | `profile` (default) | field tile, **square-cut** (EA, counted once) | edge **profile LF** (× edge height) |
-| Outside corner / exposed edge | `bullnose` | **bullnose piece EA** — *replaces* the field tile (the field corner-cut EA is **suppressed/converted**, not added) | — |
+| Outside corner / exposed edge | `bullnose` | **bullnose piece EA** per edge slot — *swaps the SKU* of that field slot (SKU field→bullnose; coverage unchanged, the field-cut EA for that slot is **converted, not added**) | — |
 | Outside corner / exposed edge | `miter` | field tile, cut **and** mitered (EA, counted once) | **mitered-edge LF** as a *labor* line (no separate material piece) |
 | Inside corner / change of plane | — | field tile (offcut-carry under wrap; end cut under reset) | **movement-joint LF** (DILEX family) |
 
@@ -416,23 +424,29 @@ space (Slice A panel / Slice B sheet), never the plan placement.
 
 ## 11. Correctness invariants (become tests in the plan)
 
-1. **Reconciliation (exact, module basis):** hole-free wall, `Σ kept-field module area
-   == L×H == area_sf` **exactly** (cells partition the ring; trim additive, §3.4) — not a
-   fuzzy "±1 tile."
+1. **Reconciliation (two parts, §3.4):** (a) **extent identity** — `wallStripRing` area
+   `== L×H == area_sf` **exactly** (geometric, no engine output); (b) **coverage** — engine
+   `keptArea_sf` (tile-face, grout-excluded) within a defined tolerance of
+   `area_sf × tileArea/moduleArea`. NOT `keptArea == area_sf` (that would fail by the grout
+   fraction). *(re-review CV-1)*
 2. **Course-height continuity:** wrap and reset both share the one **pinned V datum /
    course grid** (§4.1/§4.4).
 3. **V datum:** bottom course sits full/near-full on the floor datum, cut course at the
    top — not centered top-to-bottom (§4.4). *(scope C1, engine C-2)*
-4. **Corner-cut PIECE COUNT (area-independent — the feature's whole point):** for a known
-   run, **wrap** → exactly **one** straddling cut per interior *inside* fold + an end cut
-   per *outside* fold face; **reset** → exactly **two** end cuts per shared fold. Pinned as
-   counts, so a double-count/miscount fails even though area reconciles. *(scope C2)*
+4. **Corner-cut PIECE COUNT (area-independent — the feature's whole point):** counts are
+   **per course**. For a known run, **wrap** → exactly **one** straddling cut per interior
+   *inside* fold, and **one edge piece per face** at an *outside* fold (an outside corner
+   has two faces meeting at the arris → two edge slots); **reset** → exactly **two** end
+   cuts per shared fold. Pinned as counts, so a double-count/miscount fails even though area
+   reconciles. *(scope C2, re-review MV-1)*
 5. **Corner classification:** known inside/outside run + `face_side` classifies each
    non-collinear vertex; flipping `face_side` inverts all; a reversal run is rejected
    (§3.1/§4.3).
-6. **Trim & no double-count:** `bullnose` outside → one EA (field cut **converted**);
-   `profile` → cut EA + profile LF; `miter` → cut EA + miter-labor LF; inside →
-   movement-joint LF; `wall_waste_pct` applied (default 10%) (§5).
+6. **Trim & no double-count (per edge slot, per §11.4 count):** `bullnose` → the slot is
+   **one** bullnose EA (the field cut for that same slot is **converted, not added** — the
+   defect prevented is cut EA + bullnose EA for one slot, NOT the two faces of a corner);
+   `profile` → the slot is a square-cut field tile EA + profile LF; `miter` → field cut EA
+   + miter-labor LF; inside → movement-joint LF; `wall_waste_pct` applied (default 10%) (§5).
 7. **byShape:** a multi-wall reset run yields exactly one summary per shape, carrying
    `wallStrips[]` (§4.5).
 8. **Back-compat:** floors, existing `wall_sf` totals (`totals.js:49`), the plan
@@ -485,9 +499,9 @@ field-count engine reuse, reconciliation area-logic, dropped fake convention, tr
 
 **Critical (all resolved):**
 - **Reconciliation broke once corners exist** — trim consumes field width (domain C1).
-  → §3.4: tile the **full** field (module-footprint cells partition the ring → exact
-  reconciliation), trim is **additive & conservative** (slight over-count, never short);
-  exact trim-reveal deduction deferred.
+  → §3.4: tile the **full** field; trim is **additive/conversion & conservative** (slight
+  over-count, never short); exact trim-reveal deduction deferred. *(The v2 phrasing of the
+  reconciliation basis was itself corrected in the v2→v2.1 pass below — see CV-1.)*
 - **Vertical/course origin undefined; floor optimizer wrong for walls** (scope C1, engine
   C-2). → §4.4 wall origin mode: **U-only balance, V pinned to the floor datum**; reset
   shares the V datum (resolves the §4.2-vs-§11.2 contradiction).
@@ -503,7 +517,7 @@ field-count engine reuse, reconciliation area-logic, dropped fake convention, tr
 **Major (all resolved):** herringbone reset = **default not forced** + override wins
 (M1); reset **sub-strip semantics** — exact segments, two end cuts/fold, no allowance
 (M2); **miter** given a defined labor-LF output (M3); **reconciliation tolerance** pinned
-to the module basis (M4); **unequal-height runs out of scope**, equal-height premise
+(basis corrected in v2.1, CV-1) (M4); **unequal-height runs out of scope**, equal-height premise
 stated (M5); **`wall_waste_pct`** added, default 10% ON — not off (M3/M6); **Slice A
 hole-free** honesty (M7); **cache sig** height/role/sig-signature edits named (engine M-1);
 **byShape N-strip restructuring** named, not "verbatim," `wallStrips[]` (engine M-3);
@@ -521,3 +535,17 @@ adjust noted as Slice B; stitch-identity caveat for Slice B.
 **Explicitly confirmed sound by the reviews (not changed):** the strip/field-count reuse,
 `L×H ≡ area_sf`, dropping "reset-inside/wrap-outside," trim units (bullnose EA / profile
 LF / joint LF), and refusing the 10/15/18% constants.
+
+**v2 → v2.1 (re-review pass, `…-review-v2.md`):** a scoped re-review confirmed the U-only/
+V-datum origin, the `markedset.js:998` plan-render suppression, and the `summarizeShape`
+run-keyed branch + `agg.jointTotals` guard all hold. Two fixes applied:
+- **CV-1 (Critical):** my v2 "exact module-partition" reconciliation was false — the engine
+  emits **tile-footprint** area (grout-excluded, `classify.ts:373`), no module-area
+  quantity. → §3.4/§11.1 split into an **exact extent identity** (`ring == L×H == area_sf`,
+  geometric, no engine output) + a **grout-bounded coverage check** on `keptArea_sf`. No new
+  module computation needed (also closes the §9-ADD gap the re-review flagged).
+- **MV-1 (Major):** bullnose count ambiguity. → §11.4/§11.6/§5 pin counts **per course, per
+  edge slot**: an outside corner has two faces → two edge slots; bullnose **swaps the SKU**
+  of a slot (no reduction to one-per-corner, no cut+bullnose double-count for one slot).
+- Minors: `corner_overrides`→`wall_corner_overrides` rename propagated; §3.4 opening ref
+  fixed to §11.9.
