@@ -1,20 +1,42 @@
 // web/src/lib/tileWall/index.ts
 //
-// Wall orchestration, wrap mode (design task 5, 2026-08-29 wall-tile-slice-a).
-// The single entry point tileTakeoff.js's per-shape loop calls for a
-// `surface_area` shape — the wall counterpart of tileTakeoff.js's own
-// `summarizeShape` (floor). Pipeline: unwrapRun (Task 1: L-run verts →
-// {L_ft, strip_ring, folds} or null on a reversing/degenerate run) →
-// wallEffectiveTileSetup (Task 2: U-only balanced origin, V pinned 0) →
-// solveTileLayout (the SAME field solver the floor uses, against the
-// unwrapped L×H strip) → wallCorners (Task 3, wrap: reclassifies the field
-// cells an inside fold's u_ft straddles full|cut→corner; emits real `byKind`
-// trim entries for outside folds/exposed endpoints) → the SAME
-// tileCounts/countsBySku/tileGroutBags/cutSheet/orderTiles the floor path
-// uses, run over wallCorners' RECLASSIFIED `classified` so a consumer
+// Wall orchestration — wrap AND reset modes (design tasks 5 and 6,
+// 2026-08-29 wall-tile-slice-a). The single entry point tileTakeoff.js's
+// per-shape loop calls for a `surface_area` shape — the wall counterpart of
+// tileTakeoff.js's own `summarizeShape` (floor). Pipeline: unwrapRun (Task 1:
+// L-run verts → {L_ft, strip_ring, folds} or null on a reversing/degenerate
+// run) → effectiveCornerMode (Task 6: resolves wrap vs reset — a per-corner
+// override wins, else tile_setup.wall_corner_mode, else the pattern default,
+// which is "reset" for herringbone/diagonal since a phase-locked field can't
+// wrap a corner without a visible seam break) → for WRAP, ONE
+// wallEffectiveTileSetup (Task 2: U-only balanced origin, V pinned 0) +
+// solveTileLayout call against the full unwrapped L×H strip; for RESET, the
+// SAME two calls run ONCE PER SUB-STRIP (the run split at every fold —
+// inside and outside — into [u_{k-1},u_k] segments, each its own
+// independently-balanced L_seg×H strip) and the sub-strips' `classified`
+// arrays are concatenated into one merged layout (M5 — see below) →
+// wallCorners (Task 3: wrap reclassifies the field cells an inside fold's
+// u_ft straddles full|cut→corner; reset reclassifies nothing — each
+// sub-strip's own end column is already a real `cut` from its own solve —
+// but both emit real `byKind` trim entries for outside folds/exposed
+// endpoints) → the SAME tileCounts/countsBySku/tileGroutBags/cutSheet/
+// orderTiles the floor path uses, run over wallCorners' RECLASSIFIED
+// `classified` (wrap) or the MERGED `classified` (reset) so a consumer
 // reading `summary.counts`/`summary.layout.classified` never sees the two
 // disagree (mirrors summarizeShape's own "never diverge" posture,
 // tileTakeoff.js:107-108).
+//
+// M5 (binding, reset only): `summary.layout.classified` MUST be the
+// concatenation of EVERY sub-strip's cells, never just the first —
+// tileTakeoff.js:356's condition-level `agg.classified.push(...summary.
+// layout.classified)` feeds the multi-SKU order split/reuse pooling
+// (:423-424,448,485), so a multi-SKU reset wall whose merge dropped a
+// sub-strip would silently order from a fraction of its own cells.
+// `summary.wallStrips` carries the RAW per-sub-strip layouts (for
+// rendering) — wrap keeps its own one-element convention (`wallStrips[0] ===
+// summary.layout`, the reclassified layout); reset's sub-strips are never
+// individually reclassified (wallCorners' reset branch is a no-op clone), so
+// there is no reclassified-vs-raw distinction to preserve there.
 //
 // A null unwrapRun (reversing run, or fewer than 2 verts) returns
 // `{ ok: false, reason }` INSTEAD OF a summary — never a partial/zeroed one.
@@ -29,7 +51,7 @@ import { tileGroutBags } from "../tileCalc/grout.ts";
 import { cutSheet, type CutRow } from "../tileCalc/cutsheet.ts";
 import { orderTiles, type TileOrder } from "../tileCalc/order.ts";
 import { layoutWarning } from "../tilePatterns/index.ts";
-import { unwrapRun } from "./unwrap.ts";
+import { unwrapRun, wallStripRing, type Fold } from "./unwrap.ts";
 import { wallEffectiveTileSetup } from "./origin.ts";
 import { wallCorners, type WallTrim, type WallJoints } from "./corners.ts";
 
@@ -79,6 +101,40 @@ export type SummarizeWallResult = WallSummarizeFailure | WallSummary;
 // per-shape and condition-level wall rates must never drift apart.
 export const WALL_DEFAULT_BREAKAGE_PCT = 0.10;
 
+// A phase-locked pattern (herringbone/diagonal) can't wrap continuously
+// around a corner without a visible seam break mid-tile — the pattern's own
+// 45°/interlocking geometry only reads cleanly against a straight run — so
+// those two patterns default to "reset" (each wall segment its own
+// balanced sub-strip) rather than wrap's single continuous strip. Every
+// other pattern keeps wrapping as the default.
+function patternDefaultCornerMode(pattern: TileSetup["pattern"]): "wrap" | "reset" {
+  return pattern === "herringbone" || pattern === "diagonal" ? "reset" : "wrap";
+}
+
+// Mode-selection precedence (design §4.5, binding ruling 1): a per-corner
+// override (`wallShape.wall_corner_overrides`, keyed by the SAME run-vertex
+// index `Fold.vertexIndex` uses — tileSetup.ts:47-49) wins outright over the
+// condition-level `tile_setup.wall_corner_mode`, which itself wins over the
+// pattern default above. This resolves to ONE overall mode for the whole
+// run — both the reset sub-strip split below and the single `wallCorners`
+// call operate on the WHOLE run, not per-fold — so when more than one fold
+// carries a DIFFERENT override, the first fold in the run's own u_ft order
+// wins. A truly mixed-mode single run (one corner wrap, another reset) is
+// out of scope for this slice — no test exercises it, and supporting it for
+// real would need wallCorners itself to accept a per-fold mode, not just an
+// overall one.
+function effectiveCornerMode(
+  tile_setup: TileSetup,
+  wallShape: WallShapeInput,
+  folds: Fold[],
+): "wrap" | "reset" {
+  for (const fold of folds) {
+    const override = wallShape.wall_corner_overrides?.[fold.vertexIndex]?.mode;
+    if (override) return override;
+  }
+  return tile_setup.wall_corner_mode ?? patternDefaultCornerMode(tile_setup.pattern);
+}
+
 export function summarizeWallShape(
   tile_setup: TileSetup,
   wallShape: WallShapeInput,
@@ -111,14 +167,7 @@ export function summarizeWallShape(
 
   const { L_ft, strip_ring, folds, warnings: unwrapWarnings } = unwrapped;
 
-  const solveSetup = wallEffectiveTileSetup({
-    tile_setup,
-    strip_ring,
-    tile_layout: wallShape.tile_layout,
-  });
-  const layout = solveTileLayout({ tile_setup: solveSetup, ring_ft: strip_ring });
-
-  const corner_mode = tile_setup.wall_corner_mode ?? "wrap";
+  const corner_mode = effectiveCornerMode(tile_setup, wallShape, folds);
   const edge_finish = tile_setup.wall_edge_finish ?? "profile";
   // Array.isArray, not just `?? [false,false]`: untrusted/imported shape data
   // (MCP import_takeoff, a corrupted persisted project) isn't guaranteed to
@@ -131,26 +180,109 @@ export function summarizeWallShape(
     ? wallShape.endpoint_exposed
     : [false, false];
 
+  // `subStrips` is non-null ONLY in reset mode — it holds the raw, per-
+  // sub-strip solves (Task 6's `wallStrips`, unmodified by wallCorners,
+  // which never reclassifies a reset corner's cells). `layoutForCorners` is
+  // what wallCorners actually classifies against: wrap's own single-strip
+  // `layout`, or reset's SYNTHETIC whole-run layout whose `classified` is
+  // the concatenation of every sub-strip's cells (M5 — never just the
+  // first). `cornersTileSetup` is whichever TileSetup wallCorners reads for
+  // its module-height/courses figure — that figure only depends on
+  // h_in/joint_in (tileConfig), never origin, so a reset run's raw
+  // condition-level `tile_setup` is exactly as correct there as any one
+  // sub-strip's own origin-resolved setup would be.
+  let subStrips: TileLayout[] | null = null;
+  let layoutForCorners: TileLayout;
+  let cornersTileSetup: TileSetup;
+
+  if (corner_mode === "reset") {
+    // Split the run at EVERY fold — inside and outside alike, an outside
+    // corner breaks a straight run just as much as an inside one — into
+    // [u_{k-1}, u_k] segments; the two run endpoints (0 and L_ft) bound the
+    // first/last segment. A run with F folds always produces exactly F+1
+    // sub-strips (F=0 -> 1 sub-strip, byte-identical to wrap for that shape
+    // — ruling 4). Each segment is its OWN wallStripRing, solved
+    // independently through the SAME wallEffectiveTileSetup + solveTileLayout
+    // pair wrap uses for the whole run — U rebalances from that segment's
+    // own centerline, V stays pinned to the shared floor datum 0.
+    //
+    // A duplicated interior vertex (zero-length edge) clears BOTH
+    // collapseCollinear's drop test and unwrapRun's U-turn reject (cross AND
+    // dot are both exactly 0), so it can surface as a fold at the SAME u_ft
+    // as its neighbor -- boundaries then contains a repeat, producing a
+    // zero-length segment here. Left as-is deliberately: wallStripRing(0,H)
+    // -> solveTileLayout's own ringBounds guard (`!(maxX>minX)`) returns an
+    // empty layout (no throw, no warning), so it just degrades to one extra
+    // empty wallStrips entry rather than corrupting the F+1 invariant by
+    // filtering it out.
+    //
+    // `wallShape.tile_layout.origin`, when pinned, is passed to EVERY
+    // sub-strip's wallEffectiveTileSetup call literally as-is (never
+    // translated by this segment's own start offset) -- each sub-strip's
+    // ring is re-based to start at LOCAL u=0 (wallStripRing's own contract),
+    // so a pinned origin is read as "this many feet from THIS segment's own
+    // start", i.e. phase-consistent across every sub-strip, not "this many
+    // feet from the whole run's start". Untested (no fixture pins a
+    // reset+pinned-origin combination); the renderer/Task 7 is the first
+    // real consumer that would need to agree with this reading.
+    const boundaries = [0, ...folds.map((f) => f.u_ft), L_ft];
+    const strips: TileLayout[] = [];
+    for (let i = 1; i < boundaries.length; i++) {
+      const segLen = boundaries[i] - boundaries[i - 1];
+      const segRing = wallStripRing(segLen, resolvedHeight_ft);
+      const segSetup = wallEffectiveTileSetup({
+        tile_setup,
+        strip_ring: segRing,
+        tile_layout: wallShape.tile_layout,
+      });
+      strips.push(solveTileLayout({ tile_setup: segSetup, ring_ft: segRing }));
+    }
+    subStrips = strips;
+    layoutForCorners = {
+      config: strips[0].config,
+      bounds: strips[0].bounds,
+      quads: strips.flatMap((w) => w.quads),
+      classified: strips.flatMap((w) => w.classified),
+      warnings: strips.flatMap((w) => w.warnings || []),
+    };
+    cornersTileSetup = tile_setup;
+  } else {
+    const solveSetup = wallEffectiveTileSetup({
+      tile_setup,
+      strip_ring,
+      tile_layout: wallShape.tile_layout,
+    });
+    layoutForCorners = solveTileLayout({ tile_setup: solveSetup, ring_ft: strip_ring });
+    cornersTileSetup = solveSetup;
+  }
+
   const corners = wallCorners({
     folds,
     H_ft: resolvedHeight_ft,
-    tile_setup: solveSetup,
-    layout,
+    tile_setup: cornersTileSetup,
+    layout: layoutForCorners,
     corner_mode,
     edge_finish,
     endpoint_exposed,
   });
 
   // Every downstream figure (counts, sku split, grout, cutsheet, order)
-  // reads the RECLASSIFIED `classified` — never the pre-corners `layout`'s
-  // own — so a consumer of `summary.counts` and a consumer of
-  // `summary.layout.classified` (the canvas overlay, the multi-SKU/reuse
-  // pooling in tileTakeoff.js's byCond finalize) can never disagree about
-  // which cells are corners. `layout` itself is a shallow copy with only
-  // `classified` swapped — config/bounds/quads/warnings stay the solver's
-  // own.
+  // reads the RECLASSIFIED/merged `classified` — never `layoutForCorners`'s
+  // own pre-corners value — so a consumer of `summary.counts` and a
+  // consumer of `summary.layout.classified` (the canvas overlay, the
+  // multi-SKU/reuse pooling in tileTakeoff.js's byCond finalize) can never
+  // disagree about which cells are corners, or (reset) about which cells
+  // exist at all. `reclassifiedLayout` is a shallow copy of
+  // `layoutForCorners` with only `classified` swapped — config/bounds/quads/
+  // warnings stay whichever branch above produced.
   const classified = corners.classified;
-  const reclassifiedLayout: TileLayout = { ...layout, classified };
+  const reclassifiedLayout: TileLayout = { ...layoutForCorners, classified };
+  // wrap: the one-element convention pins `wallStrips[0] === summary.layout`
+  // (the SAME reclassified layout object). reset: `wallStrips` is the raw
+  // per-sub-strip array — never individually reclassified, since wallCorners'
+  // reset branch is a no-op clone — so there is no reclassified-vs-raw
+  // distinction to preserve there.
+  const wallStrips: TileLayout[] = subStrips ?? [reclassifiedLayout];
 
   const counts = tileCounts(classified);
   const bySku = countsBySku(classified);
@@ -167,7 +299,7 @@ export function summarizeWallShape(
     attic_pct: tile_setup.purchase?.attic_pct,
   });
 
-  const warnings = [layoutWarning(tile_setup), ...unwrapWarnings, ...(layout.warnings || [])].filter(
+  const warnings = [layoutWarning(tile_setup), ...unwrapWarnings, ...(layoutForCorners.warnings || [])].filter(
     (w): w is string => Boolean(w),
   );
 
@@ -182,7 +314,7 @@ export function summarizeWallShape(
     ring_ft: strip_ring,
     trim: corners.trim,
     joints: corners.joints,
-    wallStrips: [reclassifiedLayout],
+    wallStrips,
     extent_sf: L_ft * resolvedHeight_ft,
   };
 }
