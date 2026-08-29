@@ -922,7 +922,15 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     if (tileUpp > 0) {
       const shapesHere = shapesBy.get(sh.key) || [];
       const { byShape: tileByShape } = computeTileTakeoff(conditions, shapesHere, () => ({ w: W, h: H }), () => tileUpp);
-      if (tileByShape.size) {
+      // A wall (`surface_area`) shape solves into tileByShape too (Task 6),
+      // but its cells live in strip-local elevation coords, not this
+      // sheet's plan ring — the overlay loop below (measure_role guard)
+      // never draws it here, so a wall-only sheet must never open this
+      // page: an empty "TILE LAYOUT" page with a bare legend/title-block
+      // frame and no room block would be pure noise. Elevation sheets for
+      // walls are Slice B.
+      const hasRenderingFloorTile = shapesHere.some((s) => s.measure_role === "floor_area" && tileByShape.has(s.id));
+      if (hasRenderingFloorTile) {
         courier ??= await doc.embedFont(StandardFonts.Courier);
         courierBold ??= await doc.embedFont(StandardFonts.CourierBold);
         const tilePg = doc.addPage([pg.getWidth(), pg.getHeight()]);
@@ -998,6 +1006,12 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         for (const s of shapesHere) {
           const summary = tileByShape.get(s.id);
           if (!summary) continue;
+          // Walls solve into tileByShape (Task 6) but live in strip-local
+          // elevation coords, not this plan ring — drawing summary.layout
+          // here would place wall cells at the wall's plan centerline
+          // (wrong geometry) and could overlap an unrelated floor's cells.
+          // Walls render in the panel elevation strip (Task 8), never here.
+          if (s.measure_role === "surface_area") continue;
           const cond = condById[s.condition_id];
           const skus = cond?.tile_setup?.skus || [];
           const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond?.color || "#5c6b82";

@@ -84,10 +84,14 @@ export function tileWarnings(
   const condById = new Map(tileConds.map((c) => [c.id, c]));
 
   for (const s of shapes || []) {
-    if (s.measure_role !== "floor_area") continue;
+    const isWall = s.measure_role === "surface_area";
+    if (s.measure_role !== "floor_area" && !isWall) continue;
     const cond = condById.get(s.condition_id || "");
     if (!cond || !cond.tile_setup) continue;
-    if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) continue;
+    // A wall is an open run (2+ verts is a real straight wall); a floor
+    // still needs 3 to bound any area at all — mirrors computeTileTakeoff's
+    // own admission gate (tileTakeoff.js).
+    if (!Array.isArray(s.verts_norm) || s.verts_norm.length < (isWall ? 2 : 3)) continue;
 
     const finish_tag = cond.finish_tag || "";
     const sheet_id = s.sheet_id || "";
@@ -131,6 +135,16 @@ export function tileWarnings(
         detail: "This room's tile layout crosses a sheet seam — stitching across sheets needs a human seam decision.",
       });
     }
+
+    // Slice A: a wall's cells live in a strip-local elevation frame
+    // (summarizeWallShape's unwrapped L×H run, tileTakeoff.js), not the
+    // closed floor ring the rules below solve against — band/solve/
+    // per-cell checks all assume a floor ring, so a wall stops here with
+    // whatever generic warnings above (unscaled/layout/seam_crossing)
+    // already applied. Elevation-specific QA is Slice B; this deliberately
+    // admits and audits what's generically true rather than a floor-only
+    // `continue` that drops the wall from the report entirely.
+    if (isWall) continue;
 
     const ring_ft: [number, number][] = s.verts_norm.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
     const holes_ft: [number, number][][] = (s.verts_norm_holes || []).map((hole) =>
