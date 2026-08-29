@@ -68,12 +68,19 @@ test("wallEffectiveTileSetup: balances the U origin for L=17.5 — end cuts with
   // of a real U cut. Filter against faceW (not the nominal 12in) to isolate
   // a genuine additional trim.
   const faceW = 12 - 0.125;
-  const endCuts = classified
-    .filter((c) => (c.cls === "cut" || c.cls === "corner") && c.cut)
-    .map((c) => c.cut!.w_in)
-    .filter((w) => w > 0.1 && w < faceW - 0.05); // an actual U-direction end cut, not the installed-face baseline
-  assert.ok(endCuts.length > 0, "a 17.5ft run at a 12in pitch must leave at least one U-direction end cut");
-  const minW = Math.min(...endCuts), maxW = Math.max(...endCuts);
+  const endCutCells = classified.filter(
+    (c) => (c.cls === "cut" || c.cls === "corner") && c.cut && c.cut.w_in > 0.1 && c.cut.w_in < faceW - 0.05,
+  ); // an actual U-direction end cut, not the installed-face baseline
+  assert.ok(endCutCells.length > 0, "a 17.5ft run at a 12in pitch must leave at least one U-direction end cut");
+  // A degenerate "full tile hard against one end, sliver on the other" fit
+  // (e.g. ox=0) puts EVERY end cut at the SAME x position — only one end is
+  // cut at all. Requiring two distinct cx groups proves both ends actually
+  // carry a cut, not just that the (trivially single-valued) width spread
+  // happens to be small.
+  const cxGroups = new Set(endCutCells.map((c) => Math.round(c.quad.cx * 1e6)));
+  assert.ok(cxGroups.size >= 2, "both ends must carry a cut — a full tile hard against one end is the failure mode");
+  const widths = endCutCells.map((c) => c.cut!.w_in);
+  const minW = Math.min(...widths), maxW = Math.max(...widths);
   assert.ok(maxW - minW < cfgW, `end cuts should be balanced within a tile width, got min=${minW} max=${maxW}`);
 });
 

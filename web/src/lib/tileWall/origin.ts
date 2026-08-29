@@ -92,12 +92,17 @@ export function wallEffectiveTileSetup(args: {
 
   const cfg = tileConfig(tile_setup);
   const pitchW = (cfg.w_in + cfg.joint_in) / 12; // ft
-  const L = strip_ring.reduce((m, [x]) => Math.max(m, x), 0);
+  // wallStripRing(L,H) always starts at x=0, but this loop tolerates any
+  // ring shape (mirrors optimize.ts's own xCandidates), so minX/maxX are
+  // read from the ring rather than assumed — a strip whose U-extent doesn't
+  // start at 0 must still get a correctly-centered candidate.
+  const minX = strip_ring.reduce((m, [x]) => Math.min(m, x), Infinity);
+  const maxX = strip_ring.reduce((m, [x]) => Math.max(m, x), -Infinity);
 
   const uCandidates = dedupe([
     0,
     ...strip_ring.map(([x]) => mod(x, pitchW)),
-    centerOffset(0, L, pitchW),
+    centerOffset(minX, maxX, pitchW),
   ]);
 
   // Objective (center-and-balance, spec §4.4): primary = fewest sub-½-tile
