@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
-import { mintTileSetup } from "../src/lib/tileSetup.ts";
+import { mintTileSetup, assignedSkuId } from "../src/lib/tileSetup.ts";
 import { getPattern } from "../src/lib/tilePatterns/index.ts";
 import { slotKey } from "../src/lib/tilePatterns/slotKey.ts";
 
@@ -61,6 +61,34 @@ test("solveTileLayout: a repeat assignment stamps each quad's skuId per its name
   assert.equal(at(1, 1)?.skuId, "A");
 });
 
+test("solveTileLayout: a partial slot map (the normal case for a UI editor) falls back to the default only for the UNMAPPED cells, not the whole field", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222" },
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  // only "0_0" is mapped; "1_0" (and every other slot in the unit) is absent
+  ts.assignment = { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { quads } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  const at = (i: number, j: number) => quads.find((q) => q.cell?.i === i && q.cell?.j === j);
+  assert.equal(at(0, 0)?.skuId, "B", "mapped slot wins");
+  assert.equal(at(1, 0)?.skuId, "A", "unmapped slot falls back to the default primary");
+});
+
+test("assignedSkuId: cell absent (a generator with no cell) resolves to the default primary directly", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222" },
+  ];
+  ts.assignment = { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "B" } };
+  assert.equal(assignedSkuId(ts, undefined), "A");
+  assert.equal(assignedSkuId(ts, null), "A");
+});
+
 test("solveTileLayout: a slot pointing at an id no longer in skus falls back to the default primary, never the dangling id or a placeholder color", () => {
   const ts = mintTileSetup();
   ts.skus = [{ id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" }];
@@ -89,22 +117,27 @@ test("solveTileLayout: absent assignment leaves every quad's skuId at today's pr
 
 // ── offset.ts floored-mod rowShift fix (carried Task-4 review finding) ──
 
-test("brick_50: a negative-j row's floored-mod rowShift matches its positive-row phase-equivalent, so shared cx keeps the same cell.i (and thus slotKey)", () => {
-  const g = getPattern("brick_50");
-  const bounds = { minX: -10, minY: -10, maxX: 10, maxY: 10 };
-  const quads = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
-  const unit = { w: 2, h: 2 }; // n=2 for brick_50 (1/0.5): j=-1 and j=1 are the same phase
-  const rowNeg = quads.filter((q) => q.cell?.j === -1);
-  const rowPos = quads.filter((q) => q.cell?.j === 1);
-  assert.ok(rowNeg.length > 0 && rowPos.length > 0);
-  const posByCx = new Map(rowPos.map((q) => [Math.round(q.cx * 1e6), q]));
-  let matched = 0;
-  for (const q of rowNeg) {
-    const twin = posByCx.get(Math.round(q.cx * 1e6));
-    if (!twin) continue;
-    matched++;
-    assert.equal(q.cell!.i, twin.cell!.i, `same cx=${q.cx} must share cell.i across phase-equal rows j=-1,j=1`);
-    assert.equal(slotKey(q.cell!, unit), slotKey(twin.cell!, unit));
-  }
-  assert.ok(matched > 0, "expected overlapping cx between row j=-1 and row j=1");
-});
+// n = round(1/fraction): brick_50 (fraction 0.5) has n=2, so j=-1 and j=1 are
+// the same phase; brick_33 (fraction 1/3) has n=3, so j=-1 and j=2 are.
+// Commit message claims the fix for both offset patterns — cover both.
+for (const [pattern, negJ, posJ, n] of [["brick_50", -1, 1, 2], ["brick_33", -1, 2, 3]] as const) {
+  test(`${pattern}: a negative-j row's floored-mod rowShift matches its positive-row phase-equivalent, so shared cx keeps the same cell.i (and thus slotKey)`, () => {
+    const g = getPattern(pattern);
+    const bounds = { minX: -10, minY: -10, maxX: 10, maxY: 10 };
+    const quads = g.generate({ bounds, w_ft: 1, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
+    const unit = { w: n, h: n };
+    const rowNeg = quads.filter((q) => q.cell?.j === negJ);
+    const rowPos = quads.filter((q) => q.cell?.j === posJ);
+    assert.ok(rowNeg.length > 0 && rowPos.length > 0);
+    const posByCx = new Map(rowPos.map((q) => [Math.round(q.cx * 1e6), q]));
+    let matched = 0;
+    for (const q of rowNeg) {
+      const twin = posByCx.get(Math.round(q.cx * 1e6));
+      if (!twin) continue;
+      matched++;
+      assert.equal(q.cell!.i, twin.cell!.i, `same cx=${q.cx} must share cell.i across phase-equal rows j=${negJ},j=${posJ}`);
+      assert.equal(slotKey(q.cell!, unit), slotKey(twin.cell!, unit));
+    }
+    assert.ok(matched > 0, `expected overlapping cx between row j=${negJ} and row j=${posJ}`);
+  });
+}
