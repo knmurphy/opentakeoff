@@ -84,6 +84,83 @@ test("wallEffectiveTileSetup: balances the U origin for L=17.5 — end cuts with
   assert.ok(maxW - minW < cfgW, `end cuts should be balanced within a tile width, got min=${minW} max=${maxW}`);
 });
 
+// Center-and-balance (§4.4), tie-break coverage: at L=17.5 (the test above)
+// ox=0 leaves a genuine sub-½-tile SLIVER, so the PRIMARY sliver-count
+// objective alone already picks a different candidate — the (broken)
+// imbalance TIE-BREAK is never actually consulted there. L=17 is chosen
+// specifically because BOTH ox=0 and the centered candidate clear the
+// sub-½-tile bar (end-cut widths ≈9.9in / ≈10.9in, both ≫ 6in), so slivers
+// ties at 0 for every candidate and the tie-break is the sole deciding
+// factor — exactly the path the degenerate `max(widths) - min(widths)`
+// scoring got wrong: a one-sided fit (every end cut on ONE side, a full
+// tile hard against the other — the forbidden layout) produces N IDENTICAL
+// widths, so flat max−min scores it as a perfect (0) balance, indistinguishable
+// from — and, on floating-point ties, beating — a genuinely two-sided fit.
+test("wallEffectiveTileSetup: L=17 — tie-break (not the sliver objective) must reject a one-sided fit for a genuinely two-sided balanced one", () => {
+  const strip = wallStripRing(17, 8);
+  const eff = wallEffectiveTileSetup({ tile_setup: base, strip_ring: strip });
+  const { classified } = solveTileLayout({ tile_setup: eff, ring_ft: strip });
+  const faceW = 12 - 0.125; // installedFace(12,12,0.125).w — see the L=17.5 test's note
+  const endCutCells = classified.filter(
+    (c) => (c.cls === "cut" || c.cls === "corner") && c.cut && c.cut.w_in > 0.1 && c.cut.w_in < faceW - 0.05,
+  );
+  assert.ok(endCutCells.length > 0, "a 17ft run at a 12in pitch must leave at least one U-direction end cut");
+
+  const cxGroups = new Set(endCutCells.map((c) => Math.round(c.quad.cx * 1e6)));
+  assert.ok(cxGroups.size >= 2, "both ends must carry a cut — a full tile hard against one end is the failure mode");
+  const widths = endCutCells.map((c) => c.cut!.w_in);
+  const minW = Math.min(...widths), maxW = Math.max(...widths);
+  assert.ok(maxW - minW < 0.1, `end cuts should be nearly equal (two-sided balance), got min=${minW} max=${maxW}`);
+
+  // Sanity: confirm ox=0 really IS the one-sided degenerate fit this test
+  // guards against (single cx group — every end cut on one side) — and that
+  // it has NO sub-½-tile sliver, so slivers ties at 0 and only the tie-break
+  // can be why the chosen origin differs from it.
+  const zero = solveTileLayout({ tile_setup: { ...base, origin: [0, 0] }, ring_ft: strip }).classified;
+  const zeroEndCuts = zero.filter(
+    (c) => (c.cls === "cut" || c.cls === "corner") && c.cut && c.cut.w_in > 0.1 && c.cut.w_in < faceW - 0.05,
+  );
+  const zeroCxGroups = new Set(zeroEndCuts.map((c) => Math.round(c.quad.cx * 1e6)));
+  assert.equal(zeroCxGroups.size, 1, "sanity: ox=0 is the one-sided fit — every end cut on a single side");
+  assert.ok(
+    zeroEndCuts.every((c) => c.cut!.w_in >= 6),
+    "sanity: ox=0's end cuts must clear the sub-½-tile sliver bar (6in) so the primary objective ties",
+  );
+  assert.notEqual(eff.origin[0], 0, "the chosen origin must not be the degenerate one-sided ox=0 fit");
+
+  // Explicit objective claim, stated structurally rather than by
+  // re-deriving origin.ts's internal score (a test that reimplements the
+  // implementation's exact formula would pass even if both were wrong): a
+  // cut piece belongs to the LOW end if its nominal footprint overhangs
+  // past minX, or the HIGH end if it overhangs past maxX. For a genuinely
+  // balanced two-sided fit, BOTH ends must carry real material (both
+  // totals > 0); for the one-sided ox=0 fit, all the cut material is on a
+  // single end (the other total is exactly 0) — that asymmetry is the
+  // objective this tie-break exists to reject.
+  function uEndTotals(cls: typeof classified, minX: number, maxX: number): { low: number; high: number } {
+    let low = 0, high = 0;
+    for (const c of cls) {
+      if ((c.cls !== "cut" && c.cls !== "corner") || !c.cut) continue;
+      const w = c.cut.w_in;
+      if (!(w > 0.1 && w < faceW - 0.05)) continue;
+      const halfW = c.quad.w / 2;
+      if (c.quad.cx - halfW < minX) low += w;
+      if (c.quad.cx + halfW > maxX) high += w;
+    }
+    return { low, high };
+  }
+  const effTotals = uEndTotals(classified, 0, 17);
+  const zeroTotals = uEndTotals(zero, 0, 17);
+  assert.ok(
+    effTotals.low > 0 && effTotals.high > 0,
+    `chosen origin must carry real cut material on BOTH ends, got low=${effTotals.low} high=${effTotals.high}`,
+  );
+  assert.ok(
+    (zeroTotals.low === 0) !== (zeroTotals.high === 0),
+    `sanity: ox=0 must be one-sided (exactly one end carries all the cut material), got low=${zeroTotals.low} high=${zeroTotals.high}`,
+  );
+});
+
 // §11.3: origin[1]=0 seats a FULL course at the floor datum for grid
 // (tilePatterns/grid.ts's startJ = floor((minY-oy)/cell.h) puts the row
 // boundary at oy=0, so the row immediately above the floor is cell.j===0)

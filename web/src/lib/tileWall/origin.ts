@@ -14,6 +14,11 @@ import type { TileSetup } from "../tileSetup.ts";
 import { tileConfig } from "../tileSetup.ts";
 import { solveTileLayout } from "../tileSolve.ts";
 import { installedFace } from "../tilePitch.ts";
+import type { Classified } from "../tileGeometry/classify.ts";
+
+// Mirrors optimize.ts's own edge epsilon for the "does this cell's nominal
+// footprint touch the strip's end" position check below.
+const EDGE_EPS_FT = 1e-3;
 
 function mod(v: number, p: number): number {
   if (!(p > 0)) return 0;
@@ -45,28 +50,60 @@ function centerOffset(min: number, max: number, pitch: number): number {
   return mod(min - extra / 2, pitch);
 }
 
-// U-direction end-cut widths from a classified layout: a cell counts only
-// when it's actually cut ALONG U — a cell that's full-width-but-cut-in-height
-// (the top course, since V is pinned and any height overflow lands there) is
-// a vertical cut, not a U end cut, and must not pollute this axis's balance
-// search. classifyLayout (tileGeometry/classify.ts) reports every cut/corner
-// cell's kept w_in against the INSTALLED FACE width (nominal minus the
-// joint's own inset, tilePitch.ts's installedFace) even on an axis the room
-// boundary never actually clipped — that baseline face width is not itself
-// evidence of a U cut, so the threshold below compares against faceW_in
-// (not the nominal tile width) to isolate a genuine additional trim.
-function endCutWidths(
-  classified: { cls: string; cut?: { w_in: number } }[],
+// U-direction end-cut widths from a classified layout, partitioned by which
+// END of the strip the piece's NOMINAL footprint overhangs (low-U past
+// minX vs high-U past maxX) — adopts optimize.ts's axisImbalance's INTENT
+// (optimize.ts:66-89: partition cut widths by end, score
+// |lowSum − highSum|) but NOT its exact mechanism. axisImbalance tests
+// edge COINCIDENCE (`Math.abs(cx ± halfW − lo/hi) < EDGE_EPS_FT`), which
+// looks right but is empirically vacuous for a genuine cut: a cut cell's
+// nominal (untrimmed) edge sits past the boundary by EXACTLY the trimmed
+// amount (kept = tileW − overhang), so that distance only clears the 1e-3ft
+// epsilon when the trim itself is under ~0.012in — i.e. essentially never
+// for a real end cut. (Confirmed empirically against both this module's
+// own L=17 wall case and the floor's own existing "reduces sub-½ slivers"
+// fixture — the floor's `balance` term is likely always 0 too, which its
+// test suite doesn't happen to exercise; that's a floor-code question for
+// someone else, out of scope here since optimize.ts stays untouched.)
+// This instead tests overhang DIRECTION (does the nominal box extend past
+// minX on the low side, or past maxX on the high side?), which correctly
+// fires for any real cut of any size and reduces to the same "is it near
+// the boundary" idea for the degenerate near-zero-cut case.
+//
+// A cell counts only when it's actually cut ALONG U — a cell that's
+// full-width-but-cut-in-height (the top course, since V is pinned and any
+// height overflow lands there) is a vertical cut, not a U end cut, and must
+// not pollute this axis's balance search. classifyLayout
+// (tileGeometry/classify.ts) reports every cut/corner cell's kept w_in
+// against the INSTALLED FACE width (nominal minus the joint's own inset,
+// tilePitch.ts's installedFace) even on an axis the room boundary never
+// actually clipped — that baseline face width is not itself evidence of a U
+// cut, so the filter below compares against faceW_in (not the nominal tile
+// width) to isolate a genuine additional trim before it's ever attributed
+// to an end. (The filter's 0.05in margin is comfortably tighter than the
+// overhang epsilon below, so a genuine cut is never missed by one check but
+// caught by the other.)
+function uEndSums(
+  classified: Classified[],
   faceW_in: number,
-): number[] {
-  const out: number[] = [];
+  minX: number,
+  maxX: number,
+): { lowSum: number; highSum: number; widths: number[] } {
+  let lowSum = 0;
+  let highSum = 0;
+  const widths: number[] = [];
   for (const c of classified) {
     if (c.cls !== "cut" && c.cls !== "corner") continue;
     if (!c.cut) continue;
     const w = c.cut.w_in;
-    if (w > 0.1 && w < faceW_in - 0.05) out.push(w);
+    if (!(w > 0.1 && w < faceW_in - 0.05)) continue; // not a genuine U cut
+    widths.push(w);
+    const q = c.quad;
+    const halfW = q.w / 2;
+    if (q.cx - halfW < minX - EDGE_EPS_FT) lowSum += w;
+    if (q.cx + halfW > maxX + EDGE_EPS_FT) highSum += w;
   }
-  return out;
+  return { lowSum, highSum, widths };
 }
 
 // The wall counterpart of tileGeometry/optimize.ts's effectiveTileSetup:
@@ -106,10 +143,12 @@ export function wallEffectiveTileSetup(args: {
   ]);
 
   // Objective (center-and-balance, spec §4.4): primary = fewest sub-½-tile
-  // end cuts; tie-break = most-balanced end cuts (min |maxCutW − minCutW|).
-  // Deliberately NOT min-total-cut-area — that routinely produces one thin
-  // sliver on one end and a wide clean piece on the other (mirrors
-  // optimize.ts's own rationale for the floor).
+  // end cuts; tie-break = most-balanced opposing-end cuts (min
+  // |lowSum − highSum|, see uEndSums above for why this adapts rather than
+  // literally mirrors optimize.ts's axisImbalance). Deliberately NOT
+  // min-total-cut-area — that routinely produces one thin sliver on one end
+  // and a wide clean piece on the other (mirrors optimize.ts's own
+  // rationale for the floor).
   const faceW_in = installedFace(cfg.w_in, cfg.h_in, cfg.joint_in).w;
   let best: { ox: number; slivers: number; imbalance: number } | null = null;
   for (const ox of uCandidates) {
@@ -117,9 +156,9 @@ export function wallEffectiveTileSetup(args: {
       tile_setup: { ...tile_setup, origin: [ox, 0] },
       ring_ft: strip_ring,
     });
-    const widths = endCutWidths(classified, faceW_in);
+    const { lowSum, highSum, widths } = uEndSums(classified, faceW_in, minX, maxX);
     const slivers = widths.filter((w) => w < cfg.w_in / 2).length;
-    const imbalance = widths.length ? Math.max(...widths) - Math.min(...widths) : 0;
+    const imbalance = Math.abs(lowSum - highSum);
     if (!best || slivers < best.slivers || (slivers === best.slivers && imbalance < best.imbalance)) {
       best = { ox, slivers, imbalance };
     }
