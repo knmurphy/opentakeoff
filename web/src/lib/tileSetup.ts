@@ -3,6 +3,7 @@
 // A condition is trade-agnostic; tile is an object ON the condition, not a
 // type. Runtime guard, no load-time sanitizer — corrupt payloads read as
 // opted OUT (the hasRollSetup posture).
+import { slotKey, type TileCell } from "./tilePatterns/slotKey.ts";
 
 export type TileSku = {
   id: string; name: string; w_in: number; h_in: number;
@@ -12,16 +13,25 @@ export type TileSku = {
 export type TileJoint = { width_in: number };
 export type TilePattern =
   "grid" | "brick_50" | "brick_33" | "diagonal" | "herringbone" | "basketweave";
+// A repeat-unit SKU map over the field lattice: `unit` is the tile of the
+// map in raw cell-index units (matches slotKey.ts's `{i,j}`, floored-mod
+// wrapped), `slots` keys by `slotKey({i,j[,p]}, unit)` → a `skus[].id`.
+// Absent, or a slot missing/pointing at a dead id, resolves to the field's
+// default SKU (assignedSkuId below) — never left dangling.
+export type TileAssignment = { mode: "repeat"; unit: { w: number; h: number }; slots: Record<string, string> };
 export type TileSetup = {
   pattern: TilePattern;
   origin: [number, number];   // FEET, plan space (kept unsuffixed — persisted + in the MCP snapshot config)
   rotation_deg: number;       // DEGREES
   edge_strategy: "balanced" | "start_full";
-  // The field is tiled in the FIRST usable SKU (primaryUsableSku); any
-  // further entries are band accents (tileTakeoff.summarizeShape resolves a
-  // band's own SKU by id). The solve never mixes two SKUs in one field.
+  // The field is tiled in the FIRST usable SKU (primaryUsableSku) by
+  // default; `assignment`, when present, distributes further usable SKUs
+  // across the field per-cell (assignedSkuId below) — any entries beyond
+  // what `assignment` claims are still band accents (tileTakeoff.summarizeShape
+  // resolves a band's own SKU by id).
   skus: TileSku[];
   joint: TileJoint;
+  assignment?: TileAssignment;
   purchase?: {
     breakage_pct?: number;
     attic_pct?: number;
@@ -40,6 +50,30 @@ const usableSku = (s: unknown): boolean => {
 // they can never disagree about which SKU the field is tiled in.
 export function primaryUsableSku(setup: TileSetup): TileSku | undefined {
   return (setup.skus || []).find(usableSku);
+}
+
+// The per-quad SKU resolver: a solved quad's `cell` (slotKey.ts's raw
+// lattice index) plus the condition's `assignment` decide which SKU tiles
+// that ONE quad. This is the sole multi-SKU field resolver — tileSolve.ts
+// calls it once per generated quad, right after generate() and before
+// classifyLayout, to turn the generator's single default skuId into a
+// per-cell one.
+//
+// The default is the EXACT chain the pre-assignment solve always used
+// (tileSolve.ts:55, historically): primaryUsableSku(...)?.id, falling back
+// to the raw first entry, falling back to the literal "sku". Every miss —
+// no assignment, no cell (rotation/plank generators only stamp `cell` when
+// the generator provides one; absence is defensive, not a real path today),
+// an unmapped slot, or a slot naming a SKU no longer in `skus` — resolves
+// to that SAME default, never a dangling id and never a placeholder color.
+export function assignedSkuId(tile_setup: TileSetup, cell?: TileCell | null): string {
+  const fallback = primaryUsableSku(tile_setup)?.id ?? tile_setup.skus?.[0]?.id ?? "sku";
+  const assignment = tile_setup.assignment;
+  if (!assignment || cell == null) return fallback;
+  const id = assignment.slots[slotKey(cell, assignment.unit)];
+  if (!id) return fallback;
+  const sku = (tile_setup.skus || []).find((s) => s.id === id);
+  return sku && usableSku(sku) ? id : fallback;
 }
 
 // A condition is tile iff it carries a tile_setup with at least one usable SKU.

@@ -9,7 +9,7 @@
 // inches for the caller). The unit arithmetic itself lives in tileUnits.ts
 // (inToFt/ftToIn/degToRad) — the single primitive every tile module shares —
 // see plan docs/superpowers/plans/2026-08-26-tile-patterning-m3-m4.md.
-import { tileConfig, primaryUsableSku, type TileConfig, type TileSetup } from "./tileSetup.ts";
+import { tileConfig, primaryUsableSku, assignedSkuId, type TileConfig, type TileSetup } from "./tileSetup.ts";
 import { getPattern, type Bounds, type TileQuad } from "./tilePatterns/index.ts";
 import { classifyLayout, type Classified } from "./tileGeometry/classify.ts";
 import { inToFt } from "./tileUnits.ts";
@@ -57,6 +57,15 @@ export function solveTileLayout(args: {
   const quads = gen
     ? gen.generate({ bounds, w_ft, h_ft, joint_ft, origin: config.origin, rotation_deg: config.rotation_deg, skuId })
     : [];
+
+  // Per-quad SKU resolution (assignment resolver, design §3.2 M3 Task 5):
+  // the generator above always stamps ONE default skuId per quad (it has no
+  // notion of a multi-SKU field); assignedSkuId() then overrides that
+  // per-quad using the condition's tile_setup.assignment and each quad's own
+  // `cell` (slotKey.ts), falling back to that same generator default on any
+  // miss. Mutates the freshly-generated quads in place — safe: this runs
+  // before the caller's layout cache write, and before classifyLayout below.
+  for (const q of quads) q.skuId = assignedSkuId(tile_setup, q.cell);
 
   // classifyLayout boundary: back to inches (cfg.joint_in), deliberately —
   // it emits kept-cut dimensions in inches for downstream consumers.

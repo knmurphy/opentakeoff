@@ -17,7 +17,16 @@ export function offsetGenerator(name: string, fraction: number): PatternGenerato
       const endJ = Math.ceil((bounds.maxY - oy) / cell.h) + 1;
       const out: TileQuad[] = [];
       for (let j = startJ; j <= endJ; j++) {
-        const rowShift = ((j % Math.round(1 / fraction)) * fraction) * cell.w;
+        // Floored mod, not raw `%`: raw `%` keeps JS's sign-of-dividend
+        // behavior, so a negative j got a DIFFERENT rowShift than its
+        // positive same-phase row (e.g. brick_50 j=-1 shifted -0.5 pitch
+        // instead of +0.5 like j=1), which relabeled `cell.i` by a full
+        // cell.w for the same physical tile — a real bug once `cell` feeds
+        // slotKey.ts for multi-SKU assignment (Task 5). Geometry itself is
+        // unaffected (this only renumbers `i`; the emitted cx/cy set for a
+        // given row is byte-identical — see tileSolve.test.ts).
+        const n = Math.round(1 / fraction);
+        const rowShift = (((((j % n) + n) % n)) * fraction) * cell.w;
         const startI = Math.floor((bounds.minX - ox - rowShift) / cell.w) - 1;
         const endI = Math.ceil((bounds.maxX - ox - rowShift) / cell.w) + 1;
         for (let i = startI; i <= endI; i++)
