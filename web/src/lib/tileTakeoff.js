@@ -393,12 +393,63 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
     }
     delete agg.excluded;
     agg.warnings = Array.from(agg.warnings);
-    agg.order = orderTiles({
-      safeCount: agg.counts.safe,
-      sku: primaryUsableSku(agg.tile_setup),
-      breakage_pct: agg.tile_setup.purchase?.breakage_pct,
-      attic_pct: agg.tile_setup.purchase?.attic_pct,
-    });
+    // Multi-SKU purchase (Task 6, docs/superpowers/sdd/2026-08-29-tile-multi-sku-field):
+    // an assignment field paints two-or-more DIFFERENT products into one
+    // condition (design §3.2/Task 5's per-quad `quad.skuId`) — different
+    // SKUs never share a box, so each one purchases as its own order, rolled
+    // up HERE at the condition level. `kept` filters to full|cut|corner (a
+    // hole/out cell is never purchased — tileCalc/tiles.ts's own accumulate
+    // agrees: it skips "out" entirely and never folds "hole" into `safe`),
+    // filtered into a NEW array — `agg.classified` itself is never mutated
+    // (it's deleted a few lines down; With-reuse above already established
+    // this same never-mutate posture). `keptBySku.size <= 1` (no assignment,
+    // or an assignment that happens to resolve every kept cell to the same
+    // SKU) keeps the pre-Task-6 single-order path byte-identical — a
+    // checkerboard/multi-SKU field is opt-in, never a behavior change for an
+    // existing single-SKU condition.
+    const kept = agg.classified.filter((c) => c.cls !== "out" && c.cls !== "hole");
+    const keptBySku = countsBySku(kept);
+    if (keptBySku.size <= 1) {
+      agg.order = orderTiles({
+        safeCount: agg.counts.safe,
+        sku: primaryUsableSku(agg.tile_setup),
+        breakage_pct: agg.tile_setup.purchase?.breakage_pct,
+        attic_pct: agg.tile_setup.purchase?.attic_pct,
+      });
+    } else {
+      // A bucket's id may name a SKU no longer on this condition (stale
+      // assignment after a SKU delete) — fall back to the field's own
+      // primary usable SKU, mirroring assignedSkuId's (tileSetup.ts) own
+      // fallback so a PO line can never aggregate under a phantom/dangling
+      // material. `agg.orderBySku` is the stable shape the report seam
+      // (Task 7) reads: [{ sku_id, safe, boxes, figured, with_margin }],
+      // sorted by sku_id for a deterministic order — the same convention
+      // `agg.band` uses a few lines below (M7 Task 7.2). The scalar
+      // `agg.order` stays present too (every existing reader — TilePanel,
+      // tileReportRows, reportColumns, markedset — keeps reading it), set to
+      // the SUM across every per-SKU order so a multi-SKU condition never
+      // silently drops out of a total/summary that hasn't been taught about
+      // `orderBySku` yet.
+      const skuById = new Map((agg.tile_setup.skus || []).map((s) => [s.id, s]));
+      const perSku = [];
+      for (const [id, counts] of keptBySku) {
+        const sku = skuById.get(id) ?? primaryUsableSku(agg.tile_setup);
+        const order = orderTiles({
+          safeCount: counts.safe,
+          sku,
+          breakage_pct: agg.tile_setup.purchase?.breakage_pct,
+          attic_pct: agg.tile_setup.purchase?.attic_pct,
+        });
+        perSku.push({ sku_id: id, safe: counts.safe, boxes: order.boxes, figured: order.figured, with_margin: order.withMargin });
+      }
+      perSku.sort((a, b) => (a.sku_id < b.sku_id ? -1 : a.sku_id > b.sku_id ? 1 : 0));
+      agg.orderBySku = perSku;
+      agg.order = {
+        figured: perSku.reduce((sum, o) => sum + o.figured, 0),
+        withMargin: perSku.reduce((sum, o) => sum + o.with_margin, 0),
+        boxes: perSku.reduce((sum, o) => sum + o.boxes, 0),
+      };
+    }
     agg.grout = tileGroutBags({ tile_setup: agg.tile_setup, keptArea_sf: agg.counts.keptArea_sf });
     // With-reuse (M6, Invariants): figured ONCE per condition, over every
     // contributing shape's classified cells pooled together — never summed

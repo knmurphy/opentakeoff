@@ -1016,3 +1016,119 @@ test("computeTileTakeoff: a per-room tile_layout.origin override moves a herring
     assert.ok(Math.abs(s.cy - b.cy - 1) < EPS, "y shift between the two runs must be exactly 1");
   }
 });
+
+// ── Task 6 (2026-08-29 tile-multi-sku-field): multi-SKU purchase ───────────
+// A checkerboard assignment paints two DIFFERENT products into one field —
+// they can't share a box, so each SKU purchases as its OWN order, rolled up
+// at the condition level (byCond finalize). A,B are IDENTICAL size (12x12in,
+// 0 joint) so any figured difference below is the resolver's per_box split
+// doing the work, never a byproduct of geometry — mirrors the same
+// identical-size-SKU discipline tileSolve.test.ts's assignment tests use.
+function makeCheckerboardCondition() {
+  const tile_setup = mintTileSetup();
+  tile_setup.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111", per_box: 8 },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222", per_box: 3 },
+  ];
+  tile_setup.joint.width_in = 0;
+  tile_setup.origin = [0, 0];
+  tile_setup.assignment = {
+    mode: "repeat",
+    unit: { w: 2, h: 2 },
+    slots: { "0_0": "A", "1_0": "B", "0_1": "B", "1_1": "A" },
+  };
+  return { id: "condCheckerboard", finish_tag: "CT-CB", multiplier: 1, tile_setup };
+}
+
+test("computeTileTakeoff: a 2x2 checkerboard field figures a SEPARATE order per SKU, summed into the scalar agg.order", () => {
+  const cond = makeCheckerboardCondition();
+  const shape = makeShape(cond.id); // 4x4ft room, 12x12in tile, 0 joint => 16 full, 0 cut
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal(agg.counts.full, 16);
+  assert.equal(agg.counts.safe, 16);
+
+  assert.ok(Array.isArray(agg.orderBySku), "expected a per-SKU order breakdown");
+  assert.equal(agg.orderBySku.length, 2, "the 2x2 unit splits the 4x4 grid evenly across A and B");
+  const byId = Object.fromEntries(agg.orderBySku.map((o) => [o.sku_id, o]));
+  assert.ok(byId.A && byId.B, "expected an order entry for both A and B");
+  assert.equal(byId.A.safe, 8);
+  assert.equal(byId.B.safe, 8);
+
+  const expectedA = orderTiles({ safeCount: 8, sku: cond.tile_setup.skus[0] });
+  const expectedB = orderTiles({ safeCount: 8, sku: cond.tile_setup.skus[1] });
+  assert.equal(byId.A.figured, expectedA.figured);
+  assert.equal(byId.A.with_margin, expectedA.withMargin);
+  assert.equal(byId.A.boxes, expectedA.boxes);
+  assert.equal(byId.B.figured, expectedB.figured);
+  assert.equal(byId.B.with_margin, expectedB.withMargin);
+  assert.equal(byId.B.boxes, expectedB.boxes);
+  assert.notEqual(byId.A.boxes, byId.B.boxes, "A's per_box=8 and B's per_box=3 must NOT round to the same whole-box count");
+
+  // Whole boxes are never bought fractionally across two different
+  // products — the scalar `agg.order` must equal the SUM of the two
+  // separately-rounded per-SKU orders, not a re-round of the pooled Safe
+  // count against either SKU alone.
+  assert.equal(agg.order.boxes, byId.A.boxes + byId.B.boxes);
+  assert.equal(agg.order.figured, byId.A.figured + byId.B.figured);
+  assert.equal(agg.order.withMargin, expectedA.withMargin + expectedB.withMargin);
+
+  // Excludes the wrong answer, not just describes the right one: pooling
+  // all 16 safe tiles against a SINGLE SKU's per_box (rather than rounding
+  // each SKU's own 8 separately) under-orders — boxes=5 (2+3) here, but
+  // pooled-against-A would be ceil(ceil(16*1.05)/8)=3 and pooled-against-B
+  // would be ceil(17/3)=6. Neither equals the correct per-SKU sum.
+  assert.notEqual(
+    agg.order.boxes,
+    orderTiles({ safeCount: 16, sku: cond.tile_setup.skus[0] }).boxes,
+    "16 tiles pooled against ONE SKU's per_box must NOT match the correct per-SKU-summed figure",
+  );
+  assert.notEqual(
+    agg.order.boxes,
+    orderTiles({ safeCount: 16, sku: cond.tile_setup.skus[1] }).boxes,
+    "16 tiles pooled against the OTHER SKU's per_box must NOT match the correct per-SKU-summed figure either",
+  );
+});
+
+test("computeTileTakeoff: an assignment that resolves every KEPT cell to one SKU still figures a single order, byte-identical to no assignment at all", () => {
+  const condAssigned = makeCheckerboardCondition();
+  condAssigned.id = "condSingleColor";
+  // A 1x1 unit collapses every cell to the SAME slot key ("0_0") — every
+  // quad in the room resolves to "A" even though "B" is a real, usable SKU
+  // on this condition and the resolver machinery (assignedSkuId) runs on
+  // every quad exactly like the checkerboard test above.
+  condAssigned.tile_setup.assignment = { mode: "repeat", unit: { w: 1, h: 1 }, slots: { "0_0": "A" } };
+
+  const condPlain = makeCheckerboardCondition();
+  condPlain.id = "condSingleColorPlain";
+  delete condPlain.tile_setup.assignment; // no assignment at all: same fallback chain lands on "A" (primaryUsableSku)
+
+  const shapeAssigned = makeShape(condAssigned.id);
+  const shapePlain = { ...makeShape(condPlain.id), id: "shapePlain" };
+
+  const aggAssigned = computeTileTakeoff([condAssigned], [shapeAssigned], dimsFor, uppFor).byCond.get(condAssigned.id);
+  const aggPlain = computeTileTakeoff([condPlain], [shapePlain], dimsFor, uppFor).byCond.get(condPlain.id);
+  assert.ok(aggAssigned && aggPlain, "expected both byCond summaries");
+
+  assert.equal("orderBySku" in aggAssigned, false, "a single effective SKU never emits a per-SKU breakdown");
+  assert.deepEqual(aggAssigned.order, aggPlain.order, "one effective SKU (via assignment) must figure byte-identical to no assignment at all");
+});
+
+test("computeTileTakeoff: a single-SKU condition (no assignment) figures one order with no orderBySku key (Task 6 regression guard)", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal("orderBySku" in agg, false);
+  const expected = orderTiles({
+    safeCount: agg.counts.safe,
+    sku: cond.tile_setup.skus[0],
+    breakage_pct: cond.tile_setup.purchase?.breakage_pct,
+    attic_pct: cond.tile_setup.purchase?.attic_pct,
+  });
+  assert.deepEqual(agg.order, expected);
+});

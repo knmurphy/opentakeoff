@@ -69,9 +69,32 @@ export type TileShapeSummary = {
   joints: JointTally;
 };
 
+// One SKU's own purchase line within a multi-SKU condition (Task 6,
+// docs/superpowers/sdd/2026-08-29-tile-multi-sku-field): a checkerboard/
+// assignment field paints two-or-more DIFFERENT products into one
+// condition, and different SKUs never share a box, so each figures its OWN
+// order — `safe` is that SKU's own kept-cell count (countsBySku's bucket),
+// `boxes`/`figured`/`with_margin` are that SKU's own orderTiles() result.
+export type TileConditionSkuOrder = {
+  sku_id: string;
+  safe: number;
+  boxes: number;
+  figured: number;
+  with_margin: number;
+};
+
 // One condition's aggregated tile summary — the byCond value. Counts are
 // summed across the condition's shapes; order/grout/reuse are figured ONCE
-// from those totals (never summed per shape).
+// from those totals (never summed per shape). `orderBySku` is present only
+// when the condition's kept cells (full|cut|corner) span 2+ distinct SKUs
+// (Task 6) — absent for the overwhelmingly common single-SKU field, in
+// which case `order` is byte-identical to the pre-Task-6 figuring. When
+// `orderBySku` IS present, the scalar `order.figured/boxes/withMargin` are
+// the SUM across every `orderBySku` entry — `order.perBox`/`order.dyeLots`
+// have no single coherent value across two different products' box sizes,
+// so they are NOT set on the multi-SKU scalar `order` (read `orderBySku`
+// for a real per-SKU perBox via each entry's own SKU, or the boxes/figured/
+// with_margin fields directly).
 export type TileConditionSummary = {
   tile_setup: TileSetup;
   counts: TileCounts;
@@ -79,6 +102,7 @@ export type TileConditionSummary = {
   warnings: string[];
   shapeIds: string[];
   order: TileOrder;
+  orderBySku?: TileConditionSkuOrder[];
   grout: TileGroutResult;
   reuse?: ReusePlanResult;
   reuseOrder?: TileOrder;
