@@ -108,6 +108,17 @@ test("wallElevationLayout: RESET with TWO folds — three sub-strips partition i
   assert.ok(band1.length > 0 && band2.length > 0 && band3.length > 0, "all three sub-strips contributed tiles");
   assert.equal(band1.length + band2.length + band3.length, elev.tiles.length, "every tile falls in exactly one band — no strip landed at the wrong offset");
 
+  // Exact per-band CARDINALITY, not just non-empty + a total that sums right:
+  // a per-tile mis-offset that keeps the overall total correct but moves one
+  // tile across a band boundary (e.g. a row-3 tile landing at x=6 instead of
+  // x=5) would still pass both assertions above while silently scrambling
+  // the distribution. Each sub-strip is an exact multiple of the 1ft (0-joint)
+  // tile pitch at H=8ft, so the field tiles it with zero cut waste: 6/5/7
+  // COLUMNS (the sub-strip widths in ft) x 8 COURSES (H_ft / 1ft) = 48/40/56.
+  assert.equal(band1.length, 48, "band1: 6ft sub-strip x 8 courses of 1ft tile = 48");
+  assert.equal(band2.length, 40, "band2: 5ft sub-strip x 8 courses of 1ft tile = 40");
+  assert.equal(band3.length, 56, "band3: 7ft sub-strip x 8 courses of 1ft tile = 56");
+
   // Both fold lines sit at the TRUE segment boundaries, not just the first.
   assert.equal(elev.folds.length, 2);
   const xs = elev.folds.map((f) => f.x).sort((a, b) => a - b);

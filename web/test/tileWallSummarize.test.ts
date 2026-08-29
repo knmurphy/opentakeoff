@@ -145,6 +145,32 @@ test("summarizeWallShape: wall order applies the 0.10 fraction default breakage 
   assert.equal(summary.order.withMargin, expectedWithMargin, "wall order must apply 10% breakage, not the floor's 5%");
 });
 
+test("summarizeWallShape: a corrupt endpoint_exposed longer than 2 elements is clamped to the same end-trim as the real 2-tuple", () => {
+  const ts = make12x12Setup();
+  ts.wall_edge_finish = "profile";
+  const baseShape = { verts_norm: [[ft(0), ft(0)], [ft(10), ft(0)]] as [number, number][], face_side: "left" as const };
+  const twoEnds = { ...baseShape, endpoint_exposed: [true, true] as [boolean, boolean] };
+  // Simulates corrupt/imported data (MCP import_takeoff, a hand-edited
+  // project file) carrying a 3rd element past the declared [boolean,
+  // boolean] tuple -- `as unknown as` bypasses only the TEST's own type
+  // check, standing in for data that never went through TS at all.
+  const threeEnds = { ...baseShape, endpoint_exposed: [true, true, true] as unknown as [boolean, boolean] };
+
+  const a = summarizeWallShape(ts, twoEnds, dims, upp, 8);
+  const b = summarizeWallShape(ts, threeEnds, dims, upp, 8);
+  assert.notEqual((a as { ok?: false }).ok, false);
+  assert.notEqual((b as { ok?: false }).ok, false);
+  const summaryA = a as Exclude<typeof a, { ok: false }>;
+  const summaryB = b as Exclude<typeof b, { ok: false }>;
+
+  // Both ends exposed on a straight (no-fold) run => exactly 2 "wall_end"
+  // byKind entries either way -- the clamp means the 3rd truthy element
+  // never contributes a 3rd entry.
+  assert.equal(summaryA.trim.byKind.length, 2);
+  assert.equal(summaryB.trim.byKind.length, 2, "a 3-element endpoint_exposed must still only count 2 ends");
+  assert.deepEqual(summaryB.trim.byKind, summaryA.trim.byKind, "clamped 3-element array produces the SAME end-trim as the real 2-tuple");
+});
+
 test("summarizeWallShape: an explicit tile_setup.purchase.breakage_pct overrides the 0.10 wall default", () => {
   const ts = make12x12Setup();
   ts.purchase = { breakage_pct: 0.25 };

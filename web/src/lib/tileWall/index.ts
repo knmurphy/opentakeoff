@@ -182,8 +182,12 @@ export function summarizeWallShape(
   // and take the WHOLE shared takeoff loop down with it, exactly the failure
   // mode REJECT-BEFORE-LOOP exists to prevent. Same "corrupt payload reads
   // as the safe default" posture as tileSetup.ts's own runtime guards.
+  // `.slice(0, 2)`: a run only has two ends -- a corrupt/imported array
+  // longer than 2 would otherwise have wallCorners' `for...of` iterate every
+  // extra element and over-count wall_end trim; a shorter-than-2 array is
+  // left as-is (a missing index reads as falsy/not-exposed, same as today).
   const endpoint_exposed: [boolean, boolean] = Array.isArray(wallShape.endpoint_exposed)
-    ? wallShape.endpoint_exposed
+    ? (wallShape.endpoint_exposed.slice(0, 2) as [boolean, boolean])
     : [false, false];
 
   // `subStrips` is non-null ONLY in reset mode — it holds the raw, per-
