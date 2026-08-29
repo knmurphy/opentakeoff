@@ -20,6 +20,7 @@ import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 import { fieldRingForBand, ringCornerCount } from "./tileEdges/band.ts";
 import { inToFt } from "./tileUnits.ts";
+import { summarizeWallShape } from "./tileWall/index.ts";
 
 export { hasTileSetup, reusePlanForCondition };
 
@@ -308,10 +309,16 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
   };
 
   for (const s of shapes || []) {
-    if (s.measure_role !== "floor_area") continue;
+    // Admits both a floor (closed room ring) and a wall (open run, unwrapped
+    // to an L×H strip by summarizeWallShape below) — the ONLY two shape
+    // roles this loop figures.
+    if (s.measure_role !== "floor_area" && s.measure_role !== "surface_area") continue;
     const cond = condById.get(s.condition_id);
     if (!cond) continue;
-    if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) {
+    const isWall = s.measure_role === "surface_area";
+    // A wall is an OPEN run, not a closed ring — 2 verts is a real (straight)
+    // wall; a floor still needs 3 to bound any area at all.
+    if (!Array.isArray(s.verts_norm) || s.verts_norm.length < (isWall ? 2 : 3)) {
       aggFor(cond).excluded.degenerate++;
       continue;
     }
@@ -325,17 +332,43 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
       continue;
     }
 
+    // Wall height resolution mirrors shapeMetrics.js:25-27 exactly: an
+    // explicit height_override wins outright (even 0); otherwise the
+    // shape's own drawn height falls back to the condition default. Not
+    // meaningful for a floor -- stays null there.
+    const resolvedHeight_ft = isWall
+      ? (s.height_override === true ? Number(s.height_ft) || 0 : Number(s.height_ft) || Number(cond.height_ft) || 0)
+      : null;
+
     let summary;
     const sig = cache
       ? setupSigById.get(cond.id) +
         "\u0000" + upp + "\u0000" + dims.w + "\u0000" + dims.h +
         "\u0000" + JSON.stringify(s.verts_norm) +
         "\u0000" + JSON.stringify(s.verts_norm_holes || null) +
-        "\u0000" + JSON.stringify(s.tile_layout || null)
+        "\u0000" + JSON.stringify(s.tile_layout || null) +
+        "\u0000" + s.measure_role +
+        "\u0000" + (isWall ? resolvedHeight_ft : "") +
+        "\u0000" + (s.height_override === true ? 1 : 0) +
+        "\u0000" + (s.face_side || "") +
+        "\u0000" + JSON.stringify(s.endpoint_exposed || null) +
+        "\u0000" + JSON.stringify(s.wall_corner_overrides || null)
       : null;
     const cached = cache ? cache.get(s.id) : null;
     if (cached && cached.sig === sig) {
       summary = cached.summary;
+    } else if (isWall) {
+      // REJECT-BEFORE-LOOP: an unwrappable run (reversal/degenerate) comes
+      // back as { ok:false } -- exclude and move on, exactly like the
+      // degenerate-ring guard above. A null/partial summary must never
+      // reach the shared aggregation below.
+      const wallResult = summarizeWallShape(cond.tile_setup, s, dims, upp, resolvedHeight_ft);
+      if (wallResult.ok === false) {
+        aggFor(cond).excluded.degenerate++;
+        continue;
+      }
+      summary = wallResult;
+      if (cache) cache.set(s.id, { sig, summary });
     } else {
       const ring_ft = ringFt(s.verts_norm, dims, upp);
       const holes_ft = (s.verts_norm_holes || []).map((ring) => ringFt(ring, dims, upp));
@@ -367,7 +400,13 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
         agg.bandBySku.set(id, { tiles: summary.band.tiles, corner: summary.band.corner, lf: summary.band.lf });
       }
     }
-    if (summary.trim.byKind.length) {
+    // GATE-WIDEN: a floor corner only ever exists when both adjacent edges
+    // are already trimmed, so byKind is already non-empty there -- this
+    // widened OR is a no-op for a floor. A WRAP inside-only wall corner
+    // reclassifies field cells (corner_inside) but never pushes a byKind
+    // entry (no edge finish involved at an inside fold), so without this
+    // widened check its joints.total_lf would never surface below.
+    if (summary.trim.byKind.length || summary.trim.corner_inside || summary.trim.corner_outside) {
       agg.hasTrim = true;
       for (const k of summary.trim.byKind) {
         const existing = agg.trimByKind.get(k.exposure);

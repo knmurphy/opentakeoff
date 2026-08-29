@@ -53,7 +53,13 @@ export type TileTrimSummary = {
 };
 
 // One shape's figured tile summary — the byShape value. Raw measured
-// geometry, never multiplied.
+// geometry, never multiplied. `wallStrips`/`extent_sf` (Task 5, 2026-08-29
+// wall-tile-slice-a) are present ONLY for a `surface_area` (wall) shape's
+// summary (summarizeWallShape, tileWall/index.ts) — absent for a
+// `floor_area` shape's, exactly like `band`/`reuse` are absent unless that
+// shape opted in. `wallStrips` is `[layout]` in wrap mode (ONE strip
+// solved); `extent_sf` is the unwrapped run's own L_ft * H_ft, distinct
+// from `counts.keptArea_sf` (the actually-tiled area net of joints/cuts).
 export type TileShapeSummary = {
   counts: TileCounts;
   bySku: Map<string, TileCounts>;
@@ -67,6 +73,8 @@ export type TileShapeSummary = {
   reuse?: ReusePlanResult;
   trim: TileTrimSummary;
   joints: JointTally;
+  wallStrips?: TileLayout[];
+  extent_sf?: number;
 };
 
 // One SKU's own purchase line within a multi-SKU condition (Task 6, spec
