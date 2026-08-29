@@ -20,7 +20,7 @@ import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 import { fieldRingForBand, ringCornerCount } from "./tileEdges/band.ts";
 import { inToFt } from "./tileUnits.ts";
-import { summarizeWallShape } from "./tileWall/index.ts";
+import { summarizeWallShape, WALL_DEFAULT_BREAKAGE_PCT } from "./tileWall/index.ts";
 
 export { hasTileSetup, reusePlanForCondition };
 
@@ -301,6 +301,12 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
         trimTotals: { length_lf: 0, pieces: 0, corner_outside: 0, corner_inside: 0 },
         jointTotals: { perimeter_lf: 0, field_lf: 0, transition_lf: 0, total_lf: 0, fieldGridSpacing_ft: 0 },
         hasTrim: false,
+        // Which shape roles actually contributed to this condition — the
+        // condition-level order recompute below (the REPORTED figure)
+        // needs this to tell a wall-only condition from a floor-bearing
+        // one, since a floor and a wall can share a condition_id.
+        hasFloorShape: false,
+        hasWallShape: false,
         excluded: { unscaled: 0, degenerate: 0 },
       };
       byCond.set(cond.id, agg);
@@ -379,6 +385,8 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
     byShape.set(s.id, summary);
 
     const agg = aggFor(cond);
+    if (isWall) agg.hasWallShape = true;
+    else agg.hasFloorShape = true;
     agg.counts.full += summary.counts.full;
     agg.counts.cut += summary.counts.cut;
     agg.counts.corner += summary.counts.corner;
@@ -461,11 +469,20 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
     // existing single-SKU condition.
     const kept = agg.classified.filter((c) => c.cls !== "out" && c.cls !== "hole");
     const keptBySku = countsBySku(kept);
+    // The REPORTED order (this recompute, read by tileReportRows) must
+    // apply the SAME wall overage summarizeWallShape already applied
+    // per-shape (byShape.order) — otherwise it's silently lost the moment
+    // counts get pooled to the condition level. A condition with ANY floor
+    // shape stays at orderTiles' own 0.05 default (byte-identical to
+    // before); only a condition made ENTIRELY of wall shapes gets 0.10. An
+    // explicit tile_setup.purchase.breakage_pct still wins outright.
+    const wallOnly = agg.hasWallShape && !agg.hasFloorShape;
+    const breakage_pct = agg.tile_setup.purchase?.breakage_pct ?? (wallOnly ? WALL_DEFAULT_BREAKAGE_PCT : 0.05);
     if (keptBySku.size <= 1) {
       agg.order = orderTiles({
         safeCount: agg.counts.safe,
         sku: primaryUsableSku(agg.tile_setup),
-        breakage_pct: agg.tile_setup.purchase?.breakage_pct,
+        breakage_pct,
         attic_pct: agg.tile_setup.purchase?.attic_pct,
       });
     } else {
@@ -489,7 +506,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
         const order = orderTiles({
           safeCount: counts.safe,
           sku,
-          breakage_pct: agg.tile_setup.purchase?.breakage_pct,
+          breakage_pct,
           attic_pct: agg.tile_setup.purchase?.attic_pct,
         });
         perSku.push({ sku_id: id, safe: counts.safe, boxes: order.boxes, figured: order.figured, with_margin: order.withMargin });

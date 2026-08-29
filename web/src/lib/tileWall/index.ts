@@ -74,7 +74,10 @@ export type SummarizeWallResult = WallSummarizeFailure | WallSummary;
 // order (still `?? 0.05` inside orderTiles) never changes. An explicit
 // `tile_setup.purchase.breakage_pct` still wins outright — this is a
 // default, not a floor on the user's own figure.
-const WALL_DEFAULT_BREAKAGE_PCT = 0.10;
+// Exported so tileTakeoff.js's condition-level order recompute (the REPORTED
+// figure, not just this per-shape one) can reuse the SAME constant — the
+// per-shape and condition-level wall rates must never drift apart.
+export const WALL_DEFAULT_BREAKAGE_PCT = 0.10;
 
 export function summarizeWallShape(
   tile_setup: TileSetup,

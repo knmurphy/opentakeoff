@@ -253,6 +253,61 @@ test("computeTileTakeoff: a wall's Safe order applies the 0.10 wall-default brea
   assert.equal(summary.order.withMargin, Math.ceil(figured * 1.1));
 });
 
+// Report-level gap this pins: summarizeWallShape's byShape.order already
+// applies the 0.10 wall overage (test above), but tileReportRows reads
+// tileByCond's condition-level `agg.order` -- a SEPARATE recompute in
+// tileTakeoff.js's finalize that used to pass
+// `agg.tile_setup.purchase?.breakage_pct` (undefined for a wall condition)
+// straight into orderTiles, silently falling back to orderTiles' own 0.05
+// default and losing the wall's 0.10 overage in the actual deliverable.
+test("tileReportRows: a wall-only condition's REPORTED order (ti.order, not just byShape) applies the 0.10 wall-default breakage", () => {
+  const cond = makeCondition("condWallReport");
+  const wall = makeStraightWallShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [wall], dimsFor, uppFor);
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  // 10ft x 8ft wall, 12x12in tile, no joint width -> safe=figured=80.
+  // 0.10 wall default -> withMargin = ceil(80 * 1.10) = 88. The old bug's
+  // 0.05 fallback would instead compute ceil(80 * 1.05) = 84.
+  assert.equal(out[0].figured, 80);
+  assert.equal(out[0].with_margin, 88, "REPORTED with_margin must reflect the 0.10 wall overage, not orderTiles' 0.05 default");
+  assert.notEqual(out[0].with_margin, Math.ceil(out[0].figured * 1.05), "must NOT silently fall back to the 0.05 floor default");
+});
+
+test("tileReportRows: a floor-only condition's REPORTED order stays at the 0.05 default (no regression from the wall-overage fix)", () => {
+  const cond = makeCondition("condFloorReport");
+  const floor = makeFloorShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [floor], dimsFor, uppFor);
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  // 16 full 12x12in tiles, no joint width -> safe=figured=16. Must stay at
+  // the 0.05 default -> withMargin = ceil(16 * 1.05) = 17, byte-identical
+  // to before this fix.
+  assert.equal(out[0].figured, 16);
+  assert.equal(out[0].with_margin, 17, "floor REPORTED order must remain at the 0.05 default, unaffected by the wall-only fix");
+  assert.notEqual(out[0].with_margin, Math.ceil(out[0].figured * 1.10), "must NOT pick up the wall's 0.10 overage");
+});
+
+// A cache hit skips the per-shape summarizeWallShape/summarizeShape call
+// (:358 `cached.sig === sig` branch), but the hasWallShape/hasFloorShape
+// flag set sits at `const agg = aggFor(cond)` AFTER that branch -- so a
+// cached wall-only pass must still mark the flag and still recompute the
+// REPORTED order at 0.10, not silently regress to 84 on the second render
+// (the canvas always calls computeTileTakeoff with a shared cache).
+test("tileReportRows: a wall-only condition's REPORTED 0.10 breakage survives a cache hit on the second pass", () => {
+  const cond = makeCondition("condWallReportCache");
+  const wall = makeStraightWallShape(cond.id);
+  const cache = new Map();
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  computeTileTakeoff([cond], [wall], dimsFor, uppFor, cache); // pass 1: populates cache
+  const pass2 = computeTileTakeoff([cond], [wall], dimsFor, uppFor, cache); // pass 2: cache hit
+  const out = tileReportRows(pass2.byCond, rows);
+  assert.equal(out[0].figured, 80);
+  assert.equal(out[0].with_margin, 88, "a cache hit must not bypass the hasWallShape flag / 0.10 breakage");
+});
+
 test("computeTileTakeoff cache: a wall shape hits the cache on an unchanged pass and reuses the same summary object", () => {
   const cond = makeCondition("condWallCache");
   const wall = makeLRunWallShape(cond.id);
