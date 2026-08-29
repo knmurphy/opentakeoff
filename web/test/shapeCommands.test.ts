@@ -58,7 +58,7 @@ function roundTrip(shapes: any[], cmd: any) {
 // ── policy completeness ──────────────────────────────────────────────────────
 
 test("every applied command type has a PROVENANCE_POLICY row; unknown types throw", () => {
-  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "cutout", "tileLayout"]) {
+  for (const t of ["add", "geom", "reassign", "label", "delete", "replace", "cutout", "tileLayout", "wallFields"]) {
     assert.ok(t in PROVENANCE_POLICY, `policy row missing for ${t}`);
   }
   assert.throws(() => applyShapeCommand([], { type: "resize" } as any), /PROVENANCE_POLICY/);
@@ -579,6 +579,47 @@ test("tileLayout: input array and shape object are never mutated", () => {
   assert.notEqual(r.shapes, shapes, "apply must return a new array");
   assert.notEqual(r.shapes[0], shapes[0], "apply must return a new shape object for the touched shape");
   assert.deepEqual(shapes, before, "the input array/shape must be untouched");
+});
+
+// ── wallFields (Task 8, 2026-08-29 wall-tile-slice-a — top-level shape
+//    wall knobs, presence-aware, no stamp) ────────────────────────────────
+
+test("wallFields: sets face_side/endpoint_exposed on a shape with neither; inverse removes both keys entirely", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "surface_area", verts_norm: [[0, 0], [1, 0]] },
+  ];
+  const patch = { face_side: "right", endpoint_exposed: [true, false] };
+  const r = roundTrip(shapes, { type: "wallFields", id: "a", patch });
+  assert.deepEqual(r.shapes[0].face_side, "right");
+  assert.deepEqual(r.shapes[0].endpoint_exposed, [true, false]);
+  assert.equal(r.shapes[0].updated_at, undefined, "no stamp — a wall-field flip is not a geometry edit");
+  const undone = applyShapeCommand(r.shapes, r.inverse);
+  assert.equal("face_side" in undone.shapes[0], false, "undo removes face_side, not leaves it undefined");
+  assert.equal("endpoint_exposed" in undone.shapes[0], false);
+  assert.deepEqual(undone.shapes, shapes);
+});
+
+test("wallFields: patches one field on a shape that already carries the other; inverse restores exactly, sibling untouched", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "surface_area", verts_norm: [[0, 0], [1, 0]], face_side: "left", endpoint_exposed: [false, true] },
+  ];
+  const r = roundTrip(shapes, { type: "wallFields", id: "a", patch: { face_side: "right" } });
+  assert.equal(r.shapes[0].face_side, "right");
+  assert.deepEqual(r.shapes[0].endpoint_exposed, [false, true], "untouched sibling field survives");
+  assert.deepEqual(r.inverse, { type: "wallFields", id: "a", restore: { face_side: "left" } });
+  const undone = applyShapeCommand(r.shapes, r.inverse);
+  assert.deepEqual(undone.shapes, shapes);
+});
+
+test("wallFields: input array and shape object are never mutated", () => {
+  const shapes = [
+    { id: "a", condition_id: "c1", measure_role: "surface_area", verts_norm: [[0, 0], [1, 0]], face_side: "left" },
+  ];
+  const before = clone(shapes);
+  const r = applyShapeCommand(shapes, { type: "wallFields", id: "a", patch: { face_side: "right" } });
+  assert.notEqual(r.shapes, shapes);
+  assert.notEqual(r.shapes[0], shapes[0]);
+  assert.deepEqual(shapes, before);
 });
 
 // ── author at mint (#314) ────────────────────────────────────────────────────

@@ -86,6 +86,12 @@ export type WallSummary = {
   joints: WallJoints;
   wallStrips: TileLayout[];
   extent_sf: number;
+  // Task 8 (panel elevation-strip preview) — the SAME `folds` unwrapRun
+  // produced (u_ft along the WHOLE run, inside/outside kind, run-vertex
+  // index), carried through untouched so a per-shape consumer (TilePanel's
+  // elevation SVG) can draw corner fold-lines and label each fold
+  // inside/outside without re-deriving them from raw verts_norm itself.
+  folds: Fold[];
 };
 export type SummarizeWallResult = WallSummarizeFailure | WallSummary;
 
@@ -316,5 +322,6 @@ export function summarizeWallShape(
     joints: corners.joints,
     wallStrips,
     extent_sf: L_ft * resolvedHeight_ft,
+    folds,
   };
 }

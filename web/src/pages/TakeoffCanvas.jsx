@@ -10234,7 +10234,13 @@ export default function TakeoffCanvas() {
             onTileSetup) and on the shapes (tile_layout, via the undoable
             tileLayout command). */}
         {tilePanelOpen && (() => {
-          const selTileCond = selShape && selShape.measure_role === "floor_area" ? condById[selShape.condition_id] : null;
+          // Task 8 (2026-08-29 wall-tile-slice-a) widens this gate from
+          // floor-only to admit a selected WALL shape (surface_area) too —
+          // previously the panel showed no per-shape card at all for a
+          // wall selection. selIsWall drives which sibling card TilePanel
+          // renders (WallShapeCard vs RoomOverride).
+          const selIsWall = selShape?.measure_role === "surface_area";
+          const selTileCond = selShape && (selShape.measure_role === "floor_area" || selIsWall) ? condById[selShape.condition_id] : null;
           const selHasTile = selTileCond && hasTileSetup(selTileCond);
           // Show the SAME resolved config the grid draws and the report counts
           // (effectiveTileSetup, via byShape.layout.config) — not the raw
@@ -10242,7 +10248,9 @@ export default function TakeoffCanvas() {
           // would display origin [0,0] while the drawn/counted grid uses the
           // optimizer origin, and the first "This room" edit would pin a grid
           // off the wrong baseline. Fall back to the plain merge only when the
-          // shape isn't figured (unscaled sheet → no byShape entry).
+          // shape isn't figured (unscaled sheet → no byShape entry). Also
+          // reads fine for a wall shape (WallSummary carries the same
+          // layout.config shape) — RoomOverride just never renders for one.
           const selEffectiveConfig = selHasTile
             ? (tileTakeoff.byShape.get(selShape.id)?.layout?.config || (() => {
                 const base = tileConfig(selTileCond.tile_setup);
@@ -10254,14 +10262,32 @@ export default function TakeoffCanvas() {
                 };
               })())
             : null;
+          // M4 (binding, panel review): PER-SHAPE, not the condition's `ti`
+          // — a byCond entry has no wallStrips/folds, and a condition can
+          // hold several wall shapes with different geometry. `null` when
+          // no wall is selected OR this pass hasn't figured the selected
+          // wall yet (unscaled sheet, a reversing/degenerate run excluded
+          // before the shared loop) — WallShapeCard renders its controls
+          // without a preview in that case, never throws.
+          const selWallSummary = selIsWall && selHasTile ? tileTakeoff.byShape.get(selShape.id) : null;
+          const selectedWall = selWallSummary
+            ? { wallStrips: selWallSummary.wallStrips, folds: selWallSummary.folds, trim: selWallSummary.trim, joints: selWallSummary.joints }
+            : null;
           return (
             <TilePanel
               layouts={[...tileByCond.entries()].map(([condId, ti]) => {
                 const c = condById[condId];
                 return { condId, tag: c?.finish_tag || "?", color: c?.color, multiplier: c?.multiplier || 1, ti };
               })}
-              selectedShape={selHasTile ? { id: selShape.id, tile_layout: selShape.tile_layout } : null}
+              selectedShape={selHasTile ? {
+                id: selShape.id,
+                measure_role: selShape.measure_role,
+                tile_layout: selShape.tile_layout,
+                face_side: selShape.face_side,
+                endpoint_exposed: selShape.endpoint_exposed,
+              } : null}
               effectiveConfig={selEffectiveConfig}
+              selectedWall={selectedWall}
               roomSkus={selTileCond?.tile_setup?.skus || []}
               show={tileShow} onShow={setTileShow}
               onTileSetup={(condId, patch) => {
@@ -10269,6 +10295,7 @@ export default function TakeoffCanvas() {
                 if (c) updateCondById(condId, { tile_setup: { ...c.tile_setup, ...patch } });
               }}
               onTileLayout={(shapeId, patch) => dispatchShape({ type: "tileLayout", id: shapeId, patch })}
+              onWallField={(shapeId, patch) => dispatchShape({ type: "wallFields", id: shapeId, patch })}
               warnings={tileWarningsList} onFocusWarning={focusTileWarning}
               onClose={() => setTilePanelOpen(false)}
             />

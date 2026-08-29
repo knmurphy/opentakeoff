@@ -72,6 +72,19 @@
 //             `{tile_layout: value}` or `{}`) is the undo path: it sets the
 //             EXACT prior value back, or deletes the key entirely when the
 //             shape never carried one.
+//   wallFields Task 8 (2026-08-29 wall-tile-slice-a) — the panel's
+//             face-side flip and endpoint-exposed toggles patch TOP-LEVEL
+//             shape fields (face_side, endpoint_exposed) the wall engine
+//             reads directly off the shape — unlike tileLayout, these are
+//             NOT nested (summarizeWallShape/tileLayoutSig read
+//             wallShape.face_side/wallShape.endpoint_exposed at the top
+//             level). Same non-stamp posture as tileLayout: a layout knob,
+//             not geometry and not provenance. Forward apply shallow-merges
+//             `patch` directly onto the shape (any key set to `undefined`
+//             removes it). `restore` is presence-aware PER KEY, mirroring
+//             tileLayout's own {key: value} / absent convention: it sets
+//             each touched key back to its exact prior value, or deletes it
+//             when the shape never carried it.
 // ─────────────────────────────────────────────────────────────────────────────
 import { mintUuid, nowIso, stampEdit, authorName } from "./provenance.js";
 import { assignShapeLabel } from "./shapeLabels.js";
@@ -97,6 +110,7 @@ export const PROVENANCE_POLICY = {
   cutout: "#137 — mints the deduct (id + created_at) AND patches its parent's verts_norm/verts_norm_holes/computed as ONE undo entry; parent patch stamps nothing, nothing counts; restore unmints the deduct and reverts the parent verbatim. `runs` carries the OPEN-RUN half of the same ring — wall tile and base are polylines, so the deduct CLIPS them (patch + mint the far side of a middle cut + delete a run swallowed whole) inside this one entry, and a ring that crosses only runs mints no deduct at all",
   rollcut: "#136 — NO stamp: a manual roll-cut override (slide/resize/reorder/reset) writes LAYOUT metadata (shape.roll_layout) over the shape, never its geometry or provenance; a row without roll_layout clears the key; `prev` (grab-time rows) builds the inverse when a live preview already wrote the final state",
   tileLayout: "M5 — no stamp: shallow-merges `patch` over shape.tile_layout (or mints it); `restore` (presence-aware `{tile_layout: value}` or `{}`) sets the exact prior value back, or deletes the key when the shape never had one",
+  wallFields: "Task 8 — no stamp: shallow-merges `patch` directly onto TOP-LEVEL shape fields (face_side, endpoint_exposed — not nested, unlike tileLayout); `restore` is presence-aware per key, setting each back to its exact prior value or deleting it when the shape never carried it",
 };
 
 // Undo depth — one bounded gesture history, not an archive (revisions are).
@@ -452,6 +466,37 @@ export function applyShapeCommand(shapes, cmd) {
         return { ...sh, tile_layout: merged };
       });
       return { shapes: next, inverse: { type: "tileLayout", id: cmd.id, restore: prior } };
+    }
+    case "wallFields": {
+      // Task 8 — same presence-aware shape as tileLayout's restore, but
+      // patching the shape's OWN top-level keys instead of a nested
+      // tile_layout object (see PROVENANCE_POLICY.wallFields above for why:
+      // the wall engine reads wallShape.face_side/endpoint_exposed
+      // directly).
+      if (cmd.restore) {
+        const s = shapes.find((sh) => sh.id === cmd.id);
+        const redo = {};
+        for (const k of Object.keys(cmd.restore)) redo[k] = s && k in s ? s[k] : undefined;
+        const next = shapes.map((sh) => {
+          if (sh.id !== cmd.id) return sh;
+          const out = { ...sh };
+          for (const [k, v] of Object.entries(cmd.restore)) {
+            if (v === undefined) delete out[k];
+            else out[k] = v;
+          }
+          return out;
+        });
+        return { shapes: next, inverse: { type: "wallFields", id: cmd.id, restore: redo } };
+      }
+      let prior = {};
+      const next = shapes.map((sh) => {
+        if (sh.id !== cmd.id) return sh;
+        for (const k of Object.keys(cmd.patch)) prior[k] = k in sh ? sh[k] : undefined;
+        const out = { ...sh, ...cmd.patch };
+        for (const k of Object.keys(cmd.patch)) if (out[k] === undefined) delete out[k];
+        return out;
+      });
+      return { shapes: next, inverse: { type: "wallFields", id: cmd.id, restore: prior } };
     }
     case "review": {
       if (cmd.restore) {

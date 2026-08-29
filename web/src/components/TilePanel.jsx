@@ -17,6 +17,18 @@ import { Icon } from "../brand/icons.jsx";
 import { tileConfig } from "../lib/tileSetup.ts";
 import { enumerateSlots } from "../lib/tilePatterns/enumerateSlots.ts";
 import { PLANK_ARITY } from "../lib/tilePatterns/slotKey.ts";
+import { wallElevationLayout } from "../lib/tileWallElevation.ts";
+
+const WALL_CORNER_MODES = [
+  { value: "wrap", label: "Wrap" },
+  { value: "reset", label: "Reset per wall" },
+];
+
+const WALL_EDGE_FINISHES = [
+  { value: "profile", label: "Profile (Schluter-style)" },
+  { value: "bullnose", label: "Bullnose" },
+  { value: "miter", label: "Mitered" },
+];
 
 const TILE_PATTERNS = [
   { value: "grid", label: "Grid" },
@@ -185,6 +197,16 @@ function PaintUnit({ ts, patch }) {
 function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
   const ts = ti.tile_setup;
   const patch = (p) => onTileSetup(condId, p);
+  // Task 8 (2026-08-29 wall-tile-slice-a) — `ti.hasWallShape` is a REAL
+  // per-condition flag (tileTakeoff.js's byCond aggregation, survives to
+  // the finalized entry), true iff at least one contributing shape is a
+  // `surface_area` wall. NOT `ts.wall_corner_mode` presence — mintTileSetup
+  // defaults that field on EVERY condition (floor included, "inert on the
+  // floor path"), so it can never tell a wall condition from a floor one.
+  // A mixed floor+wall condition (shares a condition_id) still counts as a
+  // wall condition here — its corner-mode/edge-finish knobs are real, wall
+  // shapes on it will read them.
+  const isWall = !!ti.hasWallShape;
   const patchJoint = (width_in) => patch({ joint: { ...(ts.joint || {}), width_in: Math.max(0, width_in) } });
   const patchOrigin = (idx, v) => {
     const o = Array.isArray(ts.origin) ? ts.origin.slice() : [0, 0];
@@ -233,6 +255,30 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
         </label>
       </div>
 
+      {isWall && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+          <label style={fld}>Corner handling
+            <div style={{ display: "flex", gap: 2 }}>
+              {WALL_CORNER_MODES.map((m) => {
+                const on = (ts.wall_corner_mode || "wrap") === m.value;
+                return (
+                  <button key={m.value} type="button" onClick={() => patch({ wall_corner_mode: m.value })}
+                    title={m.value === "wrap" ? "Tile continuously around every corner" : "Solve each wall segment on its own, split at every corner"}
+                    style={{ padding: "3px 7px", border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`, background: on ? "var(--cobalt)" : "var(--paper-bright)", color: on ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)" }}>
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </label>
+          <label style={fld}>Edge finish
+            <select value={ts.wall_edge_finish || "profile"} onChange={(e) => patch({ wall_edge_finish: e.target.value })} style={{ ...ip, background: "var(--paper-bright)" }}>
+              {WALL_EDGE_FINISHES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
         <label style={fld}>Origin X (ft)
           <input type="number" step="0.01" value={Array.isArray(ts.origin) ? ts.origin[0] : 0} onChange={(e) => patchOrigin(0, parseFloat(e.target.value) || 0)} style={{ ...ip, width: 64 }} />
@@ -277,6 +323,19 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
       <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-secondary)", marginBottom: 4 }}>
         order {ti.order.withMargin} tile{ti.order.withMargin === 1 ? "" : "s"} · {ti.order.boxes} box{ti.order.boxes === 1 ? "" : "es"} · {ti.grout.bags} grout bag{ti.grout.bags === 1 ? "" : "s"}
       </div>
+
+      {/* Task 8 — wall-only trim/joint/corner summary (C1's widened gate,
+          tileTakeoff.js:370-ish, is what makes ti.trim/ti.joints populate
+          for a wall at all). Gated on isWall too, not just `ti.trim`
+          presence, so a floor condition's own trim summary (if any) never
+          gains a NEW line here — ruling 5, floor stays byte-identical. */}
+      {isWall && ti.trim && ti.joints && (
+        <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-secondary)", marginBottom: 4 }}>
+          trim {Math.round(ti.trim.length_lf * 100) / 100} LF · joints {Math.round(ti.joints.total_lf * 100) / 100} LF ·{" "}
+          {ti.trim.corner_inside + ti.trim.corner_outside} corner{ti.trim.corner_inside + ti.trim.corner_outside === 1 ? "" : "s"}{" "}
+          ({ti.trim.corner_inside} in / {ti.trim.corner_outside} out)
+        </div>
+      )}
 
       {Array.isArray(ti.band) && ti.band.length > 0 && ti.band.map((b) => {
         const bandSku = (ts.skus || []).find((sk) => sk.id === b.sku_id);
@@ -415,6 +474,127 @@ function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
   );
 }
 
+// The selected WALL shape's card (Task 8, 2026-08-29 wall-tile-slice-a) —
+// the shape-level face-side flip + endpoint-exposed toggles (written via
+// `onWallField`, TOP-LEVEL shape fields the wall engine reads directly —
+// NOT nested under tile_layout, see shapeCommands.js's `wallFields` policy
+// row) plus the per-shape elevation-strip preview. `selectedWall`
+// (`{wallStrips, folds, trim, joints}` or `null`, threaded from
+// TakeoffCanvas's own `byShape` lookup — M4/ruling 1, NEVER the
+// condition's `ti`) drives the SVG via the pure `wallElevationLayout`
+// helper (tileWallElevation.ts); this component only converts its FEET
+// output to a small fixed-scale px viewBox and draws it — no engine math
+// here. Renders the controls even when `selectedWall` is null (an
+// unscaled sheet, or a shape excluded this pass — reversing/degenerate
+// run) so the panel never throws on an unfigured wall selection.
+// Target on-screen box the elevation strip fits INSIDE (preserving aspect,
+// "contain"-style — the binding dimension, width or height, hits its
+// target; the other comes in under). Fixed target dims, NOT a fixed
+// feet-per-px rate, are what keeps fontSize/strokeWidth (specified once, in
+// viewBox units below) reading at a roughly constant on-screen size no
+// matter the wall's real length: a 4ft closet wall and a 40ft corridor wall
+// both render into a viewBox close to TARGET_W×TARGET_H, just at different
+// feet-per-unit rates — a run-length-dependent fixed EL_UPP would instead
+// blow the viewBox out to 40x width at 40ft, shrinking a fixed fontSize to
+// illegibility (the exact failure a docked ~300px-wide panel card can't
+// afford for its one legibility-critical label: which corner is inside).
+const TARGET_W_PX = 260;
+const TARGET_H_PX = 140;
+function WallShapeCard({ selectedShape, selectedWall, skus, onWallField }) {
+  const faceSide = selectedShape.face_side || "left";
+  const endpointExposed = Array.isArray(selectedShape.endpoint_exposed) ? selectedShape.endpoint_exposed : [false, false];
+  const setFaceSide = (v) => onWallField(selectedShape.id, { face_side: v });
+  const toggleEndpoint = (idx) => {
+    const next = [endpointExposed[0], endpointExposed[1]];
+    next[idx] = !next[idx];
+    onWallField(selectedShape.id, { endpoint_exposed: next });
+  };
+  // "#888888", not the CSS-shorthand "#888" — every fill/stroke below
+  // string-concats a 2-hex alpha suffix onto this (color + "40"), and
+  // "#888" + "40" is not a valid color. Miss-path only in practice
+  // (assignedSkuId, upstream, never dangles a live SKU id), but the concat
+  // contract still has to hold on this defensive fallback.
+  const skuColor = (skuId) => (skus || []).find((sk) => sk.id === skuId)?.color || "#888888";
+  const elev = selectedWall ? wallElevationLayout(selectedWall.wallStrips, selectedWall.folds, skuColor) : null;
+  const hasElev = !!elev && elev.width_ft > 0 && elev.height_ft > 0;
+
+  const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
+  const toggleBtn = (on) => ({ padding: "3px 7px", border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`, background: on ? "var(--cobalt)" : "var(--paper-bright)", color: on ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)" });
+
+  // PAD-ringed px viewBox so fold labels above the strip have room to draw.
+  const PAD = 16;
+  // feet-per-viewBox-unit: whichever dimension (width or height) is more
+  // demanding relative to its own target wins, so the drawn strip always
+  // fits fully inside TARGET_W×TARGET_H (never crops, never blows out).
+  const elUpp = hasElev ? Math.max(elev.width_ft / TARGET_W_PX, elev.height_ft / TARGET_H_PX, 0.005) : 0.06;
+  const w_px = hasElev ? elev.width_ft / elUpp : 0;
+  const h_px = hasElev ? elev.height_ft / elUpp : 0;
+
+  return (
+    <div style={{ borderBottom: "2px solid var(--ink-faint)", padding: "10px 12px" }}>
+      <div style={{ fontSize: 10.5, color: "var(--ink-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>This wall</div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 6 }}>
+        <label style={fld}>Face side
+          <div style={{ display: "flex", gap: 2 }}>
+            <button type="button" onClick={() => setFaceSide("left")}
+              title="The tiled face lies on the (-dy, dx) side of the drawn run — flips which corner reads inside vs outside"
+              style={toggleBtn(faceSide === "left")}>Left</button>
+            <button type="button" onClick={() => setFaceSide("right")}
+              title="The tiled face lies on the (dy, -dx) side of the drawn run — flips which corner reads inside vs outside"
+              style={toggleBtn(faceSide === "right")}>Right</button>
+          </div>
+        </label>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 10.5, color: "var(--ink-muted)" }}>
+          <input type="checkbox" checked={!!endpointExposed[0]} onChange={() => toggleEndpoint(0)} />
+          Start end exposed
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 10.5, color: "var(--ink-muted)" }}>
+          <input type="checkbox" checked={!!endpointExposed[1]} onChange={() => toggleEndpoint(1)} />
+          End end exposed
+        </label>
+      </div>
+
+      {hasElev ? (
+        <svg viewBox={`${-PAD} ${-PAD} ${w_px + PAD * 2} ${h_px + PAD * 2}`} width="100%" style={{ display: "block", border: "1px solid var(--ink-faint)", background: "var(--paper-cream)" }}>
+          {/* Floor-at-bottom V-flip (a wall elevation reads floor-up, SVG
+              draws top-down): strip y=0 (floor) -> SVG y=h_px (box bottom). */}
+          <g transform={`matrix(1,0,0,-1,0,${h_px})`}>
+            {elev.tiles.map((t, i) => {
+              const isCut = t.cls === "cut";
+              const color = t.color;
+              return (
+                <rect key={i} x={t.x / elUpp} y={t.y / elUpp} width={t.w / elUpp} height={t.h / elUpp}
+                  fill={color + (isCut ? "40" : "88")} stroke={color}
+                  strokeWidth={t.cls === "corner" ? 2 : 1}
+                  strokeDasharray={isCut ? "3 2" : undefined} />
+              );
+            })}
+            {elev.folds.map((f, i) => (
+              <line key={i} x1={f.x / elUpp} y1={0} x2={f.x / elUpp} y2={h_px}
+                stroke="var(--ink)" strokeWidth={1.5} strokeDasharray="5 4" />
+            ))}
+          </g>
+          {/* Fold labels drawn OUTSIDE the flipped group — text stays upright. */}
+          {elev.folds.map((f, i) => (
+            <text key={i} x={f.x / elUpp} y={-5} textAnchor="middle" fontSize={10} fontFamily="var(--f-mono)"
+              fill={f.kind === "inside" ? "var(--cobalt)" : "var(--ink-secondary)"}>
+              {f.kind}
+            </text>
+          ))}
+        </svg>
+      ) : (
+        <div style={{ fontSize: 10.5, color: "var(--ink-muted)", padding: "8px 0", lineHeight: 1.5 }}>
+          No elevation preview yet — this wall isn't figured (unscaled sheet, or a reversing/degenerate run).
+        </div>
+      )}
+    </div>
+  );
+}
+
 // The cross-room QA list (Task 4 tileWarnings): a sliver, an unscaled sheet,
 // a straddled hole, a seam-crossing room needing a human stitch — every row
 // carries an `at_norm` focus target for click-to-pan.
@@ -441,11 +621,23 @@ function QaList({ warnings, onFocusWarning }) {
 
 export default function TilePanel({
   layouts, // [{ condId, tag, color, multiplier, ti }] — ti = computeTileTakeoff byCond entry
-  selectedShape, // { id, tile_layout? } | null
+  selectedShape, // { id, measure_role, tile_layout?, face_side?, endpoint_exposed? } | null
   effectiveConfig, // resolved TileConfig for selectedShape, or null
+  // Task 8 (2026-08-29 wall-tile-slice-a, M4/ruling 1) — the SELECTED wall
+  // shape's OWN byShape summary: `{ wallStrips, folds, trim, joints }` or
+  // `null`. PER-SHAPE, never the condition's `ti` (a byCond entry has no
+  // wallStrips/folds — a condition can hold several wall shapes with
+  // different geometry). `null` on a floor selection, no selection, or a
+  // wall shape this pass hasn't figured yet (unscaled sheet, excluded
+  // run) — WallShapeCard must render its controls without it.
+  selectedWall,
   roomSkus, // selectedShape's condition's tile_setup.skus — the band SKU picker's option list (M7 Task 7.3)
   show, onShow,
   onTileSetup, onTileLayout,
+  // Task 8 — top-level shape-field writer (face_side, endpoint_exposed),
+  // DISTINCT from onTileLayout: those fields live on the shape directly,
+  // not nested under tile_layout (shapeCommands.js's `wallFields` command).
+  onWallField,
   warnings, onFocusWarning,
   onClose,
 }) {
@@ -468,8 +660,18 @@ export default function TilePanel({
         {(layouts || []).map(({ condId, tag, color, multiplier, ti }) => (
           <ConditionCard key={condId} condId={condId} tag={tag} color={color} multiplier={multiplier} ti={ti} onTileSetup={onTileSetup} />
         ))}
-        {selectedShape && effectiveConfig && (
-          <RoomOverride selectedShape={selectedShape} effectiveConfig={effectiveConfig} skus={roomSkus} onTileLayout={onTileLayout} />
+        {/* Wall vs floor selection: mutually exclusive cards. A wall shape
+            (measure_role "surface_area") gets WallShapeCard (face flip,
+            endpoint toggles, elevation preview) instead of RoomOverride —
+            origin/rotation/band are a floor room's own per-room knobs and
+            don't apply to a wall run. Ruling 5: a floor selection renders
+            RoomOverride exactly as before, gated the same way it always was. */}
+        {selectedShape && selectedShape.measure_role === "surface_area" ? (
+          <WallShapeCard selectedShape={selectedShape} selectedWall={selectedWall} skus={roomSkus} onWallField={onWallField} />
+        ) : (
+          selectedShape && effectiveConfig && (
+            <RoomOverride selectedShape={selectedShape} effectiveConfig={effectiveConfig} skus={roomSkus} onTileLayout={onTileLayout} />
+          )
         )}
         <QaList warnings={warnings} onFocusWarning={onFocusWarning} />
       </div>
