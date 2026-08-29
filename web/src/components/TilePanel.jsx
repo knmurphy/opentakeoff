@@ -12,7 +12,11 @@
 // (built by the canvas from computeTileTakeoff's byCond + condById) and the
 // Task 4 `warnings` list, and dispatches patches upward. SKU images are
 // deferred (design §6 #1) — color swatch only.
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../brand/icons.jsx";
+import { tileConfig } from "../lib/tileSetup.ts";
+import { enumerateSlots } from "../lib/tilePatterns/enumerateSlots.ts";
+import { PLANK_ARITY } from "../lib/tilePatterns/slotKey.ts";
 
 const TILE_PATTERNS = [
   { value: "grid", label: "Grid" },
@@ -30,6 +34,19 @@ const EDGE_STRATEGIES = [
 
 let skuSeq = 0;
 const mintSkuId = () => `sku${Date.now().toString(36)}${++skuSeq}`;
+
+// A new SKU's default color cycles through this palette (indexed by the
+// condition's current SKU count) so a second/third color is visibly
+// distinct from the field's default purple — painting a checkerboard needs
+// two DIFFERENT colors to read as anything but a solid field.
+const SKU_PALETTE = ["#9333ea", "#0ea5e9", "#f59e0b", "#16a34a", "#e11d48", "#64748b"];
+
+// The paint-the-unit grid's per-pattern unit-size range (design §6):
+// basketweave's 2-plank cell needs at least a 2x2 unit to show both
+// orientations, every other pattern can paint down to a 1x1 unit.
+const UNIT_MIN = { basketweave: 2 };
+const UNIT_MAX = 4;
+const unitMin = (pattern) => UNIT_MIN[pattern] ?? 1;
 
 // One SKU row — name/size/color, editable inline. `onChange(patch)` merges
 // into this SKU; `onRemove` drops it (guarded by the parent: a setup keeps
@@ -56,6 +73,108 @@ function SkuRow({ sku, onChange, onRemove, removable }) {
   );
 }
 
+// The paint-the-unit control (M9 Task 11): a repeat-unit size selector plus
+// a clickable grid of every slot in one iteration (enumerateSlots), each
+// filled with its currently-assigned SKU's color (falling back to the
+// field's default SKU on an unpainted/dangling slot — the SAME fallback
+// assignedSkuId uses). Click a cell -> a small SKU swatch popover -> pick a
+// SKU -> assignment.slots[slot] = skuId. One-act: click, see the swatch
+// list, pick, done — no second confirm step. Slot cells lay out in the
+// SAME row-major order enumerateSlots returns (j outer, i inner, p
+// innermost), `unit.w * arity` columns wide, so a multi-plank pattern's
+// per-cell plank roles sit adjacent in one visual row-group.
+function PaintUnit({ ts, patch }) {
+  const skus = ts.skus || [];
+  const [openSlot, setOpenSlot] = useState(null);
+  const rootRef = useRef(null);
+
+  // Close on click-outside / Escape — same idiom as DrawStylePicker.jsx.
+  useEffect(() => {
+    if (!openSlot) return;
+    const onDown = (e) => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpenSlot(null); };
+    const onKey = (e) => { if (e.key === "Escape") setOpenSlot(null); };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [openSlot]);
+
+  if (skus.length < 1) return null;
+
+  // Clamp on READ too, not just on write: switching pattern to basketweave
+  // (min 2) while an existing assignment carries a 1x1 unit must not leave
+  // the selector showing a value below its own min.
+  const min = unitMin(ts.pattern);
+  const rawUnit = ts.assignment?.unit;
+  const unit = {
+    w: Math.min(UNIT_MAX, Math.max(min, Number(rawUnit?.w) || min)),
+    h: Math.min(UNIT_MAX, Math.max(min, Number(rawUnit?.h) || min)),
+  };
+  const slots = ts.assignment?.slots || {};
+  const arity = PLANK_ARITY[ts.pattern] ?? 1;
+  const cells = enumerateSlots(ts.pattern, unit);
+
+  const setUnitAxis = (axis, v) => {
+    const next = { ...unit, [axis]: Math.min(UNIT_MAX, Math.max(min, Math.round(v) || min)) };
+    patch({ assignment: { mode: "repeat", unit: next, slots } });
+  };
+  const paint = (slot, skuId) => {
+    patch({ assignment: { mode: "repeat", unit, slots: { ...slots, [slot]: skuId } } });
+    setOpenSlot(null);
+  };
+
+  const defaultSku = skus.find((s) => Number(s.w_in) > 0 && Number(s.h_in) > 0) || skus[0];
+  const skuFor = (slot) => {
+    const id = slots[slot];
+    const found = id && skus.find((s) => s.id === id);
+    return found || defaultSku;
+  };
+
+  const ip = { padding: "3px 5px", border: "1px solid var(--ink-faint)", fontSize: 11.5, fontFamily: "var(--f-mono)" };
+  const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
+  const cellPx = 18;
+
+  return (
+    <div ref={rootRef} style={{ marginBottom: 6, position: "relative" }}>
+      <div style={{ fontSize: 10.5, color: "var(--ink-muted)", marginBottom: 3 }}>Paint the repeat unit</div>
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-end", marginBottom: 6 }}>
+        <label style={fld}>Unit W
+          <input type="number" min={min} max={UNIT_MAX} step="1" value={unit.w}
+            onChange={(e) => setUnitAxis("w", parseInt(e.target.value, 10))} style={{ ...ip, width: 40 }} />
+        </label>
+        <label style={fld}>Unit H
+          <input type="number" min={min} max={UNIT_MAX} step="1" value={unit.h}
+            onChange={(e) => setUnitAxis("h", parseInt(e.target.value, 10))} style={{ ...ip, width: 40 }} />
+        </label>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${unit.w * arity}, ${cellPx}px)`, gap: 2 }}>
+        {cells.map((s) => {
+          const sku = skuFor(s.slot);
+          return (
+            <div key={s.slot} style={{ position: "relative" }}>
+              <button type="button"
+                title={`${s.slot}${sku ? ` — ${sku.name || sku.id}` : ""}`}
+                onClick={() => setOpenSlot((cur) => (cur === s.slot ? null : s.slot))}
+                style={{ width: cellPx, height: cellPx, padding: 0, border: "1px solid var(--ink-faint)", background: sku?.color || "var(--ink-faint)", cursor: "pointer" }} />
+              {openSlot === s.slot && (
+                <div role="listbox" aria-label={`SKU for slot ${s.slot}`}
+                  style={{ position: "absolute", top: "100%", left: 0, marginTop: 2, zIndex: 80, background: "var(--paper-cream)", border: "1px solid var(--ink)", boxShadow: "var(--shadow-2)", padding: 3, display: "flex", flexDirection: "column", gap: 2, minWidth: 96 }}>
+                  {skus.map((sk) => (
+                    <button key={sk.id} type="button" onClick={() => paint(s.slot, sk.id)}
+                      style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 5px", border: "none", background: "transparent", cursor: "pointer", fontSize: 10.5, color: "var(--ink)", textAlign: "left" }}>
+                      <span style={{ width: 12, height: 12, flexShrink: 0, background: sk.color || "var(--ink-faint)", border: "1px solid var(--ink-faint)" }} />
+                      <span style={{ flex: 1 }}>{sk.name || sk.id}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // One tiled condition's setup + summary — the pattern/size/joint/edge/SKU
 // controls plus the figured counts, order, grout, and cut sheet from `ti`
 // (a computeTileTakeoff byCond entry).
@@ -70,7 +189,18 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
   };
   const patchSku = (skuId, p) => patch({ skus: (ts.skus || []).map((s) => (s.id === skuId ? { ...s, ...p } : s)) });
   const removeSku = (skuId) => patch({ skus: (ts.skus || []).filter((s) => s.id !== skuId) });
-  const addSku = () => patch({ skus: [...(ts.skus || []), { id: mintSkuId(), name: "Tile", w_in: 12, h_in: 24, color: "#9333ea" }] });
+  // A new SKU defaults to the FIELD size — tileConfig(ts) (the SAME
+  // primaryUsableSku-driven size the solve/order/QA gate all read), not a
+  // hardcoded 12x24 — so adding a second color never trips the engine's
+  // same-size assignment gate (tileSolve.ts) by accident. This card only
+  // ever renders with ts.skus.length >= 1 (hasTileSetup's own guard, and
+  // removeSku never lets it drop below 1), so tileConfig's own no-SKU
+  // fallback (12x12) is unreachable here — noted, not relied on.
+  const addSku = () => {
+    const field = tileConfig(ts);
+    const color = SKU_PALETTE[(ts.skus || []).length % SKU_PALETTE.length];
+    patch({ skus: [...(ts.skus || []), { id: mintSkuId(), name: "Tile", w_in: field.w_in, h_in: field.h_in, color }] });
+  };
 
   const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
   const ip = { padding: "3px 5px", border: "1px solid var(--ink-faint)", fontSize: 11.5, fontFamily: "var(--f-mono)" };
@@ -120,6 +250,8 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
           style={{ marginTop: 3, padding: "2px 7px", border: "1px dashed var(--ink-faint)", background: "transparent", color: "var(--ink-muted)", cursor: "pointer", fontSize: 11 }}>+ add SKU</button>
       </div>
 
+      <PaintUnit ts={ts} patch={patch} />
+
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 10.5, color: "var(--ink-muted)" }}>
           <input type="checkbox" name="tile-reuse-enabled" checked={!!ts.purchase?.reuse?.enabled}
@@ -151,7 +283,7 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
         );
       })}
 
-      {ti.reuse && (
+      {ti.reuse ? (
         ti.reuse.downgraded ? (
           <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, color: "var(--ink-muted)", marginBottom: 4 }}>
             reuse n/a for {ts.pattern} — grain ambiguous
@@ -159,6 +291,18 @@ function ConditionCard({ condId, tag, color, multiplier, ti, onTileSetup }) {
         ) : (
           <div style={{ fontFamily: "var(--f-mono)", fontSize: 11, color: "var(--ink-secondary)", marginBottom: 4 }}>
             with reuse {ti.reuseOrder.withMargin} tile{ti.reuseOrder.withMargin === 1 ? "" : "s"} · {ti.reuseOrder.boxes} box{ti.reuseOrder.boxes === 1 ? "" : "es"}
+          </div>
+        )
+      ) : (
+        // Task 8's multi-color guard: `purchase.reuse.enabled` was requested
+        // but 2+ SKUs are kept on this condition's field, so the engine
+        // guards `ti.reuse`/`ti.reuseOrder` off entirely (reuse pools
+        // offcuts per SKU but boxes them all as one) — without this branch
+        // the block above rendered NOTHING, silently dropping the reuse
+        // checkbox's own state from the card.
+        ts.purchase?.reuse?.enabled && ti.reuseDowngradedMulti && (
+          <div style={{ fontFamily: "var(--f-mono)", fontSize: 10.5, color: "var(--ink-muted)", marginBottom: 4 }}>
+            reuse n/a — multi-color field
           </div>
         )
       )}

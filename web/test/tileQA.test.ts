@@ -224,6 +224,46 @@ test("tileWarnings: FIX 1 — a banded room is audited against the band's inner 
 // posture as an unfixed band gate, minus even the honest "too small"
 // warning). It must now be withheld with an explicit warning, agreeing
 // with summarizeShape's (tileTakeoff.js) own width<=0 warning.
+// Task 11 (2026-08-29 tile-multi-sku-field): solveTileLayout's same-size
+// assignment gate (tileSolve.ts) pushes a warning into layout.warnings when
+// a painted SKU's footprint differs from the field's — this aggregator used
+// to destructure only { config, classified } and silently drop it, so a
+// live canvas QA pass never surfaced the exact condition an export already
+// reported. Two SKUs of DIFFERENT size so the gate actually trips.
+test("tileWarnings: a mismatched-size SKU assignment surfaces a size_mismatch warning (mirrors solveTileLayout's own gate)", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const otherId = "sku2";
+  ts.skus.push({ id: otherId, name: "Other", w_in: 6, h_in: 6, color: "#000000" });
+  ts.assignment = { mode: "repeat", unit: { w: 1, h: 1 }, slots: { "0_0": otherId } };
+  const cond = makeCondition("c1", ts);
+  const shape = makeShape("s1", "c1");
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  const mismatch = warnings.filter((w) => w.kind === "size_mismatch");
+  assert.equal(mismatch.length, 1);
+  assert.equal(mismatch[0].shape_id, "s1");
+  assert.equal(mismatch[0].condition_id, "c1");
+  assert.equal(mismatch[0].finish_tag, "CT-1");
+  assert.match(mismatch[0].detail, /multi-size/i);
+  assert.ok(mismatch[0].at_norm, "size_mismatch warning carries an at_norm focus target");
+});
+
+test("tileWarnings: a same-size SKU assignment (the normal case) surfaces no size_mismatch warning", () => {
+  const ts = mintTileSetup();
+  ts.skus[0].w_in = 12;
+  ts.skus[0].h_in = 12;
+  const otherId = "sku2";
+  ts.skus.push({ id: otherId, name: "Other", w_in: 12, h_in: 12, color: "#000000" });
+  ts.assignment = { mode: "repeat", unit: { w: 1, h: 1 }, slots: { "0_0": otherId } };
+  const cond = makeCondition("c1", ts);
+  const shape = makeShape("s1", "c1");
+
+  const warnings = tileWarnings([cond], [shape], dimsFor, uppFor);
+  assert.equal(warnings.filter((w) => w.kind === "size_mismatch").length, 0);
+});
+
 test("tileWarnings: a band with width_ft 0 is withheld with a warning, not a silent full-ring solve", () => {
   const ts = mintTileSetup();
   ts.skus[0].w_in = 12;

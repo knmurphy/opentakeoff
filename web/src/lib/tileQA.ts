@@ -15,7 +15,7 @@ import { layoutWarning } from "./tilePatterns/index.ts";
 import { effectiveTileSetup } from "./tileGeometry/optimize.ts";
 import { fieldRingForBand } from "./tileEdges/band.ts";
 
-export type WarningKind = "sliver" | "layout" | "hole_cut" | "unscaled" | "seam_crossing" | "band_skipped";
+export type WarningKind = "sliver" | "layout" | "hole_cut" | "unscaled" | "seam_crossing" | "band_skipped" | "size_mismatch";
 
 export type Warning = {
   condition_id: string;
@@ -178,11 +178,32 @@ export function tileWarnings(
     // O(V^2) balanced-origin search runs ONCE per render, not again here. A
     // standalone caller (tests) omits layoutFor and this solves as before.
     const pre = layoutFor?.(s.id ?? "");
-    const { config, classified } = pre ?? solveTileLayout({
+    const { config, classified, warnings: layoutWarnings } = pre ?? solveTileLayout({
       tile_setup: effectiveTileSetup({ tile_setup, tile_layout: s.tile_layout, ring_ft: fieldRing_ft, holes_ft }),
       ring_ft: fieldRing_ft,
       holes_ft,
     });
+
+    // solveTileLayout's own warnings (currently just the same-size
+    // assignment gate, tileSolve.ts) reach tileReportRows via
+    // summarizeShape's warnings.push(...layout.warnings) already — but this
+    // QA aggregator used to destructure only { config, classified } and
+    // drop them, so a user painting a differently-sized SKU never saw the
+    // warning on the LIVE canvas surface, only in an export. Room-level
+    // (not per-cell), so it gets the same centroid focus target
+    // band_skipped uses, not a per-quad at_norm.
+    for (const detail of layoutWarnings || []) {
+      warnings.push({
+        condition_id: cond.id,
+        shape_id: s.id,
+        finish_tag,
+        sheet_id,
+        kind: "size_mismatch",
+        detail,
+        at_norm: centroidNorm(s.verts_norm),
+      });
+    }
+
     const halfW_in = config.w_in / 2;
     const halfH_in = config.h_in / 2;
 
