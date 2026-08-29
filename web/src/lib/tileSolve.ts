@@ -11,6 +11,7 @@
 // see plan docs/superpowers/plans/2026-08-26-tile-patterning-m3-m4.md.
 import { tileConfig, primaryUsableSku, assignedSkuId, type TileConfig, type TileSetup } from "./tileSetup.ts";
 import { getPattern, type Bounds, type TileQuad } from "./tilePatterns/index.ts";
+import { enumerateSlots } from "./tilePatterns/enumerateSlots.ts";
 import { classifyLayout, type Classified } from "./tileGeometry/classify.ts";
 import { inToFt } from "./tileUnits.ts";
 
@@ -81,8 +82,35 @@ export function solveTileLayout(args: {
   // naming a SKU no longer in `skus`) are excluded from this check —
   // assignedSkuId() already falls back for those; they're not a sizing
   // concern. Never throws — this solve runs inside a React useMemo.
+  //
+  // REACHABLE slots only (review fix, 2026-08-29): assignment.slots can
+  // carry STALE keys — reachable under a PRIOR (pattern, unit) but not the
+  // current one, e.g. painted at a 3x3 unit and the unit later shrinks to
+  // 2x2 without the panel pruning the orphaned "2_2" entry. A quad's `cell`
+  // is only ever looked up at a key `enumerateSlots(config.pattern,
+  // assignment.unit)` actually emits (assignedSkuId → slotKey), so a stale
+  // key never colors a quad — it must not be allowed to drive this gate
+  // either, or a SKU that paints nothing can still reject the whole
+  // assignment.
   const warnings: string[] = [];
-  const assignedIds = tile_setup.assignment?.slots ? new Set(Object.values(tile_setup.assignment.slots)) : null;
+  const assignment = tile_setup.assignment;
+  // `unit` is required by the TileAssignment type and TilePanel.jsx always
+  // sets it in the same patch as `slots` — but this is a runtime guard, no
+  // load-time sanitizer (tileSetup.ts's house posture), so a corrupt/partial
+  // persisted payload CAN land with `slots` present and `unit` missing.
+  // enumerateSlots() and assignedSkuId()'s own slotKey() both index through
+  // `unit.w`/`unit.h`, so a null/undefined unit throws in either — treat it
+  // as "no usable assignment" everywhere below (same fallback the malformed-
+  // `slots` case already gets) rather than let a bad shape throw out of a
+  // React useMemo.
+  const hasUnit = assignment != null && assignment.unit != null;
+  const assignedIds = assignment?.slots && hasUnit
+    ? new Set(
+        enumerateSlots(config.pattern, assignment.unit)
+          .map((s) => assignment.slots[s.slot])
+          .filter((id): id is string => Boolean(id)),
+      )
+    : null;
   let sizeMismatch = false;
   if (assignedIds) {
     const fieldSize = [config.w_in, config.h_in].sort((a, b) => a - b);
@@ -100,7 +128,7 @@ export function solveTileLayout(args: {
   }
   if (sizeMismatch) {
     warnings.push("Multi-size tile fields aren't supported yet — the assignment was ignored; make the SKUs the same size.");
-  } else {
+  } else if (!assignment || hasUnit) {
     for (const q of quads) q.skuId = assignedSkuId(tile_setup, q.cell);
   }
 

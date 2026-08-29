@@ -1,6 +1,8 @@
 // web/src/lib/tilePatterns/slotKey.ts
 export type TileCell = { i: number; j: number; p?: number };
-const fmod = (n: number, m: number) => ((n % m) + m) % m; // floored; raw % mis-keys negatives
+// floored mod; raw `%` mis-keys negatives (see offset.ts's rowShift, its
+// other consumer, for the concrete bug this avoids).
+export const fmod = (n: number, m: number) => ((n % m) + m) % m;
 export function slotKey(cell: TileCell, unit: { w: number; h: number }): string {
   const base = `${fmod(cell.i, unit.w)}_${fmod(cell.j, unit.h)}`;
   return cell.p == null ? base : `${base}_${cell.p}`;

@@ -406,7 +406,7 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
     }
     delete agg.excluded;
     agg.warnings = Array.from(agg.warnings);
-    // Multi-SKU purchase (Task 6, docs/superpowers/sdd/2026-08-29-tile-multi-sku-field):
+    // Multi-SKU purchase (Task 6, spec docs/superpowers/specs/2026-08-28-tile-multi-sku-field.md §5.4):
     // an assignment field paints two-or-more DIFFERENT products into one
     // condition (design §3.2/Task 5's per-quad `quad.skuId`) — different
     // SKUs never share a box, so each one purchases as its own order, rolled
@@ -621,9 +621,9 @@ export function tileReportRows(tileByCond, rows) {
       trim_by_kind: ti.trim
         ? ti.trim.byKind.map((k) => ({ ...k, length_lf: k.length_lf * mult, pieces: k.pieces * mult }))
         : [],
-      // Multi-SKU purchase (Task 7, docs/superpowers/sdd/2026-08-29-tile-
-      // multi-sku-field): additive — present ONLY when byCond's finalize
-      // (Task 6) split the condition's kept cells across 2+ SKUs
+      // Multi-SKU purchase (Task 7, spec docs/superpowers/specs/2026-08-28-
+      // tile-multi-sku-field.md §5.7): additive — present ONLY when byCond's
+      // finalize (Task 6) split the condition's kept cells across 2+ SKUs
       // (`ti.orderBySku`); a single-SKU/no-assignment condition never gets
       // this key, so a tile-less/single-SKU export stays byte-identical.
       // Each entry's safe/boxes/figured/with_margin get the SAME ×N scaling
@@ -634,8 +634,9 @@ export function tileReportRows(tileByCond, rows) {
       // whose id no longer names a real SKU (stale assignment after a SKU
       // delete — the same edge case byCond's own orderBySku finalize falls
       // back for, tileTakeoff.js:423) falls back to the field's own
-      // primaryUsableSku, same chain, never a dangling id or a placeholder
-      // color (tileSetup.ts:68).
+      // primaryUsableSku, same chain — never a dangling id, and a placeholder
+      // color ("#999999" below) only in the doubly-degenerate case where
+      // even that fallback SKU is gone (tileSetup.ts:68).
       ...(bySku
         ? {
             by_sku: ti.orderBySku.map((o) => {

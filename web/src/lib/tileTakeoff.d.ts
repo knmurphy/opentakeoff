@@ -69,8 +69,8 @@ export type TileShapeSummary = {
   joints: JointTally;
 };
 
-// One SKU's own purchase line within a multi-SKU condition (Task 6,
-// docs/superpowers/sdd/2026-08-29-tile-multi-sku-field): a checkerboard/
+// One SKU's own purchase line within a multi-SKU condition (Task 6, spec
+// docs/superpowers/specs/2026-08-28-tile-multi-sku-field.md §5.4): a checkerboard/
 // assignment field paints two-or-more DIFFERENT products into one
 // condition, and different SKUs never share a box, so each figures its OWN
 // order — `safe` is that SKU's own kept-cell count (countsBySku's bucket),
@@ -127,7 +127,7 @@ export type TileTakeoff = {
 };
 
 // One SKU's own report-row purchase line within a mixed condition's
-// `by_sku[]` (Task 7, docs/superpowers/sdd/2026-08-29-tile-multi-sku-field)
+// `by_sku[]` (Task 7, spec docs/superpowers/specs/2026-08-28-tile-multi-sku-field.md §5.7)
 // — TileConditionSkuOrder's byCond figures, ×N-scaled the same as the row's
 // own scalar purchase fields, plus the resolved SKU's display name/color
 // (tile_setup.skus by sku_id; falls back to the raw id / a neutral color

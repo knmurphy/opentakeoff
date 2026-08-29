@@ -123,10 +123,14 @@ function PaintUnit({ ts, patch }) {
   };
 
   const defaultSku = skus.find((s) => Number(s.w_in) > 0 && Number(s.h_in) > 0) || skus[0];
+  // Usable, not just present: an id can still name a SKU whose w_in/h_in got
+  // zeroed out (or never set) — matches assignedSkuId's own usableSku gate
+  // (tileSetup.ts) so the swatch shown here never disagrees with what the
+  // canvas actually renders for that slot.
   const skuFor = (slot) => {
     const id = slots[slot];
     const found = id && skus.find((s) => s.id === id);
-    return found || defaultSku;
+    return (found && Number(found.w_in) > 0 && Number(found.h_in) > 0) ? found : defaultSku;
   };
 
   const ip = { padding: "3px 5px", border: "1px solid var(--ink-faint)", fontSize: 11.5, fontFamily: "var(--f-mono)" };

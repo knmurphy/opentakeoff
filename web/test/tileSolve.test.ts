@@ -190,6 +190,97 @@ test("solveTileLayout: assigned SKUs that all match the field size apply the ass
   assert.deepEqual(warnings, []);
 });
 
+// ── review fix (2026-08-29): the gate must ignore UNREACHABLE stale slots ──
+// assignment.slots can carry an entry that was reachable under a PRIOR
+// (pattern, unit) — e.g. painted under a 3x3 unit, then the unit shrinks to
+// 2x2 — and the panel never prunes it. That slot never colors a quad (the
+// resolver only ever looks up REACHABLE keys), so a differently-sized SKU
+// sitting on it must not trip the same-size gate for the whole assignment.
+test("solveTileLayout: a differently-sized SKU on a slot UNREACHABLE for the current unit is not rejected (stale slot after a unit shrink)", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" }, // field/primary size
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  // "2_2" was reachable at unit {w:3,h:3}; the unit below is {w:2,h:2} (only
+  // i,j ∈ {0,1} reachable) — "2_2" is stale and unreachable.
+  ts.assignment = { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "2_2": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { quads, warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  assert.deepEqual(warnings, [], "stale unreachable slot must not trigger the size-mismatch warning");
+  assert.ok(quads.every((q) => q.skuId === "A"), "no quad is reachable at slot 2_2 in a 2x2 unit — every quad stays on the default primary");
+});
+
+test("solveTileLayout: a differently-sized SKU on a REACHABLE slot is still rejected (guard against over-loosening the gate)", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  // Same stale "2_2" entry as above, PLUS a reachable "0_0" naming the same
+  // differently-sized SKU — the gate must still fire on the reachable one.
+  ts.assignment = { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "2_2": "B", "0_0": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { quads, warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  assert.ok(
+    warnings.some((w) => typeof w === "string" && /same size|multi-size/i.test(w)),
+    `expected a same-size warning, got ${JSON.stringify(warnings)}`,
+  );
+  assert.ok(quads.every((q) => q.skuId === "A"), "assignment ignored — every quad falls back to the primary");
+});
+
+test("solveTileLayout: a stale slot keyed for a DIFFERENT pattern's arity (e.g. after switching pattern away from herringbone) is unreachable and does not trip the gate", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.pattern = "grid"; // arity 1 — slotKey never emits a "_p" suffix for grid
+  // "0_0_3" was reachable back when this field was herringbone (arity 4,
+  // plank role 3) at the same unit; switching the pattern to grid makes it
+  // unreachable — grid's own slots never carry a "_p" suffix
+  // (enumerateSlots.ts / PLANK_ARITY.grid === 1).
+  ts.assignment = { mode: "repeat", unit: { w: 1, h: 1 }, slots: { "0_0_3": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { quads, warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  assert.deepEqual(warnings, [], "a slot keyed for a different pattern's arity must not trigger the size-mismatch warning");
+  assert.ok(quads.every((q) => q.skuId === "A"));
+});
+
+// The gate's enumerateSlots(config.pattern, assignment.unit) call and
+// assignedSkuId()'s own slotKey() both index through unit.w/unit.h —
+// TileAssignment's type requires `unit`, but this is a runtime guard, no
+// load-time sanitizer (tileSetup.ts's house posture), so a corrupt/partial
+// persisted payload can still land with `slots` present and `unit` missing.
+// A differently-sized SKU on that payload used to be SAFE pre-reachable-gate
+// (the old check read Object.values(slots) directly, never touching `unit`,
+// so it detected the mismatch and warned without ever calling the resolver)
+// — the reachable-only gate must not turn that into a crash.
+test("solveTileLayout: assignment.slots present but assignment.unit missing (corrupt payload) never throws — quads fall back to the default primary", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  // @ts-expect-error — deliberately malformed: no `unit` key at all
+  ts.assignment = { mode: "repeat", slots: { "0_0": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  let result: TileLayout | undefined;
+  assert.doesNotThrow(() => {
+    result = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  });
+  assert.ok(result!.quads.length > 0);
+  assert.ok(result!.quads.every((q) => q.skuId === "A"), "corrupt unit — assignment can't be resolved, every quad falls back to the primary");
+});
+
 test("assignedSkuId: assignment present but slots undefined (malformed payload) falls back to the default and does not throw", () => {
   const ts = mintTileSetup();
   ts.skus = [{ id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" }];
