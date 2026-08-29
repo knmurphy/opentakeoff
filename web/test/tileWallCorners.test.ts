@@ -106,6 +106,48 @@ test("wallCorners: exposed endpoint, bullnose — pieces=courses per end, no len
   assert.equal(r.trim.byKind[0].length_lf, 0);
 });
 
+test("wallCorners: WRAP mid-tile fold on a NON-integer-H top CUT course reclassifies the cut straddler too (not full-only)", () => {
+  // H=8.5 (vs the 8.0 fixture above) makes moduleH_ft=1 not divide H evenly:
+  // courses 0..7 (cy=0.5..7.5) are full-height; course 8 (cy=8.5) is a real
+  // partial top course, kept y=8..8.5 — classifyLayout marks it "cut", not
+  // "full". At u_ft=10.5 every course's cx=10.5 column straddles the fold
+  // (same phase as the H=8 fixture's u=10.5 test), so this is the one case
+  // in the suite that puts a "cut"-classed cell through the WRAP straddle
+  // reclassify — corners.ts explicitly reclassifies `full` OR `cut`
+  // (corners.ts:105); a future edit narrowing that check to `full`-only
+  // would leave this course's straddler un-reclassified and this test would
+  // catch it (corner would read 8, not 9).
+  const H85 = 8.5;
+  const layout85 = solveTileLayout({ tile_setup: setup, ring_ft: wallStripRing(18, H85) });
+  const before = tileCounts(layout85.classified);
+  assert.equal(before.corner, 0, "sanity: no corner cells before any fold, same as the H=8 fixture");
+
+  // The top-course straddler at cx=10.5 — confirm it's really a "cut" cell
+  // pre-reclassify (not "full"), so the assertion below is discriminating.
+  const topStraddler = layout85.classified.find(
+    (c) => Math.abs(c.quad.cx - 10.5) < 1e-9 && Math.abs(c.quad.cy - 8.5) < 1e-9,
+  );
+  assert.ok(topStraddler, "top-course cell at cx=10.5 must exist in the layout");
+  assert.equal(topStraddler!.cls, "cut", "top course is a real partial-height cut row, not full");
+
+  const r = wallCorners({
+    folds: [{ u_ft: 10.5, kind: "inside", vertexIndex: 1 }], H_ft: H85, tile_setup: setup,
+    layout: layout85, corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [false, false],
+  });
+
+  // Same cell, post-reclassify: was "cut", must now be "corner".
+  const topAfter = r.classified.find(
+    (c) => Math.abs(c.quad.cx - 10.5) < 1e-9 && Math.abs(c.quad.cy - 8.5) < 1e-9,
+  );
+  assert.ok(topAfter, "same cell must still be present post-reclassify");
+  assert.equal(topAfter!.cls, "corner", "the cut top-course straddler must be reclassified too, not skipped");
+
+  const after = tileCounts(r.classified);
+  assert.equal(after.corner, 9, "8 full-course straddlers + 1 top cut-course straddler; a full-only reclassify would stop at 8");
+  assert.equal(after.safe, before.safe, "reclassify only relabels cls; full+cut+corner total (safe) must be unchanged");
+  assert.ok(Math.abs(after.keptArea_sf - before.keptArea_sf) < 10 ** -9, "reclassify must not change kept area");
+});
+
 test("wallCorners: trim.length_lf/pieces are the sum over byKind; joints are inside-only zeros elsewhere", () => {
   const r = wallCorners({
     folds: [{ u_ft: 10.5, kind: "inside", vertexIndex: 1 }, { u_ft: 5, kind: "outside", vertexIndex: 2 }],
