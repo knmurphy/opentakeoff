@@ -82,6 +82,40 @@ test("wallElevationLayout: RESET — sub-strips lay left-to-right, never overlap
   assert.ok(Math.abs(elev.folds[0].x - 10.5) < 1e-6);
 });
 
+// A 2-sub-strip fixture can't distinguish "offset by cumulative sub-strip
+// width" from a bug like "offset every strip by sub-strip[0]'s own width" —
+// with only one fold, both produce the SAME single boundary. Three
+// sub-strips (two folds) is where they diverge: east 6ft -> north 5ft ->
+// east 7ft, reset mode -> 3 sub-strips of widths 6/5/7, folds at u=6
+// (inside) and u=11 (outside).
+const threeSegRun = { verts_norm: [[ft(0), ft(0)], [ft(6), ft(0)], [ft(6), ft(5)], [ft(13), ft(5)]] as [number, number][] };
+
+test("wallElevationLayout: RESET with TWO folds — three sub-strips partition into three disjoint x-bands, folds at both real boundaries", () => {
+  const ts = make12x12Setup();
+  ts.wall_corner_mode = "reset";
+  const s = summarizeWallShape(ts, { ...threeSegRun, face_side: "left" }, dims, upp, 8);
+  assert.notEqual((s as { ok?: false }).ok, false, "expected a real summary");
+  const summary = s as Exclude<typeof s, { ok: false }>;
+  assert.equal(summary.wallStrips.length, 3, "two folds -> 3 sub-strips");
+
+  const elev = wallElevationLayout(summary.wallStrips, summary.folds, colorFor);
+  assert.ok(Math.abs(elev.width_ft - 18) < 1e-6, "6 + 5 + 7 = 18ft total run length");
+
+  // Every tile lands in exactly one of the three bands: [0,6), [6,11), [11,18].
+  const band1 = elev.tiles.filter((t) => t.x + t.w <= 6 + 1e-6);
+  const band2 = elev.tiles.filter((t) => t.x >= 6 - 1e-6 && t.x + t.w <= 11 + 1e-6);
+  const band3 = elev.tiles.filter((t) => t.x >= 11 - 1e-6);
+  assert.ok(band1.length > 0 && band2.length > 0 && band3.length > 0, "all three sub-strips contributed tiles");
+  assert.equal(band1.length + band2.length + band3.length, elev.tiles.length, "every tile falls in exactly one band — no strip landed at the wrong offset");
+
+  // Both fold lines sit at the TRUE segment boundaries, not just the first.
+  assert.equal(elev.folds.length, 2);
+  const xs = elev.folds.map((f) => f.x).sort((a, b) => a - b);
+  assert.ok(Math.abs(xs[0] - 6) < 1e-6, `first fold at u=6, got ${xs[0]}`);
+  assert.ok(Math.abs(xs[1] - 11) < 1e-6, `second fold at u=11, got ${xs[1]}`);
+  assert.deepEqual(elev.folds.map((f) => f.kind).sort(), ["inside", "outside"]);
+});
+
 test("wallElevationLayout: a straight run (no folds) draws one strip, empty folds array", () => {
   const ts = make12x12Setup();
   const s = summarizeWallShape(ts, { verts_norm: [[ft(0), ft(0)], [ft(10), ft(0)]] as [number, number][], face_side: "left" as const }, dims, upp, 8);
