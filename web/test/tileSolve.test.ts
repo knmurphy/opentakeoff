@@ -281,6 +281,75 @@ test("solveTileLayout: assignment.slots present but assignment.unit missing (cor
   assert.ok(result!.quads.every((q) => q.skuId === "A"), "corrupt unit — assignment can't be resolved, every quad falls back to the primary");
 });
 
+// ── review re-check (2026-08-29): an out-of-bounds/non-finite unit must not
+// reach enumerateSlots at all — it's O(unit.w * unit.h * arity), so a huge
+// or infinite unit turns a same-tick solve into a synchronous main-thread
+// freeze (measured ~1.1s at 2000x2000) or an outright hang (h: Infinity),
+// inside a React useMemo. TilePanel's own UNIT_MAX (4) only bounds what the
+// panel WRITES, not a corrupt/imported payload — same "no load-time
+// sanitizer, corrupt payloads read as opted OUT" posture as the missing-unit
+// case above, just with an insane unit instead of an absent one. Both must
+// return PROMPTLY (no throw, no hang) and render single-primary.
+test("solveTileLayout: an oversized unit (5000x5000, a corrupt/imported payload) does not hang — returns promptly, single-primary", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.assignment = { mode: "repeat", unit: { w: 5000, h: 5000 }, slots: { "0_0": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const start = Date.now();
+  let result: TileLayout | undefined;
+  assert.doesNotThrow(() => {
+    result = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  });
+  assert.ok(Date.now() - start < 500, "an oversized unit must be rejected before enumerateSlots ever runs, not iterated");
+  assert.ok(result!.quads.length > 0);
+  assert.ok(result!.quads.every((q) => q.skuId === "A"), "oversized unit — assignment treated as opted-out, every quad falls back to the primary");
+  assert.deepEqual(result!.warnings, [], "an unusable unit is not a same-size mismatch — no warning, just opted out");
+});
+
+test("solveTileLayout: a non-finite unit (h: Infinity) does not hang — returns promptly, single-primary", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.assignment = { mode: "repeat", unit: { w: 2, h: Infinity }, slots: { "0_0": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const start = Date.now();
+  let result: TileLayout | undefined;
+  assert.doesNotThrow(() => {
+    result = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  });
+  assert.ok(Date.now() - start < 500, "h: Infinity must be rejected before enumerateSlots' for-loop ever runs, not iterated");
+  assert.ok(result!.quads.length > 0);
+  assert.ok(result!.quads.every((q) => q.skuId === "A"), "non-finite unit — assignment treated as opted-out, every quad falls back to the primary");
+  assert.deepEqual(result!.warnings, []);
+});
+
+// A valid unit at/under the panel's own UNIT_MAX (4) must still work
+// normally — the new cap must not clip legitimate small units.
+test("solveTileLayout: a valid 4x4 unit (at the panel's own UNIT_MAX) still applies the assignment normally", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222" }, // SAME size — must apply, not gate
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.assignment = { mode: "repeat", unit: { w: 4, h: 4 }, slots: { "0_0": "B" } };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { quads, warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  const at = (i: number, j: number) => quads.find((q) => q.cell?.i === i && q.cell?.j === j);
+  assert.equal(at(0, 0)?.skuId, "B", "a sane 4x4 unit is unaffected by the new cap");
+  assert.deepEqual(warnings, []);
+});
+
 test("assignedSkuId: assignment present but slots undefined (malformed payload) falls back to the default and does not throw", () => {
   const ts = mintTileSetup();
   ts.skus = [{ id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" }];

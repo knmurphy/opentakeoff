@@ -95,15 +95,38 @@ export function solveTileLayout(args: {
   const warnings: string[] = [];
   const assignment = tile_setup.assignment;
   // `unit` is required by the TileAssignment type and TilePanel.jsx always
-  // sets it in the same patch as `slots` — but this is a runtime guard, no
-  // load-time sanitizer (tileSetup.ts's house posture), so a corrupt/partial
-  // persisted payload CAN land with `slots` present and `unit` missing.
-  // enumerateSlots() and assignedSkuId()'s own slotKey() both index through
-  // `unit.w`/`unit.h`, so a null/undefined unit throws in either — treat it
-  // as "no usable assignment" everywhere below (same fallback the malformed-
-  // `slots` case already gets) rather than let a bad shape throw out of a
-  // React useMemo.
-  const hasUnit = assignment != null && assignment.unit != null;
+  // sets it in the same patch as `slots` (clamped to its own UNIT_MAX=4 on
+  // that write path) — but this is a runtime guard, no load-time sanitizer
+  // (tileSetup.ts's house posture), so a corrupt/partial/imported persisted
+  // payload can land with `slots` present and `unit` missing, non-numeric,
+  // or simply huge (TilePanel's UNIT_MAX only bounds what the PANEL writes,
+  // not what a payload can carry). Two failure modes, both below:
+  //   1. null/undefined unit — enumerateSlots() and assignedSkuId()'s own
+  //      slotKey() both index through unit.w/unit.h and throw.
+  //   2. non-finite or oversized unit — enumerateSlots() is
+  //      O(unit.w * unit.h * arity); an insane `w`/`h` (measured: ~1.1s
+  //      main-thread freeze at 2000x2000; `h: Infinity` is a true infinite
+  //      loop) turns a same-tick solve into a hang, synchronously inside a
+  //      React useMemo.
+  // isSaneUnit's cap (256) sits comfortably above the panel's own UNIT_MAX
+  // (4) AND above the largest unit this codebase's own test suite
+  // deliberately constructs (tileTakeoff.test.ts uses {w:100,h:100} to
+  // isolate a slot key from mod-wraparound aliasing in a small room) — so
+  // it doesn't clip any real usage. It's still bounded: measured,
+  // enumerateSlots' worst case at the cap (256 * 256 * herringbone's arity
+  // 4 = 262144 iterations) costs ~24ms; at 500 it's ~101ms, at 2000 it's the
+  // ~1.1-1.9s freeze this guard exists to prevent (and h/w: Infinity is an
+  // outright hang). Either failure mode — missing unit or one over the cap
+  // — is treated as "no usable assignment" everywhere below (same fallback
+  // the malformed-`slots` case already gets) rather than let a bad shape
+  // throw or hang.
+  const UNIT_CAP = 256;
+  const isSaneUnit = (u: { w: number; h: number } | null | undefined): boolean =>
+    !!u &&
+    Number.isInteger(u.w) && Number.isInteger(u.h) &&
+    u.w >= 1 && u.h >= 1 &&
+    u.w <= UNIT_CAP && u.h <= UNIT_CAP;
+  const hasUnit = assignment != null && isSaneUnit(assignment.unit);
   const assignedIds = assignment?.slots && hasUnit
     ? new Set(
         enumerateSlots(config.pattern, assignment.unit)
