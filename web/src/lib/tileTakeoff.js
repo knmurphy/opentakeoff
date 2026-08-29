@@ -179,13 +179,25 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   if (band) summary.band = band;
   const reuseOpts = tile_setup.purchase?.reuse;
   if (reuseOpts?.enabled) {
-    summary.reuse = reusePlan({
-      classified,
-      sku: primaryUsableSku(tile_setup),
-      pattern: layout.config.pattern,
-      sliver_threshold_in: reuseOpts.sliver_threshold_in,
-      kerf_in: reuseOpts.kerf_in,
-    });
+    // Task 8 (2026-08-29 tile-multi-sku-field): With-reuse pools offcuts by
+    // quad.skuId, but a left-diagonal offcut can't fill a right-diagonal
+    // gap and two different products can never share a box — a kept field
+    // spanning 2+ SKUs guards this informational per-shape figure off, the
+    // same kept-cell filter (`cls !== "out" && cls !== "hole"`) Task 6's
+    // keptBySku uses, so an out/hole cell's stray skuId can never trip it.
+    // The condition-level `agg.reuse`/`agg.reuseOrder` finalize (byCond,
+    // below) is the actual purchase figure and carries the honest
+    // `reuseDowngradedMulti` flag; this one is display-only.
+    const keptSkus = new Set(classified.filter((c) => c.cls !== "out" && c.cls !== "hole").map((c) => c.quad.skuId));
+    if (keptSkus.size < 2) {
+      summary.reuse = reusePlan({
+        classified,
+        sku: primaryUsableSku(tile_setup),
+        pattern: layout.config.pattern,
+        sliver_threshold_in: reuseOpts.sliver_threshold_in,
+        kerf_in: reuseOpts.kerf_in,
+      });
+    }
   }
   // Trim + movement joints (M8 Task 8, design §3.4/§3.3) — read the ROOM's
   // own full ring (the `ring_ft` param, never the band-eroded `fieldRing_ft`)
@@ -456,7 +468,19 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
     // from byShape reuse figures. Strictly additive: `agg.order` (Safe)
     // above is untouched either way.
     const reuseOpts = agg.tile_setup.purchase?.reuse;
-    if (reuseOpts?.enabled) {
+    // Task 8 (2026-08-29 tile-multi-sku-field): reusePlanForCondition pools
+    // whole-tile counts per SKU bucket but reuseOrder below boxes the whole
+    // condition as ONE sku (primaryUsableSku) — a left-diagonal offcut
+    // can't fill a right-diagonal gap, and different SKUs never share a
+    // box. `keptBySku` (computed just above for the multi-SKU order split,
+    // Task 6) is the SAME kept-cell filter, so reuse guards off exactly
+    // when the order split turns on. Guard reuse OFF and report the
+    // downgrade honestly via `reuseDowngradedMulti` — tileReportRows reads
+    // it through a two-variable split so the absent `agg.reuse`/
+    // `agg.reuseOrder` can never NPE the report row.
+    if (reuseOpts?.enabled && keptBySku.size >= 2) {
+      agg.reuseDowngradedMulti = true;
+    } else if (reuseOpts?.enabled) {
       agg.reuse = reusePlanForCondition(agg.tile_setup, agg.classified, reuseOpts);
       agg.reuseOrder = orderTiles({
         safeCount: agg.reuse.wholeTiles,
@@ -531,7 +555,15 @@ export function computeTileTakeoff(conditions, shapes, dimsFor, uppFor, cache) {
 // `reuse_downgraded` carries the pattern-driven downgrade reason string
 // (reusePlanForCondition) when reuse was requested but no savings could be
 // modeled for the pattern — numbers then equal Safe even though
-// `reuse_enabled` is true.
+// `reuse_enabled` is true. Task 8 (2026-08-29 tile-multi-sku-field) adds a
+// SECOND downgrade path: a multi-color field (byCond finalize sets
+// `ti.reuseDowngradedMulti`, never figures `ti.reuse`/`ti.reuseOrder`)
+// still reports `reuse_enabled: true` (reuse was requested) but
+// `reuse_downgraded: "multi-color field"` and zeroed `reuse_whole`/
+// `reuse_with_margin`/`reuse_boxes` — an honest downgrade, not a silent
+// mis-boxing across products that can't share a box. `reuseFigured` below
+// gates the real-figure reads so this path can never NPE on the absent
+// objects.
 export function tileReportRows(tileByCond, rows) {
   if (!tileByCond || !tileByCond.size || !Array.isArray(rows)) return [];
   const out = [];
@@ -542,7 +574,15 @@ export function tileReportRows(tileByCond, rows) {
     const ti = tileByCond.get(r.id);
     if (!ti) continue;
     const mult = r.multiplier || 1;
-    const reuseEnabled = Boolean(ti.reuse && ti.reuseOrder);
+    // Task 8 (2026-08-29 tile-multi-sku-field): a multi-color field guards
+    // condition-level reuse off (byCond finalize, above) — `ti.reuse`/
+    // `ti.reuseOrder` are then ABSENT, not zeroed. `reuseFigured` gates the
+    // real figures below (never read `ti.reuse.*`/`ti.reuseOrder.*` when
+    // false — that's the NPE this split prevents); `reuseEnabled` is only
+    // the REPORTED flag, true whenever reuse was requested — figured or
+    // honestly downgraded.
+    const reuseFigured = Boolean(ti.reuse && ti.reuseOrder);
+    const reuseEnabled = reuseFigured || Boolean(ti.reuseDowngradedMulti);
     const bySku = ti.orderBySku && ti.orderBySku.length > 1
       ? new Map((ti.tile_setup.skus || []).map((s) => [s.id, s]))
       : null;
@@ -561,10 +601,10 @@ export function tileReportRows(tileByCond, rows) {
       with_margin: ti.order.withMargin * mult,
       grout_bags: ti.grout.bags * mult,
       reuse_enabled: reuseEnabled,
-      reuse_whole: reuseEnabled ? ti.reuseOrder.figured * mult : 0,
-      reuse_with_margin: reuseEnabled ? ti.reuseOrder.withMargin * mult : 0,
-      reuse_boxes: reuseEnabled ? ti.reuseOrder.boxes * mult : 0,
-      reuse_downgraded: reuseEnabled && ti.reuse.downgraded ? ti.reuse.downgraded : null,
+      reuse_whole: reuseFigured ? ti.reuseOrder.figured * mult : 0,
+      reuse_with_margin: reuseFigured ? ti.reuseOrder.withMargin * mult : 0,
+      reuse_boxes: reuseFigured ? ti.reuseOrder.boxes * mult : 0,
+      reuse_downgraded: ti.reuseDowngradedMulti ? "multi-color field" : (reuseFigured && ti.reuse.downgraded ? ti.reuse.downgraded : null),
       cutsheet: ti.cutsheet,
       warnings: ti.warnings,
       // Trim + movement joints (M8 Task 8): trim/joint LF are purchase

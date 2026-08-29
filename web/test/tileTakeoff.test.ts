@@ -1306,3 +1306,105 @@ test("tileReportRows: an assignment that resolves every kept cell to one SKU als
   assert.equal(out.length, 1);
   assert.equal("by_sku" in out[0], false, "one effective SKU (via assignment) must never emit a by_sku key");
 });
+
+// ── Task 8 (2026-08-29 tile-multi-sku-field): reuse guarded off on a
+// multi-color field ─────────────────────────────────────────────────────
+// With-reuse pools whole-tile counts per SKU (reusePlanForCondition, Task
+// 6-era) but then boxes them ALL under ONE sku (reuseOrder's
+// primaryUsableSku) — a left-diagonal offcut can't fill a right-diagonal
+// gap, and two different products can never share a box. A KEPT field
+// spanning 2+ distinct SKUs must guard reuse off entirely and report the
+// downgrade honestly, never silently mis-box across products.
+// `makeCheckerboardCondition` (Task 6, above) is the multi-color fixture:
+// identical-size A/B tiles in a 2x2 repeating unit, so any figured
+// difference below is the guard doing the work, never a byproduct of
+// geometry.
+test("computeTileTakeoff: reuse is guarded OFF on a multi-color (2+ kept SKU) field, and reported honestly", () => {
+  const cond = makeCheckerboardCondition();
+  cond.tile_setup.purchase = { reuse: { enabled: true } };
+  const shape = makeShape(cond.id); // 4x4ft room, 12x12in tile, 0 joint => 16 full, split 8/8 across A/B
+
+  const { byCond, byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal(agg.reuse, undefined, "condition-level reuse must be skipped on a multi-color field");
+  assert.equal(agg.reuseOrder, undefined, "condition-level reuseOrder must be skipped on a multi-color field");
+  assert.equal(agg.reuseDowngradedMulti, true, "expected the honest multi-color downgrade flag");
+
+  // The per-shape informational reuse figure (summarizeShape) is guarded
+  // the same way, over the shape's own kept cells.
+  const shapeSummary = byShape.get(shape.id);
+  assert.ok(shapeSummary);
+  assert.equal(shapeSummary.reuse, undefined, "per-shape reuse must also be skipped on a multi-color field");
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  assert.doesNotThrow(
+    () => tileReportRows(byCond, rows),
+    "the two-variable split must never NPE on the absent ti.reuse/ti.reuseOrder objects",
+  );
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reuse_enabled, true, "reuse was requested — report it as on, just downgraded");
+  assert.equal(out[0].reuse_downgraded, "multi-color field");
+  assert.equal(out[0].reuse_whole, 0);
+  assert.equal(out[0].reuse_with_margin, 0);
+  assert.equal(out[0].reuse_boxes, 0);
+});
+
+test("computeTileTakeoff: a stale assignment resolving every KEPT cell to one SKU still figures reuse normally (predicate is distinct KEPT skuIds, not slot count)", () => {
+  const cond = makeCheckerboardCondition();
+  cond.id = "condReuseSingleColor";
+  cond.tile_setup.purchase = { reuse: { enabled: true } };
+  // A 1x1 unit collapses every cell to the SAME slot key ("0_0") — every
+  // quad in the room resolves to "A" even though "B" is a real, usable SKU
+  // on this condition (same stale-assignment fixture as the Task 6 test
+  // above).
+  cond.tile_setup.assignment = { mode: "repeat", unit: { w: 1, h: 1 }, slots: { "0_0": "A" } };
+  const shape = makeShape(cond.id);
+
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal(agg.reuseDowngradedMulti, undefined, "a single effective SKU is not a multi-color field");
+  assert.ok(agg.reuse, "expected a condition-level reuse plan");
+  assert.ok(agg.reuseOrder, "expected a condition-level reuse order");
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].reuse_enabled, true);
+  assert.notEqual(out[0].reuse_downgraded, "multi-color field", "the normal (null or pattern) downgrade value, never the multi-color reason");
+  assert.ok(out[0].reuse_whole > 0, "expected non-zero reuse figures on the single-effective-SKU path");
+  assert.ok(out[0].reuse_boxes > 0);
+});
+
+test("computeTileTakeoff: a no-assignment condition with reuse.enabled figures unchanged from today (byte-identical reuse fields)", () => {
+  const cond = makeReuseCondition();
+  cond.tile_setup.purchase = { reuse: { enabled: true } };
+  const shape = makeReuseShape("reuseShapeTask8", cond.id);
+
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor2, uppFor2);
+  const summary = byCond.get(cond.id);
+  assert.ok(summary, "expected a byCond summary for the reuse condition");
+  assert.equal(summary.reuseDowngradedMulti, undefined, "a single-SKU condition is never a multi-color field");
+  assert.ok(summary.reuse, "expected a condition-level reuse plan");
+  assert.equal(summary.reuse.wholeTiles, 7, "unchanged from the pre-Task-8 reuse fixture");
+  assert.equal(summary.reuse.offcutsUsed, 2);
+  assert.equal(summary.reuse.downgraded, undefined, "grid is not an AABB-approximate pattern");
+
+  const expectedReuseOrder = orderTiles({
+    safeCount: summary.reuse.wholeTiles,
+    sku: cond.tile_setup.skus[0],
+    breakage_pct: cond.tile_setup.purchase.breakage_pct,
+    attic_pct: cond.tile_setup.purchase.attic_pct,
+  });
+  assert.deepEqual(summary.reuseOrder, expectedReuseOrder);
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out[0].reuse_enabled, true);
+  assert.equal(out[0].reuse_downgraded, null);
+  assert.equal(out[0].reuse_whole, summary.reuseOrder.figured);
+  assert.equal(out[0].reuse_with_margin, summary.reuseOrder.withMargin);
+  assert.equal(out[0].reuse_boxes, summary.reuseOrder.boxes);
+});

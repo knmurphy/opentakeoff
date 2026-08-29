@@ -106,6 +106,15 @@ export type TileConditionSummary = {
   grout: TileGroutResult;
   reuse?: ReusePlanResult;
   reuseOrder?: TileOrder;
+  // Task 8 (2026-08-29 tile-multi-sku-field): set true (never false — absent
+  // otherwise) when `purchase.reuse.enabled` was requested but the
+  // condition's kept cells span 2+ distinct SKUs — reuse pools offcuts per
+  // SKU but boxes them all as ONE SKU, so a mixed field guards `reuse`/
+  // `reuseOrder` off entirely (both stay absent) rather than mis-boxing
+  // across products. tileReportRows reads this to report `reuse_enabled:
+  // true` + `reuse_downgraded: "multi-color field"` without ever reading
+  // the absent `reuse`/`reuseOrder` objects.
+  reuseDowngradedMulti?: boolean;
   band?: TileConditionBand[];
   trim?: TileTrimSummary;
   joints?: JointTally;
