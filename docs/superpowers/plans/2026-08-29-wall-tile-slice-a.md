@@ -42,10 +42,22 @@ approved). Code map: `docs/superpowers/research/2026-08-29-wall-tile-slice-a-cod
   and unequal-height runs are rejected/out-of-scope with a warning.
 - **Overage reuses the existing `TileSetup.purchase` (`breakage_pct`/`attic_pct`) + `orderTiles`
   margin** — do NOT add a new `wall_waste_pct` field. Offcut `reuse` stays OFF for walls
-  (conservative). Default a wall condition's `breakage_pct` to 10.
+  (conservative). **`breakage_pct` is a FRACTION** (0.05 default), so the wall's ~10% overage is
+  `0.10`, NOT `10`. Apply it EXPLICITLY in Task 5's wall `orderTiles` call (wall context only) —
+  do NOT set a `purchase` default in the shared `mintTileSetup` (it would change floors too and
+  break `tileSetup.test.ts:56`). *(SDD ruling, Task 4 — my earlier "breakage_pct 10 in mintTileSetup"
+  was a unit + shared-factory error the implementer correctly declined.)*
 - **Simple runs only:** reject a run with an antiparallel (U-turn) adjacent-edge pair; collapse
   collinear interior vertices before building the strip.
-- All new pure logic lands under `web/src/lib/tileWall/`. Tests under `web/test/tileWall/`.
+- All new pure logic lands under `web/src/lib/tileWall/`.
+- **TEST CONVENTION (corrects the vitest code blocks below — the repo has NO vitest):** tests use
+  `node:test` + `node:assert/strict`, as FLAT files `web/test/tileWall<Module>.test.ts` (matches the
+  repo's `node --import tsx --test test/*.test.ts` glob), importing libs WITH the `.ts` extension
+  (`../src/lib/tileWall/unwrap.ts`). Model on `web/test/tileSolve.test.ts`. The vitest snippets in the
+  tasks are translation sources: `describe/it`→`test()`, `expect(a).toBe(b)`→`assert.equal`,
+  `.toEqual`→`assert.deepEqual`, `.not.toBe`→`assert.notEqual`, `.toBeCloseTo(b,n)`→
+  `assert.ok(Math.abs(a-b) < 10**-n)`. Run with `cd web && npm test` (or a single file via
+  `node --import tsx --test test/tileWall<Module>.test.ts`).
 - No AI-attribution trailers in commits (repo pre-commit hook blocks them).
 
 ---
