@@ -10,10 +10,10 @@
 // between opposing walls.
 //
 // Only origin-honoring patterns (grid, brick_50, brick_33, diagonal)
-// participate in the search — herringbone now honors `origin` for its own
-// rigid phase and basketweave still ignores it entirely (tilePatterns/*),
-// but this optimizer doesn't yet *choose* an origin for either of them;
-// they sit out of the candidate search regardless.
+// participate in the search — herringbone and basketweave now both honor
+// `origin` for their own rigid phase (tilePatterns/*), but this optimizer
+// doesn't yet *choose* an origin for either of them; they sit out of the
+// candidate search regardless.
 import { tileConfig, type TileSetup } from "../tileSetup.ts";
 import { solveTileLayout } from "../tileSolve.ts";
 import type { Classified } from "./classify.ts";

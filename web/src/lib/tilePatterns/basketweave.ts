@@ -9,12 +9,15 @@ import { degToRad } from "../tileUnits.ts";
 // classic subway/parquet basketweave look. Each block's footprint is
 // nominal w x w (the plank's long dimension), which tiles cleanly for the
 // common 2:1 plank ratio; other ratios still produce a deterministic
-// alternating weave. It ignores the free `origin` for the weave's own
-// phasing (the checkerboard is always anchored at the plan's [0,0]) — but
-// rotation_deg is honored via the same shared whole-pattern post-rotation
-// as every other generator (pattern.ts): the assembled weave is spun about
-// `origin` after it's built, over an expanded generation bound so a
-// rotated pattern still covers every corner of the room.
+// alternating weave. The weave's own phasing now honors the free `origin`
+// too — the block range and each block's anchor are offset by `origin`
+// before the checkerboard is laid out, so the whole weave translates
+// rigidly with it (byte-identical to the old anchored-at-[0,0] output when
+// `origin` is [0,0]). rotation_deg is still honored separately via the
+// same shared whole-pattern post-rotation as every other generator
+// (pattern.ts): the assembled weave is spun about `origin` after it's
+// built, over an expanded generation bound so a rotated pattern still
+// covers every corner of the room.
 export const basketweaveGenerator: PatternGenerator = {
   name: "basketweave",
   generate(input: GenInput): TileQuad[] {
@@ -39,14 +42,15 @@ export const basketweaveGenerator: PatternGenerator = {
     const orientAdjust = w_ft >= h_ft ? 0 : Math.PI / 2;
     const block = long;
     const pairGap = short + joint_ft;
-    const startI = Math.floor(bounds.minX / block) - 1;
-    const endI = Math.ceil(bounds.maxX / block) + 1;
-    const startJ = Math.floor(bounds.minY / block) - 1;
-    const endJ = Math.ceil(bounds.maxY / block) + 1;
+    const [ox, oy] = origin;
+    const startI = Math.floor((bounds.minX - ox) / block) - 1;
+    const endI = Math.ceil((bounds.maxX - ox) / block) + 1;
+    const startJ = Math.floor((bounds.minY - oy) / block) - 1;
+    const endJ = Math.ceil((bounds.maxY - oy) / block) + 1;
     const out: TileQuad[] = [];
     for (let i = startI; i <= endI; i++) {
       for (let j = startJ; j <= endJ; j++) {
-        const bx = (i + 0.5) * block, by = (j + 0.5) * block;
+        const bx = (i + 0.5) * block + ox, by = (j + 0.5) * block + oy;
         const horizontal = ((i + j) % 2 + 2) % 2 === 0;
         if (horizontal) {
           const rot = orientAdjust;
