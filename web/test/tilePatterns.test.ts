@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getPattern, registry, layoutWarning } from "../src/lib/tilePatterns/index.ts";
+import { herringboneGenerator } from "../src/lib/tilePatterns/herringbone.ts";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
 
@@ -118,11 +119,11 @@ test("herringbone places interlocking rotated pairs covering the bounds", () => 
   assert.equal(rots.size, 2);
 });
 
-test("herringbone ignores origin translation when rotation_deg is 0 (interlock-derived, §3.1)", () => {
+test("herringbone honors origin translation when rotation_deg is 0 (rigid phase, §3.1)", () => {
   const g = getPattern("herringbone");
   const base = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [0, 0], rotation_deg: 0, skuId: "s1" });
   const shifted = g.generate({ bounds, w_ft: 2, h_ft: 1, joint_ft: 0, origin: [5, 5], rotation_deg: 0, skuId: "s1" });
-  assert.deepEqual(base, shifted);
+  assert.notDeepEqual(base, shifted);
 });
 
 test("herringbone honors rotation_deg via whole-pattern rotation about origin", () => {
@@ -246,4 +247,18 @@ test("rotated herringbone conserves room area with origin far from the room", ()
 
 test("rotated basketweave conserves room area with origin far from the room", () => {
   areaConservationCheck("basketweave", farRoomRing, [0, 0], "basketweave far-origin");
+});
+
+const HB = { w_ft: 2, h_ft: 1, joint_ft: 0, rotation_deg: 0, skuId: "s" };
+const key = (x: number, y: number, r: number) => `${x.toFixed(4)}_${y.toFixed(4)}_${r.toFixed(4)}`;
+
+test("herringbone translates rigidly by origin", () => {
+  const bounds = { minX: -20, minY: -20, maxX: 20, maxY: 20 };
+  const o: [number, number] = [0.37, 0.81];
+  const q0 = herringboneGenerator.generate({ ...HB, origin: [0, 0], bounds });
+  const qo = herringboneGenerator.generate({ ...HB, origin: o, bounds });
+  const set = new Set(qo.map((t) => key(t.cx, t.cy, t.rot)));
+  const inWin = q0.filter((t) => t.cx + o[0] > -10 && t.cx + o[0] < 10 && t.cy + o[1] > -10 && t.cy + o[1] < 10);
+  assert.ok(inWin.length > 0);
+  for (const t of inWin) assert.ok(set.has(key(t.cx + o[0], t.cy + o[1], t.rot)), "shifted plank missing");
 });

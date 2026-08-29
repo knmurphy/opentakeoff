@@ -23,13 +23,17 @@ import { degToRad } from "../tileUnits.ts";
 // exactly once by construction, so coverage is complete regardless of room
 // size or how far `origin`/the room sit from the pattern's own anchor.
 //
-// It still ignores the free `origin` for the weave's own phasing (the
-// lattice is always anchored at the plan's [0,0], like grid/basketweave)
-// — but rotation_deg is honored via the same shared whole-pattern
-// post-rotation as every other generator (pattern.ts): the assembled
-// interlock is spun about `origin` after it's built, over an expanded
-// generation bound so a rotated pattern still covers every corner of the
-// room.
+// The weave's own phasing now honors the free `origin` too — the band/
+// column ranges and the period-cell anchor are all offset by `origin`
+// before the closed-form arithmetic runs, so the whole lattice translates
+// rigidly with it (byte-identical to the old anchored-at-[0,0] output when
+// `origin` is [0,0]). rotation_deg is still honored separately via the
+// same shared whole-pattern post-rotation as every other generator
+// (pattern.ts): the assembled interlock is spun about `origin` after it's
+// built, over an expanded generation bound so a rotated pattern still
+// covers every corner of the room. The sliver-avoidance optimizer
+// (tileGeometry/optimize.ts) doesn't search over this phase yet — it just
+// picks up whatever `origin` it's given.
 export const herringboneGenerator: PatternGenerator = {
   name: "herringbone",
   generate(input: GenInput): TileQuad[] {
@@ -67,20 +71,21 @@ export const herringboneGenerator: PatternGenerator = {
     const pad = long + short;
     const loX = bounds.minX - pad, hiX = bounds.maxX + pad;
     const loY = bounds.minY - pad, hiY = bounds.maxY + pad;
+    const [ox, oy] = origin;
 
     const rotH = normalizeRot(orientAdjust);
     const rotV = normalizeRot(Math.PI / 2 + orientAdjust);
 
     const out: TileQuad[] = [];
-    const bandStart = Math.floor(loY / bandH) - 1;
-    const bandEnd = Math.ceil(hiY / bandH) + 1;
+    const bandStart = Math.floor((loY - oy) / bandH) - 1;
+    const bandEnd = Math.ceil((hiY - oy) / bandH) + 1;
     for (let bi = bandStart; bi <= bandEnd; bi++) {
-      const bandY0 = bi * bandH;
+      const bandY0 = bi * bandH + oy;
       const shift = (((bi % 2) + 2) % 2) === 1 ? periodX / 2 : 0;
-      const colStart = Math.floor((loX - shift) / periodX) - 1;
-      const colEnd = Math.ceil((hiX - shift) / periodX) + 1;
+      const colStart = Math.floor((loX - ox - shift) / periodX) - 1;
+      const colEnd = Math.ceil((hiX - ox - shift) / periodX) + 1;
       for (let ci = colStart; ci <= colEnd; ci++) {
-        const x0 = ci * periodX + shift;
+        const x0 = ci * periodX + shift + ox;
         // leading vertical plank
         out.push({ cx: x0 + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId });
         // stacked horizontal pair, one joint gap between them, joint/2
