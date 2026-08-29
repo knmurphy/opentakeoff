@@ -37,6 +37,20 @@ export type TileSetup = {
     attic_pct?: number;
     reuse?: { enabled: boolean; sliver_threshold_in?: number; kerf_in?: number };
   };
+  // Wall-run settings (condition-level — applies to every surface_area shape
+  // under this condition). Overage reuses purchase.breakage_pct above; there
+  // is no separate wall waste field.
+  wall_corner_mode?: "wrap" | "reset";
+  wall_edge_finish?: "profile" | "bullnose" | "miter";
+};
+
+// Shape-level wall fields (design §8). Keyed by RUN-VERTEX index — a
+// DIFFERENT index space than tile_layout.edge_overrides (ring-edge index,
+// see tileLayoutSig.ts's TileLayoutOverride) — do not conflate the two.
+export type WallShapeFields = {
+  face_side?: "left" | "right";
+  endpoint_exposed?: [boolean, boolean];
+  wall_corner_overrides?: Record<number, { mode?: "wrap" | "reset"; finish?: "profile" | "bullnose" | "miter" }>;
 };
 
 const usableSku = (s: unknown): boolean => {
@@ -95,6 +109,16 @@ export function mintTileSetup(): TileSetup {
     edge_strategy: "balanced",
     skus: [{ id: skuId(), name: "Tile 1", w_in: 12, h_in: 24, color: "#9333ea" }],
     joint: { width_in: 0.125 },
+    // Wall-only settings — inert on the floor path (nothing reads them for a
+    // floor_area shape), so defaulting them here doesn't change floor
+    // behavior. `purchase.breakage_pct` is deliberately NOT defaulted here:
+    // it's a live floor input (tileCalc/order.ts falls back to 0.05 when
+    // absent) and TileSetup carries no wall/floor discriminator, so minting
+    // it here would silently change every floor condition's material
+    // overage too. Wall overage is threaded explicitly by the wall
+    // orchestration path instead (see summarizeWallShape).
+    wall_corner_mode: "wrap",
+    wall_edge_finish: "profile",
   };
 }
 

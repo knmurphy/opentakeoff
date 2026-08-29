@@ -1312,10 +1312,18 @@ export default function TakeoffCanvas() {
     const condMap = new Map(tileConds.map((c) => [c.id, c]));
     const parts = [];
     for (const s of shapes) {
+      // NOTE: surface_area (wall) shapes don't reach this loop yet — the
+      // filter above admits floor_area only. The role gate that widens this
+      // to walls lives at tileTakeoff.js's role gate (a separate task), not
+      // here; this branch is written ahead of that so the persist key is
+      // already height-aware once walls start flowing through.
       if (s.measure_role !== "floor_area") continue;
       const cond = condMap.get(s.condition_id);
       if (!cond) continue;
-      parts.push(s.id + ":" + tileLayoutSig(s, cond.tile_setup));
+      const resolvedHeight = s.measure_role === "surface_area"
+        ? (s.height_override === true ? Number(s.height_ft) || 0 : Number(s.height_ft) || Number(cond?.height_ft) || 0)
+        : undefined;
+      parts.push(s.id + ":" + tileLayoutSig(s, cond.tile_setup, resolvedHeight));
     }
     return parts.join("|");
   }, [conditions, shapes]);
