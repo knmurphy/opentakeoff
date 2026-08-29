@@ -430,12 +430,14 @@ and emit `byKind` entries for edge finishes.
 
 **Rules (spec §4.4/§5/§11.4; the numeric tests below are the binding spec):**
 - `courses = floor(H_ft / moduleH_ft)`, `moduleH_ft = (h_in + joint_in)/12`; `pitchW = (w_in+joint_in)/12`.
-- **WRAP inside fold** at `u_k`: find the field cells whose x-span **strictly contains** `u_k`
-  (`quad.x < u_k < quad.x + quad.w`) — these straddle the corner. Reclassify each `full`→`corner`
-  in the returned `classified` (phase-aware: a fold on a tile boundary contains **0** cells → no
-  reclassify, no over-count). This makes `counts.corner` correct and keeps `order`/`keptArea`
-  unchanged (a wrap corner tile is one tile, cut, both pieces used). `corner_inside += 1`; movement
-  joint `total_lf += H_ft`.
+- **WRAP inside fold** at `u_k`: `TileQuad` is CENTER-based `{cx,cy,w,h,rot}` (`tilePatterns/types.ts:7`,
+  `classify.ts:104-107`) — there is no `quad.x`. Find the kept cells whose x-span **strictly contains**
+  `u_k`: `quad.cx - quad.w/2 < u_k < quad.cx + quad.w/2`. Reclassify each straddler that is `full`
+  **or** `cut` → `corner` (a straddler in the top cut course is a `cut` cell that also crosses the
+  fold → still a corner; reclassifying only `full` under-counts corner EA by ~1 course at non-integer
+  H). Phase-aware: a fold on a tile boundary contains **0** cells → no reclassify, no over-count. This
+  makes `counts.corner` correct and keeps `safe`/`order`/`keptArea` unchanged (a wrap corner tile is
+  one tile, cut, both pieces used). `corner_inside += 1`; movement joint `total_lf += H_ft`.
 - **RESET inside fold:** no reclassification (each sub-strip's own end column is a real `cut` from
   its solve — Task 6). Still `corner_inside += 1` and joint `total_lf += H_ft`.
 - **Outside fold** (both modes), 2 faces, `corner_outside += 1`:
@@ -513,10 +515,10 @@ describe("wallCorners", () => {
 - [ ] **Step 2: Run tests, verify they fail.**
 
 - [ ] **Step 3: Implement `corners.ts`** — `courses` from `tileConfig`; clone `layout.classified`;
-  for WRAP inside folds, reclassify straddlers (`quad.x < u_k < quad.x+quad.w`) `full`→`corner`;
-  walk folds/endpoints to build `byKind` (edge finishes) + `corner_inside`/`corner_outside`; build
-  inside-only `joints`. Pure; `import type { Classified, TileLayout } from "../tileSolve"` /
-  `../tileGeometry/classify`.
+  for WRAP inside folds, reclassify straddlers (`quad.cx - quad.w/2 < u_k < quad.cx + quad.w/2`),
+  `full`|`cut`→`corner`; walk folds/endpoints to build `byKind` (edge finishes) +
+  `corner_inside`/`corner_outside`; build inside-only `joints`. Pure;
+  `import type { Classified, TileLayout } from "../tileSolve"` / `../tileGeometry/classify`.
 
 - [ ] **Step 4: Run tests, verify pass.**
 
@@ -732,6 +734,11 @@ each sub-strip's own quads in `wallStrips` for rendering). Build merged `counts`
   not the plan overlay). In `tileQA.ts:87-90` admit `surface_area` (role gate) and require
   `>= 2` verts for it; route its `layoutFor`/solve through the wall path or skip QA rules that
   assume a floor ring for Slice A (warn-only). Verify `dxf.ts:219/232` unchanged.
+  **Empty-page guard (re-review Minor):** the tile-shop page is created when `tileByShape.size`
+  (`markedset.js:925`); a wall-only condition now populates `tileByShape` but its overlay is skipped,
+  so the page would render EMPTY. Gate page creation on there being at least one shape that actually
+  renders (a `floor_area` tile shape) — do NOT create a tile-shop page for a wall-only set in Slice A
+  (elevation sheets are Slice B).
 - [ ] **Step 4: Run, verify pass** + assert `export_marked_pdf` snapshot for a floor-only project
   is byte-identical (no regression).
 - [ ] **Step 5: Commit** — `fix(tile-wall): keep walls out of the plan-space overlay; admit walls to QA`
@@ -801,7 +808,9 @@ Review: `docs/superpowers/research/2026-08-29-wall-tile-plan-review.md` (verdict
   rejects BEFORE the shared loop (`excluded.degenerate++; continue;`), like the floor `:314` path.
   Test: reversal wall + floor → floor still computes, no throw.
 - **M1 (phase-blind wrap over-count):** Task 3 reclassifies the ACTUAL straddling cells from the
-  field layout (`quad.x < u_k < quad.x+quad.w`) — a boundary fold → 0. Tests: u=10.5 → 8, u=10.0 → 0.
+  field layout, using the CENTER-based quad predicate `quad.cx - quad.w/2 < u_k < quad.cx + quad.w/2`
+  (`TileQuad` has `{cx,cy,w,h}`, no `.x` — re-review MAJ-1) — a boundary fold → 0. Tests: u=10.5 → 8,
+  u=10.0 → 0.
 - **M2 (`counts.corner` stayed 0):** wrap reclassifies `full`→`corner`; counts derive from the
   reclassified `classified` (no blind `extraCornerCuts`). Test: `tileCounts(classified).corner`.
 - **M3 (inside/outside absolute unverifiable):** convention pinned (face left = `(-dy,dx)` side),
@@ -816,3 +825,12 @@ Review: `docs/superpowers/research/2026-08-29-wall-tile-plan-review.md` (verdict
   added to Task 4; extent test computes from code (`s.extent_sf`) instead of self-passing.
 - **Confirmed sound (unchanged):** field-count strip reuse, joint-0 coverage ≈144, reset two-end-cuts,
   `origin[1]=0` seating a full grid course at the floor, markedset/dxf floor gates.
+
+**v2 → v2.1 (re-review `…-plan-review-v2.md`, verdict REVISE 1 Maj + 2 Min — both Criticals + 4/5
+Majors confirmed closed):**
+- **MAJ-1:** straddle predicate used `quad.x` but `TileQuad` is center-based `{cx,cy,w,h}`
+  (`tilePatterns/types.ts:7`). → predicate now `quad.cx - quad.w/2 < u_k < quad.cx + quad.w/2`.
+- **Minor (top-course under-count):** reclassify `full` **or** `cut` straddlers (a top cut-course
+  straddler is still a corner) → corner EA no longer under-counts ~1 course at non-integer H.
+- **Minor (empty wall-only shop page):** Task 7 gates tile-shop page creation on a rendering
+  `floor_area` shape existing — no empty page for a wall-only set.
