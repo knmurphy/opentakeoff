@@ -48,9 +48,13 @@ const roundRing = (ring: [number, number][]): [number, number][] => (ring || [])
  * Hashes exactly:
  *   - `shape.verts_norm` / `verts_norm_holes`, rounded to `SIG_PRECISION`
  *   - `tile_setup` identity via `tileConfig()` (pattern, w_in/h_in of the
- *     active sku, joint_in, origin, rotation_deg), plus `edge_strategy` and
- *     every sku's own `w_in`/`h_in` (an id/name/color edit does not change
- *     the drawn grid, so those are left out)
+ *     active sku, joint_in, origin, rotation_deg), plus `edge_strategy`,
+ *     every sku's own `w_in`/`h_in`, and `assignment` (mode/unit + sorted
+ *     slots) — a slot edit changes which sku each quad resolves to
+ *     (`assignedSkuId`, run inside `solveTileLayout`), so it must flip this
+ *     sig. Sku `color` (and a sku's position in the array) stays out: a
+ *     recolor doesn't change the solved layout, and its repaint is handled
+ *     elsewhere via the `conditions` dependency, not this sig.
  *   - `shape.tile_layout`'s geometry-affecting overrides: `origin`,
  *     `rotation`, `edge_overrides`, `band`
  *
@@ -80,6 +84,14 @@ export function tileLayoutSig(shape: TileLayoutShape, tile_setup: TileSetup): st
       rotation_deg: round(cfg.rotation_deg),
       edge_strategy: tile_setup.edge_strategy || "balanced",
       sku_sizes: skuSizes,
+      assignment: tile_setup.assignment
+        ? {
+            mode: tile_setup.assignment.mode,
+            unit: tile_setup.assignment.unit,
+            // sort slot entries for order-independence — mirrors the edge_overrides sort above
+            slots: Object.entries(tile_setup.assignment.slots || {}).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+          }
+        : null,
     },
     tile_layout: {
       origin: tl?.origin ? roundPt(tl.origin) : null,

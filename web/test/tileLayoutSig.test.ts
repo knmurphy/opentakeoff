@@ -166,3 +166,42 @@ test("tileLayoutSig: an unrelated tile_setup change (sku color) does NOT flip th
   const ts2: TileSetup = { ...ts1, skus: ts1.skus.map((sku) => ({ ...sku, color: "#00ff00" })) };
   assert.equal(tileLayoutSig(s, ts1), tileLayoutSig(s, ts2));
 });
+
+test("tileLayoutSig: editing an assignment slot's SKU value flips the sig", () => {
+  const s = shape();
+  const base = mintTileSetup();
+  const ts1: TileSetup = { ...base, assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A", "0_1": "B" } } };
+  const ts2: TileSetup = { ...base, assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "B", "0_1": "B" } } };
+  assert.notEqual(tileLayoutSig(s, ts1), tileLayoutSig(s, ts2));
+});
+
+test("tileLayoutSig: adding or removing an assignment slot flips the sig", () => {
+  const s = shape();
+  const base = mintTileSetup();
+  const withoutSlot: TileSetup = { ...base, assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A" } } };
+  const withSlot: TileSetup = { ...base, assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A", "0_1": "B" } } };
+  assert.notEqual(tileLayoutSig(s, withoutSlot), tileLayoutSig(s, withSlot));
+});
+
+test("tileLayoutSig: reordering the same assignment slot entries (insertion order) does NOT flip the sig", () => {
+  const s = shape();
+  const base = mintTileSetup();
+  const forward: TileSetup = {
+    ...base,
+    assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A", "0_1": "B", "1_0": "C" } },
+  };
+  const reversedSlots: Record<string, string> = {};
+  for (const [k, v] of Object.entries(forward.assignment!.slots).reverse()) reversedSlots[k] = v;
+  const backward: TileSetup = { ...base, assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: reversedSlots } };
+  // Sanity: insertion order genuinely differs before the sig sorts it away.
+  assert.notDeepEqual(Object.keys(forward.assignment!.slots), Object.keys(backward.assignment!.slots));
+  assert.equal(tileLayoutSig(s, forward), tileLayoutSig(s, backward));
+});
+
+test("tileLayoutSig: no assignment produces the same sig as the same tile_setup with the assignment key deleted (back-compat)", () => {
+  const s = shape();
+  const ts1 = mintTileSetup();
+  const ts2: TileSetup = { ...ts1, assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A" } } };
+  delete (ts2 as { assignment?: unknown }).assignment;
+  assert.equal(tileLayoutSig(s, ts1), tileLayoutSig(s, ts2));
+});
