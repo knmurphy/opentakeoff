@@ -8,6 +8,7 @@ import { mintTileSetup } from "../src/lib/tileSetup.ts";
 import { orderTiles } from "../src/lib/tileCalc/order.ts";
 import { computeTileTakeoff, tileReportRows, reusePlanForCondition } from "../src/lib/tileTakeoff.js";
 import { reusePlan } from "../src/lib/tileCalc/reuse.ts";
+import { slotKey } from "../src/lib/tilePatterns/slotKey.ts";
 import type { Classified } from "../src/lib/tileGeometry/classify.ts";
 
 // A 4ft x 4ft square room: verts_norm in [0,1] against a 100x100px sheet
@@ -1131,4 +1132,102 @@ test("computeTileTakeoff: a single-SKU condition (no assignment) figures one ord
     attic_pct: cond.tile_setup.purchase?.attic_pct,
   });
   assert.deepEqual(agg.order, expected);
+});
+
+// ── Task 6, fix round 1: the kept-cell filter is genuinely exercised ───────
+// The "single-color-in-room" test above (keptBySku.size===1 via a collapsing
+// 1x1 unit) never puts a SECOND sku on a hole/out cell, so it can't tell a
+// correct `kept = classified.filter(c.cls !== "out" && c.cls !== "hole")`
+// from a broken one that forgot the filter entirely — both would produce
+// keptBySku.size===1 either way, since NOTHING besides "A" is ever assigned
+// anywhere in that fixture. These two tests close that gap: they assign "B"
+// ONLY to a cell that classifies "out" (this one) or "hole" (the next test),
+// and assert `orderBySku` stays ABSENT — a broken filter that let an
+// out/hole cell's skuId leak into `keptBySku` would spawn a spurious second
+// "B" entry (safe: 0, since `accumulate` never increments full/cut/corner
+// for "out"/"hole" — see tileCalc/tiles.ts), which these assertions catch.
+test("computeTileTakeoff: an 'out' cell assigned to a second SKU does NOT spawn a spurious orderBySku entry (kept-cell filter guard)", () => {
+  const tile_setup = mintTileSetup();
+  tile_setup.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222" },
+  ];
+  tile_setup.joint.width_in = 0;
+  tile_setup.origin = [0, 0];
+  tile_setup.edge_strategy = "start_full";
+  // grid.ts's generator always pads ONE cell beyond the room on every side
+  // (startI = floor(...) - 1, etc.) — cell (i:-1, j:0) sits entirely to the
+  // LEFT of this 4x4ft room (x in [-1,0], the room's x starts at 0), so
+  // classify.ts's bbox-disjoint fast path marks it "out" (confirmed
+  // empirically: solveTileLayout with this exact setup puts (i:-1,j:0) at
+  // cls "out", areaKept_sf 0). A {w:100,h:100} unit keeps every (i,j) this
+  // small room's padded range touches on its OWN distinct slot key (no
+  // mod-wraparound aliasing with any in-room cell), so mapping ONLY that
+  // one out-of-room slot to "B" isolates the filter: every cell INSIDE the
+  // room stays on the unmapped-slot default ("A"), and "B" is never placed
+  // anywhere a correct filter would count.
+  const unit = { w: 100, h: 100 };
+  tile_setup.assignment = { mode: "repeat", unit, slots: { [slotKey({ i: -1, j: 0 }, unit)]: "B" } };
+  const cond = { id: "condOutFilter", finish_tag: "CT-OUT", multiplier: 1, tile_setup };
+  const shape = makeShape(cond.id); // 4x4ft room, 12x12in tile, 0 joint => 16 full, 0 cut, 0 hole
+
+  const { byCond, byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const shapeSummary = byShape.get(shape.id);
+  assert.ok(shapeSummary, "expected a byShape summary");
+  const bCells = shapeSummary.layout.classified.filter((c: Classified) => c.quad.skuId === "B");
+  assert.ok(bCells.length > 0, "expected the assignment to actually place a B quad in this solve (a no-op assignment would make the rest of this test meaningless)");
+  assert.ok(
+    bCells.every((c: Classified) => c.cls === "out"),
+    `expected every B quad to classify "out", got ${JSON.stringify(bCells.map((c: Classified) => c.cls))}`,
+  );
+
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal(agg.counts.full, 16, "the room itself is untouched by the out-of-room B assignment");
+  assert.equal("orderBySku" in agg, false, "an out-of-room SKU must never spawn a per-SKU order entry");
+  const expected = orderTiles({ safeCount: 16, sku: tile_setup.skus[0] });
+  assert.deepEqual(agg.order, expected, "byte-identical to a single-SKU figuring — the out cell contributes nothing");
+});
+
+test("computeTileTakeoff: a 'hole' cell (interior cutout) assigned to a second SKU does NOT spawn a spurious orderBySku entry (kept-cell filter guard)", () => {
+  const tile_setup = mintTileSetup();
+  tile_setup.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222" },
+  ];
+  tile_setup.joint.width_in = 0;
+  tile_setup.origin = [0, 0];
+  tile_setup.edge_strategy = "start_full";
+  // A 1x1ft interior cutout at x in [1,2], y in [1,2] exactly matches cell
+  // (i:1, j:1)'s own footprint: that quad has real overlap with the room's
+  // OUTER shell (ignoring holes) but zero overlap with the room once the
+  // hole is subtracted, so classify.ts marks it "hole", not "out"
+  // (confirmed empirically). Same isolation technique as the out-cell test:
+  // a large unit keeps every in-range (i,j) on its own slot, so mapping
+  // ONLY that hole-straddling slot to "B" leaves every kept cell "A".
+  const unit = { w: 100, h: 100 };
+  tile_setup.assignment = { mode: "repeat", unit, slots: { [slotKey({ i: 1, j: 1 }, unit)]: "B" } };
+  const cond = { id: "condHoleFilter", finish_tag: "CT-HOLE", multiplier: 1, tile_setup };
+  const shape = {
+    ...makeShape(cond.id),
+    id: "shapeHoleFilter",
+    verts_norm_holes: [[[0.25, 0.25], [0.5, 0.25], [0.5, 0.5], [0.25, 0.5]]],
+  };
+
+  const { byCond, byShape } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const shapeSummary = byShape.get(shape.id);
+  assert.ok(shapeSummary, "expected a byShape summary");
+  const bCells = shapeSummary.layout.classified.filter((c: Classified) => c.quad.skuId === "B");
+  assert.ok(bCells.length > 0, "expected the assignment to actually place a B quad in this solve (a no-op assignment would make the rest of this test meaningless)");
+  assert.ok(
+    bCells.every((c: Classified) => c.cls === "hole"),
+    `expected every B quad to classify "hole", got ${JSON.stringify(bCells.map((c: Classified) => c.cls))}`,
+  );
+
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal(agg.counts.full, 15, "16 cells minus the one hole cutout");
+  assert.equal("orderBySku" in agg, false, "a hole-cutout SKU must never spawn a per-SKU order entry");
+  const expected = orderTiles({ safeCount: 15, sku: tile_setup.skus[0] });
+  assert.deepEqual(agg.order, expected, "byte-identical to a single-SKU figuring — the hole cell contributes nothing");
 });
