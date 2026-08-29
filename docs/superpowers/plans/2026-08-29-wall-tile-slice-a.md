@@ -143,6 +143,11 @@ describe("unwrapRun", () => {
     expect(["inside", "outside"]).toContain(res.folds[0].kind);
   });
 
+  it("ABSOLUTE label: east→south L-run with face_side left → INSIDE (pins the convention)", () => {
+    const res = unwrapRun({ verts_norm: [[ft(0), ft(0)], [ft(10.5), ft(0)], [ft(10.5), ft(7.5)]], dims, upp, H_ft: 8, face_side: "left" })!;
+    expect(res.folds[0].kind).toBe("inside");   // NOT just left≠right — the literal label
+  });
+
   it("flipping face_side inverts every fold's inside/outside label", () => {
     const run = { verts_norm: [[ft(0), ft(0)], [ft(10), ft(0)], [ft(10), ft(6)]] as [number,number][], dims, upp, H_ft: 8 };
     const left = unwrapRun({ ...run, face_side: "left" })!;
@@ -238,8 +243,11 @@ export function unwrapRun(args: {
     cum += Math.hypot(bx - ax, by - ay);
     const inx = bx - ax, iny = by - ay, outx = cx - bx, outy = cy - by;
     const cross = inx * outy - iny * outx;
-    // face_side decides which turn is "inside" (toward the tiled face).
-    // left face (faceSign +1): a left turn (cross>0 in screen y-down) folds toward the face → inside.
+    // CONVENTION (settled — do not hand-wave): face_side "left" = the tiled face lies on the
+    // (-dy, dx) side of the drawn direction, in the RAW verts_norm coords. For an eastward wall
+    // dir=(1,0), that face side is +y. "inside" = the corner turns TOWARD the tiled face.
+    // Worked: east→south L-run [0,0]→[10.5,0]→[10.5,7.5], out=(0,+1), cross=+1; face left
+    // (faceSign +1) → inside. Flip face_side → faceSign -1 inverts every label.
     const kind: "inside" | "outside" = (cross * faceSign) > 0 ? "inside" : "outside";
     folds.push({ u_ft: cum, kind, vertexIndex: keptIndex[i] });
   }
@@ -247,7 +255,11 @@ export function unwrapRun(args: {
 }
 ```
 
-- [ ] **Step 4: Run tests, verify pass** — `npx vitest run test/tileWall/unwrap.test.ts` → PASS. (If the inside/outside sign convention is inverted vs the flip test, flip `faceSign` mapping — the flip test pins the *relative* correctness.)
+- [ ] **Step 4: Run tests, verify pass** — `npx vitest run test/tileWall/unwrap.test.ts` → PASS. The
+  ABSOLUTE label is pinned by the east→south test below (not just the relative flip). The on-SCREEN
+  sense of "left" is additionally validated in Task 8's browser smoke against a real traced wall
+  (the visible inside/outside labels catch a global inversion) — per the `screenshots-when-driving-ui`
+  practice; do NOT silently flip `faceSign` to make a test pass without re-deriving the convention.
 
 - [ ] **Step 5: Commit** — `git add web/src/lib/tileWall/unwrap.ts web/test/tileWall/unwrap.test.ts && git commit -m "feat(tile-wall): run unwrap — folds, inside/outside, collinear collapse, reversal reject"`
 
@@ -339,21 +351,41 @@ export function wallEffectiveTileSetup(args: {
   const L = Math.max(...strip_ring.map(([x]) => x));
   const centerU = mod((L % pitchW) / 2, pitchW);
   const uCandidates = dedupe([0, mod(L, pitchW), centerU]);
-  let best: { ox: number; score: number } | null = null;
+  // objective (center-and-balance, spec §4.4): primary = fewest sub-½ end cuts; tie-break =
+  // most-balanced end remainders (min |leftEnd - rightEnd|). This must NOT default to a full
+  // tile hard against one end for a non-integer L (the reviewer's L=17.5 case).
+  const endRemainder = (ox: number) => {
+    const left = mod(-ox, pitchW);                 // cut width at u=0
+    const right = mod(L - (mod(L - ox, pitchW)), 1); // placeholder → compute from classified below
+    return { left, right };
+  };
+  let best: { ox: number; slivers: number; imbalance: number } | null = null;
   for (const ox of uCandidates) {
     const { classified } = solveTileLayout({ tile_setup: { ...tile_setup, origin: [ox, 0] }, ring_ft: strip_ring });
-    // objective: fewest sub-half end cuts along U (mirrors optimize.ts sliver/balance intent)
-    let slivers = 0;
+    let slivers = 0, minCutW = cfg.w_in, maxCutW = 0;
     for (const c of classified) {
-      if (c.cls === "cut" && c.cut && c.cut.w_in > 0 && c.cut.w_in < cfg.w_in / 2) slivers++;
+      if (c.cls === "cut" && c.cut && c.cut.w_in > 0) {
+        if (c.cut.w_in < cfg.w_in / 2) slivers++;
+        minCutW = Math.min(minCutW, c.cut.w_in); maxCutW = Math.max(maxCutW, c.cut.w_in);
+      }
     }
-    if (!best || slivers < best.score) best = { ox, score: slivers };
+    const imbalance = maxCutW - minCutW; // proxy for end-cut asymmetry
+    if (!best || slivers < best.slivers || (slivers === best.slivers && imbalance < best.imbalance)) {
+      best = { ox, slivers, imbalance };
+    }
   }
   return { ...tile_setup, origin: [best ? best.ox : 0, 0], rotation_deg };
 }
 ```
+(Drop the `endRemainder` stub if the classified-based imbalance suffices; it's illustrative of intent.)
 
-- [ ] **Step 4: Run tests, verify pass.** (Adjust the objective if a candidate set can't move `origin[0]`; the V-pin assertions are the load-bearing ones.)
+- [ ] **Step 4: Run tests, verify pass.** Add a **balance** test: for `L=17.5` (12" tile), the
+  chosen `origin[0]` must NOT leave one end a full tile while the other is a sliver — assert the two
+  end cuts are within a tile of each other (center-and-balance, §4.4), not merely `origin[0]` finite.
+  NOTE on §11.3: `origin[1]=0` seats a full course at the floor datum for **grid/brick** (verified
+  `tilePatterns/grid.ts` `startJ=floor((minY-oy)/cell.h)`); for herringbone/basketweave the weave
+  merely anchors at v=0 — so the "full course at floor" invariant is asserted for grid, and weave
+  patterns assert only v=0 anchoring.
 
 - [ ] **Step 5: Commit** — `feat(tile-wall): wall origin mode — U-only balance, V pinned to floor datum`
 
@@ -365,103 +397,130 @@ export function wallEffectiveTileSetup(args: {
 - Create: `web/src/lib/tileWall/corners.ts`
 - Test: `web/test/tileWall/corners.test.ts`
 
+**Design correction (folds review C1/M1/M2): corner counting is LAYOUT-DRIVEN, not blind, and
+emits REAL `byKind` entries.** The earlier draft's `byKind: []` + additive `extraCornerCuts` was
+wrong on three counts: (a) `tileTakeoff.js` sets `agg.hasTrim` and accumulates corner/joint totals
+ONLY inside `if (summary.trim.byKind.length)` (`:370-385`) and emits only under `hasTrim`
+(`:507-522`) — an empty `byKind` silently drops all wall trim/joint/corner numbers; (b) a blind
+`extraCornerCuts = courses` over-counts a fold that lands on a tile boundary (0 straddlers); (c)
+adding to `order` without reclassifying leaves `counts.corner = 0`, so §11.4 is unpinned and wrap
+disagrees with reset. Fix: reclassify the ACTUAL straddling cells from the field layout (phase-aware),
+and emit `byKind` entries for edge finishes.
+
 **Interfaces:**
-- Consumes: `Fold` (`./unwrap`), `TileSetup`, resolved `H_ft`, `endpoint_exposed`, the field
-  `TileLayout` from the strip solve (for course count / straddling-tile detection).
-- Produces (shaped to the existing `summary.trim`/`summary.joints` — codemap §3):
+- Consumes: `Fold[]` (`./unwrap`), resolved `H_ft`, `TileSetup`, `endpoint_exposed`, `corner_mode`,
+  `edge_finish`, and the field `TileLayout` (`solveTileLayout` result — for phase-aware straddle
+  detection over `layout.quads`/`classified`).
+- Produces (`byKind` shaped exactly like codemap §3-4 so the existing aggregation fires):
   ```ts
-  export type WallTrim = { byKind: []; length_lf: number; pieces: number; corner_outside: number; corner_inside: number };
+  export type WallTrimKind = { exposure: string; length_lf: number; pieces: number; finish_neighbor: string };
+  export type WallTrim = { byKind: WallTrimKind[]; length_lf: number; pieces: number; corner_outside: number; corner_inside: number };
   export type WallJoints = { perimeter_lf: number; field_lf: number; transition_lf: number; total_lf: number; fieldGridSpacing_ft: number };
   export type WallCornerResult = {
-    trim: WallTrim; joints: WallJoints;
-    extraCornerCuts: number;   // wrap: straddling cuts added to the field order (per course, per inside fold)
-    edgePieces: { bullnose_ea: number; profile_lf: number; miter_lf: number };
+    classified: Classified[];  // WRAP: straddlers at inside folds reclassified full→corner (phase-aware). RESET: input passed through.
+    trim: WallTrim;            // byKind = edge finishes (outside corners + exposed endpoints); corner_* counts
+    joints: WallJoints;        // inside-only: perimeter_lf=0, field_lf=0, total_lf = Σ inside-fold H
   };
   export function wallCorners(args: {
-    folds: Fold[]; H_ft: number; tile_setup: TileSetup;
+    folds: Fold[]; H_ft: number; tile_setup: TileSetup; layout: TileLayout;
     corner_mode: "wrap" | "reset"; edge_finish: "profile" | "bullnose" | "miter";
     endpoint_exposed: [boolean, boolean];
   }): WallCornerResult;
   ```
 
-**Rules (from spec §4.4/§5/§11.4 — encoded as the tests below):**
-- `courses = floor(H_ft / moduleH_ft)` where `moduleH_ft = (h_in + joint_in)/12`.
-- **Inside fold** → movement joint of length `H_ft` (`joints`); under **wrap**, `courses`
-  extra corner cuts (`extraCornerCuts += courses`); under **reset**, no extra cut (each
-  sub-strip's own end column already counts it — Task 6).
-- **Outside fold** → a finished vertical edge of height `H_ft`, on **each of the 2 faces**:
-  - `profile`: `profile_lf += 2*H_ft` (the field square-cuts are counted by the strip solve
-    / sub-strip solve, not here).
-  - `bullnose`: `bullnose_ea += 2*courses` (SKU swap of the two edge columns; no extra cut).
-  - `miter`: `miter_lf += 2*H_ft` (labor).
-  - `corner_outside += 1` per outside fold (count).
-- **Endpoints** (`u=0`,`u=L`), when `endpoint_exposed[k]`, are treated as an exposed edge
-  with the same `edge_finish` on **one** face: `profile_lf += H_ft` (or `bullnose_ea += courses`,
-  or `miter_lf += H_ft`).
-- `corner_inside += 1` per inside fold. `joints.total_lf = perimeter_lf + field_lf + transition_lf`
-  with `field_lf = 0` (walls have no interior expansion grid in Slice A) and
-  `perimeter_lf = Σ inside-fold H` (movement joints); `fieldGridSpacing_ft = 0`.
+**Rules (spec §4.4/§5/§11.4; the numeric tests below are the binding spec):**
+- `courses = floor(H_ft / moduleH_ft)`, `moduleH_ft = (h_in + joint_in)/12`; `pitchW = (w_in+joint_in)/12`.
+- **WRAP inside fold** at `u_k`: find the field cells whose x-span **strictly contains** `u_k`
+  (`quad.x < u_k < quad.x + quad.w`) — these straddle the corner. Reclassify each `full`→`corner`
+  in the returned `classified` (phase-aware: a fold on a tile boundary contains **0** cells → no
+  reclassify, no over-count). This makes `counts.corner` correct and keeps `order`/`keptArea`
+  unchanged (a wrap corner tile is one tile, cut, both pieces used). `corner_inside += 1`; movement
+  joint `total_lf += H_ft`.
+- **RESET inside fold:** no reclassification (each sub-strip's own end column is a real `cut` from
+  its solve — Task 6). Still `corner_inside += 1` and joint `total_lf += H_ft`.
+- **Outside fold** (both modes), 2 faces, `corner_outside += 1`:
+  - `profile`: `byKind.push({ exposure:"wall_outside_corner", length_lf: 2*H_ft, pieces: 0, finish_neighbor:"profile" })`
+  - `bullnose`: `byKind.push({ exposure:"wall_outside_corner", length_lf: 0, pieces: 2*courses, finish_neighbor:"bullnose" })`
+  - `miter`: `byKind.push({ exposure:"wall_outside_corner", length_lf: 2*H_ft, pieces: 0, finish_neighbor:"miter" })` (LF = labor)
+- **Exposed endpoint** (`endpoint_exposed[k]`), one face, same finish → a `byKind` entry with
+  `length_lf: H_ft` (profile/miter) or `pieces: courses` (bullnose), `exposure:"wall_end"`.
+- `trim.length_lf = Σ byKind.length_lf`, `trim.pieces = Σ byKind.pieces`. Joints:
+  `perimeter_lf=0, field_lf=0, transition_lf=0, total_lf = (#inside folds)*H_ft, fieldGridSpacing_ft=0`.
+- **Bullnose is a SKU swap, NOT an extra piece** (spec §5): it does not add a field cut; the
+  `pieces` on the byKind entry ARE the order for those slots.
 
-- [ ] **Step 1: Write the failing tests** (concrete numbers; 12"×12" tile, joint 0):
+- [ ] **Step 1: Write the failing tests** (12"×12", joint 0, H=8 → courses=8; build a real `layout`
+  via `solveTileLayout` on the strip so straddle detection is exercised):
 
 ```ts
 // web/test/tileWall/corners.test.ts
 import { describe, it, expect } from "vitest";
 import { wallCorners } from "../../src/lib/tileWall/corners";
-const setup = { pattern: "grid", origin: [0,0], rotation_deg: 0, edge_strategy: "balanced",
-  skus: [{ id: "a", name: "A", w_in: 12, h_in: 12, color: "#000" }], joint: { width_in: 0 } } as any;
-const H = 8; // 8 courses of 12"
+import { wallStripRing } from "../../src/lib/tileWall/unwrap";
+import { solveTileLayout } from "../../src/lib/tileSolve";
+import { tileCounts } from "../../src/lib/tileCalc/tiles";
+const setup = { pattern: "grid", origin: [0,0], rotation_deg: 0, edge_strategy: "start_full",
+  skus: [{ id:"a", name:"A", w_in:12, h_in:12, color:"#000" }], joint: { width_in: 0 } } as any;
+const H = 8;
+const layout18 = solveTileLayout({ tile_setup: setup, ring_ft: wallStripRing(18, H) });
 
 describe("wallCorners", () => {
-  it("wrap + one inside fold: movement joint H, courses extra corner cuts, no edge trim", () => {
+  it("WRAP mid-tile inside fold (u=10.5): 8 straddlers reclassified full→corner; joint 8 LF", () => {
     const r = wallCorners({ folds: [{ u_ft: 10.5, kind: "inside", vertexIndex: 1 }], H_ft: H, tile_setup: setup,
-      corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [false, false] });
+      layout: layout18, corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [false, false] });
+    expect(tileCounts(r.classified).corner).toBe(8);   // pinned as a COUNT (§11.4), phase-aware
     expect(r.trim.corner_inside).toBe(1);
-    expect(r.trim.corner_outside).toBe(0);
-    expect(r.joints.total_lf).toBeCloseTo(8, 6);   // one inside joint of height 8
-    expect(r.extraCornerCuts).toBe(8);             // 8 courses straddle the fold
-    expect(r.edgePieces.profile_lf).toBe(0);
+    expect(r.joints.total_lf).toBeCloseTo(8, 6);
+    expect(r.trim.byKind.length).toBe(0);              // no outside/endpoint finish here
   });
 
-  it("reset + one inside fold: joint H, NO extra corner cut (sub-strips own it)", () => {
+  it("WRAP boundary inside fold (u=10.0): 0 straddlers (phase-aware, no phantom cuts)", () => {
+    const r = wallCorners({ folds: [{ u_ft: 10.0, kind: "inside", vertexIndex: 1 }], H_ft: H, tile_setup: setup,
+      layout: layout18, corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [false, false] });
+    expect(tileCounts(r.classified).corner).toBe(0);
+  });
+
+  it("RESET inside fold: no reclassify, joint 8 LF", () => {
     const r = wallCorners({ folds: [{ u_ft: 10.5, kind: "inside", vertexIndex: 1 }], H_ft: H, tile_setup: setup,
-      corner_mode: "reset", edge_finish: "profile", endpoint_exposed: [false, false] });
-    expect(r.extraCornerCuts).toBe(0);
+      layout: layout18, corner_mode: "reset", edge_finish: "profile", endpoint_exposed: [false, false] });
+    expect(tileCounts(r.classified).corner).toBe(tileCounts(layout18.classified).corner); // unchanged
     expect(r.joints.total_lf).toBeCloseTo(8, 6);
   });
 
-  it("outside fold, profile: 2*H profile LF on the two faces, corner_outside=1", () => {
+  it("outside fold, profile: a byKind entry of 2*H LF, corner_outside=1 (emits, non-empty byKind)", () => {
     const r = wallCorners({ folds: [{ u_ft: 10, kind: "outside", vertexIndex: 1 }], H_ft: H, tile_setup: setup,
-      corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [false, false] });
-    expect(r.edgePieces.profile_lf).toBeCloseTo(16, 6);
+      layout: layout18, corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [false, false] });
+    expect(r.trim.byKind.length).toBe(1);
+    expect(r.trim.byKind[0].length_lf).toBeCloseTo(16, 6);
     expect(r.trim.corner_outside).toBe(1);
   });
 
-  it("outside fold, bullnose: 2*courses bullnose EA, no profile, no extra field cut", () => {
+  it("outside fold, bullnose: byKind pieces = 2*courses, length_lf 0, corner_outside=1", () => {
     const r = wallCorners({ folds: [{ u_ft: 10, kind: "outside", vertexIndex: 1 }], H_ft: H, tile_setup: setup,
-      corner_mode: "wrap", edge_finish: "bullnose", endpoint_exposed: [false, false] });
-    expect(r.edgePieces.bullnose_ea).toBe(16);
-    expect(r.edgePieces.profile_lf).toBe(0);
+      layout: layout18, corner_mode: "wrap", edge_finish: "bullnose", endpoint_exposed: [false, false] });
+    expect(r.trim.byKind[0].pieces).toBe(16);
+    expect(r.trim.byKind[0].length_lf).toBe(0);
   });
 
-  it("exposed endpoints add one-face finish each", () => {
-    const r = wallCorners({ folds: [], H_ft: H, tile_setup: setup,
+  it("exposed endpoints: one byKind entry per exposed end (one face each)", () => {
+    const r = wallCorners({ folds: [], H_ft: H, tile_setup: setup, layout: layout18,
       corner_mode: "wrap", edge_finish: "profile", endpoint_exposed: [true, true] });
-    expect(r.edgePieces.profile_lf).toBeCloseTo(16, 6); // H on each end
+    expect(r.trim.byKind.reduce((s, k) => s + k.length_lf, 0)).toBeCloseTo(16, 6); // H each end
   });
 });
 ```
 
 - [ ] **Step 2: Run tests, verify they fail.**
 
-- [ ] **Step 3: Implement `corners.ts`** per the Rules above (compute `courses`, walk `folds`,
-  branch on `kind`/`corner_mode`/`edge_finish`, sum endpoint finishes, assemble the
-  `trim`/`joints`/`edgePieces`/`extraCornerCuts`). Keep it pure. Use `tileConfig(tile_setup)`
-  for `h_in`/`joint_in`.
+- [ ] **Step 3: Implement `corners.ts`** — `courses` from `tileConfig`; clone `layout.classified`;
+  for WRAP inside folds, reclassify straddlers (`quad.x < u_k < quad.x+quad.w`) `full`→`corner`;
+  walk folds/endpoints to build `byKind` (edge finishes) + `corner_inside`/`corner_outside`; build
+  inside-only `joints`. Pure; `import type { Classified, TileLayout } from "../tileSolve"` /
+  `../tileGeometry/classify`.
 
 - [ ] **Step 4: Run tests, verify pass.**
 
-- [ ] **Step 5: Commit** — `feat(tile-wall): run-keyed corner cuts / trim / movement joints`
+- [ ] **Step 5: Commit** — `feat(tile-wall): layout-driven corner reclassify + real byKind trim/joints`
 
 ---
 
@@ -470,6 +529,9 @@ describe("wallCorners", () => {
 **Files:**
 - Modify: `web/src/lib/tileSetup.ts` (`TileSetup` `:22-40`, `mintTileSetup` `:90-99`)
 - Modify: `web/src/lib/tileLayoutSig.ts` (`TileLayoutShape` `:25-29`, `tileLayoutSig` `:65`)
+- Modify: `web/src/pages/TakeoffCanvas.jsx` (`:1318` `tileLayoutSig(s, cond.tile_setup)` — the
+  layout-persist/reset caller; for a `surface_area` shape pass the resolved height as the new 3rd
+  arg so a wall's persist key isn't height-blind. The param is optional, so floor callers are safe.)
 - Test: `web/test/tileWall/dataModel.test.ts`
 
 **Interfaces:**
@@ -536,61 +598,83 @@ describe("tileLayoutSig wall-awareness", () => {
 - Test: `web/test/tileWall/summarizeWallShape.test.ts`, `web/test/tileWall/takeoff.wall.test.ts`
 
 **Interfaces:**
-- Produces: `summarizeWallShape(tile_setup, wallShape, dims, upp, resolvedHeight_ft)` returning
-  the SAME `summary` shape `summarizeShape` returns (codemap §3: `{ counts, bySku, grout,
-  cutsheet, order, warnings, layout, ring_ft, trim, joints }`) plus `summary.wallStrips`
-  (Task 6) — so `byCond` aggregation (codemap §4) consumes it unchanged. In wrap mode it
-  solves ONE strip; `summary.trim`/`summary.joints` come from `wallCorners`; `extraCornerCuts`
-  is folded into `order` (add to the tile order; reclassify is not required for Slice A —
-  conservative). Field solve uses `wallEffectiveTileSetup` (Task 2).
+- Produces: `summarizeWallShape(tile_setup, wallShape, dims, upp, resolvedHeight_ft)` — returns
+  EITHER `{ ok: false, reason }` (unwrappable run: reversal/`<2` verts) so the caller rejects
+  BEFORE the shared aggregation loop, OR a complete `summary` of the SAME shape `summarizeShape`
+  returns (codemap §3: `{ counts, bySku, grout, cutsheet, order, warnings, layout, ring_ft, trim,
+  joints }`) plus `summary.wallStrips: TileLayout[]` and `summary.extent_sf` (= `L*H`). In wrap
+  mode it solves ONE strip; `wallCorners` (Task 3) returns the reclassified `classified` (which
+  `tileCounts`/`countsBySku` run over) plus `trim`/`joints`. Field solve uses `wallEffectiveTileSetup`
+  (Task 2). NO separate `extraCornerCuts` — corner counts come from the reclassified `classified`.
 
-- [ ] **Step 1: Write failing tests** — extent identity + coverage reconciliation; a wall +
-  floor on one condition does NOT emit a bogus joint_lf; wrap corner counts match Task 3.
+- [ ] **Step 1: Write failing tests** — extent identity computed from code (not hardcoded);
+  coverage; a wall+floor on one condition does NOT emit a bogus joint_lf; an inside-only wall DOES
+  emit joint_lf; a reversal run is rejected without aborting the takeoff.
 
 ```ts
-// web/test/tileWall/summarizeWallShape.test.ts  (illustrative shape; refine to real API)
+// web/test/tileWall/summarizeWallShape.test.ts
 import { describe, it, expect } from "vitest";
 import { summarizeWallShape } from "../../src/lib/tileWall";
 import { mintTileSetup } from "../../src/lib/tileSetup";
 const dims = { w: 100, h: 100 }, upp = 0.1; const ft = (x:number)=>x/10;
 const ts = { ...mintTileSetup(), skus: [{ id:"a", name:"A", w_in:12, h_in:12, color:"#000" }], joint:{width_in:0} };
 
-it("extent identity: strip area == area_sf == L*H", () => {
+it("extent identity: summary.extent_sf === L*H === area_sf (computed, not hardcoded)", () => {
   const shape = { verts_norm: [[ft(0),ft(0)],[ft(18),ft(0)]], measure_role:"surface_area", face_side:"left" };
-  const s = summarizeWallShape(ts as any, shape as any, dims, upp, 8);
-  const area = s.ring_ft; // rectangle
-  const L = 18, H = 8;
-  expect((s as any).extent_sf ?? (L*H)).toBeCloseTo(144, 6); // area_sf = openLen*upp*H = 18*8
+  const s = summarizeWallShape(ts as any, shape as any, dims, upp, 8) as any;
+  expect(s.ok).not.toBe(false);
+  expect(s.extent_sf).toBeCloseTo(18 * 8, 6);          // exercises the code path, not `?? 144`
 });
 
-it("coverage: keptArea_sf ≈ area_sf * tileArea/moduleArea (grout-bounded), NOT == area_sf", () => {
+it("coverage: keptArea_sf ≈ area_sf * tileArea/moduleArea, NOT == area_sf; joint 0 → ≈144", () => {
   const shape = { verts_norm: [[ft(0),ft(0)],[ft(18),ft(0)]], measure_role:"surface_area", face_side:"left" };
-  const s = summarizeWallShape(ts as any, shape as any, dims, upp, 8);
-  // joint 0 → tileArea==moduleArea → keptArea ≈ 144
+  const s = summarizeWallShape(ts as any, shape as any, dims, upp, 8) as any;
   expect(s.counts.keptArea_sf).toBeCloseTo(144, 1);
+});
+
+it("reversal run → { ok:false }, not a throwing partial summary", () => {
+  const shape = { verts_norm: [[ft(0),ft(0)],[ft(10),ft(0)],[ft(2),ft(0)]], measure_role:"surface_area", face_side:"left" };
+  const s = summarizeWallShape(ts as any, shape as any, dims, upp, 8) as any;
+  expect(s.ok).toBe(false);
 });
 ```
 
 ```ts
-// web/test/tileWall/takeoff.wall.test.ts — mixed floor+wall on one condition: no bogus joint_lf
-// Build one condition with a floor shape (no trim) + a straight wall shape (no inside folds,
-// endpoints not exposed) → joint_lf must be 0, not 2*(L+H).
+// web/test/tileWall/takeoff.wall.test.ts — via computeTileTakeoff:
+//  (1) one condition, floor shape (no trim) + STRAIGHT wall (no folds, ends not exposed) → joint_lf === 0
+//      (NOT 2*(L+H)) and floor counts unchanged.
+//  (2) one condition, an L-run wall (one inside fold) → joint_lf > 0 (emits despite empty edge byKind,
+//      because the gate is widened to fire on corner_inside).
+//  (3) a project with a REVERSAL wall + a floor → floor still computes; the takeoff does NOT throw;
+//      the wall is counted in an excluded/warned bucket.
 ```
 
 - [ ] **Step 2: Run, verify fail.**
-- [ ] **Step 3a: Implement `summarizeWallShape`** — unwrap (Task 1; on null, return a summary
-  with an empty layout + a warning, excluded from field counts), `wallEffectiveTileSetup`
-  (Task 2), `solveTileLayout` on the strip, `tileCounts`/`countsBySku`/`grout`/`cutsheet`/
-  `orderTiles` (reuse), `wallCorners` (Task 3) → `summary.trim`/`summary.joints`; add
-  `extraCornerCuts` and `edgePieces` into `order`/new order lines.
-- [ ] **Step 3b: Wire `tileTakeoff.js`** — at `:311` change the gate to admit both roles:
-  `if (s.measure_role !== "floor_area" && s.measure_role !== "surface_area") continue;`
-  At `:314` require `>= 2` verts for `surface_area` (keep `>= 3` for floor). Extend the cache
-  `sig` (`:328-335`) with `s.measure_role`, the resolved height, and the wall fields. At
-  `:336-346`, branch: `surface_area` → resolve height (mirror `shapeMetrics.js:25-27`), call
-  `summarizeWallShape(...)`; else the existing floor path. Leave floor untouched.
+- [ ] **Step 3a: Implement `summarizeWallShape`** — `unwrapRun` (Task 1); **on `null` return
+  `{ ok:false, reason:"reversing_or_degenerate" }`** (do NOT synthesize a partial summary).
+  Else: `wallEffectiveTileSetup` (Task 2) → `solveTileLayout` on the strip → `wallCorners` (Task 3,
+  wrap) returns reclassified `classified` + `trim` + `joints` → run `tileCounts`/`countsBySku`/
+  `grout`/`cutsheet`/`orderTiles` over the RECLASSIFIED `classified` → assemble `summary` with
+  `trim`/`joints`/`wallStrips:[layout]`/`extent_sf = L*H`.
+- [ ] **Step 3b: Wire `tileTakeoff.js`** —
+  - `:311` gate: `if (s.measure_role !== "floor_area" && s.measure_role !== "surface_area") continue;`
+  - `:314` guard: for `surface_area` require `>= 2` verts (keep `>= 3` for floor).
+  - **REJECT-BEFORE-LOOP (C2):** in the `surface_area` branch, resolve height (mirror
+    `shapeMetrics.js:25-27`), call `summarizeWallShape(...)`; if it returns `{ ok:false }`,
+    `aggFor(cond).excluded.degenerate++;` + push a warning and `continue` — exactly like the floor
+    `:314` degenerate path — so a null summary NEVER enters the shared deref loop (`:349-395`).
+  - Extend the cache `sig` (`:328-335`) with `s.measure_role`, resolved height, `s.height_override`,
+    and the wall fields.
+  - **GATE-WIDEN (C1), floor-safe:** change the accumulation gate at `:370` from
+    `if (summary.trim.byKind.length)` to
+    `if (summary.trim.byKind.length || summary.trim.corner_inside || summary.trim.corner_outside)`.
+    For floors this is a no-op (`cornerTallies` only counts a corner when both adjacent edges are
+    trimmed → `byKind` already non-empty). For an inside-only wall it sets `hasTrim` so `agg.joints`
+    emits (`:507`). Add the mixed floor+wall test (2) above to prove joints emit for the wall and
+    floors are unchanged.
+  - Leave the floor path untouched.
 - [ ] **Step 4: Run, verify pass** + full suite `npx vitest run` green.
-- [ ] **Step 5: Commit** — `feat(tile-wall): wall takeoff (wrap) — strip solve + run-keyed trim, height-aware`
+- [ ] **Step 5: Commit** — `feat(tile-wall): wall takeoff (wrap) — reject-before-loop, gate-widen, height-aware`
 
 ---
 
@@ -603,21 +687,31 @@ it("coverage: keptArea_sf ≈ area_sf * tileArea/moduleArea (grout-bounded), NOT
 **Interfaces:**
 - Consumes: `folds`, `wall_corner_mode` (+ herringbone/diagonal → default reset unless a
   per-corner override forces wrap), `wallEffectiveTileSetup` per sub-strip.
-- Produces: `summary.wallStrips: TileLayout[]` (one per sub-strip); `counts`/`bySku`/`order`/
-  `cutsheet` are the MERGED tallies across sub-strips; `summary.layout` is the first strip
-  (kept non-null for legacy single-`layout` readers, which are all gated off walls by Task 7).
+- Produces: `summary.wallStrips: TileLayout[]` (one per sub-strip, for rendering);
+  `summary.layout.classified` = the **CONCATENATION of ALL sub-strips' `classified`** (M5 — see
+  below); `counts`/`bySku`/`order`/`cutsheet` derived from that merged `classified`.
 
-- [ ] **Step 1: Write failing tests** — reset run of two walls (10.5 + 7.5, H 8) yields two
-  sub-strips, merged `keptArea_sf ≈ 144`, one summary; each sub-strip balanced with V pinned
-  0; `corner_inside == 1`, `extraCornerCuts == 0` (Task 3 rule); a herringbone setup defaults
-  to reset even with `wall_corner_mode` unset.
+**M5 fix (binding):** `tileTakeoff.js:356` does `agg.classified.push(...summary.layout.classified)`,
+and the multi-SKU order split (`:423-424,448`) + reuse (`:485`) read `agg.classified`. If
+`summary.layout` were only the first sub-strip, a multi-SKU reset wall would order from a fraction
+of its cells. So `summary.layout.classified` MUST be the union of every sub-strip's cells (offset in
+u so cells don't collide is unnecessary for counts — they only tally `cls`/dims/`skuId` — but keep
+each sub-strip's own quads in `wallStrips` for rendering). Build merged `counts`/`bySku` by running
+`tileCounts`/`countsBySku` over the concatenated `classified` (do NOT hand-sum, so it can't drift).
+
+- [ ] **Step 1: Write failing tests** — reset run of two walls (10.5 + 7.5, H 8): `wallStrips.length===2`;
+  `summary.layout.classified.length === Σ sub-strip cells`; merged `keptArea_sf ≈ 144`; a **two-SKU**
+  reset wall's `countsBySku` covers cells from BOTH sub-strips (not just the first); each sub-strip
+  balanced with V pinned 0; `corner_inside === 1`; a herringbone setup defaults to reset even with
+  `wall_corner_mode` unset; a per-corner override `{mode:"wrap"}` overrides that default.
 - [ ] **Step 2: Run, verify fail.**
 - [ ] **Step 3: Implement** — split the run at each fold into `[u_{k-1}, u_k]` sub-strip rings
-  (each a fresh `wallStripRing(segLen, H)`), solve each with `wallEffectiveTileSetup`, merge
-  `tileCounts`/`countsBySku`/`order`/`cutsheet`, set `wallStrips`, compute `trim`/`joints`
-  once via `wallCorners({corner_mode:"reset"})`.
+  (`wallStripRing(segLen, H)`), solve each with `wallEffectiveTileSetup`, set `wallStrips`, set
+  `summary.layout.classified = wallStrips.flatMap(w => w.classified)` (+ a representative
+  `layout.config`/`bounds`), recompute `counts`/`bySku`/`order`/`cutsheet` over the merged
+  `classified`, and `trim`/`joints` via `wallCorners({corner_mode:"reset", layout: mergedLayout})`.
 - [ ] **Step 4: Run, verify pass.**
-- [ ] **Step 5: Commit** — `feat(tile-wall): reset-per-wall sub-strips + wallStrips[]`
+- [ ] **Step 5: Commit** — `feat(tile-wall): reset-per-wall — merged classified across sub-strips + wallStrips[]`
 
 ---
 
@@ -647,24 +741,39 @@ it("coverage: keptArea_sf ≈ area_sf * tileArea/moduleArea (grout-bounded), NOT
 ### Task 8: Panel preview + wall controls — `TilePanel.jsx`
 
 **Files:**
-- Modify: `web/src/components/TilePanel.jsx` (`ConditionCard` `:185`, counts block `:274-279`)
+- Modify: `web/src/components/TilePanel.jsx` (`ConditionCard` `:185` counts/controls; `RoomOverride`
+  `:347` for the per-shape wall card; `TilePanel` prop list `:442`)
+- Modify: `web/src/pages/TakeoffCanvas.jsx` (TilePanel mount ~`:10250-10266`) — thread the selected
+  wall shape's per-shape summary to the panel.
 - Test: `web/test/tilePanel.wall.test.tsx` (or the repo's existing panel test harness)
 
-- [ ] **Step 1: Write failing tests** — a wall condition renders: a **corner-mode toggle**
-  (Wrap / Reset per wall), an **edge-finish** select (profile/bullnose/miter), a **face-side
-  flip**, the **visible inside/outside** fold labels, and an **elevation strip** figure; the
-  trim/joint LF + corner counts appear in the wall condition's summary line. A floor condition
-  is unchanged.
+**M4 fix (binding):** the elevation strip is PER-SHAPE (`wallStrips` lives on the per-shape
+`summary`, and a condition can hold several wall shapes). Do NOT read `ti.wallStrips` — the byCond
+`ti` has no `layout`/`wallStrips` (codemap §16 / review M4). `computeTileTakeoff` already returns a
+per-shape `byShape` map (used by `markedset.js:924`); TakeoffCanvas passes the **selected shape's**
+`byShape` entry to TilePanel as a new `selectedWall` prop (`{ wallStrips, folds, trim, joints }` or
+`null`). The elevation strip renders from `selectedWall.wallStrips`.
+
+- [ ] **Step 1: Write failing tests** — for a selected `surface_area` shape the panel renders: a
+  **corner-mode toggle** (Wrap / Reset, condition-level via `onTileSetup`), an **edge-finish** select
+  (condition-level), a **face-side flip** + **endpoint-exposed** toggles (shape-level via
+  `onTileLayout`/shape update), the **visible inside/outside** fold labels, and an **elevation strip**
+  drawn from `selectedWall.wallStrips`; the wall condition's summary line shows trim/joint LF + corner
+  counts (now non-zero, from the widened-gate emission). A floor condition/shape is unchanged, and the
+  panel does NOT throw when `selectedWall` is null.
 - [ ] **Step 2: Run, verify fail.**
-- [ ] **Step 3: Implement** — in `ConditionCard`, when the condition's shapes are `surface_area`,
-  render the wall controls (writing `wall_corner_mode`/`wall_edge_finish` via `onTileSetup`,
-  and `face_side`/`endpoint_exposed` via `onTileLayout`/shape update) and a small SVG elevation
-  strip from `ti.wallStrips ?? [ti.layout]` (reuse the quad→corners math in elevation space —
-  do NOT use plan placement); show the inside/outside labels from the run folds; add a
-  trim/joint/corner summary line next to the existing counts block `:274-279`.
-- [ ] **Step 4: Run, verify pass** + browser smoke per `screenshots-when-driving-ui` memory
-  (drive the wall condition, screenshot the panel + elevation strip, attach as evidence).
-- [ ] **Step 5: Commit** — `feat(tile-wall): docked elevation-strip preview + corner/finish/face controls`
+- [ ] **Step 3: Implement** — (a) TakeoffCanvas: compute/lookup the selected shape's `byShape` entry
+  and pass it as `selectedWall`. (b) `ConditionCard`: when the condition is a wall condition
+  (`tile_setup.wall_corner_mode` present / shapes are `surface_area`), render the corner-mode +
+  edge-finish selects (write via `onTileSetup`) and a trim/joint/corner summary line beside `:274-279`.
+  (c) `RoomOverride` (or a sibling wall card): face-side flip + endpoint toggles (shape-level) + the
+  SVG **elevation strip** from `selectedWall.wallStrips` (reuse the quad→corners math in elevation
+  space — NOT plan placement) + the inside/outside labels from `selectedWall.folds`.
+- [ ] **Step 4: Run, verify pass** + browser smoke per `screenshots-when-driving-ui` memory: drive a
+  real 2-wall run, screenshot the panel + elevation strip, and **confirm the inside/outside labels
+  match the physical corner** (this is where the absolute `face_side` convention from Task 1 is
+  validated on-screen); attach the screenshot as evidence.
+- [ ] **Step 5: Commit** — `feat(tile-wall): per-shape elevation-strip preview + corner/finish/face controls`
 
 ---
 
@@ -680,3 +789,30 @@ it("coverage: keptArea_sf ≈ area_sf * tileArea/moduleArea (grout-bounded), NOT
 - **No placeholders:** new pure modules carry real code; integration tasks carry exact edit
   anchors + real tests. The intricate corner accounting is pinned by concrete numeric tests
   (Task 3) that ARE the spec for the implementer.
+
+## Revision log — adversarial plan review folded (v1 → v2)
+
+Review: `docs/superpowers/research/2026-08-29-wall-tile-plan-review.md` (verdict REVISE, 2 Crit + 5 Maj).
+- **C1 (trim/joints/corners silently dropped — `byKind`-empty fails `hasTrim`):** Task 3 now emits
+  REAL `byKind` entries for edge finishes; Task 5 **widens the accumulation gate** at
+  `tileTakeoff.js:370` to `|| corner_inside || corner_outside` (floor-safe no-op) so an inside-only
+  wall's joints/corners emit. Tests: mixed floor+wall joint_lf, inside-only wall emits.
+- **C2 (null run aborts the whole takeoff):** `summarizeWallShape` returns `{ ok:false }`; Task 5
+  rejects BEFORE the shared loop (`excluded.degenerate++; continue;`), like the floor `:314` path.
+  Test: reversal wall + floor → floor still computes, no throw.
+- **M1 (phase-blind wrap over-count):** Task 3 reclassifies the ACTUAL straddling cells from the
+  field layout (`quad.x < u_k < quad.x+quad.w`) — a boundary fold → 0. Tests: u=10.5 → 8, u=10.0 → 0.
+- **M2 (`counts.corner` stayed 0):** wrap reclassifies `full`→`corner`; counts derive from the
+  reclassified `classified` (no blind `extraCornerCuts`). Test: `tileCounts(classified).corner`.
+- **M3 (inside/outside absolute unverifiable):** convention pinned (face left = `(-dy,dx)` side),
+  wrong comment removed, ABSOLUTE test added (east→south → inside), on-screen sense validated in
+  Task 8 browser smoke.
+- **M4 (panel read a nonexistent `ti.wallStrips`):** panel reads the selected shape's `byShape`
+  entry via a new `selectedWall` prop (per-shape, threaded from TakeoffCanvas).
+- **M5 (reset undercounts multi-SKU):** `summary.layout.classified` = concat of ALL sub-strips'
+  cells; counts/bySku recomputed over the merge. Test: two-SKU reset covers both sub-strips.
+- **Minors:** U objective now center-and-balance (not first-candidate); §11.3 full-course-at-floor
+  scoped to grid (weave asserts v=0 anchoring); `tileLayoutSig` persist caller `TakeoffCanvas.jsx:1318`
+  added to Task 4; extent test computes from code (`s.extent_sf`) instead of self-passing.
+- **Confirmed sound (unchanged):** field-count strip reuse, joint-0 coverage ≈144, reset two-end-cuts,
+  `origin[1]=0` seating a full grid course at the floor, markedset/dxf floor gates.
