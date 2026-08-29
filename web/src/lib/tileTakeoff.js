@@ -164,6 +164,7 @@ function summarizeShape(tile_setup, ring_ft, holes_ft, tile_layout) {
   }
   const solveSetup = effectiveTileSetup({ tile_setup, tile_layout, ring_ft: fieldRing_ft, holes_ft });
   const layout = solveTileLayout({ tile_setup: solveSetup, ring_ft: fieldRing_ft, holes_ft });
+  warnings.push(...(layout.warnings || []));
   const { classified } = layout;
   const counts = tileCounts(classified);
   const bySku = countsBySku(classified);

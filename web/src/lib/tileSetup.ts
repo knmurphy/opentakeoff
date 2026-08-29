@@ -70,7 +70,7 @@ export function assignedSkuId(tile_setup: TileSetup, cell?: TileCell | null): st
   const fallback = primaryUsableSku(tile_setup)?.id ?? tile_setup.skus?.[0]?.id ?? "sku";
   const assignment = tile_setup.assignment;
   if (!assignment || cell == null) return fallback;
-  const id = assignment.slots[slotKey(cell, assignment.unit)];
+  const id = assignment.slots?.[slotKey(cell, assignment.unit)];
   if (!id) return fallback;
   const sku = (tile_setup.skus || []).find((s) => s.id === id);
   return sku && usableSku(sku) ? id : fallback;

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { solveTileLayout } from "../src/lib/tileSolve.ts";
+import { solveTileLayout, type TileLayout } from "../src/lib/tileSolve.ts";
 import { mintTileSetup, assignedSkuId } from "../src/lib/tileSetup.ts";
 import { getPattern } from "../src/lib/tilePatterns/index.ts";
 import { slotKey } from "../src/lib/tilePatterns/slotKey.ts";
@@ -109,10 +109,113 @@ test("solveTileLayout: absent assignment leaves every quad's skuId at today's pr
   ts.joint.width_in = 0;
   ts.origin = [0, 0];
   const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
-  const { quads } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  const { quads, warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
   const primaryId = ts.skus[0].id;
   assert.ok(quads.length > 0);
   assert.ok(quads.every((q) => q.skuId === primaryId));
+  assert.deepEqual(warnings, []);
+});
+
+// ── Task 9 (2026-08-29 tile-multi-sku-field): same-size gate ──
+// The generator lays ONE uniform tile size; a differently-sized assigned SKU
+// would be counted/ordered at the wrong size. The engine must REJECT a
+// multi-SKU assignment whose SKUs aren't all the same footprint as the
+// field: ignore the assignment (solve single-primary) + push a QA warning.
+// Never throw — this runs inside a React useMemo.
+
+test("solveTileLayout: an assigned SKU whose size differs from the field is REJECTED — assignment ignored, warning pushed, no throw", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" }, // field/primary size
+    { id: "B", name: "B", w_in: 6, h_in: 6, color: "#222222" }, // DIFFERENT size — must be rejected
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.assignment = {
+    mode: "repeat",
+    unit: { w: 2, h: 2 },
+    slots: { "0_0": "A", "1_0": "B", "0_1": "B", "1_1": "A" },
+  };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  let result: TileLayout | undefined;
+  assert.doesNotThrow(() => {
+    result = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  });
+  const { quads, warnings } = result!;
+  assert.ok(quads.length > 0);
+  assert.ok(quads.every((q) => q.skuId === "A"), "assignment ignored — every quad falls back to the primary");
+  assert.ok(
+    warnings.some((w) => typeof w === "string" && /same size|multi-size/i.test(w)),
+    `expected a same-size warning, got ${JSON.stringify(warnings)}`,
+  );
+});
+
+test("solveTileLayout: an assigned SKU whose size differs from the field is rejected even when the pair is just rotated (unordered w×h compare)", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 24, color: "#111111" }, // field/primary size
+    { id: "B", name: "B", w_in: 24, h_in: 12, color: "#222222" }, // same footprint, rotated — ALLOWED
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.assignment = {
+    mode: "repeat",
+    unit: { w: 2, h: 2 },
+    slots: { "0_0": "A", "1_0": "B", "0_1": "B", "1_1": "A" },
+  };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const result = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  assert.ok(result.quads.some((q) => q.skuId === "B"), "same-footprint rotated SKU is allowed — assignment applied");
+  assert.deepEqual(result.warnings, []);
+});
+
+test("solveTileLayout: assigned SKUs that all match the field size apply the assignment normally (unchanged from Task 5) and warnings is []", () => {
+  const ts = mintTileSetup();
+  ts.skus = [
+    { id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" },
+    { id: "B", name: "B", w_in: 12, h_in: 12, color: "#222222" },
+  ];
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  ts.assignment = {
+    mode: "repeat",
+    unit: { w: 2, h: 2 },
+    slots: { "0_0": "A", "1_0": "B", "0_1": "B", "1_1": "A" },
+  };
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { quads, warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  const at = (i: number, j: number) => quads.find((q) => q.cell?.i === i && q.cell?.j === j);
+  assert.equal(at(0, 0)?.skuId, "A");
+  assert.equal(at(1, 0)?.skuId, "B");
+  assert.deepEqual(warnings, []);
+});
+
+test("assignedSkuId: assignment present but slots undefined (malformed payload) falls back to the default and does not throw", () => {
+  const ts = mintTileSetup();
+  ts.skus = [{ id: "A", name: "A", w_in: 12, h_in: 12, color: "#111111" }];
+  // @ts-expect-error — deliberately malformed: no `slots` key at all
+  ts.assignment = { mode: "repeat", unit: { w: 2, h: 2 } };
+  let result;
+  assert.doesNotThrow(() => {
+    result = assignedSkuId(ts, { i: 0, j: 0 });
+  });
+  assert.equal(result, "A");
+});
+
+test("solveTileLayout: no assignment at all — layout.warnings is []", () => {
+  const ts = mintTileSetup();
+  ts.joint.width_in = 0;
+  ts.origin = [0, 0];
+  const ring: [number, number][] = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const { warnings } = solveTileLayout({ tile_setup: ts, ring_ft: ring });
+  assert.deepEqual(warnings, []);
+});
+
+test("solveTileLayout: degenerate ring — warnings is [] on the empty-layout path too", () => {
+  const ts = mintTileSetup();
+  const { warnings, classified } = solveTileLayout({ tile_setup: ts, ring_ft: [] });
+  assert.deepEqual(classified, []);
+  assert.deepEqual(warnings, []);
 });
 
 // ── offset.ts floored-mod rowShift fix (carried Task-4 review finding) ──

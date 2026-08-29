@@ -19,6 +19,7 @@ export type TileLayout = {
   bounds: Bounds;
   quads: TileQuad[];
   classified: Classified[];
+  warnings: string[];
 };
 
 function ringBounds(ring: readonly [number, number][]): Bounds | null {
@@ -43,7 +44,7 @@ export function solveTileLayout(args: {
   const config = tileConfig(tile_setup);
   const bounds = ringBounds(ring_ft);
   if (!bounds) {
-    return { config, bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 }, quads: [], classified: [] };
+    return { config, bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 }, quads: [], classified: [], warnings: [] };
   }
 
   // Generator boundary: inches → feet (tileUnits.inToFt).
@@ -65,11 +66,47 @@ export function solveTileLayout(args: {
   // `cell` (slotKey.ts), falling back to that same generator default on any
   // miss. Mutates the freshly-generated quads in place — safe: this runs
   // before the caller's layout cache write, and before classifyLayout below.
-  for (const q of quads) q.skuId = assignedSkuId(tile_setup, q.cell);
+  //
+  // Same-size gate (M3 Task 9): the generator above lays down ONE uniform
+  // tile size (w_ft/h_ft, from `config` — the field/primary SKU) — every
+  // downstream consumer (tileCalc/* counts, grout, order) trusts that
+  // single config.w_in/h_in for every kept cell, regardless of which SKU a
+  // quad ends up wearing. An assigned SKU whose footprint DIFFERS from the
+  // field would therefore be counted/ordered at the wrong size — so the
+  // engine REJECTS such an assignment wholesale rather than silently
+  // mis-sizing the order: it skips the resolver loop below (every quad
+  // keeps generate()'s single default skuId) and surfaces a QA warning
+  // instead. Compared UNORDERED ({min,max}) so a same-footprint SKU that's
+  // just rotated (12x24 vs 24x12) is still allowed. Dangling ids (a slot
+  // naming a SKU no longer in `skus`) are excluded from this check —
+  // assignedSkuId() already falls back for those; they're not a sizing
+  // concern. Never throws — this solve runs inside a React useMemo.
+  const warnings: string[] = [];
+  const assignedIds = tile_setup.assignment?.slots ? new Set(Object.values(tile_setup.assignment.slots)) : null;
+  let sizeMismatch = false;
+  if (assignedIds) {
+    const fieldSize = [config.w_in, config.h_in].sort((a, b) => a - b);
+    for (const id of assignedIds) {
+      const sku = (tile_setup.skus || []).find((s) => s.id === id);
+      if (!sku) continue;
+      const w = Math.max(0.25, Number(sku.w_in) || 0);
+      const h = Math.max(0.25, Number(sku.h_in) || 0);
+      const size = [w, h].sort((a, b) => a - b);
+      if (size[0] !== fieldSize[0] || size[1] !== fieldSize[1]) {
+        sizeMismatch = true;
+        break;
+      }
+    }
+  }
+  if (sizeMismatch) {
+    warnings.push("Multi-size tile fields aren't supported yet — the assignment was ignored; make the SKUs the same size.");
+  } else {
+    for (const q of quads) q.skuId = assignedSkuId(tile_setup, q.cell);
+  }
 
   // classifyLayout boundary: back to inches (cfg.joint_in), deliberately —
   // it emits kept-cut dimensions in inches for downstream consumers.
   const classified = classifyLayout(quads, ring_ft, holes_ft ?? [], config.joint_in);
 
-  return { config, bounds, quads, classified };
+  return { config, bounds, quads, classified, warnings };
 }
