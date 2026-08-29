@@ -205,7 +205,7 @@ ordered quantity cannot drift.
   |---|---|---|
   | grid, brick_50, brick_33 | honored | honored |
   | diagonal | honored | fixed 45° |
-  | herringbone, basketweave | interlock-derived; free origin ignored | n/a |
+  | herringbone, basketweave | interlock-derived; origin honored as a rigid phase | n/a |
   | modular | cell-anchored | per cell |
   | nonrect (hex/penny) | honored | pattern-fixed |
 

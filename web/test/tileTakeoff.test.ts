@@ -954,3 +954,65 @@ test("computeTileTakeoff: movement joints accumulate for EVERY room, not only tr
   assert.equal(agg.joints.perimeter_lf, 32);
   assert.equal(agg.joints.total_lf, 32);
 });
+
+// Slice 1 close-out (2026-08-29 tile-multi-sku-field, Task 3) — herringbone
+// and basketweave used to derive their own phasing from the interlock
+// geometry alone and silently ignore `origin` (design §3.1's old
+// "interlock-derived; free origin ignored" row). Tasks 1/2 (commits
+// 92c786c, c2181e2) made both generators honor `origin` as a rigid
+// translation. This is the INTEGRATION proof that the shipped per-room
+// override — shape.tile_layout.origin — actually reaches that fix: the
+// verified path is effectiveTileSetup pinning tile_layout.origin
+// (tileGeometry/optimize.ts ~:190-193) into tileConfig.origin into the
+// generator (tileSolve.ts). Before Task 1, this override was a silent
+// no-op for herringbone; the drawn grid would never move even though the
+// estimator asked it to.
+function makeHerringboneCondition() {
+  const tile_setup = mintTileSetup();     // 12x24in SKU (2:1 long:short — herringbone's own design ratio)
+  tile_setup.pattern = "herringbone";
+  tile_setup.joint.width_in = 0;
+  return { id: "condHb", finish_tag: "CT-HB", multiplier: 1, tile_setup };
+}
+
+test("computeTileTakeoff: a per-room tile_layout.origin override moves a herringbone room's solved quads (Slice 1 close-out)", () => {
+  const cond = makeHerringboneCondition();
+  const base = makeShape(cond.id);
+  const shifted = { ...makeShape(cond.id), id: "shapeHbShifted", tile_layout: { origin: [1, 1] } };
+
+  const { byShape } = computeTileTakeoff([cond], [base, shifted], dimsFor, uppFor);
+  const baseOut = byShape.get(base.id);
+  const shiftedOut = byShape.get(shifted.id);
+  assert.ok(baseOut && shiftedOut, "expected byShape summaries for both rooms");
+
+  const baseQuads = baseOut.layout.quads;
+  const shiftedQuads = shiftedOut.layout.quads;
+  assert.ok(baseQuads.length > 0 && shiftedQuads.length > 0, "expected a non-empty herringbone lattice for both rooms");
+
+  // Match quads present in BOTH runs by rot + the (-1,-1)-shifted center: a
+  // plank at (cx, cy, rot) under the override should correspond to a plank
+  // at (cx-1, cy-1, rot) with no override, if the origin genuinely moved
+  // the lattice. Pre-Task-1, herringbone ignored `origin` entirely, so both
+  // runs would generate the IDENTICAL quad set — the lattice's own
+  // translation symmetries are (periodX, 0) and (periodX/2, bandH), neither
+  // of which is (1,1), so a stale/no-op origin would find zero (-1,-1)
+  // matches here and this assertion would fail.
+  const EPS = 1e-6;
+  const matches: Array<[{ cx: number; cy: number }, { cx: number; cy: number }]> = [];
+  for (const s of shiftedQuads) {
+    const hit = baseQuads.find(
+      (b: { cx: number; cy: number; w: number; h: number; rot: number }) =>
+        Math.abs(b.rot - s.rot) < EPS &&
+        Math.abs(b.w - s.w) < EPS &&
+        Math.abs(b.h - s.h) < EPS &&
+        Math.abs(s.cx - 1 - b.cx) < EPS &&
+        Math.abs(s.cy - 1 - b.cy) < EPS,
+    );
+    if (hit) matches.push([s, hit]);
+  }
+
+  assert.ok(matches.length >= 5, `expected several overlapping planks between the two runs, got ${matches.length}`);
+  for (const [s, b] of matches) {
+    assert.ok(Math.abs(s.cx - b.cx - 1) < EPS, "x shift between the two runs must be exactly 1");
+    assert.ok(Math.abs(s.cy - b.cy - 1) < EPS, "y shift between the two runs must be exactly 1");
+  }
+});
