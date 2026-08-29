@@ -1231,3 +1231,78 @@ test("computeTileTakeoff: a 'hole' cell (interior cutout) assigned to a second S
   const expected = orderTiles({ safeCount: 15, sku: tile_setup.skus[0] });
   assert.deepEqual(agg.order, expected, "byte-identical to a single-SKU figuring — the hole cell contributes nothing");
 });
+
+// ── Task 7 (2026-08-29 tile-multi-sku-field): tile_goods `by_sku[]` rows ───
+// Task 6 put the per-SKU purchase split on the byCond aggregate
+// (`agg.orderBySku`); this surfaces it in the report row tileReportRows
+// builds, additive and ×N-scaled the SAME way the scalar purchase fields
+// already are (safe/boxes/figured/with_margin) — mirrors the trim/joint ×N
+// precedent above (line 888).
+test("tileReportRows: a mixed (2+ kept SKU) condition emits by_sku[] with one entry per SKU, ×N scaled, summing to the row's scalars", () => {
+  const cond = makeCheckerboardCondition();
+  cond.multiplier = 2;
+  const shape = makeShape(cond.id); // 4x4ft room, 12x12in tile, 0 joint => 16 full, split 8/8 across A/B
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const agg = byCond.get(cond.id);
+  assert.ok(agg?.orderBySku, "expected a per-SKU order breakdown to build the report row from");
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 2 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  const row = out[0];
+
+  assert.ok(Array.isArray(row.by_sku), "expected a by_sku[] array on the report row");
+  assert.equal(row.by_sku.length, 2);
+  const byId = Object.fromEntries(row.by_sku.map((o) => [o.sku_id, o]));
+  assert.ok(byId.A && byId.B, "expected a by_sku entry for both A and B");
+
+  // name/color resolve from the condition's tile_setup.skus by sku_id
+  assert.equal(byId.A.name, "A");
+  assert.equal(byId.A.color, "#111111");
+  assert.equal(byId.B.name, "B");
+  assert.equal(byId.B.color, "#222222");
+
+  // ×N scaling mirrors the scalar purchase fields — each entry's safe/
+  // boxes/figured/with_margin equal the byCond per-SKU figure × multiplier.
+  const bySkuAgg = Object.fromEntries(agg.orderBySku.map((o) => [o.sku_id, o]));
+  for (const id of ["A", "B"]) {
+    assert.equal(byId[id].safe, bySkuAgg[id].safe * 2);
+    assert.equal(byId[id].boxes, bySkuAgg[id].boxes * 2);
+    assert.equal(byId[id].figured, bySkuAgg[id].figured * 2);
+    assert.equal(byId[id].with_margin, bySkuAgg[id].with_margin * 2);
+  }
+
+  // the row's scalar purchase fields stay the SUM across by_sku — never a
+  // separate pooled figuring.
+  assert.equal(row.safe, byId.A.safe + byId.B.safe);
+  assert.equal(row.boxes, byId.A.boxes + byId.B.boxes);
+  assert.equal(row.figured, byId.A.figured + byId.B.figured);
+  assert.equal(row.with_margin, byId.A.with_margin + byId.B.with_margin);
+});
+
+test("tileReportRows: a single-SKU/no-assignment condition's row has NO by_sku key (byte-identical to today)", () => {
+  const cond = makeTileCondition();
+  const shape = makeShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+  const agg = byCond.get(cond.id);
+  assert.ok(agg, "expected a byCond summary");
+  assert.equal("orderBySku" in agg, false, "sanity: no per-SKU breakdown on this fixture");
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  assert.equal("by_sku" in out[0], false, "a single-SKU condition must never emit a by_sku key");
+});
+
+test("tileReportRows: an assignment that resolves every kept cell to one SKU also emits NO by_sku key", () => {
+  const cond = makeCheckerboardCondition();
+  cond.id = "condSingleColorReport";
+  cond.tile_setup.assignment = { mode: "repeat", unit: { w: 1, h: 1 }, slots: { "0_0": "A" } };
+  const shape = makeShape(cond.id);
+  const { byCond } = computeTileTakeoff([cond], [shape], dimsFor, uppFor);
+
+  const rows = [{ id: cond.id, finish_tag: cond.finish_tag, multiplier: 1 }];
+  const out = tileReportRows(byCond, rows);
+  assert.equal(out.length, 1);
+  assert.equal("by_sku" in out[0], false, "one effective SKU (via assignment) must never emit a by_sku key");
+});

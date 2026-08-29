@@ -543,6 +543,9 @@ export function tileReportRows(tileByCond, rows) {
     if (!ti) continue;
     const mult = r.multiplier || 1;
     const reuseEnabled = Boolean(ti.reuse && ti.reuseOrder);
+    const bySku = ti.orderBySku && ti.orderBySku.length > 1
+      ? new Map((ti.tile_setup.skus || []).map((s) => [s.id, s]))
+      : null;
     out.push({
       condition_id: r.id,
       finish_tag: r.finish_tag,
@@ -577,6 +580,37 @@ export function tileReportRows(tileByCond, rows) {
       trim_by_kind: ti.trim
         ? ti.trim.byKind.map((k) => ({ ...k, length_lf: k.length_lf * mult, pieces: k.pieces * mult }))
         : [],
+      // Multi-SKU purchase (Task 7, docs/superpowers/sdd/2026-08-29-tile-
+      // multi-sku-field): additive — present ONLY when byCond's finalize
+      // (Task 6) split the condition's kept cells across 2+ SKUs
+      // (`ti.orderBySku`); a single-SKU/no-assignment condition never gets
+      // this key, so a tile-less/single-SKU export stays byte-identical.
+      // Each entry's safe/boxes/figured/with_margin get the SAME ×N scaling
+      // as the scalar fields above — the row's own safe/boxes/figured/
+      // with_margin equal the SUM of these already-scaled entries (scaling
+      // then summing is the same as summing then scaling). name/color
+      // resolve from the condition's tile_setup.skus by sku_id; a bucket
+      // whose id no longer names a real SKU (stale assignment after a SKU
+      // delete — the same edge case byCond's own orderBySku finalize falls
+      // back for, tileTakeoff.js:423) falls back to the field's own
+      // primaryUsableSku, same chain, never a dangling id or a placeholder
+      // color (tileSetup.ts:68).
+      ...(bySku
+        ? {
+            by_sku: ti.orderBySku.map((o) => {
+              const sku = bySku.get(o.sku_id) ?? primaryUsableSku(ti.tile_setup);
+              return {
+                sku_id: o.sku_id,
+                name: sku?.name ?? o.sku_id,
+                color: sku?.color ?? "#999999",
+                safe: o.safe * mult,
+                boxes: o.boxes * mult,
+                figured: o.figured * mult,
+                with_margin: o.with_margin * mult,
+              };
+            }),
+          }
+        : {}),
     });
   }
   return out;

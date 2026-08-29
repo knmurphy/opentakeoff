@@ -644,6 +644,10 @@ export const exportReportOutput = {
       w_in: z.number(), h_in: z.number(), count: z.number().int(), lShaped: z.boolean(), corner: z.boolean(),
     })),
     warnings: z.array(z.string()),
+    by_sku: z.array(z.object({
+      sku_id: z.string(), name: z.string(), color: z.string(),
+      safe: z.number(), boxes: z.number(), figured: z.number(), with_margin: z.number(),
+    })).optional().describe("Per-SKU purchase split (Task 7) — present only when a mixed/checkerboard field distributes 2+ kept SKUs on this condition; each entry's safe/boxes/figured/with_margin are ×N applied like the row's own scalar purchase fields, and sum to them"),
   })).describe("Tile order rows (Task 8) — full/cut/corner/hole counts, kept_area_sf, safe/boxes/figured/with_margin, grout_bags, reuse_enabled/reuse_whole/reuse_with_margin/reuse_boxes/reuse_downgraded (M6, additive — present with zero/null figures when purchase.reuse is not opted in), cutsheet, and warnings per tile-setup condition, ×N applied to purchase quantities; empty when no condition carries a tile_setup"),
 };
 

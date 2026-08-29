@@ -117,6 +117,22 @@ export type TileTakeoff = {
   byShape: Map<string, TileShapeSummary>;
 };
 
+// One SKU's own report-row purchase line within a mixed condition's
+// `by_sku[]` (Task 7, docs/superpowers/sdd/2026-08-29-tile-multi-sku-field)
+// — TileConditionSkuOrder's byCond figures, ×N-scaled the same as the row's
+// own scalar purchase fields, plus the resolved SKU's display name/color
+// (tile_setup.skus by sku_id; falls back to the raw id / a neutral color
+// when the id no longer resolves).
+export type TileReportSkuRow = {
+  sku_id: string;
+  name: string;
+  color: string;
+  safe: number;
+  boxes: number;
+  figured: number;
+  with_margin: number;
+};
+
 // The additive tile row for opentakeoff.report.v1's `tile_goods` block
 // (tileReportRows). ×N multiplier applied to purchase quantities; measured
 // geometry reported as-measured per unit.
@@ -146,6 +162,11 @@ export type TileReportRow = {
   corner_inside: number;
   joint_lf: number;
   trim_by_kind: TrimTally[];
+  // Task 7: present ONLY when the condition's byCond aggregate split kept
+  // cells across 2+ SKUs (`orderBySku.length > 1`) — absent for the
+  // overwhelmingly common single-SKU condition, keeping a tile-less/
+  // single-SKU export byte-identical to pre-Task-7.
+  by_sku?: TileReportSkuRow[];
 };
 
 export function hasTileSetup(c: unknown): boolean;

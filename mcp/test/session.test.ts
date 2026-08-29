@@ -380,11 +380,16 @@ test("exportReport: a tile_setup condition with a floor shape figures tile_goods
   // tileReportRows would fail this, not just production runtime.
   z.object(exportReportOutput).parse(rep);
   const row = rep.tile_goods[0];
+  // M8 (trim + movement joints) added trim_lf/corner_outside/corner_inside/
+  // joint_lf/trim_by_kind to every row — this pin went stale when that
+  // landed without updating it. CT-1 here is single-SKU (no assignment), so
+  // Task 7's by_sku key stays absent; a mixed-condition by_sku assertion
+  // lives in its own test below so it can never perturb this key-set pin.
   assert.deepEqual(Object.keys(row), [
     "condition_id", "finish_tag", "multiplier", "full", "cut", "corner", "hole",
     "kept_area_sf", "safe", "boxes", "figured", "with_margin", "grout_bags",
     "reuse_enabled", "reuse_whole", "reuse_with_margin", "reuse_boxes", "reuse_downgraded",
-    "cutsheet", "warnings",
+    "cutsheet", "warnings", "trim_lf", "corner_outside", "corner_inside", "joint_lf", "trim_by_kind",
   ]);
   assert.equal(row.reuse_enabled, false, "reuse is opt-in — absent purchase.reuse reports disabled");
   assert.equal(row.reuse_whole, 0);
@@ -399,6 +404,52 @@ test("exportReport: a tile_setup condition with a floor shape figures tile_goods
   // opting back out empties the block again
   s.editCondition("CT-1", { tile_setup: null });
   assert.deepEqual(s.exportReport().tile_goods, []);
+});
+
+// Task 7 (2026-08-29 tile-multi-sku-field) — a checkerboard assignment field
+// (Task 5/6) surfaces its per-SKU purchase split on the report row as
+// `by_sku[]` (web/src/lib/tileTakeoff.js's tileReportRows). A separate test
+// from the key-set pin above so a mixed-condition assertion can never
+// perturb that single-SKU row's exact key list.
+test("exportReport: a checkerboard (2-SKU) tile_setup condition's tile_goods row carries by_sku[]", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-MULTI", role: "floor_area", returnVerts: false });
+
+  // Identical-size SKUs (mirrors web/test/tileTakeoff.test.ts's
+  // makeCheckerboardCondition) so any figured difference is the resolver's
+  // per-SKU order split doing the work, not a byproduct of geometry.
+  const cond = s.editCondition("CT-MULTI", {
+    tile_setup: {
+      pattern: "grid",
+      skus: [
+        { id: "A", name: "Tile A", w_in: 12, h_in: 12, color: "#111111" },
+        { id: "B", name: "Tile B", w_in: 12, h_in: 12, color: "#222222" },
+      ],
+      joint: { width_in: 0 },
+      origin: [0, 0],
+      assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A", "1_0": "B", "0_1": "B", "1_1": "A" } },
+    },
+  });
+
+  const rep = s.exportReport();
+  const row = rep.tile_goods.find((r: { condition_id: string }) => r.condition_id === cond.condition_id);
+  assert.ok(row, "expected a tile_goods row for CT-MULTI");
+  assert.ok(Array.isArray(row.by_sku), "expected a by_sku[] array — the checkerboard assignment spans 2 SKUs");
+  assert.equal(row.by_sku.length, 2);
+  const byId = Object.fromEntries(row.by_sku.map((o: { sku_id: string }) => [o.sku_id, o]));
+  assert.equal(byId.A.name, "Tile A");
+  assert.equal(byId.A.color, "#111111");
+  assert.equal(byId.B.name, "Tile B");
+  assert.equal(byId.B.color, "#222222");
+  assert.equal(row.safe, byId.A.safe + byId.B.safe, "the row's scalar safe is the sum of by_sku entries");
+  assert.equal(row.boxes, byId.A.boxes + byId.B.boxes);
+  assert.equal(row.figured, byId.A.figured + byId.B.figured);
+  assert.equal(row.with_margin, byId.A.with_margin + byId.B.with_margin);
+
+  // the strict tile_goods z.object still parses with by_sku present
+  z.object(exportReportOutput).parse(rep);
 });
 
 // Task 7 (M5) — export_takeoff's additive tile_layouts snapshot. Additive
