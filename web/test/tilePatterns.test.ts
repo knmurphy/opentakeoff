@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { getPattern, registry, layoutWarning } from "../src/lib/tilePatterns/index.ts";
 import { herringboneGenerator } from "../src/lib/tilePatterns/herringbone.ts";
 import { basketweaveGenerator } from "../src/lib/tilePatterns/basketweave.ts";
+import { PLANK_ARITY } from "../src/lib/tilePatterns/slotKey.ts";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
 
@@ -273,4 +274,36 @@ test("basketweave translates rigidly by origin", () => {
   const inWin = q0.filter((t) => t.cx + o[0] > -10 && t.cx + o[0] < 10 && t.cy + o[1] > -10 && t.cy + o[1] < 10);
   assert.ok(inWin.length > 0);
   for (const t of inWin) assert.ok(set.has(key(t.cx + o[0], t.cy + o[1], t.rot)), "shifted plank missing");
+});
+
+// ── raw cell index + PLANK_ARITY (task 4: multi-SKU field foundation) ───
+
+test("grid quads carry cell {i,j}; p is unset, honoring PLANK_ARITY.grid", () => {
+  const q = getPattern("grid").generate({ ...HB, origin: [0, 0], bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+  assert.ok(q.length > 0);
+  assert.ok(q.every((t) => t.cell !== undefined && Number.isInteger(t.cell.i) && Number.isInteger(t.cell.j)));
+  assert.ok(q.every((t) => t.cell?.p === undefined));
+  assert.equal(new Set(q.map((t) => t.cell?.p)).size, PLANK_ARITY.grid);
+});
+
+test("herringbone emits four p roles per cell = PLANK_ARITY", () => {
+  const q = herringboneGenerator.generate({ ...HB, origin: [0, 0], bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+  assert.deepEqual([...new Set(q.map((t) => t.cell?.p))].sort(), [0, 1, 2, 3]);
+  assert.equal(new Set(q.map((t) => t.cell?.p)).size, PLANK_ARITY.herringbone); // keep the constant honest
+});
+
+test("basketweave emits two p roles per cell = PLANK_ARITY", () => {
+  const q = basketweaveGenerator.generate({ ...HB, origin: [0, 0], bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+  assert.deepEqual([...new Set(q.map((t) => t.cell?.p))].sort(), [0, 1]);
+  assert.equal(new Set(q.map((t) => t.cell?.p)).size, PLANK_ARITY.basketweave); // keep the constant honest
+});
+
+test("diagonal carries the delegated grid cell through rotateQuadsAboutOrigin's spread", () => {
+  // diagonal defaults rotation_deg to 45 when unset/zero, so this also
+  // exercises the shared post-rotation path (pattern.ts) that grid/HB-only
+  // tests above never rotate through.
+  const q = getPattern("diagonal").generate({ ...HB, origin: [0, 0], bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 } });
+  assert.ok(q.length > 0);
+  assert.ok(q.every((t) => t.cell !== undefined && Number.isInteger(t.cell.i) && Number.isInteger(t.cell.j)));
+  assert.equal(new Set(q.map((t) => t.cell?.p)).size, PLANK_ARITY.diagonal);
 });

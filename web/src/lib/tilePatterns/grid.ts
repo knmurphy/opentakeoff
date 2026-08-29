@@ -28,7 +28,7 @@ export const gridGenerator: PatternGenerator = {
     const out: TileQuad[] = [];
     for (let i = startI; i <= endI; i++)
       for (let j = startJ; j <= endJ; j++)
-        out.push({ cx: ox + (i + 0.5) * cell.w, cy: oy + (j + 0.5) * cell.h, w: w_ft, h: h_ft, rot: 0, skuId });
+        out.push({ cx: ox + (i + 0.5) * cell.w, cy: oy + (j + 0.5) * cell.h, w: w_ft, h: h_ft, rot: 0, skuId, cell: { i, j } });
     return angle === 0 ? out : rotateQuadsAboutOrigin(out, origin, angle);
   },
 };

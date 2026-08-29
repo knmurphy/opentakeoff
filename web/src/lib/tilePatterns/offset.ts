@@ -21,7 +21,7 @@ export function offsetGenerator(name: string, fraction: number): PatternGenerato
         const startI = Math.floor((bounds.minX - ox - rowShift) / cell.w) - 1;
         const endI = Math.ceil((bounds.maxX - ox - rowShift) / cell.w) + 1;
         for (let i = startI; i <= endI; i++)
-          out.push({ cx: ox + rowShift + (i + 0.5) * cell.w, cy: oy + (j + 0.5) * cell.h, w: w_ft, h: h_ft, rot: 0, skuId });
+          out.push({ cx: ox + rowShift + (i + 0.5) * cell.w, cy: oy + (j + 0.5) * cell.h, w: w_ft, h: h_ft, rot: 0, skuId, cell: { i, j } });
       }
       return angle === 0 ? out : rotateQuadsAboutOrigin(out, origin, angle);
     },

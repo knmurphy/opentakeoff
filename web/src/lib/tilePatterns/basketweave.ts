@@ -54,12 +54,12 @@ export const basketweaveGenerator: PatternGenerator = {
         const horizontal = ((i + j) % 2 + 2) % 2 === 0;
         if (horizontal) {
           const rot = orientAdjust;
-          out.push({ cx: bx, cy: by - pairGap / 2, w: w_ft, h: h_ft, rot, skuId });
-          out.push({ cx: bx, cy: by + pairGap / 2, w: w_ft, h: h_ft, rot, skuId });
+          out.push({ cx: bx, cy: by - pairGap / 2, w: w_ft, h: h_ft, rot, skuId, cell: { i, j, p: 0 } });
+          out.push({ cx: bx, cy: by + pairGap / 2, w: w_ft, h: h_ft, rot, skuId, cell: { i, j, p: 1 } });
         } else {
           const rot = Math.PI / 2 + orientAdjust;
-          out.push({ cx: bx - pairGap / 2, cy: by, w: w_ft, h: h_ft, rot, skuId });
-          out.push({ cx: bx + pairGap / 2, cy: by, w: w_ft, h: h_ft, rot, skuId });
+          out.push({ cx: bx - pairGap / 2, cy: by, w: w_ft, h: h_ft, rot, skuId, cell: { i, j, p: 0 } });
+          out.push({ cx: bx + pairGap / 2, cy: by, w: w_ft, h: h_ft, rot, skuId, cell: { i, j, p: 1 } });
         }
       }
     }

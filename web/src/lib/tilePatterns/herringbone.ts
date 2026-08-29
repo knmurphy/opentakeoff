@@ -87,15 +87,15 @@ export const herringboneGenerator: PatternGenerator = {
       for (let ci = colStart; ci <= colEnd; ci++) {
         const x0 = ci * periodX + shift + ox;
         // leading vertical plank
-        out.push({ cx: x0 + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId });
+        out.push({ cx: x0 + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId, cell: { i: ci, j: bi, p: 0 } });
         // stacked horizontal pair, one joint gap between them, joint/2
         // margin against the band's own top/bottom (matching the vertical
         // planks' own symmetric margin within their band)
         const hhCx = x0 + pShort + pLong / 2;
-        out.push({ cx: hhCx, cy: bandY0 + joint_ft / 2 + short / 2, w: w_ft, h: h_ft, rot: rotH, skuId });
-        out.push({ cx: hhCx, cy: bandY0 + pLong - joint_ft / 2 - short / 2, w: w_ft, h: h_ft, rot: rotH, skuId });
+        out.push({ cx: hhCx, cy: bandY0 + joint_ft / 2 + short / 2, w: w_ft, h: h_ft, rot: rotH, skuId, cell: { i: ci, j: bi, p: 1 } });
+        out.push({ cx: hhCx, cy: bandY0 + pLong - joint_ft / 2 - short / 2, w: w_ft, h: h_ft, rot: rotH, skuId, cell: { i: ci, j: bi, p: 2 } });
         // trailing vertical plank
-        out.push({ cx: x0 + pShort + pLong + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId });
+        out.push({ cx: x0 + pShort + pLong + pShort / 2, cy: bandY0 + bandH / 2, w: w_ft, h: h_ft, rot: rotV, skuId, cell: { i: ci, j: bi, p: 3 } });
       }
     }
     out.sort((a, b) => a.cy - b.cy || a.cx - b.cx || a.rot - b.rot);
