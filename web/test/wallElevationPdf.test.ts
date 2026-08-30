@@ -18,6 +18,8 @@ import { RENDER_SCALE } from "../src/lib/sheets.ts";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
 import { wallStripRing } from "../src/lib/tileWall/unwrap.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
+import { wallElevationLayout } from "../src/lib/tileWallElevation.ts";
+import { developedElevationLayout } from "../src/lib/developedElevation.ts";
 
 const setup = { ...mintTileSetup(), skus: [{ id: "a", name: "A", w_in: 12, h_in: 12, color: "#3b82f6" }], joint: { width_in: 0 } };
 const layout = solveTileLayout({ tile_setup: setup, ring_ft: wallStripRing(18, 8) });
@@ -103,6 +105,52 @@ test("is DETERMINISTIC with a NON-EMPTY folds array — same real 2-fold wall yi
   const b = await buildWallElevationPdf({ wallStrips: [foldedLayout], folds, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
   const ba = new Uint8Array(await a.file.arrayBuffer()), bb = new Uint8Array(await b.file.arrayBuffer());
   assert.deepEqual([...ba], [...bb]); // the fold-drawing branch must be just as deterministic as the folds:[] path
+});
+
+// ── Task 3 v2 (2026-08-29 wall-tile-slice-c) — the generated SHEET now
+// draws the DEVELOPED elevation (developedElevationLayout's per-wall
+// panels, gap-separated) instead of one continuous strip. The returned
+// width_ft/upp contract Slice B's handler depends on must survive: upp is
+// a per-foot constant (unchanged), width_ft is now the DRAWN width
+// (dev.total_width_ft, wider than the raw run whenever a fold splits it
+// into more than one panel). ──
+
+const L_RUN_FOLDS = [{ u_ft: 6, kind: "inside" as const, vertexIndex: 1 }];
+
+test("an L-run's returned width_ft equals the developed total_width_ft (wider than the raw run); a straight run's width is unchanged", async () => {
+  const straight = await buildWallElevationPdf({ wallStrips: [layout], folds: [], skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  assert.equal(straight.width_ft, 18, "one panel, no gap — same as the raw run width");
+
+  const lRun = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  // Recompute the expected developed layout independently (same inputs,
+  // same pipeline buildWallElevationPdf itself runs) rather than hardcode a
+  // literal, so this test pins the CONTRACT (returned width_ft ==
+  // developedElevationLayout's total_width_ft) and not a magic number tied
+  // to today's default gap.
+  const elev = wallElevationLayout([layout], L_RUN_FOLDS, () => "#3b82f6");
+  const dev = developedElevationLayout({
+    tiles: elev.tiles,
+    foldsU: elev.folds.map((f) => f.x),
+    foldKinds: elev.folds.map((f) => f.kind),
+    width_ft: elev.width_ft,
+    height_ft: elev.height_ft,
+  });
+  assert.equal(lRun.width_ft, dev.total_width_ft);
+  assert.ok(lRun.width_ft > 18, `expected the developed width (raw 18ft run + a corner gap) to exceed the raw run, got ${lRun.width_ft}`);
+});
+
+test("upp is IDENTICAL for a straight run and an L-run — a per-foot constant, unaffected by the page growing wider for panel gaps", async () => {
+  const straight = await buildWallElevationPdf({ wallStrips: [layout], folds: [], skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  const lRun = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  assert.equal(straight.upp, lRun.upp);
+  assert.ok(Math.abs(lRun.upp - 1 / (ELEV_POINTS_PER_FT * RENDER_SCALE)) < 1e-9);
+});
+
+test("is DETERMINISTIC with PANELS — an L-run (gap-separated panels + a break-line) built twice is byte-identical", async () => {
+  const a = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  const b = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  const ba = new Uint8Array(await a.file.arrayBuffer()), bb = new Uint8Array(await b.file.arrayBuffer());
+  assert.deepEqual([...ba], [...bb]); // regen-on-demand safety must hold on the panel-drawing path too, not just the old single-strip path
 });
 
 // ── wallElevationSheetName — later tasks store the generated PDF under a
