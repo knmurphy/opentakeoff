@@ -367,6 +367,21 @@ export const exportTakeoffOutput = {
   }).passthrough()),
   markups: z.array(z.unknown()),
   approvals: z.array(z.unknown()).optional().describe("Approval-family records (#176) — the estimator's APPROVED seals and the agent's verdict marks {id, actor, ts, sheet_id, at:[nx,ny], shape_id?, text?}. Present only when any exist (the canvas payload's own convention), so a verdict-free export stays byte-identical"),
+  tile_layouts: z.array(z.object({
+    shape_id: z.string(),
+    condition_id: z.string(),
+    finish_tag: z.string(),
+    config: z.object({
+      w_in: z.number(), h_in: z.number(), joint_in: z.number(),
+      pattern: z.enum(["grid", "brick_50", "brick_33", "diagonal", "herringbone", "basketweave"]),
+      origin: point,
+      rotation_deg: z.number(),
+    }).describe("The condition's tile_setup resolved to a solve config — SKU face size, joint width, pattern, and the condition-default origin/rotation this shape solved against"),
+    classified_summary: z.object({
+      full: z.number().int(), cut: z.number().int(), corner: z.number().int(), hole: z.number().int(),
+    }).describe("Cell counts from the SAME classify pass exportReport's tile_goods figures from (computeTileTakeoff byShape) — never re-solved, so the two can never disagree"),
+    tile_layout: z.record(z.unknown()).optional().describe("This shape's own per-room override (origin/rotation/edge_overrides/wet_tags) if it carries one — absent means it inherits the condition defaults in config"),
+  })).optional().describe("Task 7 (M5) — per-shape solved tile layout snapshot for every floor_area shape under a tile_setup condition, so a headless agent can read what the canvas would draw without re-solving the engine itself. Present only when the session carries a tile_setup condition with a scaled floor shape; a tile-less export omits this key entirely (byte-identical to a pre-M5 export)"),
   sheet_group: z.array(z.unknown()),
   last_group: z.array(z.unknown()),
   sheet_tabs: z.array(z.unknown()),
@@ -614,6 +629,26 @@ export const exportReportOutput = {
   units: z.string(),
   display_units: z.string(),
   roll_goods: z.array(z.record(z.unknown())).describe("Roll-goods order rows (#136) — order_lf / rolls / order_qty per roll-goods condition, ×N applied; empty when no condition carries a roll_setup (always the case for a headless session today)"),
+  tile_goods: z.array(z.object({
+    condition_id: z.string(),
+    finish_tag: z.string(),
+    multiplier: z.number(),
+    full: z.number().int(), cut: z.number().int(), corner: z.number().int(), hole: z.number().int(),
+    kept_area_sf: z.number(),
+    safe: z.number(), boxes: z.number(), figured: z.number(), with_margin: z.number(),
+    grout_bags: z.number(),
+    reuse_enabled: z.boolean(),
+    reuse_whole: z.number(), reuse_with_margin: z.number(), reuse_boxes: z.number(),
+    reuse_downgraded: z.string().nullable(),
+    cutsheet: z.array(z.object({
+      w_in: z.number(), h_in: z.number(), count: z.number().int(), lShaped: z.boolean(), corner: z.boolean(),
+    })),
+    warnings: z.array(z.string()),
+    by_sku: z.array(z.object({
+      sku_id: z.string(), name: z.string(), color: z.string(),
+      safe: z.number(), boxes: z.number(), figured: z.number(), with_margin: z.number(),
+    })).optional().describe("Per-SKU purchase split (Task 7) — present only when a mixed/checkerboard field distributes 2+ kept SKUs on this condition; each entry's safe/boxes/figured/with_margin are ×N applied like the row's own scalar purchase fields, and sum to them"),
+  })).describe("Tile order rows (Task 8) — full/cut/corner/hole counts, kept_area_sf, safe/boxes/figured/with_margin, grout_bags, reuse_enabled/reuse_whole/reuse_with_margin/reuse_boxes/reuse_downgraded (M6, additive — present with zero/null figures when purchase.reuse is not opted in), cutsheet, and warnings per tile-setup condition, ×N applied to purchase quantities; empty when no condition carries a tile_setup"),
 };
 
 /** export_marked_pdf — the tool writes the PDF to disk and replies with where
@@ -654,6 +689,7 @@ export const editConditionOutput = {
   multiplier: z.number().describe("The condition's quantity multiplier after this write"),
   height_ft: z.number().optional().describe("The condition's wall height after this write — present once set (measure_surface multiplies traced LF by it)"),
   roll_setup: z.object({}).passthrough().optional().describe("The condition's roll-goods setup after this write — present while opted in"),
+  tile_setup: z.object({}).passthrough().optional().describe("The condition's tile-patterning setup after this write — present while opted in"),
   roll: z.object({
     condition_id: z.string(), finish_tag: z.string(), material: z.string(),
     roll_width_ft: z.number(), roll_length_ft: z.number(),

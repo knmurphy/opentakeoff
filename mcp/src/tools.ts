@@ -431,7 +431,7 @@ export function registerTools(realServer: McpServer, session: Session): Map<stri
   }, run("edit_materials", (a) => session.editMaterials(a.condition, { add: a.add, remove: a.remove, patch: a.patch })));
 
   server.registerTool("edit_condition", {
-    description: `Set a condition's quantity knobs — waste %, multiplier, height_ft (the H knob measure_surface quantifies against), and/or roll_setup (the roll-goods opt-in: seams and order footage figured from the committed rooms, #147). takeoff_summary emits waste-adjusted *_net order quantities and a per-condition multiplier, and every export carries both, but conditions minted through the measure tools start at waste 0 / multiplier 1 — without this tool an agent's takeoff always ships net === gross (#131). waste_pct is the estimator's cut-waste percentage (carpet commonly 5–10); multiplier scales every quantity on the condition (×N identical floors — takeoff_summary applies it before waste). condition must resolve to an EXISTING finish tag — a typo'd tag errors rather than minting an empty condition (the edit_materials remove/patch rule, not its add rule: these knobs mean nothing on a condition that doesn't exist yet). No review gate — quantity config, not traced geometry; undo_last reverses a call in one step (both knobs snapshotted together, restored verbatim).`,
+    description: `Set a condition's quantity knobs — waste %, multiplier, height_ft (the H knob measure_surface quantifies against), and/or roll_setup / tile_setup (the roll-goods and tile-patterning opt-ins: seams/order footage or pattern layout figured from the committed rooms, #147 / #tile). takeoff_summary emits waste-adjusted *_net order quantities and a per-condition multiplier, and every export carries both, but conditions minted through the measure tools start at waste 0 / multiplier 1 — without this tool an agent's takeoff always ships net === gross (#131). waste_pct is the estimator's cut-waste percentage (carpet commonly 5–10); multiplier scales every quantity on the condition (×N identical floors — takeoff_summary applies it before waste). condition must resolve to an EXISTING finish tag — a typo'd tag errors rather than minting an empty condition (the edit_materials remove/patch rule, not its add rule: these knobs mean nothing on a condition that doesn't exist yet). No review gate — quantity config, not traced geometry; undo_last reverses a call in one step (both knobs snapshotted together, restored verbatim).`,
     inputSchema: {
       condition: z.string().describe("Finish tag of an existing condition, e.g. 'CPT-1'"),
       waste_pct: z.number().min(0).optional().describe("Waste percentage applied to net order quantities, e.g. 10 for 10%"),
@@ -450,9 +450,20 @@ export function registerTools(realServer: McpServer, session: Session): Map<stri
           price_unit: z.enum(["sy", "sf", "lf"]).optional().describe("Sell unit the order quantity is figured in"),
         }),
       ]).optional().describe("Roll-goods opt-in (#147): presence of a setup is what makes the condition roll goods — seams figured, cuts packed, order footage beside the measured quantities. Same-material partial edits patch the existing setup; null opts out. The reply echoes the figured order (cuts, order_lf, rolls, order_qty) whenever floor shapes exist on scaled sheets, and export_report's roll_goods block carries the same rows"),
+      tile_setup: z.union([
+        z.null().describe("Opt the condition OUT of tile patterning"),
+        z.object({
+          pattern: z.string().optional().describe("Layout pattern, e.g. 'grid', 'brick_50', 'brick_33', 'diagonal', 'herringbone', 'basketweave'"),
+          rotation_deg: z.number().optional(),
+          origin: z.array(z.number()).optional(),
+          edge_strategy: z.string().optional().describe("'balanced' or 'start_full'"),
+          skus: z.array(z.object({}).passthrough()).optional().describe("Tile SKUs (id/name/w_in/h_in/color/…)"),
+          joint: z.object({}).passthrough().optional().describe("{ width_in }"),
+        }).passthrough(),
+      ]).optional().describe("Tile-patterning opt-in: presence of a setup is what makes the condition tile-patterned. A fresh opt-in (or an edit while not yet opted in) starts from the engine's minted defaults; a patch while already opted in keeps every field not passed. null opts out"),
     },
     outputSchema: editConditionOutput,
-  }, run("edit_condition", (a) => session.editCondition(a.condition, { waste_pct: a.waste_pct, multiplier: a.multiplier, height_ft: a.height_ft, roll_setup: a.roll_setup })));
+  }, run("edit_condition", (a) => session.editCondition(a.condition, { waste_pct: a.waste_pct, multiplier: a.multiplier, height_ft: a.height_ft, roll_setup: a.roll_setup, tile_setup: a.tile_setup })));
 
   server.registerTool("duplicate_condition", {
     description: `Twin a condition — the same finish measured somewhere else, with its own supporting materials. One finish in two areas is not two conditions and it is not one either: the same sheet goods over a slab and over a raised deck take the same field material and different preparation underneath (one wants a moisture barrier, the other a primer and a different adhesive). The twin arrives carrying the original's whole materials list and keeps FOLLOWING it — change a coverage rate on the original and every twin that has not touched that row gets it; edit a row on the twin and only THAT row stops following. \`label\` is REQUIRED and becomes the tag suffix ('CPT-1' + 'Level 2' → 'CPT-1 – Level 2'), because every tool in this server resolves a condition by finish tag and takes the FIRST match: two conditions sharing a tag would make one permanently unreachable, and a takeoff re-import collapses them last-wins. A label already in use is refused rather than de-collided. No takeoffs come along — measure the new area against the returned condition_id. Reversible with undo_last; use split_condition to end the inheritance permanently.`,

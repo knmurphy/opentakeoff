@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseTakeoffImport, mergeTakeoffImport } from "../src/lib/importTakeoff.js";
 import { ANN_SCHEMA } from "../src/lib/store.js";
+import { hasTileSetup, mintTileSetup } from "../src/lib/tileSetup.ts";
 
 const doc = (over: Record<string, unknown> = {}) => ({
   schema: ANN_SCHEMA,
@@ -207,4 +208,32 @@ test("a twin whose parent merged into the operator's own condition keeps its mat
   assert.equal(twin.materials[0].per, 185, "it keeps the numbers the file carried");
   assert.equal(twin.materials[0].origin_id, undefined);
   assert.equal(twin.materials[0].inherited, undefined);
+});
+
+// ── tile_setup (#tile): rides the condition wholesale, same as roll_setup ───
+// A condition is serialized as-is (new tag → pushed straight from the import;
+// same tag → the operator's own object wins and only shapes are remapped), so
+// tile_setup was never named in an allowlist to begin with. This pins that so
+// a future refactor toward an explicit field list can't silently drop it.
+test("import preserves a condition's tile_setup (export/import round-trip)", () => {
+  const current = { project_name: "", conditions: [], shapes: [], markups: [], sheets: [] };
+  const imported = doc({
+    conditions: [{ id: "c1", finish_tag: "CT-1", color: "#123456", fill: "solid", hatch: "", multiplier: 1, waste_pct: 10, materials: [], tile_setup: mintTileSetup() }],
+    shapes: [],
+  });
+  const { payload } = mergeTakeoffImport(current, imported);
+  const ct1 = payload.conditions.find((c: { finish_tag: string }) => c.finish_tag === "CT-1");
+  assert.equal(hasTileSetup(ct1), true);
+});
+
+test("import preserves a condition's tile_setup when a new tag appends onto an existing project", () => {
+  const current = { conditions: [{ id: "mine", finish_tag: "CPT-1" }], shapes: [], markups: [], sheets: [] };
+  const imported = doc({
+    conditions: [{ id: "c1", finish_tag: "CT-1", color: "#123456", fill: "solid", hatch: "", multiplier: 1, waste_pct: 10, materials: [], tile_setup: mintTileSetup() }],
+    shapes: [],
+  });
+  const { payload, note } = mergeTakeoffImport(current, imported);
+  assert.equal(note.conditions_added, 1);
+  const ct1 = payload.conditions.find((c: { finish_tag: string }) => c.finish_tag === "CT-1");
+  assert.equal(hasTileSetup(ct1), true);
 });

@@ -11,9 +11,11 @@
 // default ($INSUNITS 2); `units: "m"` writes metres ($INSUNITS 6).
 //
 // Layers carry the finish: `OT-<TAG>` for floor rings, with role suffixes
-// (-DEDUCT, -HOLE, -WALL, -LINEAR, -COUNT) so a CAD user can isolate any
-// bucket with one layer filter. Each condition gets its own ACI color; the
-// suffix layers share it. Room labels (#112) land as TEXT on OT-LABELS at the
+// (-DEDUCT, -HOLE, -WALL, -LINEAR, -COUNT, -TILEGRID) so a CAD user can
+// isolate any bucket with one layer filter. Each condition gets its own ACI
+// color; the suffix layers share it (TILEGRID's cut/corner fragments get a
+// distinct override color so a full tile reads apart from a cut one without
+// a second layer). Room labels (#112) land as TEXT on OT-LABELS at the
 // ring's centroid. A deduct that was reconciled INTO a parent as a hole
 // (cuts_shape_id) is skipped — its ring already ships as that parent's -HOLE.
 //
@@ -27,6 +29,19 @@
 
 import { flattenCurve } from "./curve.js";
 
+/** A pre-solved tile cell (tileTakeoff's classify step) to draw alongside a
+ * floor_area ring. dxf.ts never solves a tile layout itself — the caller
+ * threads computeTileTakeoff's per-shape `layout.classified` through here,
+ * one DxfTileCell per kept cell. Only "full"/"cut"/"corner" carry installed
+ * material; a caller that passes "hole"/"out" cells has them skipped. */
+export interface DxfTileCell {
+  cls: "full" | "cut" | "corner" | string;
+  /** Installed-face quad corners, FEET, in tileTakeoff's ring_ft frame: x
+   * right, y DOWN from the sheet's top-left (verts_norm × dims × upp, same
+   * frame `ring_ft` and `quad.cx/cy` use before this module's Y-up flip). */
+  pts_ft: [number, number][];
+}
+
 export interface DxfShape {
   id: string;
   sheet_id: string;
@@ -37,6 +52,10 @@ export interface DxfShape {
   curved?: boolean;
   cuts_shape_id?: string;
   label?: string;
+  /** Solved tile grid for this floor_area shape — present only when its
+   * condition carries a usable tile_setup. Absent/empty → no TILEGRID layer,
+   * output byte-identical to a shape with no tiling at all. */
+  tile_cells?: DxfTileCell[];
 }
 
 export interface DxfCondition {
@@ -90,6 +109,10 @@ const FT_PER_M = 1 / 0.3048;
 const CONDITION_COLORS = [5, 3, 1, 2, 4, 6, 30, 40, 90, 150, 200, 210, 32, 92, 172, 12];
 const COLOR_LABELS = 7;
 const COLOR_HOLE = 8;
+// Cut/corner tile fragments on a TILEGRID layer — a fixed neutral grey kept
+// out of CONDITION_COLORS so it never collides with a condition's own color
+// (which full tiles inherit BYLAYER, no override needed).
+const COLOR_TILE_CUT = 9;
 
 /** A finish tag as a DXF layer name: the characters R2000 forbids in symbol
  * names (<>/\":;?*|,=`) become "-", runs collapse, upper-cased, capped, and an
@@ -145,6 +168,11 @@ export function buildSheetDxf(sheet: DxfSheetInput, opts: DxfOptions = {}): DxfB
   if (!(upp > 0)) throw new Error(`DXF: sheet ${sheet.sheet_id} has no scale — set the scale before exporting to CAD`);
 
   const toXY = ([nx, ny]: [number, number]): [number, number] => [nx * w * upp * k, (1 - ny) * h * upp * k];
+  // Same flip as toXY, but for a point already in tileTakeoff's ring_ft feet
+  // frame (x right, y down from the sheet's top-left) — skips the round trip
+  // through normalized coords since h*upp (the sheet height in feet) is the
+  // only term toXY's nx/ny derivation would reintroduce.
+  const toXYft = ([xf, yf]: [number, number]): [number, number] => [xf * k, (h * upp - yf) * k];
   const toPx = ([nx, ny]: [number, number]): [number, number] => [nx * w, ny * h];
   const fromPx = ([px, py]: [number, number]): [number, number] => [px * upp * k, (h - py) * upp * k];
 
@@ -155,7 +183,7 @@ export function buildSheetDxf(sheet: DxfSheetInput, opts: DxfOptions = {}): DxfB
   // Pass 1 — resolve every shape on this sheet into entities, collecting the
   // layer set first (the LAYER table precedes ENTITIES in the file).
   type Ent =
-    | { kind: "lwpoly"; layer: string; pts: [number, number][]; closed: boolean }
+    | { kind: "lwpoly"; layer: string; pts: [number, number][]; closed: boolean; color?: number }
     | { kind: "circle"; layer: string; c: [number, number]; r: number }
     | { kind: "text"; layer: string; at: [number, number]; text: string; height: number };
   const ents: Ent[] = [];
@@ -200,6 +228,17 @@ export function buildSheetDxf(sheet: DxfSheetInput, opts: DxfOptions = {}): DxfB
         const hp = ring.map(toXY);
         hp.forEach(grow);
         ents.push({ kind: "lwpoly", layer: useLayer(dxfLayerName(tag, "HOLE"), COLOR_HOLE), pts: hp, closed: true });
+      }
+      if (role === "floor_area" && Array.isArray(s.tile_cells) && s.tile_cells.length) {
+        const gridLayer = useLayer(dxfLayerName(tag, "TILEGRID"), color);
+        for (const cell of s.tile_cells) {
+          if (cell.cls !== "full" && cell.cls !== "cut" && cell.cls !== "corner") continue;
+          const cellPts = Array.isArray(cell.pts_ft) ? cell.pts_ft : [];
+          if (cellPts.length < 3) continue;
+          const gp = cellPts.map(toXYft);
+          gp.forEach(grow);
+          ents.push({ kind: "lwpoly", layer: gridLayer, pts: gp, closed: true, color: cell.cls === "full" ? undefined : COLOR_TILE_CUT });
+        }
       }
       if (role === "floor_area" && s.label && String(s.label).trim()) {
         ents.push({ kind: "text", layer: useLayer("OT-LABELS", COLOR_LABELS), at: polygonCentroid(pts), text: String(s.label).trim(), height: textH });
@@ -337,7 +376,9 @@ export function buildSheetDxf(sheet: DxfSheetInput, opts: DxfOptions = {}): DxfB
   ents.forEach((e, i) => {
     const hd = entHandles[i];
     if (e.kind === "lwpoly") {
-      d.add(0, "LWPOLYLINE"); d.add(5, hd); d.add(330, H.brModel); d.add(100, "AcDbEntity"); d.add(8, e.layer); d.add(100, "AcDbPolyline");
+      d.add(0, "LWPOLYLINE"); d.add(5, hd); d.add(330, H.brModel); d.add(100, "AcDbEntity"); d.add(8, e.layer);
+      if (e.color != null) d.add(62, e.color);
+      d.add(100, "AcDbPolyline");
       d.add(90, e.pts.length); d.add(70, e.closed ? 1 : 0); d.add(43, 0);
       for (const [x, y] of e.pts) { d.add(10, fmt(x)); d.add(20, fmt(y)); }
     } else if (e.kind === "circle") {

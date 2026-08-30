@@ -6,6 +6,7 @@
 // defaults from lib/coverage.js, so the CT-1 seed and the editor can't drift.)
 
 import { GROUT_DEFAULTS } from "./coverage.js";
+import { mintTileSetup } from "./tileSetup.ts";
 
 export const MIN_SCALE = 0.03;
 export const MAX_SCALE = 32;  // stage zoom is in raster px — with the 28MP base budget this keeps ≈ the old deep-zoom ceiling (detail view carries the crispness)
@@ -52,6 +53,11 @@ export const GESTURE_MS = 140;      // wheel/pinch quiet window before the detai
 export const DETAIL_STALL_MS = 25000;
 
 export const SNAP_CELL = 24;   // snap-grid bucket, raster px (Spline runs 12 — its budgeted raster is denser)
+// Tile-overlay LOD floor (design §4.4 / M5 #6): below this on-screen px for
+// the smaller installed tile-cell dimension, the per-tile grid overlay
+// reads as noise, so the canvas swaps it for a coarser hatch fill instead.
+export const TILE_OVERLAY_MIN_CELL_PX = 6;
+
 
 // toolbar menus — STACK-style: the menu face shows the armed tool
 export const MEASURE_TOOLS = [
@@ -117,7 +123,7 @@ export const FLOORING_DEFAULTS = [
     // decided yet how the sheet gets cut.
     { name: "Heat-weld rod", per: 1, basis: "seam_lf", unit: "lf", note: "runs the figured seams — set the roll width on this condition" },
   ] },
-  { finish_tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste_pct: 10, materials: [                                                                                                  // Ceramic / porcelain tile
+  { finish_tag: "CT-1",  color: "#9333ea", hatch: "grid",    waste_pct: 10, tile_setup: mintTileSetup(), materials: [                                                                                    // Ceramic / porcelain tile
     { name: "Thinset mortar", kind: "mortar", per: 65, basis: "area", unit: "bag", note: '1/4″×3/8″×1/4″ sq' },
     { name: "Grout", kind: "grout", per: 512, basis: "area", unit: "bag", grout: { ...GROUT_DEFAULTS }, note: '12×24×3/8″ @ 1/8″ · 25 lb' },
   ] },

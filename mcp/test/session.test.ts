@@ -4,6 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Session, ANN_SCHEMA } from "../src/session.ts";
+import { z } from "zod";
+import { exportReportOutput } from "../src/outputs.ts";
 
 const PLAN = fileURLToPath(new URL("../../demo/sample-plan.pdf", import.meta.url));
 const KEY = "sample-plan.pdf";
@@ -320,4 +322,202 @@ test("assignmentDisclosure: null for all-human, mixed counts, and the pointInPol
     "Finish assignment: 2 schedule-resolved · 1 agent-asserted · 3 pending human review",
   );
   assert.match(assignmentDisclosure(mixed, [otherSheet])!, / · 1 room withheld/);
+});
+
+// Task 4 (M1 tile-patterning) — mirrors the roll_setup round-trip test above
+// (tools.test.ts:1018) at the session layer: opt in, patch preserves prior
+// fields, opt out, undo restores the last opted-in state verbatim.
+test("editCondition: round-trips tile_setup (opt in, patch, opt out, undo)", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+
+  // opt in
+  let out = s.editCondition("CT-1", { tile_setup: { pattern: "herringbone" } });
+  assert.ok(out.tile_setup);
+  assert.equal(out.tile_setup.pattern, "herringbone");
+  const skus = out.tile_setup.skus;
+  assert.ok(Array.isArray(skus) && skus.length >= 1, "minted defaults filled in");
+
+  // patch keeps prior fields
+  out = s.editCondition("CT-1", { tile_setup: { rotation_deg: 45 } });
+  assert.ok(out.tile_setup);
+  assert.equal(out.tile_setup.pattern, "herringbone", "preserved");
+  assert.equal(out.tile_setup.rotation_deg, 45);
+
+  // opt out
+  out = s.editCondition("CT-1", { tile_setup: null });
+  assert.equal(out.tile_setup, undefined);
+
+  // undo restores the last opted-in state
+  s.undoLast(1);
+  const c = s.conditions.find((x) => x.finish_tag === "CT-1");
+  assert.ok(c?.tile_setup);
+  assert.equal(c.tile_setup.rotation_deg, 45);
+  assert.equal(c.tile_setup.pattern, "herringbone");
+});
+
+// Task 8 (M3-M4 tile-patterning report seam) — mirrors the roll_setup →
+// report block test (tools.test.ts:1018) for tile: opt a condition into
+// tile_setup, commit a floor_area shape under it, and confirm
+// export_report's tile_goods carries the figured counts/order — the exact
+// field set tileReportRows emits (web/src/lib/tileTakeoff.js).
+test("exportReport: a tile_setup condition with a floor shape figures tile_goods", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+
+  // no tile_setup yet — the block stays empty
+  assert.deepEqual(s.exportReport().tile_goods, []);
+
+  s.editCondition("CT-1", { tile_setup: { pattern: "grid" } });
+  const rep = s.exportReport();
+  assert.equal(rep.tile_goods.length, 1);
+  // Pin the strict tile_goods z.object against a POPULATED row (conformance
+  // only ever exercises export_report tile-less) — a field rename in
+  // tileReportRows would fail this, not just production runtime.
+  z.object(exportReportOutput).parse(rep);
+  const row = rep.tile_goods[0];
+  // M8 (trim + movement joints) added trim_lf/corner_outside/corner_inside/
+  // joint_lf/trim_by_kind to every row — this pin went stale when that
+  // landed without updating it. CT-1 here is single-SKU (no assignment), so
+  // Task 7's by_sku key stays absent; a mixed-condition by_sku assertion
+  // lives in its own test below so it can never perturb this key-set pin.
+  assert.deepEqual(Object.keys(row), [
+    "condition_id", "finish_tag", "multiplier", "full", "cut", "corner", "hole",
+    "kept_area_sf", "safe", "boxes", "figured", "with_margin", "grout_bags",
+    "reuse_enabled", "reuse_whole", "reuse_with_margin", "reuse_boxes", "reuse_downgraded",
+    "cutsheet", "warnings", "trim_lf", "corner_outside", "corner_inside", "joint_lf", "trim_by_kind",
+  ]);
+  assert.equal(row.reuse_enabled, false, "reuse is opt-in — absent purchase.reuse reports disabled");
+  assert.equal(row.reuse_whole, 0);
+  assert.equal(row.reuse_with_margin, 0);
+  assert.equal(row.reuse_boxes, 0);
+  assert.equal(row.reuse_downgraded, null);
+  assert.equal(row.finish_tag, "CT-1");
+  assert.ok(row.safe > 0, "the committed room figures a purchase quantity");
+  assert.ok(row.boxes > 0);
+  assert.ok(row.grout_bags >= 0);
+
+  // opting back out empties the block again
+  s.editCondition("CT-1", { tile_setup: null });
+  assert.deepEqual(s.exportReport().tile_goods, []);
+});
+
+// Task 7 (2026-08-29 tile-multi-sku-field) — a checkerboard assignment field
+// (Task 5/6) surfaces its per-SKU purchase split on the report row as
+// `by_sku[]` (web/src/lib/tileTakeoff.js's tileReportRows). A separate test
+// from the key-set pin above so a mixed-condition assertion can never
+// perturb that single-SKU row's exact key list.
+test("exportReport: a checkerboard (2-SKU) tile_setup condition's tile_goods row carries by_sku[]", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-MULTI", role: "floor_area", returnVerts: false });
+
+  // Identical-size SKUs (mirrors web/test/tileTakeoff.test.ts's
+  // makeCheckerboardCondition) so any figured difference is the resolver's
+  // per-SKU order split doing the work, not a byproduct of geometry.
+  const cond = s.editCondition("CT-MULTI", {
+    tile_setup: {
+      pattern: "grid",
+      skus: [
+        { id: "A", name: "Tile A", w_in: 12, h_in: 12, color: "#111111" },
+        { id: "B", name: "Tile B", w_in: 12, h_in: 12, color: "#222222" },
+      ],
+      joint: { width_in: 0 },
+      origin: [0, 0],
+      assignment: { mode: "repeat", unit: { w: 2, h: 2 }, slots: { "0_0": "A", "1_0": "B", "0_1": "B", "1_1": "A" } },
+    },
+  });
+
+  const rep = s.exportReport();
+  const row = rep.tile_goods.find((r: { condition_id: string }) => r.condition_id === cond.condition_id);
+  assert.ok(row, "expected a tile_goods row for CT-MULTI");
+  assert.ok(Array.isArray(row.by_sku), "expected a by_sku[] array — the checkerboard assignment spans 2 SKUs");
+  assert.equal(row.by_sku.length, 2);
+  const byId = Object.fromEntries(row.by_sku.map((o: { sku_id: string }) => [o.sku_id, o]));
+  assert.equal(byId.A.name, "Tile A");
+  assert.equal(byId.A.color, "#111111");
+  assert.equal(byId.B.name, "Tile B");
+  assert.equal(byId.B.color, "#222222");
+  assert.equal(row.safe, byId.A.safe + byId.B.safe, "the row's scalar safe is the sum of by_sku entries");
+  assert.equal(row.boxes, byId.A.boxes + byId.B.boxes);
+  assert.equal(row.figured, byId.A.figured + byId.B.figured);
+  assert.equal(row.with_margin, byId.A.with_margin + byId.B.with_margin);
+
+  // the strict tile_goods z.object still parses with by_sku present
+  z.object(exportReportOutput).parse(rep);
+});
+
+// Task 7 (M5) — export_takeoff's additive tile_layouts snapshot. Additive
+// ONLY: a tile-less session's exportPayload carries no tile_layouts key at
+// all (mirrors the approvals precedent's byte-identical guarantee), and once
+// a shape sits under a tile_setup condition, the snapshot carries the SAME
+// classified counts exportReport's tile_goods figures from (computeTileTakeoff
+// byShape — never re-solved).
+test("exportPayload: no tile_setup anywhere in the session — tile_layouts key absent", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+
+  const p = s.exportPayload() as Record<string, unknown>;
+  assert.equal("tile_layouts" in p, false, "tile-less export stays byte-identical to a pre-M5 one");
+});
+
+test("exportPayload: a tiled floor shape carries a solved tile_layouts snapshot", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+  const shapeId = s.shapes[0].id;
+
+  // not tiled yet — no snapshot
+  assert.equal("tile_layouts" in (s.exportPayload() as Record<string, unknown>), false);
+
+  const cond = s.editCondition("CT-1", { tile_setup: { pattern: "grid", rotation_deg: 15 } });
+  const p = s.exportPayload() as { tile_layouts: Array<{ shape_id: string; condition_id: string; finish_tag: string; config: { w_in: number; h_in: number; joint_in: number; pattern: string; origin: number[]; rotation_deg: number }; classified_summary: { full: number; cut: number; corner: number; hole: number } }> };
+  assert.equal(p.tile_layouts.length, 1);
+  const snap = p.tile_layouts[0];
+  assert.deepEqual(Object.keys(snap).sort(), ["classified_summary", "condition_id", "config", "finish_tag", "shape_id"]);
+  assert.equal(snap.shape_id, shapeId);
+  assert.equal(snap.condition_id, cond.condition_id);
+  assert.equal(snap.finish_tag, "CT-1");
+
+  // config is the EFFECTIVE resolved setup (§4.1) — a balanced condition's
+  // origin is the optimizer's sliver-avoidance choice, i.e. exactly what the
+  // canvas draws and the report counts, not the raw [0,0] default.
+  assert.equal(snap.config.w_in, 12);
+  assert.equal(snap.config.h_in, 24);
+  assert.equal(snap.config.joint_in, 0.125);
+  assert.equal(snap.config.pattern, "grid");
+  assert.equal(snap.config.rotation_deg, 15);
+  assert.ok(Array.isArray(snap.config.origin) && snap.config.origin.length === 2
+    && snap.config.origin.every((n) => typeof n === "number"), "effective origin is a resolved [x,y] in feet");
+
+  // classified_summary matches the SAME figures exportReport's tile_goods reads
+  const row = s.exportReport().tile_goods[0];
+  assert.deepEqual(snap.classified_summary, { full: row.full, cut: row.cut, corner: row.corner, hole: row.hole });
+  assert.ok(snap.classified_summary.full > 0, "the committed room classifies real tiles");
+
+  // opting back out empties the snapshot, same as the report block
+  s.editCondition("CT-1", { tile_setup: null });
+  assert.equal("tile_layouts" in (s.exportPayload() as Record<string, unknown>), false);
+});
+
+test("exportPayload: a shape's own tile_layout override rides the snapshot verbatim", async () => {
+  const s = new Session();
+  await s.loadPlan(PLAN);
+  s.setScale(KEY, { use_detected: true });
+  await s.oneClick(KEY, 600, 1084, { condition: "CT-1", role: "floor_area", returnVerts: false });
+  s.editCondition("CT-1", { tile_setup: { pattern: "grid" } });
+
+  const target = s.shapes[0];
+  target.tile_layout = { origin: [0.3, 0.1], rotation: 90 };
+
+  const p = s.exportPayload() as { tile_layouts: Array<{ tile_layout?: unknown }> };
+  assert.deepEqual(p.tile_layouts[0].tile_layout, { origin: [0.3, 0.1], rotation: 90 });
 });

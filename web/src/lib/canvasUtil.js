@@ -6,7 +6,7 @@
 // this module outside the web app (mcp/ keeps its own mirrored copies).
 
 import { RENDER_SCALE } from "./sheets";
-import { STALE_TAB_MESSAGE } from "./store.js";
+import { STALE_TAB_MESSAGE, isStaleTabError, friendlyStoreError } from "./store.js";
 import { mintUuid, nowIso } from "./provenance.js";
 import { instantiateMaterial } from "./materials.js";
 import { PALETTE } from "../components/hatches.jsx";
@@ -52,6 +52,20 @@ export const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 // shared by the status-bar tone AND the auto-dismiss skip (in the canvas) — one
 // definition of "this message is bad news" for both readers
 export const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
+// generateWallElevationSheet's catch (Slice B fix) — the union of the two
+// sibling error conventions it's copied from: the stale-tab distinction +
+// sticky STALE_TAB_MESSAGE from the autosave catch (TakeoffCanvas.jsx, the
+// hydrate-load catch and the debounced-save catch), and the "Couldn't …"
+// prefix from handleFiles' per-file catch. The prefix matters as more than
+// wording — isDangerMsg above only reds+stickies a message that either
+// equals STALE_TAB_MESSAGE or starts with "Couldn't"/"Commit failed"; a bare
+// friendlyStoreError(e) (as autosave uses) renders in the POSITIVE color and
+// auto-expires after 6s (see the isDangerMsg guard on that timer), which for
+// a "the user saw nothing happen" finding is barely a fix. Both branches here
+// satisfy isDangerMsg — asserted in the test alongside the message text.
+export const elevationErrorMessage = (e) => (isStaleTabError(e)
+  ? STALE_TAB_MESSAGE
+  : `Couldn't generate the elevation sheet: ${friendlyStoreError(e)}`);
 
 // A template is a condition minus ids (finish_tag, colors, hatch, waste,
 // H/T params, materials) — instantiation mints fresh condition/material ids.
@@ -64,6 +78,7 @@ export const instantiateTemplate = (t) => ({
   ...(t.laborType != null ? { laborType: t.laborType } : {}),
   ...(t.subfloorType != null ? { subfloorType: t.subfloorType } : {}),
   ...(t.roll_setup ? { roll_setup: { ...t.roll_setup } } : {}),   // #136 — deep-copied like grout: a template's roll spec must never be shared by reference
+  ...(t.tile_setup ? { tile_setup: structuredClone(t.tile_setup) } : {}), // nested skus/joint — deep copy, never share
   // instantiateMaterial (lib/materials.js) deep-copies the nested grout
   // geometry — a shallow spread here aliased the CT-1 seed's one grout object
   // into every fresh-workspace condition across every project in the session
@@ -73,3 +88,19 @@ export const instantiateTemplate = (t) => ({
 // built-in flooring defaults are only the empty-library fallback. Both paths
 // run instantiateTemplate — ONE condition constructor, no drift.
 export const seedConditions = (library) => (library?.length ? library : FLOORING_DEFAULTS).map(instantiateTemplate);
+// Pure inverse of instantiateTemplate above: condition → template shape (no
+// ids, no component state). Must copy every first-class sub-object
+// instantiateTemplate reinstates (roll_setup, tile_setup, …) — the write
+// side dropping one silently loses it on Library Apply / fresh-workspace
+// seeding, since both read through instantiateTemplate.
+export const condToTemplate = (c) => ({
+  finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
+  waste_pct: c.waste_pct || 0,
+  ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
+  ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
+  ...(c.laborType != null ? { laborType: c.laborType } : {}),
+  ...(c.subfloorType != null ? { subfloorType: c.subfloorType } : {}),
+  ...(c.roll_setup ? { roll_setup: { ...c.roll_setup } } : {}),   // #136 — the roll spec is part of what makes a CPT-1 template CPT-1
+  ...(c.tile_setup ? { tile_setup: structuredClone(c.tile_setup) } : {}),   // nested skus/joint — deep copy, never share (mirrors instantiateTemplate above)
+  materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
+});

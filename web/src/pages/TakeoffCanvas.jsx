@@ -111,6 +111,27 @@ import RollPanel from "../components/RollPanel.jsx";
 import LayerPanel from "../components/LayerPanel.jsx";
 import { rollColorForType } from "../lib/rollgoods.js";
 import { computeRollTakeoff, seamLfByShape } from "../lib/rollTakeoff.js";
+// Tile patterning (M5 Task 6): computeTileTakeoff mirrors rollTakeoff's own
+// bridge (byCond/byShape); solveTileLayout is the pure inch/foot solve
+// bridge run PER tiled floor shape here for RENDERING (byShape carries no
+// quads); tileOverlay turns a solved layout into panel-px SVG primitives +
+// the hatch<->grid LOD gate; tileQA is the cross-room sliver/warning batch
+// list; TilePanel is the docked setup/room/QA desk. shapeCommands' own
+// `tileLayout` command (mirrors `rollcut`) is the ONE undoable per-room
+// origin/rotation/edge-override command every gesture below dispatches.
+import TilePanel from "../components/TilePanel.jsx";
+import { computeTileTakeoff } from "../lib/tileTakeoff.js";
+import { computeLaborRom } from "../lib/tileCalc/labor.ts";
+import { hasTileSetup, tileConfig } from "../lib/tileSetup.ts";
+import { solveTileLayout } from "../lib/tileSolve.ts";
+import { effectiveTileSetup } from "../lib/tileGeometry/optimize.ts";
+import { tileOverlayPrimitives, bandOverlayPrimitives, shouldShowGrid } from "../lib/tileOverlay.ts";
+import { tileWarnings } from "../lib/tileQA.ts";
+import { tileLayoutSig } from "../lib/tileLayoutSig.ts";
+import { edgeExposures } from "../lib/tileEdges/expose.ts";
+import { fieldRingForBand } from "../lib/tileEdges/band.ts";
+import { buildWallElevationPdf, wallElevationSheetName, wallElevationScaleRow } from "../lib/wallElevationPdf.ts";
+import { dimsChanged } from "../lib/wallElevationSheet.ts";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -142,7 +163,7 @@ import {
   MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, HL_INKS, HL_SIZES,
   MARKUP_IMG_MAX, MAX_IMAGE_MARKUP_BYTES, MARKUP_UPLOAD_MAX_BYTES, MARKUP_DECODE_MAX_AREA,
 } from "../lib/canvasConstants.js";
-import { uid, clamp, isDangerMsg, instantiateTemplate, seedConditions } from "../lib/canvasUtil.js";
+import { uid, clamp, isDangerMsg, instantiateTemplate, condToTemplate, seedConditions, elevationErrorMessage } from "../lib/canvasUtil.js";
 // Tile-pyramid rendering (#86) — pure math in lib/tiles.ts (tested), worker
 // pool in lib/tilePool.ts, DOM/Worker orchestration glue here via one
 // long-lived compositor instance. Replaces the old single-raster base +
@@ -181,6 +202,20 @@ const CARPET_ROLL_FT = 12;
 // ties within a tier (stable sort), so overlapping Areas keep newest-wins.
 const ROLE_TIER = { floor_area: 0, deduct: 1, linear: 2, surface_area: 2, count: 3 };
 const tierOf = (s) => ROLE_TIER[s.measure_role] ?? 0;
+
+// True while a vertex/edge/body gesture is dragging a real shape (dragRef.kind).
+// The whole-project totals + roll layout freeze on these — one ring is moving,
+// the rest of the takeoff can hold its pre-drag figure and snap fresh on
+// release. markupMove is deliberately NOT included: it commits through
+// setMarkups and never changes `shapes`, so it neither needs the freeze nor
+// would ever reopen the gated memos (which would leave them stale).
+//
+// Each gated memo below (rollTakeoff / visRows / projRows / zoneRows) caches its
+// last computed value into a useRef DURING render — a deliberate escape hatch,
+// not an oversight. It is safe because the cached value is a pure function of the
+// memo's deps: a discarded or StrictMode-doubled render writes the identical
+// value the committed render would, so the freeze can never observe a torn one.
+const isGeomDrag = (d) => d?.kind === "vertex" || d?.kind === "edge" || d?.kind === "move";
 
 // The tools whose boundary can bend mid-measure (#284): the same click, the
 // same commit, the curve is just a property of the points you placed. Zone is
@@ -258,6 +293,55 @@ const TOOL_VERB = {
 
 // The materials/column editors (MaterialsEditor, ColumnSelects, AddValueInput)
 // live in components/TakeoffsPanel.jsx — the panel is their only surface now.
+
+// Tile patterning (M5 Task 6) — the pure per-shape solve+overlay bridge. A
+// module-level function (no React state closures) so the steady-state memo
+// AND a live origin-drag preview can share exactly one code path: pass an
+// explicit origin/rotation override for the live-drag case, omit both for
+// the shape's own committed tile_layout (falling through to the condition
+// default per §4.1). ringFt mirrors tileTakeoff.js's own conversion byte
+// for byte (verts_norm -> feet via the shape's bitmap dims + upp) — the
+// two modules must never disagree about where a room's ring sits. A band
+// (M7 Task 7.3, `tl.band`) re-scopes the FIELD solve to the band's inner
+// ring via `fieldRingForBand` — the SAME shared helper tileTakeoff.js's
+// `summarizeShape` calls, so the two field-solve paths stay byte-identical
+// by construction. `edges`/the returned `ring_ft` stay keyed to the ROOM's
+// own ring (edge exposures are the room's walls, unaffected by a band).
+function tileOverlayForShape(s, cond, dims, upp, originOverride, rotationOverride, preLayout) {
+  if (!cond || !dims || !(dims.w > 0) || !(upp > 0)) return null;
+  if (!Array.isArray(s.verts_norm) || s.verts_norm.length < 3) return null;
+  const ringFt = (verts) => verts.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
+  const ring_ft = ringFt(s.verts_norm);
+  const tl = s.tile_layout || {};
+  // Perf: reuse the takeoff's already-solved layout (tileTakeoff.byShape) when
+  // there is no live drag override — it is produced by the SAME
+  // fieldRingForBand -> effectiveTileSetup -> solveTileLayout chain, so the
+  // drawn grid is now literally the counted grid (not two paths that must
+  // agree). Only a live origin/rotation drag (originOverride/rotationOverride)
+  // re-solves, and only for the ONE shape being dragged.
+  let layout = (originOverride === undefined && rotationOverride === undefined) ? preLayout : null;
+  if (!layout) {
+    const holes_ft = (s.verts_norm_holes || []).map(ringFt);
+    const { fieldRing_ft } = fieldRingForBand({ ring_ft, holes_ft, band: tl.band });
+    const effective = effectiveTileSetup({ tile_setup: cond.tile_setup, tile_layout: tl, ring_ft: fieldRing_ft, holes_ft, originOverride, rotationOverride });
+    layout = solveTileLayout({ tile_setup: effective, ring_ft: fieldRing_ft, holes_ft });
+  }
+  const skus = cond.tile_setup?.skus || [];
+  const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond.color || "#888";
+  const overlay = tileOverlayPrimitives(layout, upp, skuColor);
+  const edges = edgeExposures({ ring_ft, overrides: Object.fromEntries(Object.entries(tl.edge_overrides || {}).map(([i, o]) => [i, o?.exposure])) });
+  return { config: layout.config, tiles: overlay.tiles, origin: overlay.origin, ring_ft, edges };
+}
+
+// Edge-exposure ink (M5 Task 6, tileEdges/expose.ts kinds) — "field" needs
+// no trim and is never drawn (skipped at the render call site).
+const TILE_EDGE_COLORS = { trim: "#c47a10", threshold: "#1f3fc7", bullnose: "#0e9488", cove: "#7c3aed" };
+
+// FIFO cap for netCacheRef (One-Click built "net" per sheet+scale). A long
+// session revisiting many sheets at many zoom tiers — each ftPx tier is a
+// distinct key — would otherwise grow this unbounded (unlike maskCacheRef,
+// which is cleared on group change). 24 tiers of live work is generous.
+const NET_CACHE_MAX = 24;
 
 export default function TakeoffCanvas() {
   // Client-only: a single local workspace in this browser (no project id, no backend).
@@ -380,6 +464,13 @@ export default function TakeoffCanvas() {
   // (rescaleSheet) clears the flag — the act is the confirmation.
   const [scaleUnconfirmed, setScaleUnconfirmed] = useState({});
   const confirmScale = (key) => setScaleUnconfirmed((m) => { if (!(key in m)) return m; const n = { ...m }; delete n[key]; return n; });
+  // Generated wall-elevation sheets only (Task 2, 2026-08-29 wall-tile-slice-b):
+  // sheet_id → the DRAWN strip dims (width_ft/height_ft) recorded at generation
+  // time — persisted alongside scale_source in the `sheets` payload array (rides
+  // the same per-sheet record, additive fields). Lets generateWallElevationSheet's
+  // dims-change confirm guard (I1) compare a regenerated wall's new dims against
+  // what was last actually drawn, without reloading/re-measuring the stored PDF.
+  const [wallElevDims, setWallElevDims] = useState({});
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const isNarrow = useIsNarrow();
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
@@ -535,6 +626,19 @@ export default function TakeoffCanvas() {
   const [rollEdit, setRollEdit] = useState(false);        // cut-edit mode — cuts take pointer events (slide / resize / double-click reset)
   const [rollPanelOpen, setRollPanelOpen] = useState(false); // docked Roll panel (diagram + reorder)
   const rollDragRef = useRef(null);                       // live cut-drag gesture; commit is ONE rollcut command on release
+  // ── tile patterning (M5 Task 6) — view state; figured layouts are a memo below ──
+  const [tileShow, setTileShow] = useState(true);         // draw the figured tile grid over the plan
+  const [tileEdit, setTileEdit] = useState(false);        // origin/edge-edit mode — the overlay takes pointer events
+  const [tilePanelOpen, setTilePanelOpen] = useState(false); // docked Tile panel (setup + this room + QA)
+  const [tileDragPreview, setTileDragPreview] = useState(null); // live origin-drag preview: {id, origin:[x,y] ft} for ONE shape, never written to `shapes` (tileLayout has no `prev` escape hatch — see beginTileOrigin)
+  const tileDragRef = useRef(null);                       // live origin-drag gesture; commit is ONE tileLayout command on release
+  // While a vertex/edge/body drag is live, the shape re-renders every
+  // pointermove — which would rebuild + re-reconcile the thousands of tile
+  // <rect> nodes each frame (the grid shown is stale/frozen anyway). Hide the
+  // grid for the duration and redraw it on release ("stop rendering the
+  // pattern while adjusting, snap it back when done"). Set on first motion,
+  // cleared in onPointerUp.
+  const [geomDragging, setGeomDragging] = useState(false);
   const [agentLog, setAgentLog] = useState([]);           // streaming run status [{kind, text}]
   const [agentRunning, setAgentRunning] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false); // BYO-key config modal (ai.js seam)
@@ -544,6 +648,25 @@ export default function TakeoffCanvas() {
   // the run-click render's. Updated every render (cheap object build).
   const agentStateRef = useRef({ panels: [], scales: {}, scaleSources: {}, detectedScales: {}, conditions: [], status: "loading" });
   useEffect(() => () => agentAbortRef.current?.abort(), []);   // leaving the canvas stops a live agent run
+  // Dev-only long-task logger: surface main-thread blocks >=50ms during real
+  // interaction (pan/zoom, pattern switch, vertex drag) in the console, so a
+  // perf regression self-reports without an explicit profiling pass. Stripped
+  // from production (import.meta.env.DEV is false there) and a no-op where the
+  // `longtask` entry type is unsupported (Safari/Firefox). Complements the
+  // offline timing gate in bench/tilePerf.mts.
+  useEffect(() => {
+    if (!import.meta.env.DEV || typeof PerformanceObserver === "undefined") return undefined;
+    let obs;
+    try {
+      obs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          if (e.duration >= 50) console.warn(`[longtask] ${Math.round(e.duration)}ms`, e.name || "");
+        }
+      });
+      obs.observe({ entryTypes: ["longtask"] });
+    } catch { /* longtask unsupported — logger stays a no-op */ }
+    return () => { try { obs?.disconnect(); } catch { /* already gone */ } };
+  }, []);
   const [ocSel, setOcSel] = useState(null);        // selected proposal vertex {ri, vi} — Delete removes just that point
   const [ocHover, setOcHover] = useState(-1);      // proposal region under the cursor — handles reveal on hover
   const [selectedId, setSelectedId] = useState(null);   // selected shape (Select tool)
@@ -661,6 +784,7 @@ export default function TakeoffCanvas() {
   const selectShape = (id) => { setSelectedId(id); setSelectedMarkupId(null); };
   const selectMarkup = (id) => { setSelectedMarkupId(id); setSelectedId(null); };
   const pendingFlyRef = useRef(null);   // fly-to target whose sheet is opening this tick (two-phase center once its bitmap loads)
+  const tileFocusRef = useRef(null);    // pending QA-warning fly-to target: {sheet_id, at_norm?, shape_id?} (M5 Task 6, same two-phase posture as pendingFlyRef)
   // Source-trace (◎) equivalent of pendingFlyRef: { sheet_id, rect, token, attempts }
   // for a trace whose SOURCE sheet is opening this tick. Unlike pendingFlyRef it
   // carries no markup id to re-validate against — there's no markup on the source
@@ -1133,8 +1257,19 @@ export default function TakeoffCanvas() {
   // speak feet. Memoized off geometry/config, never the transform: pan/zoom
   // must not re-figure a roll. uppFor reads `scales` (a dep) plus a ref pinned
   // to RENDER_SCALE, so the dep list is honest.
+  // A geometry drag replaces `shapes` every pointermove; re-figuring every roll
+  // room in the open group per frame is the drag-jank source. The gesture moves
+  // ONE ring, so hold the last figured layout while it's live and recompute
+  // canonically on release: onPointerUp clears dragRef BEFORE the commit
+  // replaces `shapes`, so the very next render runs this memo fresh.
+  const lastRollRef = useRef(null);
   const rollTakeoff = useMemo(
-    () => computeRollTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k)),
+    () => {
+      if (isGeomDrag(dragRef.current) && lastRollRef.current) return lastRollRef.current;
+      const r = computeRollTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k));
+      lastRollRef.current = r;
+      return r;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor reads scales (listed) + renderScalesRef pinned to RENDER_SCALE; listing it would re-figure rolls on every render
     [conditions, shapes, panelImgs, scales]   // uppFor: scales + a pinned ref
   );
@@ -1145,6 +1280,269 @@ export default function TakeoffCanvas() {
   // the HUD, the project roll-up, and a zone check agree with the Report on
   // what the layout welds.
   const seamCtx = useMemo(() => ({ seamByShape: seamLfByShape(rollByCond) }), [rollByCond]);
+
+  // Tile takeoff (M5 Task 6) — mirrors rollTakeoff's own memo exactly: same
+  // dimsFor/uppFor closures, same dep list (uppFor reads scales + a pinned
+  // ref, never listed directly).
+  const lastTileRef = useRef(null);
+  // Cross-render per-shape solve cache (perf #2): unchanged rooms are reused
+  // when any OTHER shape/condition ref changes, so an edit re-solves only the
+  // room that moved. Cleared on project/snapshot reset (shape ids are reused
+  // across projects). See computeTileTakeoff's cache doc.
+  const tileTakeoffCacheRef = useRef(new Map());
+  const tileTakeoff = useMemo(
+    () => {
+      // A geometry drag rewrites `shapes` every pointermove with a transient,
+      // often self-touching ring; running the jsts classify on that ring throws
+      // a non-noded TopologyException (classify.ts is made resilient too, but
+      // the gate is why the grid holds still and snaps on release rather than
+      // re-figuring per frame). Freeze the last figured takeoff while a drag is
+      // live — onPointerUp clears dragRef BEFORE the commit replaces `shapes`,
+      // so the very next render figures fresh on the released geometry.
+      if (isGeomDrag(dragRef.current) && lastTileRef.current) return lastTileRef.current;
+      const r = computeTileTakeoff(conditions, shapes, (k) => panelImgs[k] || null, (k) => uppFor(k), tileTakeoffCacheRef.current);
+      lastTileRef.current = r;
+      return r;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff above
+    [conditions, shapes, panelImgs, scales]
+  );
+  const tileByCond = tileTakeoff.byCond;
+  const laborRomByCond = useMemo(() => computeLaborRom(tileByCond), [tileByCond]);
+  // §3.7 persist/reset key — every tiled floor shape's tileLayoutSig, joined.
+  // Pure zoom/pan never touches verts_norm/tile_setup/tile_layout, so this
+  // string is stable across them; a real geometry/setup/override edit flips
+  // it. tileOverlayByPanel keys off THIS, not `shapes` directly, so a live
+  // drag preview (which never writes `shapes` — see beginTileOrigin below)
+  // can't thrash the expensive per-room solve on every render either.
+  const tileOverlaySig = useMemo(() => {
+    const tileConds = conditions.filter(hasTileSetup);
+    if (!tileConds.length) return "";
+    const condMap = new Map(tileConds.map((c) => [c.id, c]));
+    const parts = [];
+    for (const s of shapes) {
+      // NOTE: surface_area (wall) shapes don't reach this loop — the filter
+      // below admits floor_area only. Walls aren't in the plan overlay yet
+      // (tileOverlayByPanel below has the same floor_area-only filter), so
+      // this sig doesn't need to be height-aware; tileTakeoff.js's own role
+      // gate is where walls actually get taken off.
+      if (s.measure_role !== "floor_area") continue;
+      const cond = condMap.get(s.condition_id);
+      if (!cond) continue;
+      parts.push(s.id + ":" + tileLayoutSig(s, cond.tile_setup));
+    }
+    return parts.join("|");
+  }, [conditions, shapes]);
+  // Per-panel solved overlays (§4.1/§4.2) — one entry per tiled floor shape,
+  // each carrying its own solved tile grid + ring + edge exposures in PANEL
+  // px. A live origin-drag (tileDragPreview) overrides ONE shape's entry at
+  // render time (see the overlay render below) rather than re-keying this
+  // memo, so dragging never re-solves every OTHER room on the sheet.
+  const tileOverlayByPanel = useMemo(() => {
+    const byPanel = new Map();
+    if (geomDragging) return byPanel;   // adjusting geometry — grid hidden until release (redrawn fresh then)
+    const tileConds = conditions.filter(hasTileSetup);
+    if (!tileConds.length) return byPanel;
+    const condMap = new Map(tileConds.map((c) => [c.id, c]));
+    for (const s of shapes) {
+      if (s.measure_role !== "floor_area") continue;
+      const cond = condMap.get(s.condition_id);
+      if (!cond) continue;
+      const dims = panelImgs[s.sheet_id] || null;
+      const upp = uppFor(s.sheet_id);
+      const ov = tileOverlayForShape(s, cond, dims, upp, undefined, undefined, tileTakeoff.byShape.get(s.id)?.layout);
+      if (!ov) continue;
+      const arr = byPanel.get(s.sheet_id) || [];
+      arr.push({ shapeId: s.id, conditionId: cond.id, upp, ...ov });
+      byPanel.set(s.sheet_id, arr);
+    }
+    return byPanel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tileOverlaySig (not `shapes`/`conditions`) is the real memo key (§3.7: persists across pure zoom); tileTakeoff supplies the reused solved layout and recomputes on the same edits
+  }, [tileOverlaySig, tileTakeoff, panelImgs, scales, geomDragging]);
+  // Cross-room QA (Task 4) — a 40-room job audited once, not one zoom at a
+  // time. Same dimsFor/uppFor contract as computeTileTakeoff.
+  const tileWarningsList = useMemo(
+    () => {
+      // §2.I/§5: a room whose ring reaches the shared butt edge of a
+      // multi-sheet stitch is a seam-crossing candidate — flag it for a
+      // HUMAN seam (tiling stops at a sheet boundary; never auto-joined).
+      // This is the only place stitch membership is known, so the flag is
+      // set here and tileQA merely relays it.
+      const shapesForQA = shapes.map((s) => {
+        if (s.measure_role !== "floor_area" || !Array.isArray(s.verts_norm) || s.verts_norm.length < 3) return s;
+        let mem = null;
+        for (const st of stitches) {
+          const members = st.members || [];
+          if (members.length < 2) continue;
+          const i = members.findIndex((mm) => mm.key === s.sheet_id);
+          if (i >= 0) { mem = { left: i > 0, right: i < members.length - 1 }; break; }
+        }
+        if (!mem) return s;
+        let minX = 1, maxX = 0;
+        for (const [nx] of s.verts_norm) { if (nx < minX) minX = nx; if (nx > maxX) maxX = nx; }
+        const crosses = (mem.left && minX <= 0.01) || (mem.right && maxX >= 0.99);
+        return crosses ? { ...s, stitch_crossing: true } : s;
+      });
+      // layoutFor reuses the takeoff's already-solved byShape.layout so QA
+      // doesn't re-run the O(V²) balanced-origin solve a third time per render.
+      return tileWarnings(conditions, shapesForQA, (k) => panelImgs[k] || null, (k) => uppFor(k), (id) => tileTakeoff.byShape.get(id)?.layout);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- uppFor: scales + a pinned ref, same posture as rollTakeoff/tileTakeoff above
+    [conditions, shapes, stitches, panelImgs, scales, tileTakeoff]
+  );
+
+  // Origin drag (M5 Task 6) — mirrors the roll cut-drag pattern (#136) below,
+  // with ONE deliberate difference: shapeCommands' `tileLayout` command has
+  // no `rollcut`-style `prev` escape hatch, so it always derives its undo
+  // inverse from the CURRENT `shapes` array at commit time. A live preview
+  // that wrote straight into `shapes` (roll's own preview path) would
+  // poison that inverse with the near-final drag position instead of the
+  // true grab-time origin. So the live preview lives entirely in
+  // `tileDragPreview` (component state, never touches `shapes`); `shapes` —
+  // and therefore the command's `prior` snapshot — stays exactly as it was
+  // at grab time until the ONE dispatchShape fired on release.
+  const beginTileOrigin = (e, shapeId, upp, baseOriginFt) => {
+    if (!tileEdit) return;
+    e.stopPropagation(); e.preventDefault();
+    tileDragRef.current = { id: shapeId, upp, sx: e.clientX, sy: e.clientY, base: baseOriginFt, moved: false, lastOrigin: null };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const moveTileOrigin = (e) => {
+    const d = tileDragRef.current; if (!d) return;
+    const dxFt = ((e.clientX - d.sx) / tfRef.current.scale) * d.upp;
+    const dyFt = ((e.clientY - d.sy) / tfRef.current.scale) * d.upp;
+    d.moved = d.moved || Math.abs(dxFt) > 1e-4 || Math.abs(dyFt) > 1e-4;
+    d.lastOrigin = [d.base[0] + dxFt, d.base[1] + dyFt];
+    setTileDragPreview({ id: d.id, origin: d.lastOrigin });
+  };
+  const endTileOrigin = () => {
+    const d = tileDragRef.current; if (!d) return;
+    tileDragRef.current = null;
+    setTileDragPreview(null);
+    if (!d.moved || !d.lastOrigin) return;   // zero-motion = not an edit — no command, no undo entry
+    dispatchShape({ type: "tileLayout", id: d.id, patch: { origin: d.lastOrigin } });
+  };
+  // Edge-exposure confirm (M5 Task 6) — click an edge in edit mode to cycle
+  // its kind and confirm it in one step (tileEdges/expose.ts: a confirmed
+  // override always wins over the proximity-suggested default). ONE
+  // tileLayout command per click — a click has no drag delta to preview.
+  const TILE_EDGE_CYCLE = ["trim", "threshold", "bullnose", "cove", "field"];
+  const cycleTileEdge = (shapeId, edgeIndex, currentKind) => {
+    const s = shapes.find((sh) => sh.id === shapeId);
+    if (!s) return;
+    const i = TILE_EDGE_CYCLE.indexOf(currentKind);
+    const next = TILE_EDGE_CYCLE[(i + 1) % TILE_EDGE_CYCLE.length];
+    const edge_overrides = { ...(s.tile_layout?.edge_overrides || {}), [edgeIndex]: { exposure: next, confirmed: true } };
+    dispatchShape({ type: "tileLayout", id: shapeId, patch: { edge_overrides } });
+  };
+
+  // The tile-grid overlay JSX, precomputed once per panel — NOT re-created on
+  // every parent render. The monolith re-renders ~11Hz during pan/zoom (setTf)
+  // and on every hover/selection/commit-message tick; rebuilding this
+  // hundreds-to-thousands-of-<rect> subtree inline (as it was) made React
+  // reconcile the whole grid on each of those renders, competing with the pan
+  // loop for main-thread time. Keyed on the CONTENT that changes the drawn
+  // grid — the solved overlay memo, the live origin-drag preview, the zoom
+  // scale (stroke widths are 1/scale), band summaries, edit mode, units — so a
+  // pan at constant zoom, a hover, or a status tick returns the SAME element
+  // refs and React skips the whole subtree (the protection TakeoffsPanel gets
+  // from React.memo). `panels`/handlers are captured, not deps: panels' content
+  // is covered by groupSig + panelImgs, and the handlers branch only on
+  // tileEdit/shapes (both deps), so a stale capture is impossible.
+  const tileOverlayJsxByPanel = useMemo(() => {
+    const byPanel = new Map();
+    if (!tileShow) return byPanel;
+    const s = tf.scale;
+    const condMap = new Map(conditions.map((c) => [c.id, c]));
+    for (const p of panels) {
+      const entries = tileOverlayByPanel.get(p.key) || [];
+      if (!entries.length) continue;
+      const nodes = [];
+      for (const entry of entries) {
+        const live = tileDragPreview && tileDragPreview.id === entry.shapeId
+          ? (() => {
+              const ds = shapes.find((sh) => sh.id === entry.shapeId);
+              const dCond = condMap.get(entry.conditionId);
+              if (!ds || !dCond) return null;
+              return tileOverlayForShape(ds, dCond, panelImgs[ds.sheet_id] || null, entry.upp, tileDragPreview.origin);
+            })()
+          : null;
+        const ov = live || entry;
+        if (!shouldShowGrid(ov.config, entry.upp, s)) continue;
+        const bandSummary = tileTakeoff.byShape.get(entry.shapeId)?.band;
+        const bandCond = condMap.get(entry.conditionId);
+        const bandColor = bandSummary
+          ? (bandCond?.tile_setup?.skus || []).find((sk) => sk && sk.id === bandSummary.sku_id)?.color || bandCond?.color || "#888"
+          : null;
+        const bandPath = bandSummary
+          ? (() => {
+              const bp = bandOverlayPrimitives(bandSummary, entry.upp);
+              const ring = (pts) => pts.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x},${pt.y}`).join(" ") + " Z";
+              return `${ring(bp.outer)} ${ring(bp.inner)}`;
+            })()
+          : null;
+        nodes.push(
+          <g key={"tile" + entry.shapeId}>
+            {bandPath && (
+              <path d={bandPath} fillRule="evenodd" fill={bandColor} fillOpacity={0.4}
+                stroke={bandColor} strokeOpacity={0.85} strokeWidth={1.6 / s}
+                style={{ pointerEvents: "none" }}>
+                <title>{`Band — ${bandSummary.tiles} tile${bandSummary.tiles === 1 ? "" : "s"} · ${fmtCheckLen(bandSummary.lf, units)}`}</title>
+              </path>
+            )}
+            {ov.tiles.map((t, i) => {
+              const rotDeg = (t.rot * 180) / Math.PI;
+              const isHole = t.cls === "hole";
+              const fillA = t.cls === "cut" ? "18" : "33";
+              return (
+                <g key={i} style={{ pointerEvents: "none" }}>
+                  <rect x={t.cx - t.w / 2} y={t.cy - t.h / 2} width={t.w} height={t.h}
+                    transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`}
+                    fill={isHole ? "rgba(176,58,38,.24)" : t.color + fillA}
+                    stroke={isHole ? "#b03a26" : t.color}
+                    strokeOpacity={isHole ? 0.9 : 0.55}
+                    strokeWidth={(t.cls === "corner" ? 2 : 1) / s}
+                    strokeDasharray={t.cls === "cut" || isHole ? `${3 / s} ${2 / s}` : undefined} />
+                  {t.cls === "corner" && (
+                    <path d={`M${t.cx - t.w / 2},${t.cy - t.h / 2} l${Math.min(t.w, t.h) * 0.35},0 l0,${Math.min(t.w, t.h) * 0.35} Z`}
+                      transform={`rotate(${rotDeg} ${t.cx} ${t.cy})`} fill={t.color} fillOpacity={0.85} />
+                  )}
+                </g>
+              );
+            })}
+            {(ov.edges || []).map((edge) => {
+              if (edge.exposure === "field") return null;
+              const a = ov.ring_ft[edge.shapeEdgeIndex], b = ov.ring_ft[(edge.shapeEdgeIndex + 1) % ov.ring_ft.length];
+              const ecol = TILE_EDGE_COLORS[edge.exposure] || TILE_EDGE_COLORS.trim;
+              return (
+                <line key={"edge" + edge.shapeEdgeIndex}
+                  x1={a[0] / entry.upp} y1={a[1] / entry.upp} x2={b[0] / entry.upp} y2={b[1] / entry.upp}
+                  stroke={ecol} strokeWidth={(edge.confirmed ? 3 : 2) / s}
+                  strokeOpacity={edge.confirmed ? 0.95 : 0.5}
+                  strokeDasharray={edge.confirmed ? undefined : `${5 / s} ${3 / s}`}
+                  strokeLinecap="round"
+                  style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "pointer" : undefined }}
+                  onClick={(e) => { if (tileEdit) { e.stopPropagation(); cycleTileEdge(entry.shapeId, edge.shapeEdgeIndex, edge.exposure); } }}>
+                  <title>{`${edge.exposure}${edge.confirmed ? " (confirmed)" : " (suggested)"} — ${fmtCheckLen(edge.length_lf, units)}${tileEdit ? " · click to cycle" : ""}`}</title>
+                </line>
+              );
+            })}
+            <g style={{ pointerEvents: tileEdit ? "auto" : "none", cursor: tileEdit ? "grab" : undefined }}
+              onPointerDown={(e) => beginTileOrigin(e, entry.shapeId, entry.upp, ov.config.origin)}
+              onPointerMove={moveTileOrigin} onPointerUp={endTileOrigin} onPointerCancel={endTileOrigin}>
+              <title>{`Tile origin${tileEdit ? " — drag to relocate the grid" : ""}`}</title>
+              <circle cx={ov.origin.x} cy={ov.origin.y} r={7 / s} fill="none" stroke="#1f3fc7" strokeWidth={2 / s} />
+              <line x1={ov.origin.x - 10 / s} y1={ov.origin.y} x2={ov.origin.x + 10 / s} y2={ov.origin.y} stroke="#1f3fc7" strokeWidth={1.6 / s} />
+              <line x1={ov.origin.x} y1={ov.origin.y - 10 / s} x2={ov.origin.x} y2={ov.origin.y + 10 / s} stroke="#1f3fc7" strokeWidth={1.6 / s} />
+            </g>
+          </g>
+        );
+      }
+      if (nodes.length) byPanel.set(p.key, nodes);
+    }
+    return byPanel;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- panels/handlers captured: panels' content = groupSig + panelImgs (both deps); handlers branch only on tileEdit/shapes (both deps)
+  }, [tileShow, tf.scale, conditions, tileOverlayByPanel, tileDragPreview, shapes, panelImgs, tileTakeoff, tileEdit, units, groupSig]);
 
   // Cut drag (#136) — the self-contained element-drag pattern (the panel-resize
   // handle's): the cut's own <g> opts into pointer events in edit mode, captures
@@ -1209,6 +1607,7 @@ export default function TakeoffCanvas() {
   // pack FIRST, in that order — the engine's skyline re-packs, so a manual
   // order can never overlap) — ONE rollcut command, one undo entry.
   const onReorderRollCuts = (condId, orderedIds) => {
+    if (dragRef.current) return;   // rollByCond is frozen mid-geometry-drag; a concurrent-pointer reorder off the stale strips could persist a wrong laneCount — wait for release
     const ri = rollByCond.get(condId); if (!ri) return;
     const laneCountBySrc = new Map(ri.strips.map((s) => [s.srcId, s.laneCount]));
     const bySrc = new Map();
@@ -1232,6 +1631,7 @@ export default function TakeoffCanvas() {
   // strip only the seq keys — a floor-position edit (runMin/runMax) survives a
   // cutting-order reset; that's a different decision than double-click reset
   const onResetRollOrder = (condId) => {
+    if (dragRef.current) return;   // rollByCond is frozen mid-geometry-drag — reorder edits wait for release (see onReorderRollCuts)
     const ri = rollByCond.get(condId); if (!ri) return;
     const srcIds = new Set(ri.strips.map((s) => s.srcId));
     const rows = [];
@@ -1471,6 +1871,84 @@ export default function TakeoffCanvas() {
       setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
     }
   }
+  // Slice B Task 2 (2026-08-29 wall-tile-slice-b) — turns a selected wall
+  // shape's Slice A tile summary into a real, stored elevation sheet: draws
+  // it (Task 1's buildWallElevationPdf), adds it to the plan set at its
+  // KNOWN scale (never the agent-set gate — we drew the page ourselves), and
+  // opens it. Reuses handleFiles' proven add/revision-reset/open recipe
+  // verbatim (evictDoc+forgetPages+setDocEpoch on a revision; refreshSheets
+  // THEN setOpenTabs THEN goToSheet — `sheets` must already carry the new
+  // key before it's added as a tab, or the `[sheets, stitchById]`
+  // tab-liveness effect above would prune it right back out). No button
+  // calls this yet (Task 3) — this is the handler + its wired-up seam.
+  async function generateWallElevationSheet(shape) {
+    // defensive — the prop closure that reaches this (TilePanel's
+    // onGenerateElevation, bound to selShape) is built whenever the panel is
+    // open, whether or not a wall is actually selected.
+    if (!shape?.id) return;
+    // the SAME synchronous value the Slice A panel reads (selWallSummary,
+    // below) — no async/staleness. Absent/empty on an unscaled sheet or a
+    // reversing/degenerate run the shared takeoff loop already excluded.
+    const summary = tileTakeoff.byShape.get(shape.id);
+    if (!summary?.wallStrips?.length) return;
+    const cond = condById[shape.condition_id];
+    if (!cond) return;   // defensive — a shape whose condition doesn't resolve has nothing to tag/color from
+    const tag = cond.finish_tag || "?";
+    const skus = cond.tile_setup?.skus || [];
+    // PURE lookup, no allocator/counter (M4, plan review): an unchanged wall
+    // regenerates byte-identically, and a same-dims SKU/color-only regen
+    // never trips the dims-change guard below.
+    const skuColor = (id) => skus.find((s) => s.id === id)?.color ?? "#888888";
+    const name = wallElevationSheetName(tag, shape.id);
+    // Whole-body try/catch (Slice B fix, whole-branch review): every step
+    // below is async/throwable — buildWallElevationPdf (pdf-lib) or
+    // store.addPdf (IndexedDB quota, or the stale-tab/multi-session write
+    // conflict a concurrent-session user can actually hit) — and the button
+    // calls this fire-and-forget (TilePanel.jsx onClick), so an uncaught
+    // rejection was a silent no-op: no sheet, no nav, no message. Surfaced
+    // via the same commitMsg channel + isStaleTabError/friendlyStoreError
+    // convention as handleFiles' per-file catch and the autosave catch
+    // above (elevationErrorMessage, canvasUtil.js).
+    try {
+      const r = await buildWallElevationPdf({ wallStrips: summary.wallStrips, folds: summary.folds || [], skuColor, tag, name });
+
+      // I1: only a wall whose sheet already exists AND is actually bound to
+      // shapes AND whose drawn dims changed needs the human's go-ahead — never
+      // a first generation, and never a same-dims SKU/color-only regen.
+      if (sheets.some((s) => s.name === name) && shapes.some((s) => s.sheet_id === name)) {
+        const next = { width_ft: r.width_ft, height_ft: r.height_ft };
+        if (dimsChanged(wallElevDims[name], next)
+          && !window.confirm("This wall's size changed — marks on its elevation sheet may shift. Regenerate anyway?")) {
+          return;
+        }
+      }
+
+      const added = await store.addPdf(r.file);
+      // M1 — idiomatic scale path: a KNOWN scale (we drew the page ourselves),
+      // so scaleUnconfirmed is deliberately left untouched (absence ===
+      // confirmed; the gate is `scaleUnconfirmed[key] === false`).
+      const row = wallElevationScaleRow(r.upp);
+      setScales((m) => ({ ...m, [name]: row.units_per_px }));
+      setScaleSources((m) => ({ ...m, [name]: row.scale_source }));
+      setWallElevDims((m) => ({ ...m, [name]: { width_ft: r.width_ft, height_ft: r.height_ft } }));
+
+      // M2 — cache reset on revision: the same recipe handleFiles uses for a
+      // re-dropped file whose bytes changed.
+      if (added?.revised) {
+        evictDoc(name);
+        forgetPages([name]);
+        setDocEpoch((e) => e + 1);
+      }
+
+      // M2 — open: refreshSheets FIRST so `sheets` already carries `name`
+      // before it's added as a tab — see the recipe note above.
+      await refreshSheets();
+      setOpenTabs((t) => (t.includes(name) ? t : [...t, name]));
+      goToSheet(name);
+    } catch (e) {
+      setCommitMsg(elevationErrorMessage(e));
+    }
+  }
   // The empty-project landing view (the Drive picker for an empty cloud project,
   // else the gallery) depends on BOTH the sheet list and the annotations (open
   // tabs), which load in two racing mount effects. These flags let whichever
@@ -1579,6 +2057,8 @@ export default function TakeoffCanvas() {
     layerOverridesRef.current = lov;
     setLayerOverrides(lov);
     maskCacheRef.current.clear();
+    netCacheRef.current.clear();   // a snapshot/project load must not inherit the replaced project's per-sheet net (same-named sheet at same ftPx)
+    tileTakeoffCacheRef.current.clear();   // shape ids are reused across projects — a stale summary would misdraw/miscount the new project's room
     // additive `stitches` (#161) — sanitize-gated like approvals; else-clear so a
     // snapshot load can't inherit the replaced project's composites. Sanitized
     // BEFORE group normalization: a solo stitch key in sheet_group is only a
@@ -1612,6 +2092,7 @@ export default function TakeoffCanvas() {
     const sc = {};
     const src = {};
     const unconf = {};
+    const elevDims = {};
     for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
       sc[s.sheet_id] = s.units_per_px;
       // provenance is additive — old projects lack it (report shows "unknown").
@@ -1620,10 +2101,17 @@ export default function TakeoffCanvas() {
       // autosave would persist the loss. Display already falls back safely.
       if (typeof s.scale_source === "string" && s.scale_source) src[s.sheet_id] = s.scale_source;
       if (s.scale_confirmed === false) unconf[s.sheet_id] = false;   // scale gate: agent-set, awaiting a human
+      // additive, generated-elevation-sheets only (Task 2): the drawn dims at
+      // last generation, for the dims-change confirm guard — absent on every
+      // ordinary (non-generated) sheet and on payloads that predate it.
+      if (Number.isFinite(s.elev_width_ft) && Number.isFinite(s.elev_height_ft)) {
+        elevDims[s.sheet_id] = { width_ft: s.elev_width_ft, height_ft: s.elev_height_ft };
+      }
     }
     setScales(sc);
     setScaleSources(src);
     setScaleUnconfirmed(unconf);
+    setWallElevDims(elevDims);
     // display units ride the payload (additive) — a metric project opens metric
     // on any machine; payloads without the field keep this browser's toggle
     if (a.units === "metric" || a.units === "imperial") setUnits(a.units);
@@ -1858,6 +2346,8 @@ export default function TakeoffCanvas() {
     maskCacheRef.current.clear();
     sheetStatsRef.current.clear();
     rasterMaskCacheRef.current.clear();
+    netCacheRef.current.clear();   // sheet+scale-keyed like the mask caches: a same-named sheet at the same ftPx must NOT inherit the prior project's net
+    tileTakeoffCacheRef.current.clear();   // shape ids are reused across projects — a stale summary would misdraw/miscount the new project's room
     canvasInvertedRef.current.clear();
     pageObjsRef.current.clear();
     renderScalesRef.current.clear();
@@ -2213,6 +2703,20 @@ export default function TakeoffCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelImgs, groupSig, status]);
 
+  // Tile QA focus (M5 Task 6) — same two-phase posture as the markup fly-to
+  // above, for a raw Warning target (tileQA.ts) instead of a markup id: no
+  // "was it deleted" check (a Warning isn't a persisted record), so this
+  // only drops a stale target on a render error or an already-closed sheet.
+  useEffect(() => {
+    const w = tileFocusRef.current;
+    if (!w) return;
+    if (status === "error") { tileFocusRef.current = null; return; }
+    if (status !== "ready" || !panelKeySet.has(w.sheet_id)) return;
+    const sp = panels.find((p) => p.key === w.sheet_id);
+    if (sp && sp.img.w) { centerTileFocus(w); tileFocusRef.current = null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelImgs, groupSig, status]);
+
   // source-trace (◎) phase 2 — mirrors the fly-to phase-2 effect above, but
   // pendingSourceRef has no markup id to re-validate against (there's no markup
   // on the source sheet, only a synthetic {sheet_id, rect}), so it leans on
@@ -2258,7 +2762,6 @@ export default function TakeoffCanvas() {
     setSourceFlash((f) => (f && !panelKeySet.has(f.sheet_id) ? null : f));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupSig]);
-
   // ── autosave (debounced) ──────────────────────────────────────────────────
   // buildPayload is the single serializer — autosave and snapshots must write
   // identical records for the same state (byte-stability matters downstream).
@@ -2270,7 +2773,7 @@ export default function TakeoffCanvas() {
     // units is additive and diff-only (the sheet_levels convention): imperial —
     // the default — omits the key, so an old imperial project's payload is
     // byte-identical on round-trip; only a metric project carries the field.
-    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}), ...(scaleUnconfirmed[sheet_id] === false ? { scale_confirmed: false } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, ...(approvals.length ? { approvals } : {}), ...(rules.length ? { rules } : {}), sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(stitches.length ? { stitches } : {}), ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}), ...(Object.keys(layerOverrides).length ? { layer_overrides: layerOverrides } : {}), ...(Object.keys(provCounters.shapes_deleted).length ? { provenance_counters: provCounters } : {}) };
+    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}), ...(scaleUnconfirmed[sheet_id] === false ? { scale_confirmed: false } : {}), ...(wallElevDims[sheet_id] ? { elev_width_ft: wallElevDims[sheet_id].width_ft, elev_height_ft: wallElevDims[sheet_id].height_ft } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, ...(approvals.length ? { approvals } : {}), ...(rules.length ? { rules } : {}), sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(stitches.length ? { stitches } : {}), ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}), ...(Object.keys(layerOverrides).length ? { layer_overrides: layerOverrides } : {}), ...(Object.keys(provCounters.shapes_deleted).length ? { provenance_counters: provCounters } : {}) };
   };
   // Runtime restore of a saved payload — the Revisions panel's Restore lands
   // here. A runtime load (unlike mount) can interrupt work in
@@ -2503,7 +3006,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, approvals, rfis, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units]);
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, wallElevDims, markups, approvals, rfis, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -2583,7 +3086,6 @@ export default function TakeoffCanvas() {
     if (!bridge) return;
     bridge.getSheet = () => presenceSheetRef.current || null;
     return () => { bridge.getSheet = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Idle-drain. When the canvas goes idle, drain BOTH defer paths:
@@ -2846,6 +3348,16 @@ export default function TakeoffCanvas() {
       const t = e.target.tagName;
       if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
       if (viewRef.current === "gallery") return;
+      // A pointer geometry drag is mid-gesture (dragRef armed): the totals/roll
+      // memos are frozen for that gesture, so a keyboard shape-mutation now
+      // (delete/undo/paste/dup) would land yet leave the panels showing
+      // pre-mutation figures until an unrelated render — and a delete could
+      // orphan the pointerup commit. Ignore shape shortcuts until the gesture
+      // commits on release; Escape and the rest stay live.
+      if (dragRef.current) {
+        const k = e.key.toLowerCase();
+        if (e.key === "Backspace" || e.key === "Delete" || ((e.metaKey || e.ctrlKey) && (k === "z" || k === "c" || k === "v" || k === "d"))) return;
+      }
       if (e.key === "Backspace" || e.key === "Delete") {
         e.preventDefault();
         if (poly.length) { dropLastPoint(); }
@@ -3854,6 +4366,7 @@ export default function TakeoffCanvas() {
       if (d.kind === "vertex" || d.kind === "edge" || d.kind === "move") {
         if (!d.moved && e.clientX === d.gx && e.clientY === d.gy) return;
         d.moved = true;
+        setGeomDragging(true);   // first motion of a geom drag — hide the tile grid render (redrawn on release)
         const sp = panelByKey(d.shape.sheet_id);
         let vn;
         if (d.kind === "vertex") {
@@ -3973,6 +4486,7 @@ export default function TakeoffCanvas() {
     if (dragRef.current) {
       const d = dragRef.current;
       dragRef.current = null;
+      setGeomDragging(false);   // drag released — let the tile grid render again (fresh solve)
       bumpIdle();
       // Commit-on-gesture-end: ONE geom command per drag, and only when the
       // geometry actually moved off the grab-time snapshot (a drag that snapped
@@ -4770,6 +5284,9 @@ export default function TakeoffCanvas() {
         built = netCall({ type: "build", key: ck, segs, meta, subpaths: subpathsIn, ftPx, texts: textsIn, opts: buildOpts })
           .then((m) => { if (m.error) { netCacheRef.current.delete(ck); throw new Error(m.error); } try { Object.assign(window.__netLast, { faces: m.faces, starved: m.starved, ms: m.ms }); } catch { /* diagnostics only */ } return m; });
         netCacheRef.current.set(ck, built);
+        // FIFO evict oldest over the cap. Safe to drop an in-flight promise:
+        // an awaiter already holds its reference (a future miss just rebuilds).
+        while (netCacheRef.current.size > NET_CACHE_MAX) netCacheRef.current.delete(netCacheRef.current.keys().next().value);
       }
       let info;
       try { info = await built; }
@@ -5183,7 +5700,11 @@ export default function TakeoffCanvas() {
   // includeMarkups (from the ReportPanel checkbox, default true) is ORTHOGONAL to
   // the canvas layer-hide (showMarkups): only this flag drops markups from the
   // PDF. Off → pass []; the RFI-only export still works (empty-guard unaffected).
-  async function exportMarkedSet(includeMarkups = true) {
+  // includeTilePattern (from the ReportPanel "Include tile pattern" checkbox,
+  // default off) is what turns the optional tile shop-drawing page(s) ON —
+  // passing uppFor is the whole trigger (markedset skips tile pages when it's
+  // absent). Off → the marked set is byte-identical to the pre-tile export.
+  async function exportMarkedSet(includeMarkups = true, includeTilePattern = false) {
     try {
       setCommitMsg("Building the marked set…");
       const exportMarkups = includeMarkups ? markups : [];
@@ -5218,6 +5739,7 @@ export default function TakeoffCanvas() {
         dark: darkMode, units, sheets: sheetMeta, shapes, markups: exportMarkups, approvals, rfis, conditions,
         getPage: async (file, pageNum) => (await docFor(file)).getPage(pageNum),
         loadPdfData: (file) => store.loadPdfData(file),
+        ...(includeTilePattern ? { uppFor: (k) => uppFor(k) } : {}),
       });
       downloadBytes(filename, bytes);
       setCommitMsg(`Marked set downloaded — ${filename}`);
@@ -5560,6 +6082,29 @@ export default function TakeoffCanvas() {
     // inline center can't run yet, hand off to the phase-2 effect below.
     if (!centerOnMarkup(m)) pendingFlyRef.current = m;
   }
+  // Tile QA click-to-focus (M5 Task 6, tileQA.ts Warning): centers on
+  // w.at_norm when present and always selects w.shape_id (if any) so the
+  // docked panel's "this room" section reflects the flagged room even for
+  // a warning with no point to pan to (e.g. an unscaled sheet).
+  function centerTileFocus(w) {
+    const sp = panelByKey(w.sheet_id);
+    if (!sp || !sp.img.w) return false;
+    if (w.shape_id) selectShape(w.shape_id);
+    if (!Array.isArray(w.at_norm)) return true;
+    const el = containerRef.current;
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const scale = tfRef.current.scale;
+    const sx = w.at_norm[0] * sp.img.w + sp.xOffset, sy = w.at_norm[1] * sp.img.h;
+    setTfNow({ x: r.width / 2 - sx * scale, y: r.height / 2 - sy * scale, scale });
+    return true;
+  }
+  function focusTileWarning(w) {
+    if (!w || !w.sheet_id) return;
+    setTilePanelOpen(true);
+    if (!panelKeySet.has(w.sheet_id)) { tileFocusRef.current = w; openSheets([w.sheet_id], false); return; }
+    if (!centerTileFocus(w)) tileFocusRef.current = w;
+  }
   // Reposition an image markup — the row's Place button. Two cases, branched on
   // whether the image's CURRENT sheet is already open (panelKeySet.has):
   //  - same-sheet: unchanged foundation behavior — fly the view to it (centers
@@ -5897,6 +6442,7 @@ export default function TakeoffCanvas() {
         built = netCall({ type: "build", key: ck, segs, meta, subpaths: subpathsRef.current.get(key) || null, ftPx, texts: textMarksRef.current.get(key) || [], opts: {} })
           .then((m) => { if (m.error) { netCacheRef.current.delete(ck); throw new Error(m.error); } return m; });
         netCacheRef.current.set(ck, built);
+        while (netCacheRef.current.size > NET_CACHE_MAX) netCacheRef.current.delete(netCacheRef.current.keys().next().value);   // FIFO cap (see the first build site)
       }
       try { await built; } catch { return { error: "One-Click couldn't read this sheet's linework — the estimator will have to trace it." }; }
       const rm = await netCall({ type: "room", key: ck, x: local[0] * kF, y: local[1] * kF, ftPx, mode: "room" });
@@ -7109,7 +7655,19 @@ export default function TakeoffCanvas() {
   // VISIBLE shapes through the same conditionTotals rules the Report uses —
   // one source of role math, two scopes. Memoized: visRowById is a prop of the
   // memoized panel, so its identity must only change when the totals can.
-  const visRows = useMemo(() => conditionTotals(conditions, visibleShapes, seamCtx), [conditions, visibleShapes, seamCtx]);
+  // Frozen during a geometry drag alongside rollTakeoff (approved contract: the
+  // side-panel totals hold still, then snap on release) — conditionTotals over
+  // the whole project runs per pointermove otherwise. These feed only display
+  // (visRowById/projRowById → the memoized panel + condRow), never an effect,
+  // persist, or export, so a one-frame-stale read has no blast radius past the
+  // numbers on screen; the commit replaces shapes/visibleShapes and recomputes.
+  const lastVisRef = useRef(null);
+  const visRows = useMemo(() => {
+    if (isGeomDrag(dragRef.current) && lastVisRef.current) return lastVisRef.current;
+    const r = conditionTotals(conditions, visibleShapes, seamCtx);
+    lastVisRef.current = r;
+    return r;
+  }, [conditions, visibleShapes, seamCtx]);
   const visRowById = useMemo(() => new Map(visRows.map((r) => [r.id, r])), [visRows]);
   // Whole-project per-condition totals — the number the bid is built on. The
   // panel's rows lead with the visible-sheet slice (what you're looking at);
@@ -7117,7 +7675,13 @@ export default function TakeoffCanvas() {
   // open sheets show, so a condition whose takeoffs live on closed sheets
   // reads "Σ 412 SF" instead of a dead "—" (the whole-project number used to
   // exist only in the Report/exports). Same conditionTotals rules, no filter.
-  const projRows = useMemo(() => conditionTotals(conditions, shapes, seamCtx), [conditions, shapes, seamCtx]);
+  const lastProjRef = useRef(null);
+  const projRows = useMemo(() => {
+    if (isGeomDrag(dragRef.current) && lastProjRef.current) return lastProjRef.current;
+    const r = conditionTotals(conditions, shapes, seamCtx);
+    lastProjRef.current = r;
+    return r;
+  }, [conditions, shapes, seamCtx]);
   const projRowById = useMemo(() => new Map(projRows.map((r) => [r.id, r])), [projRows]);
   // ── load-time quantity heal (#137) ─────────────────────────────────────────
   // A shape can ARRIVE without the numbers its role requires (an import that
@@ -7162,6 +7726,11 @@ export default function TakeoffCanvas() {
   // Zone check: the SAME conditionTotals rules on the shapes whose center point
   // sits inside the traced zone (lib/zone.js) — third scope of the one role math.
   const zoneShapes = useMemo(() => (zoneCheck ? shapesInZone(shapes, zoneCheck) : null), [shapes, zoneCheck]);
+  // Deliberately NOT drag-frozen (unlike visRows/projRows): the [tool] effect
+  // clears zoneCheck the instant you leave the zone tool (`if (tool !== "zone")
+  // resetZone()`), and a shape geometry drag only ever arms in the Select tool —
+  // so an active zone and a geom drag are mutually exclusive. zoneShapes is
+  // always null during a drag, so there is nothing here to hold still.
   const zoneRows = useMemo(
     () => (zoneShapes ? conditionTotals(conditions, zoneShapes, seamCtx).filter((r) => r.shape_count > 0) : null),
     [conditions, zoneShapes, seamCtx]
@@ -7352,16 +7921,6 @@ export default function TakeoffCanvas() {
     templatesRef.current = next; setTemplates(next);
     store.saveTemplates(next).catch((e) => setCommitMsg(`Couldn't save the library: ${e.message || e}`));
   };
-  const condToTemplate = (c) => ({
-    finish_tag: c.finish_tag, color: c.color, fill: c.fill, hatch: c.hatch || "solid",
-    waste_pct: c.waste_pct || 0,
-    ...(c.height_ft != null ? { height_ft: c.height_ft } : {}),
-    ...(c.thickness_in != null ? { thickness_in: c.thickness_in } : {}),
-    ...(c.laborType != null ? { laborType: c.laborType } : {}),
-    ...(c.subfloorType != null ? { subfloorType: c.subfloorType } : {}),
-    ...(c.roll_setup ? { roll_setup: { ...c.roll_setup } } : {}),   // #136 — the roll spec is part of what makes a CPT-1 template CPT-1
-    materials: (c.materials || []).map(({ id: _id, ...m }) => (m.grout ? { ...m, grout: { ...m.grout } } : m)),   // ids are minted on instantiation; grout never shared by reference
-  });
   const saveActiveAsTemplate = () => {
     if (!aCond) return;
     const tpl = condToTemplate(aCond);
@@ -8589,6 +9148,13 @@ export default function TakeoffCanvas() {
               {/* committed shapes + markups, one group per panel in its local frame */}
               {panels.map((p) => {
                 const pShapes = stackedShapes.filter((s) => s.sheet_id === p.key);
+                // M5 Task 6 — hatch<->grid LOD swap (§4.2): a tiled floor shape's
+                // hatch fill is suppressed exactly when its own grid overlay is
+                // showing, so the two never double-draw (hatch stays the
+                // overview/print fill below the LOD threshold — §6).
+                const tileGridShapeIds = tileShow
+                  ? new Set((tileOverlayByPanel.get(p.key) || []).filter((ov) => shouldShowGrid(ov.config, ov.upp, tf.scale)).map((ov) => ov.shapeId))
+                  : null;
                 const dn = (vn) => vn.map(([x, y]) => [x * p.img.w, y * p.img.h]);
                 const label = labelFor(p);
                 return (
@@ -8639,11 +9205,11 @@ export default function TakeoffCanvas() {
                       if (!ded && s.verts_norm_holes?.length) {
                         const ringD = (ring) => `M${dn(ring).map((q) => q.join(",")).join("L")}Z`;
                         const d = ringD(s.verts_norm) + s.verts_norm_holes.map(ringD).join("");
-                        return <path key={s.id} d={d} fillRule="evenodd" fill={pending ? col + "14" : shapeFill(cond)} stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw} strokeDasharray={pending ? pDash : dashArrayFor(cond?.line_style || "solid", z)} />;
+                        return <path key={s.id} d={d} fillRule="evenodd" fill={pending ? col + "14" : (tileGridShapeIds?.has(s.id) ? "none" : shapeFill(cond))} stroke={sel ? DS.selection.color : col} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw} strokeDasharray={pending ? pDash : dashArrayFor(cond?.line_style || "solid", z)} />;
                       }
                       // deduct keeps its danger-red dashing (a safety signal, wins over line_style); positive floor_area follows the condition's line_style
                       return <polygon key={s.id} points={pts.map((q) => q.join(",")).join(" ")}
-                        fill={ded ? (pending ? "rgba(176,58,38,.10)" : "rgba(176,58,38,.28)") : pending ? col + "14" : shapeFill(cond)}
+                        fill={ded ? (pending ? "rgba(176,58,38,.10)" : "rgba(176,58,38,.28)") : pending ? col + "14" : (tileGridShapeIds?.has(s.id) ? "none" : shapeFill(cond))}
                         stroke={ded ? "#b03a26" : (sel ? DS.selection.color : col)} strokeOpacity={pending ? 0.9 : undefined} strokeWidth={sw}
                         strokeDasharray={pending ? pDash : ded ? `${6 / z} ${4 / z}` : dashArrayFor(cond?.line_style || "solid", z)} />;
                     })}
@@ -9137,6 +9703,23 @@ export default function TakeoffCanvas() {
                         </g>
                       );
                     })}
+                    {/* Tile-grid overlay (M5 Task 6, §4.1/§4.2) — every tiled
+                        floor shape's solved layout drawn to scale over its
+                        room: full tiles solid, cut tiles lighter + dashed,
+                        corner tiles corner-marked, holes flagged red — plus
+                        an origin crosshair (drag to relocate the grid) and
+                        the room's edge exposures (dashed ghost = suggested,
+                        inked = confirmed; click cycles/confirms). Gated on
+                        shouldShowGrid's LOD threshold — below it the
+                        condition's ordinary hatch fill (above) carries the
+                        read instead (the suppression Set built above this
+                        panel's shape loop). Inert until edit mode, then the
+                        crosshair and each edge own their own pointer events
+                        — mirrors the roll-goods cut overlay immediately
+                        above. The one shape being origin-dragged solves its
+                        OWN live preview here (never touches `shapes` — see
+                        beginTileOrigin); every other shape reads the memo. */}
+                    {tileOverlayJsxByPanel.get(p.key)}
                     {/* Source-trace flash (◎, wired by slice 3) — a transient highlight
                         drawn in the SOURCE panel's own <g>, so it inherits xOffset like
                         every other overlay here. `key={sourceFlash.token}` is load-bearing:
@@ -9686,6 +10269,8 @@ export default function TakeoffCanvas() {
           {panelBtn(toggleTakeoffs, "takeoffs", "Takeoffs — conditions + running totals", takeoffsOpen, visibleShapes.length)}
           {panelBtn(() => setAgentOpen((o) => !o), "target", "Agent — describe a takeoff; it stages dashed proposals you accept or reject (bring your own AI key)", agentOpen, agentProposals.length)}
           {rollByCond.size > 0 && panelBtn(() => setRollPanelOpen((o) => !o), "roll", "Roll goods — the cut diagram, cutting order, and figured order footage", rollPanelOpen, rollByCond.size)}
+          {tileByCond.size > 0 && panelBtn(() => setTilePanelOpen((o) => !o), "sheets", "Tile — the grid layout, cuts, and per-room origin/rotation", tilePanelOpen, tileByCond.size)}
+          {tilePanelOpen && panelBtn(() => setTileEdit((o) => !o), "calibrate", "Tile edit — drag a room's origin crosshair to relocate its grid; click an edge to cycle/confirm its trim/threshold exposure", tileEdit)}
           {layerEntries.length > 0 && panelBtn(() => setLayersOpen((o) => !o), "layers", "PDF layers — what this drawing's own layer table states each ink is; set what One-Click treats as wall and what it ignores", layersOpen, layerEntries.reduce((n, e) => n + e.layers.length, 0))}
           {panelBtn(() => setShowRevisions(true), "revisions", "Revisions — save the takeoff at each bid revision, compare what moved", showRevisions)}
         </div>
@@ -9733,6 +10318,94 @@ export default function TakeoffCanvas() {
             onClose={() => setRollPanelOpen(false)}
           />
         )}
+
+        {/* Tile panel (M5 Task 6) — DOCKED right-rail sibling like the Roll
+            panel: per-condition setup/summary cards, the selected room's
+            origin/rotation override, and the cross-room QA list. A pure
+            view — layout state lives on the conditions (tile_setup, via
+            onTileSetup) and on the shapes (tile_layout, via the undoable
+            tileLayout command). */}
+        {tilePanelOpen && (() => {
+          // Task 8 (2026-08-29 wall-tile-slice-a) widens this gate from
+          // floor-only to admit a selected WALL shape (surface_area) too —
+          // previously the panel showed no per-shape card at all for a
+          // wall selection. selIsWall drives which sibling card TilePanel
+          // renders (WallShapeCard vs RoomOverride).
+          const selIsWall = selShape?.measure_role === "surface_area";
+          const selTileCond = selShape && (selShape.measure_role === "floor_area" || selIsWall) ? condById[selShape.condition_id] : null;
+          const selHasTile = selTileCond && hasTileSetup(selTileCond);
+          // Show the SAME resolved config the grid draws and the report counts
+          // (effectiveTileSetup, via byShape.layout.config) — not the raw
+          // tile_setup default. Otherwise a balanced room with no override
+          // would display origin [0,0] while the drawn/counted grid uses the
+          // optimizer origin, and the first "This room" edit would pin a grid
+          // off the wrong baseline. Fall back to the plain merge only when the
+          // shape isn't figured (unscaled sheet → no byShape entry). Also
+          // reads fine for a wall shape (WallSummary carries the same
+          // layout.config shape) — RoomOverride just never renders for one.
+          const selEffectiveConfig = selHasTile
+            ? (tileTakeoff.byShape.get(selShape.id)?.layout?.config || (() => {
+                const base = tileConfig(selTileCond.tile_setup);
+                const tl = selShape.tile_layout || {};
+                return {
+                  ...base,
+                  ...(Array.isArray(tl.origin) ? { origin: tl.origin } : {}),
+                  ...(tl.rotation != null ? { rotation_deg: tl.rotation } : {}),
+                };
+              })())
+            : null;
+          // M4 (binding, panel review): PER-SHAPE, not the condition's `ti`
+          // — a byCond entry has no wallStrips/folds, and a condition can
+          // hold several wall shapes with different geometry. `null` when
+          // no wall is selected OR this pass hasn't figured the selected
+          // wall yet (unscaled sheet, a reversing/degenerate run excluded
+          // before the shared loop) — WallShapeCard renders its controls
+          // without a preview in that case, never throws.
+          const selWallSummary = selIsWall && selHasTile ? tileTakeoff.byShape.get(selShape.id) : null;
+          const selectedWall = selWallSummary
+            ? { wallStrips: selWallSummary.wallStrips, folds: selWallSummary.folds, trim: selWallSummary.trim, joints: selWallSummary.joints }
+            : null;
+          return (
+            <TilePanel
+              layouts={[...tileByCond.entries()].map(([condId, ti]) => {
+                const c = condById[condId];
+                return { condId, tag: c?.finish_tag || "?", color: c?.color, multiplier: c?.multiplier || 1, ti };
+              })}
+              selectedShape={selHasTile ? {
+                id: selShape.id,
+                measure_role: selShape.measure_role,
+                tile_layout: selShape.tile_layout,
+                face_side: selShape.face_side,
+                endpoint_exposed: selShape.endpoint_exposed,
+              } : null}
+              effectiveConfig={selEffectiveConfig}
+              selectedWall={selectedWall}
+              // Task 3 — WallShapeCard's Generate/Regenerate button needs the
+              // selected wall's condition tag (elevationButtonState derives
+              // the sheet key from tag+shapeId via wallElevationSheetName)
+              // and the CURRENT open sheet-key set (to read Generate vs
+              // Regenerate) — neither lives inside TilePanel's own narrowed
+              // props, so both are threaded straight through from here.
+              wallTag={selTileCond?.finish_tag}
+              existingSheetKeys={sheets.map((s) => s.name)}
+              roomSkus={selTileCond?.tile_setup?.skus || []}
+              show={tileShow} onShow={setTileShow}
+              onTileSetup={(condId, patch) => {
+                const c = condById[condId];
+                if (c) updateCondById(condId, { tile_setup: { ...c.tile_setup, ...patch } });
+              }}
+              onTileLayout={(shapeId, patch) => dispatchShape({ type: "tileLayout", id: shapeId, patch })}
+              onWallField={(shapeId, patch) => dispatchShape({ type: "wallFields", id: shapeId, patch })}
+              // Task 3 wires the actual button (WallShapeCard) — pre-bound to
+              // the CURRENTLY selected shape (not TilePanel's own narrowed
+              // `selectedShape` prop, which omits condition_id) so the button
+              // needs no arguments and no knowledge of the shape's own fields.
+              onGenerateElevation={() => generateWallElevationSheet(selShape)}
+              warnings={tileWarningsList} onFocusWarning={focusTileWarning}
+              onClose={() => setTilePanelOpen(false)}
+            />
+          );
+        })()}
 
         {/* Layers panel (#85 phase 2) — DOCKED right-rail sibling like the Roll
             panel: the sheet's PDF layer table (names + stated roles) with the
@@ -9846,6 +10519,7 @@ export default function TakeoffCanvas() {
           conditionColumns={conditionColumns} shapeLabels={shapeLabels}
           scaleInfo={Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, scale_source: scaleSources[sheet_id] || "unknown", scale_confirmed: scaleUnconfirmed[sheet_id] !== false }))}
           rollByCond={rollByCond}
+          tileByCond={tileByCond} tileByShape={tileTakeoff.byShape} laborRomByCond={laborRomByCond}
           provenanceCounters={provCounters}
           sheetLabel={(k) => tabLabel(k)}
           sheetDims={(k) => panelByKey(k)?.img}

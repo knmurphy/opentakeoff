@@ -57,6 +57,8 @@ import { applyRuleToProject, type Rule, type RuleShape, type SheetRuleData } fro
 import { sanitizeApprovals as sanitizeApprovalsJs, applyApprovalCommand as applyApprovalCommandJs } from "../../web/src/lib/approvals.js";
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
+import { computeTileTakeoff, tileReportRows } from "../../web/src/lib/tileTakeoff.js";
+import { hasTileSetup, mintTileSetup, type TileSetup, type TileConfig } from "../../web/src/lib/tileSetup.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
 // Copied from the canvas (web/src/pages/TakeoffCanvas.jsx) so conditions and
@@ -116,6 +118,10 @@ export interface Condition {
    * condition roll goods — material class + the packing engine's spec fields,
    * exactly the object the canvas persists (web/src/lib/rollTakeoff.js). */
   roll_setup?: Record<string, unknown>;
+  /** Tile-patterning opt-in (#tile): presence of a usable setup is what makes the
+   * condition tile-patterned — the same object the canvas persists
+   * (web/src/lib/tileSetup.ts). */
+  tile_setup?: Record<string, unknown>;
   materials: MaterialRow[];
 }
 
@@ -264,6 +270,14 @@ export interface Shape {
    * as a real hole — totals.js skips it (the parent's computed already nets
    * the hole), and delete restores the parent it cut. */
   cuts_shape_id?: string;
+  /** Tile-patterning per-room override (M5, #tile) — origin/rotation/
+   * edge_overrides/wet_tags that override the condition's
+   * tile_setup defaults for THIS room, written by the canvas's undoable
+   * tileLayout shape command (web/src/lib/shapeCommands.js). Opaque here,
+   * same posture as Condition.tile_setup — this server never solves against
+   * it directly, it only carries it through export_takeoff's tile_layouts
+   * snapshot for a headless reader. Absent = inherits the condition default. */
+  tile_layout?: Record<string, unknown>;
   origin?: ShapeOrigin;
 }
 
@@ -273,6 +287,21 @@ export interface CutoutParentPrev {
   verts_norm: [number, number][];
   verts_norm_holes?: [number, number][][];
   computed?: Shape["computed"];
+}
+
+/** Task 7 (M5) — export_takeoff's additive per-shape tile layout snapshot.
+ * One entry per floor_area shape sitting under a tile_setup condition:
+ * config is that condition's tile_setup resolved to a solve config,
+ * classified_summary is the SAME classify pass exportReport's tile_goods
+ * figures from (never re-solved), and tile_layout is the shape's own
+ * per-room override, carried through verbatim when present. */
+export interface TileLayoutSnapshot {
+  shape_id: string;
+  condition_id: string;
+  finish_tag: string;
+  config: TileConfig;
+  classified_summary: { full: number; cut: number; corner: number; hole: number };
+  tile_layout?: Record<string, unknown>;
 }
 
 /** An annotation — a note ABOUT the work, never a measurement of it.
@@ -473,7 +502,7 @@ export type JournalPayload =
   | { op: "delete"; tool: string; removed: { shape: Shape; index: number }[] }
   | { op: "materials"; tool: string; condition_id: string; before: MaterialRow[]; dropped_before?: string[];
       family?: { condition_id: string; before: MaterialRow[]; dropped_before?: string[] }[] }
-  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number; height_ft?: number; roll_setup?: Record<string, unknown> } }
+  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number; height_ft?: number; roll_setup?: Record<string, unknown>; tile_setup?: Record<string, unknown> } }
   | { op: "duplicate_condition"; tool: string; condition_id: string; parent_id: string; parent_had_family: boolean }
   | { op: "split_condition"; tool: string; condition_id: string; before: { variant_of?: string; materials?: unknown; materials_dropped?: string[] } }
   | { op: "approval"; tool: string; inverse: ApprovalCommand }
@@ -3227,9 +3256,9 @@ export class Session {
     return { seamByShape: seamLfByShape(byCond) as Map<string, number> };
   }
 
-  editCondition(tag: string, opts: { waste_pct?: number; multiplier?: number; height_ft?: number; roll_setup?: Record<string, unknown> | null }) {
-    if (opts.waste_pct === undefined && opts.multiplier === undefined && opts.height_ft === undefined && opts.roll_setup === undefined) {
-      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier, height_ft, roll_setup.");
+  editCondition(tag: string, opts: { waste_pct?: number; multiplier?: number; height_ft?: number; roll_setup?: Record<string, unknown> | null; tile_setup?: Record<string, unknown> | null }) {
+    if (opts.waste_pct === undefined && opts.multiplier === undefined && opts.height_ft === undefined && opts.roll_setup === undefined && opts.tile_setup === undefined) {
+      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier, height_ft, roll_setup, tile_setup.");
     }
     const c = this.conditions.find((x) => x.finish_tag === tag);
     if (!c) {
@@ -3239,6 +3268,7 @@ export class Session {
     const before = {
       waste_pct: c.waste_pct, multiplier: c.multiplier, height_ft: c.height_ft,
       roll_setup: c.roll_setup ? structuredClone(c.roll_setup) : undefined,
+      tile_setup: c.tile_setup ? structuredClone(c.tile_setup) : undefined,
     };
     if (opts.waste_pct !== undefined) c.waste_pct = opts.waste_pct;
     if (opts.multiplier !== undefined) c.multiplier = opts.multiplier;
@@ -3255,6 +3285,15 @@ export class Session {
         // a same-material partial edit patches the existing setup
         const base = hasRollSetup(c) && material === prevMaterial ? (c.roll_setup as object) : (mintRollSetup(material) as object);
         c.roll_setup = { ...base, ...given, material };
+      }
+    }
+    if (opts.tile_setup !== undefined) {
+      if (opts.tile_setup === null) {
+        delete c.tile_setup; // opt out — trade-agnostic again
+      } else {
+        const given = Object.fromEntries(Object.entries(opts.tile_setup).filter(([, v]) => v !== undefined));
+        const base = hasTileSetup(c) ? (c.tile_setup as object) : (mintTileSetup() as object);
+        c.tile_setup = { ...base, ...given };
       }
     }
     this.record({ op: "condition", tool: "edit_condition", condition_id: c.id, before });
@@ -3274,6 +3313,7 @@ export class Session {
       ...(c.height_ft !== undefined ? { height_ft: c.height_ft } : {}),
       ...(c.roll_setup ? { roll_setup: c.roll_setup } : {}),
       ...(roll ? { roll } : {}),
+      ...(c.tile_setup ? { tile_setup: c.tile_setup } : {}),
     };
   }
 
@@ -3414,6 +3454,8 @@ export class Session {
           else c.height_ft = e.before.height_ft;
           if (e.before.roll_setup === undefined) delete c.roll_setup;
           else c.roll_setup = e.before.roll_setup;
+          if (e.before.tile_setup === undefined) delete c.tile_setup;
+          else c.tile_setup = e.before.tile_setup;
         }
         undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: 0 });
       } else if (e.op === "duplicate_condition") {
@@ -3774,8 +3816,44 @@ export class Session {
     return { sheet: s, build };
   }
 
+  /** Task 7 (M5) — one floor_area shape's solved tile layout snapshot for
+   * export_takeoff, so a headless agent can read what the canvas would draw
+   * without re-solving the engine itself. */
+  private tileLayoutSnapshots(): TileLayoutSnapshot[] {
+    const { dimsFor, uppFor } = this.rollInputs();
+    // Reuses computeTileTakeoff's byShape figures — the SAME classify pass
+    // exportReport's tile_goods reads (session.ts:3843) — never re-solved, so
+    // a headless snapshot and the report block can never disagree about a
+    // shape's classified counts.
+    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor);
+    if (!byShape.size) return [];
+    const condById = new Map(this.conditions.map((c) => [c.id, c]));
+    const out: TileLayoutSnapshot[] = [];
+    for (const s of this.shapes) {
+      const summary = byShape.get(s.id);
+      if (!summary) continue;
+      const cond = condById.get(s.condition_id);
+      if (!cond?.tile_setup) continue;
+      out.push({
+        shape_id: s.id,
+        condition_id: s.condition_id,
+        finish_tag: cond.finish_tag,
+        config: summary.layout.config,
+        classified_summary: {
+          full: summary.counts.full,
+          cut: summary.counts.cut,
+          corner: summary.counts.corner,
+          hole: summary.counts.hole,
+        },
+        ...(s.tile_layout ? { tile_layout: s.tile_layout } : {}),
+      });
+    }
+    return out;
+  }
+
   exportPayload() {
     if (!this.docs.size) throw new UserError("No plan loaded — call load_plan first.");
+    const tileLayouts = this.tileLayoutSnapshots();
     return {
       schema: ANN_SCHEMA,
       project_name: "",
@@ -3799,6 +3877,10 @@ export class Session {
       last_group: [],
       sheet_tabs: [],
       sheet_levels: {},
+      // tile layout snapshots ride the payload additively (Task 7/M5) — the
+      // same absent-when-empty convention as approvals, so a tile-less
+      // session's export stays byte-identical to a pre-M5 one
+      ...(tileLayouts.length ? { tile_layouts: tileLayouts } : {}),
     };
   }
 
@@ -3818,6 +3900,10 @@ export class Session {
     const { dimsFor, uppFor } = this.rollInputs();
     const { byCond } = computeRollTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byCond: Map<string, unknown> };
     const rows = (conditionTotals(this.conditions, this.shapes, { seamByShape: seamLfByShape(byCond) }) as Record<string, unknown>[]).filter((r) => (r.shape_count as number) > 0);
+    // tile goods (Task 8): the same pure seam the canvas report will use —
+    // figured off the SAME dimsFor/uppFor rollInputs() already resolved, so a
+    // tile condition and a roll condition on the same sheet agree on scale.
+    const { byCond: tileByCond } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor);
     return reportJson({
       projectName,
       rows,
@@ -3826,6 +3912,7 @@ export class Session {
       markups: this.markups,
       rfis: [],
       rollGoods: rollReportRows(byCond, rows),
+      tileGoods: tileReportRows(tileByCond, rows),
     });
   }
 

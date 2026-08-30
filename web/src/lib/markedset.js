@@ -20,6 +20,16 @@
 
 import { conditionTotals, sheetTotals, roundSheetRow, hasMultipliers, BY_SHEET_BASE_NOTE } from "./totals.js";
 import { approvalInk, approvalTally, APPROVAL_R } from "./approvals.js";
+// Tile shop-drawing sheet (M8 -> shop-drawing redesign): the SOLVED grid a
+// tiled floor shape already carries in its tileTakeoff summary, drawn to
+// scale — never re-measured or re-solved here. edgeExposures/primaryUsableSku
+// recover per-edge geometry and the field SKU's nominal size for the page's
+// own furniture (trim/joint lines, the title block) from the SAME inputs
+// computeTileTakeoff already read — never a second, divergent figure.
+import { computeTileTakeoff } from "./tileTakeoff.js";
+import { tileOverlayPrimitives } from "./tileOverlay.ts";
+import { edgeExposures } from "./tileEdges/expose.ts";
+import { primaryUsableSku } from "./tileSetup.ts";
 
 // The cover's author line (#314), pure for the node runner: named authors
 // sorted, unattributed counted last, null when NO shape carries an author so
@@ -40,7 +50,7 @@ import { pointInPoly, starPath, arrowheadPath, cloudBezier, chiselRibbon } from 
 import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { imagePlacedBox, pickEmbedFormat, imageDrawParams, sourceCaption } from "./markupImage";
 import { rfiStatus } from "./rfi.js";
-import { RENDER_SCALE, parseSheetKey, sheetBaseLabelFromKey } from "./sheets";
+import { RENDER_SCALE, parseSheetKey, sheetBaseLabelFromKey, STANDARD_SCALES } from "./sheets";
 import { stitchPagePlan, memberEmbed } from "./stitches";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
 import { dimLabel } from "./units";
@@ -228,7 +238,13 @@ function invertPixels(cv) {
   ctx.restore();
 }
 
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial" }) {
+// `uppFor(sheetKey) => feet-per-image-px | null` (new, optional; default a
+// no-op) is the ONE piece of tile-page scale info `sheets` doesn't carry —
+// dims come from the sheet's own vpR bitmap (W,H, already computed per
+// sheet below) at the SAME normalization verts_norm uses. A caller that
+// never supplies it (every caller today) exports byte-identical: no tile
+// page can ever be added without a real per-sheet scale.
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial", uppFor = () => null }) {
   // display-unit edge (lib/units contract): quantities arrive as internal feet;
   // metric converts at the drawn string only — legend rows, by-sheet rows, and
   // the per-shape chips. ASCII "m2" (Helvetica WinAnsi has no superscript 2).
@@ -263,6 +279,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
   doc.setCreator("OpenTakeoff");
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  // shop-drawing readouts (tile layout page) — Courier/Courier-Bold keep every
+  // numeric value tabular/mono without embedding a font program. Declared here
+  // but embedded LAZILY on the first tile page (embedFont registers the font
+  // dict in the saved PDF even when unused, which would break the
+  // byte-identical-when-no-tile-page invariant).
+  let courier = null;
+  let courierBold = null;
   const ink = dark ? rgb(0.93, 0.92, 0.89) : rgb(0.13, 0.12, 0.1);
   const muted = dark ? rgb(0.63, 0.61, 0.56) : rgb(0.42, 0.4, 0.36);
   const cobalt = dark ? rgb(0.45, 0.56, 1) : rgb(...hex(COBALT));   // brighter on near-black
@@ -881,6 +904,327 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       ? `${sh.label} · stitched composite (${sh.stitch.members.map((m) => m.label || m.key).join(" + ")}) · marked set`
       : `${sh.label} · marked set`;
     text(stamp, 14, 20, 8, muted);
+    // ── tile shop-drawing sheet (M8 -> shop-drawing redesign) — one NEW page
+    // per tiled sheet: a fixed-furniture drawing (heading, legend, title
+    // block, scale bar) wrapped around the sheet's own SOLVED tile grid,
+    // drawn to scale. Reuses THIS sheet's own toPage/chipRot (identical
+    // frame as the marked-up sheet above, via computeTileTakeoff scoped to
+    // this sheet's own shapes + dims + upp) and tileOverlayPrimitives (the
+    // SAME geometry the canvas overlay draws) — never re-measures or
+    // re-solves the grid itself. Trim/finished edges and movement joints are
+    // the one exception: they re-run edgeExposures / the joint AABB formula
+    // over the shape's OWN ring (byte-identical inputs to what
+    // summarizeShape already used) purely to recover the per-edge/per-line
+    // GEOMETRY the aggregated summary.trim/summary.joints figures don't
+    // carry — the drawn LF can never disagree with the reported LF because
+    // it is the same formula, never a second measurement.
+    const tileUpp = uppFor(sh.key);
+    if (tileUpp > 0) {
+      const shapesHere = shapesBy.get(sh.key) || [];
+      const { byShape: tileByShape } = computeTileTakeoff(conditions, shapesHere, () => ({ w: W, h: H }), () => tileUpp);
+      // A wall (`surface_area`) shape solves into tileByShape too (Task 6),
+      // but its cells live in strip-local elevation coords, not this
+      // sheet's plan ring — the overlay loop below (measure_role guard)
+      // never draws it here, so a wall-only sheet must never open this
+      // page: an empty "TILE LAYOUT" page with a bare legend/title-block
+      // frame and no room block would be pure noise. Elevation sheets for
+      // walls are Slice B.
+      const hasRenderingFloorTile = shapesHere.some((s) => s.measure_role === "floor_area" && tileByShape.has(s.id));
+      if (hasRenderingFloorTile) {
+        courier ??= await doc.embedFont(StandardFonts.Courier);
+        courierBold ??= await doc.embedFont(StandardFonts.CourierBold);
+        const tilePg = doc.addPage([pg.getWidth(), pg.getHeight()]);
+        tilePg.setRotation(chipRot);
+        if (dark) tilePg.drawRectangle({ x: 0, y: 0, width: pg.getWidth(), height: pg.getHeight(), color: rgb(...DARK_BG) });
+
+        // page-local drawing primitives, all threaded through THIS sheet's
+        // own toPage/ptScale/chipRot so the fixed furniture keeps a REAL,
+        // constant pt size regardless of the sheet's raster resolution.
+        const tdraw = (t, x, y, size, colorRgb, fnt = font) => {
+          const [px, py] = toPage(x, y);
+          tilePg.drawText(winAnsiSafe(t), { x: px, y: py, size, font: fnt, color: colorRgb, rotate: chipRot });
+        };
+        const tline = (x1, y1, x2, y2, colorRgb, w, opacity = 1, dash) => {
+          const [sx, sy] = toPage(x1, y1), [ex, ey] = toPage(x2, y2);
+          tilePg.drawLine({ start: { x: sx, y: sy }, end: { x: ex, y: ey }, thickness: w, color: colorRgb, opacity, ...(dash ? { dashArray: dash } : {}) });
+        };
+        // a fixed-pt box, centered at an image-space point and rotated to
+        // match the sheet — the chip() technique, generalized
+        const trect = (cxImg, cyImg, wPt, hPt, opts) => {
+          const [px, py] = toPage(cxImg, cyImg);
+          tilePg.drawRectangle({ x: px - wPt / 2, y: py - hPt / 2, width: wPt, height: hPt, rotate: chipRot, ...opts });
+        };
+        const imgPerPt = 1 / ptScale;   // fixed-pt chrome -> image px at THIS sheet's own scale
+        // walk a visual corner anchor (image px) by a pt offset (x right, y
+        // down, the file's image-space law) — every furniture element below
+        // is laid out this way so it keeps a constant on-page size
+        const at = (anchor, dxPt, dyPt) => [anchor[0] + dxPt * imgPerPt, anchor[1] + dyPt * imgPerPt];
+        // a room-ring edge "just inside" a wall, offset toward the interior
+        // point along the true edge normal (never the fixed page axes, so a
+        // diagonal wall keeps a PARALLEL inset)
+        const insetSegment = (a, b, interior, inset) => {
+          const dx = b[0] - a[0], dy = b[1] - a[1];
+          const len = Math.hypot(dx, dy) || 1;
+          let nx = -dy / len, ny = dx / len;
+          const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+          if (nx * (interior[0] - mx) + ny * (interior[1] - my) < 0) { nx = -nx; ny = -ny; }
+          return [[a[0] + nx * inset, a[1] + ny * inset], [b[0] + nx * inset, b[1] + ny * inset]];
+        };
+        // rounded-rect path (image space, mapped through toPage like the
+        // file's other bezier paths — cloudBezier/svgPath). Square corners
+        // are the rule on this page; the legend card is the ONE floating-
+        // chrome exception that keeps the brand's 3px radius.
+        const roundedRectPath = (x0, y0, x1, y1, r) => {
+          const k = 0.5523 * r;
+          const P = (x, y) => { const [px, py] = toPage(x, y); return `${px},${-py}`; };
+          return [
+            `M${P(x0 + r, y0)}`, `L${P(x1 - r, y0)}`,
+            `C${P(x1 - r + k, y0)} ${P(x1, y0 + r - k)} ${P(x1, y0 + r)}`, `L${P(x1, y1 - r)}`,
+            `C${P(x1, y1 - r + k)} ${P(x1 - r + k, y1)} ${P(x1 - r, y1)}`, `L${P(x0 + r, y1)}`,
+            `C${P(x0 + r - k, y1)} ${P(x0, y1 - r + k)} ${P(x0, y1 - r)}`, `L${P(x0, y0 + r)}`,
+            `C${P(x0, y0 + r - k)} ${P(x0 + r - k, y0)} ${P(x0 + r, y0)}`, "Z",
+          ].join(" ");
+        };
+
+        // brand tokens exact to the shop-drawing spec (the file's shared
+        // `cobalt`/`muted` run slightly different tunings for the rest of
+        // the marked set; this page keeps the literal spec hex — its one
+        // saturated accent).
+        const tileCobalt = rgb(...hex(dark ? "#3f8cff" : COBALT));
+        const tileMuted = rgb(...hex("#5c6b82"));
+        const hairline = rgb(...hex("#d8e0ec"));
+        const danger = rgb(...hex(DEDUCT_RED));
+        const knockout = dark ? rgb(...hex("#141a20")) : rgb(1, 1, 1);
+
+        tdraw(`TILE LAYOUT — ${sh.label}`, 14, 30, 13, tileCobalt, bold);
+
+        // ── the grid: every tiled room's solved cells, its finished-edge
+        // trim, and its movement joints — drawn FIRST so the fixed
+        // furniture below is never occluded by grid ink.
+        let repColor = null;
+        const roomBlocks = [];
+        for (const s of shapesHere) {
+          const summary = tileByShape.get(s.id);
+          if (!summary) continue;
+          // Walls solve into tileByShape (Task 6) but live in strip-local
+          // elevation coords, not this plan ring — drawing summary.layout
+          // here would place wall cells at the wall's plan centerline
+          // (wrong geometry) and could overlap an unrelated floor's cells.
+          // Walls render in the panel elevation strip (Task 8), never here.
+          if (s.measure_role === "surface_area") continue;
+          const cond = condById[s.condition_id];
+          const skus = cond?.tile_setup?.skus || [];
+          const skuColor = (skuId) => skus.find((sk) => sk && sk.id === skuId)?.color || cond?.color || "#5c6b82";
+          repColor = repColor || cond?.color || "#5c6b82";
+          const ring = (s.verts_norm || []).map(([nx, ny]) => [nx * W, ny * H]);
+          if (ring.length < 3) continue;
+          const cx = ring.reduce((a, p) => a + p[0], 0) / ring.length;
+          const cy = ring.reduce((a, p) => a + p[1], 0) / ring.length;
+
+          // grid backing — a faint hairline frame around this room's own
+          // extent, drawn first so it always sits behind the cells
+          const bx0 = Math.min(...ring.map((p) => p[0])), bx1 = Math.max(...ring.map((p) => p[0]));
+          const by0 = Math.min(...ring.map((p) => p[1])), by1 = Math.max(...ring.map((p) => p[1]));
+          tline(bx0, by0, bx1, by0, hairline, 0.4); tline(bx1, by0, bx1, by1, hairline, 0.4);
+          tline(bx1, by1, bx0, by1, hairline, 0.4); tline(bx0, by1, bx0, by0, hairline, 0.4);
+
+          const overlay = tileOverlayPrimitives(summary.layout, tileUpp, skuColor);
+          // classified filtered the SAME way tileOverlayPrimitives filters
+          // internally (skip "out"), so cells[i] <-> overlay.tiles[i] by
+          // index — gives us the cut dimensions the overlay type doesn't
+          // carry.
+          const cells = summary.layout.classified.filter((c) => c.cls !== "out");
+          for (let i = 0; i < overlay.tiles.length; i++) {
+            const t = overlay.tiles[i];
+            const cell = cells[i];
+            const hw = t.w / 2, hh = t.h / 2;
+            const cosr = Math.cos(t.rot), sinr = Math.sin(t.rot);
+            const corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([lx, ly]) => [t.cx + lx * cosr - ly * sinr, t.cy + lx * sinr + ly * cosr]);
+            const col = rgb(...hex(t.color));
+            if (t.cls === "full") {
+              tilePg.drawSvgPath(svgPath(corners), { x: 0, y: 0, color: col, opacity: 0.08, borderColor: col, borderWidth: 0.5, borderOpacity: 0.85 });
+            } else if (t.cls === "hole") {
+              tilePg.drawSvgPath(svgPath(corners), { x: 0, y: 0, borderColor: tileMuted, borderWidth: 0.5, borderOpacity: 0.5, borderDashArray: [1.5, 1.5] });
+            } else if (t.cls === "corner") {
+              tilePg.drawSvgPath(svgPath(corners), { x: 0, y: 0, color: danger, opacity: 0.14, borderColor: danger, borderWidth: 0.9, borderDashArray: [1, 1.2] });
+            } else {
+              // cut
+              tilePg.drawSvgPath(svgPath(corners), { x: 0, y: 0, color: col, opacity: 0.14, borderColor: col, borderWidth: 0.9, borderOpacity: 0.95, borderDashArray: [3, 1.6] });
+              if (cell?.cut) {
+                const label = winAnsiSafe(`${Math.round(cell.cut.w_in)}×${Math.round(cell.cut.h_in)}"`);
+                const size = 5.5;
+                const lw = courier.widthOfTextAtSize(label, size) + 3, lh = size + 2.4;
+                const cellW_pt = t.w * ptScale, cellH_pt = t.h * ptScale;
+                // suppression, not collision-solving: a cut too small to
+                // physically hold its own label drops it (the cut sheet
+                // CSV still carries the number)
+                if (Math.min(cellW_pt, cellH_pt) > 6 && Math.max(cellW_pt, cellH_pt) > lw) {
+                  // nudge the centroid toward the tile's own short LOCAL
+                  // axis — classify.ts's Classified never exposes WHICH
+                  // side a cell was cut from (only the kept extents), so
+                  // this leans on the short face rather than a guessed side
+                  const shortIsW = t.w <= t.h;
+                  const nudge = Math.min(t.w, t.h) * 0.18;
+                  const lx = t.cx - (shortIsW ? cosr : -sinr) * nudge, ly = t.cy - (shortIsW ? sinr : cosr) * nudge;
+                  const [lpx, lpy] = toPage(lx, ly);
+                  tilePg.drawRectangle({ x: lpx - lw / 2, y: lpy - lh / 2 + 1, width: lw, height: lh, color: knockout, opacity: 0.85, rotate: chipRot });
+                  tilePg.drawText(label, { x: lpx - lw / 2 + 1.5, y: lpy - size / 2.7, size, font: courier, color: dark ? ink : tileMuted, rotate: chipRot });
+                }
+              }
+            }
+          }
+
+          // finished-edge trim (the signature stroke) — confirmed,
+          // non-field edges only, exactly the set summary.trim.byKind
+          // tallies; edgeExposures is scale-invariant for exposure/confirmed
+          // (only length_lf/proximity would care, and neither is read
+          // here), so the room's own image-px ring stands in for ring_ft.
+          const overrides = Object.fromEntries(Object.entries(s.tile_layout?.edge_overrides || {}).map(([idx, o]) => [idx, o?.exposure]));
+          const exposures = edgeExposures({ ring_ft: ring, overrides });
+          for (const e of exposures) {
+            if (!e.confirmed || e.exposure === "field") continue;
+            const a = ring[e.shapeEdgeIndex], b = ring[(e.shapeEdgeIndex + 1) % ring.length];
+            const [ia, ib] = insetSegment(a, b, [cx, cy], 3 * imgPerPt);
+            tline(ia[0], ia[1], ib[0], ib[1], tileCobalt, 1.4);
+          }
+
+          // movement joints — a soft joint at every restraining wall (the
+          // room's own ring, inset FURTHER than the trim line so the two
+          // strokes read as distinct ink) plus the interior field grid,
+          // reconstructed from summary.joints.fieldGridSpacing_ft with the
+          // SAME AABB/floor formula tileCalc/joints.ts's movementJoints
+          // uses — the drawn LF can never disagree with the reported total.
+          for (let i = 0; i < ring.length; i++) {
+            const a = ring[i], b = ring[(i + 1) % ring.length];
+            const [ia, ib] = insetSegment(a, b, [cx, cy], 6 * imgPerPt);
+            tline(ia[0], ia[1], ib[0], ib[1], tileMuted, 0.7, undefined, [4, 2, 1, 2]);
+          }
+          const spacing_ft = summary.joints.fieldGridSpacing_ft;
+          if (spacing_ft > 0) {
+            const minX = Math.min(...ring.map((p) => p[0])), maxX = Math.max(...ring.map((p) => p[0]));
+            const minY = Math.min(...ring.map((p) => p[1])), maxY = Math.max(...ring.map((p) => p[1]));
+            const EPS_FT = 1e-6;
+            const vLines = Math.floor(((maxX - minX) * tileUpp - EPS_FT) / spacing_ft);
+            const hLines = Math.floor(((maxY - minY) * tileUpp - EPS_FT) / spacing_ft);
+            for (let i = 1; i <= vLines; i++) { const x = minX + (i * spacing_ft) / tileUpp; tline(x, minY, x, maxY, tileMuted, 0.7, undefined, [4, 2, 1, 2]); }
+            for (let i = 1; i <= hLines; i++) { const y = minY + (i * spacing_ft) / tileUpp; tline(minX, y, maxX, y, tileMuted, 0.7, undefined, [4, 2, 1, 2]); }
+          }
+
+          const sku = primaryUsableSku(cond?.tile_setup || { skus: [] });
+          roomBlocks.push({
+            tag: cond?.finish_tag || "Tile",
+            finish: sku ? `${cond?.finish_tag || "Tile"} ${sku.w_in}×${sku.h_in}"` : String(cond?.finish_tag || "Tile"),
+            counts: summary.counts,
+            trimLf: summary.trim.length_lf,
+            jointLf: summary.joints.total_lf,
+            boxes: summary.order.boxes,
+          });
+        }
+        if (!repColor) repColor = "#5c6b82";
+        const repRgb = rgb(...hex(repColor));
+
+        // ── fixed furniture — heading already drawn above; legend/title-
+        // block/scale-bar corners, all drawn AFTER the grid so nothing
+        // occludes them.
+        const marginPt = 16;
+        const anchorTR = [W - marginPt * imgPerPt, marginPt * imgPerPt];
+        const anchorBR = [W - marginPt * imgPerPt, H - marginPt * imgPerPt];
+        const anchorBL = [marginPt * imgPerPt, H - marginPt * imgPerPt];
+
+        // legend — the one floating card on this page (the brand's sole 3px
+        // radius); six swatches, literal miniatures of the grid strokes.
+        {
+          const cardW = 172, headerH = 14, rowH = 14, padTop = 6, padBottom = 8;
+          const cardH = padTop + headerH + 6 * rowH + padBottom;
+          const [x0, y0] = at(anchorTR, -cardW, 0), [x1, y1] = at(anchorTR, 0, cardH);
+          tilePg.drawSvgPath(roundedRectPath(x0, y0, x1, y1, 3 * imgPerPt), { x: 0, y: 0, color: knockout, borderColor: hairline, borderWidth: 0.4 });
+          const [hx, hy] = at(anchorTR, -cardW + 10, 12);
+          tdraw("LEGEND", hx, hy, 7.5, ink, bold);
+          const rowY = (i) => padTop + headerH + i * rowH + rowH / 2;
+          const swatchCX = -cardW + 17, labelX = -cardW + 32;
+          const sw = (i, opts) => { const [cx, cy] = at(anchorTR, swatchCX, rowY(i)); trect(cx, cy, 14, 10, opts); };
+          const swLine = (i, colorRgb, w, dash) => {
+            const [lx0, ly0] = at(anchorTR, swatchCX - 7, rowY(i)), [lx1, ly1] = at(anchorTR, swatchCX + 7, rowY(i));
+            tline(lx0, ly0, lx1, ly1, colorRgb, w, undefined, dash);
+          };
+          const lbl = (i, t, fnt = font, size = 7, dx = 0) => { const [lx, ly] = at(anchorTR, labelX + dx, rowY(i) + 2.5); tdraw(t, lx, ly, size, ink, fnt); };
+          sw(0, { color: repRgb, opacity: 0.08, borderColor: repRgb, borderWidth: 0.5, borderOpacity: 0.85 }); lbl(0, "FULL");
+          sw(1, { color: repRgb, opacity: 0.14, borderColor: repRgb, borderWidth: 0.9, borderOpacity: 0.95, borderDashArray: [3, 1.6] });
+          lbl(1, "CUT"); lbl(1, '12×5"', courier, 6.5, font.widthOfTextAtSize("CUT", 7) + 4);
+          sw(2, { color: danger, opacity: 0.14, borderColor: danger, borderWidth: 0.9, borderDashArray: [1, 1.2] }); lbl(2, "CORNER");
+          sw(3, { borderColor: tileMuted, borderWidth: 0.5, borderOpacity: 0.5, borderDashArray: [1.5, 1.5] }); lbl(3, "HOLE");
+          swLine(4, tileCobalt, 1.4); lbl(4, "TRIM EDGE");
+          swLine(5, tileMuted, 0.7, [4, 2, 1, 2]); lbl(5, "MOVEMENT JOINT");
+        }
+
+        // title block — per tiled room, a FIELD header strip + two aligned
+        // columns (Helvetica label, Courier value); square corners.
+        {
+          const frameW = 224, colLX = 8, colVX = 98, rowH = 9.5, headerH = 13, blockPad = 4, padTop = 8, padBottom = 8;
+          const scaleLabel = (() => {
+            let best = null, bestErr = Infinity;
+            for (const sc of STANDARD_SCALES) { const err = Math.abs(Math.log(tileUpp / sc.upp)); if (err < bestErr) { bestErr = err; best = sc; } }
+            return best ? best.label : "NTS";
+          })();
+          const dateStr = new Date().toLocaleDateString();
+          const boldRows = new Set(["FULL", "CUT", "CORNER", "HOLE"]);
+          const rowsFor = (b) => {
+            const rows = [
+              ["PROJECT", String(projectName || "Untitled project")], ["SHEET", sh.label], ["FINISH", b.finish],
+              ["SCALE", scaleLabel], ["DATE", dateStr],
+              ["FULL", String(b.counts.full)], ["CUT", String(b.counts.cut)], ["CORNER", String(b.counts.corner)], ["HOLE", String(b.counts.hole)],
+              ["TRIM", `${num(uL(b.trimLf))} ${LU}`], ["BOXES", String(b.boxes)],
+            ];
+            if (b.jointLf > 0) rows.push(["JOINT", `${num(uL(b.jointLf))} ${LU}`]);
+            return rows;
+          };
+          const blockH = (b) => headerH + rowsFor(b).length * rowH + blockPad;
+          const totalH = padTop + roomBlocks.reduce((sum, b) => sum + blockH(b), 0) + padBottom;
+          const [fx0, fy0] = at(anchorBR, -frameW, -totalH);
+          const at2 = (dxPt, dyPt) => [fx0 + dxPt * imgPerPt, fy0 + dyPt * imgPerPt];
+          const [fcx, fcy] = at2(frameW / 2, totalH / 2);
+          trect(fcx, fcy, frameW, totalH, { color: knockout, borderColor: hairline, borderWidth: 0.4 });
+          let yCursor = padTop;
+          for (const b of roomBlocks) {
+            const rows = rowsFor(b);
+            const bh = headerH + rows.length * rowH + blockPad;
+            const [scx, scy] = at2(frameW / 2, yCursor + headerH / 2);
+            trect(scx, scy, frameW - 4, headerH, { color: tileCobalt, opacity: 0.12 });
+            const [hx, hy] = at2(colLX, yCursor + headerH / 2 + 2.6);
+            tdraw(`FIELD · ${b.tag}`, hx, hy, 7.5, tileCobalt, bold);
+            let ry = yCursor + headerH + rowH * 0.72;
+            for (const [label, value] of rows) {
+              const [lx, ly] = at2(colLX, ry);
+              tdraw(label, lx, ly, 7, ink, font);
+              const [vx, vy] = at2(colVX, ry);
+              tdraw(value, vx, vy, 7, ink, boldRows.has(label) ? courierBold : courier);
+              ry += rowH;
+            }
+            yCursor += bh;
+          }
+        }
+
+        // scale bar — a graphic hairline ruler with Courier ticks, sized
+        // from THIS sheet's own real print scale (tileUpp/ptScale), so it
+        // stays honest even when the nearest architectural-ratio label in
+        // the title block above reads NTS.
+        {
+          const ftPerPt = tileUpp / ptScale;
+          const NICE_FT = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000];
+          let niceFt = NICE_FT[0], bestErr = Infinity;
+          for (const c of NICE_FT) { const err = Math.abs(c / ftPerPt - 90); if (err < bestErr) { bestErr = err; niceFt = c; } }
+          const barLenPt = niceFt / ftPerPt;
+          const [rx0, ry0] = at(anchorBL, 0, 0), [rx1, ry1] = at(anchorBL, barLenPt, 0);
+          tline(rx0, ry0, rx1, ry1, hairline, 0.4);
+          for (const frac of [0, 0.5, 1]) {
+            const [tx0, ty0] = at(anchorBL, barLenPt * frac, -4), [tx1, ty1] = at(anchorBL, barLenPt * frac, 0);
+            tline(tx0, ty0, tx1, ty1, hairline, 0.4);
+          }
+          const barLbl = (frac, t) => { const [lx, ly] = at(anchorBL, barLenPt * frac, -7); tdraw(t, lx, ly, 6, ink, courier); };
+          barLbl(0, "0"); barLbl(0.5, num(uL(niceFt / 2))); barLbl(1, `${num(uL(niceFt))} ${LU}`);
+        }
+      }
+    }
   }
 
   // small tool credit on the LAST page only — the subtle parent credit shown in
