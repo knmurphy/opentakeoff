@@ -63,6 +63,17 @@ const BREAK_LINE_W = 2; // pt: bold corner break-line — distinct from the 0.25
 const PANEL_LABEL_DROP = 16; // pt below FLOOR_Y (the floor datum) for the panel label baseline
 const BREAK_LABEL_RISE = 2; // pt above stripTopY for the inside/outside marker
 
+// Renders a feet value as architectural feet-inches (nearest inch), e.g.
+// 17.5 -> "17'-6\"". Rounds to the nearest INCH first (not feet, then
+// inches separately) so a value like 11.98 carries correctly into the next
+// foot ("12'-0\"") instead of overflowing to "11'-12\"".
+export function formatFeetInches(ft: number): string {
+  const totalInches = Math.round(ft * 12);
+  const feet = Math.floor(totalInches / 12);
+  const inches = totalInches % 12;
+  return `${feet}'-${inches}"`;
+}
+
 // wallElevationLayout's tile colors are always caller-resolved hex (the
 // condition's per-SKU `skuColor`), never a CSS name or rgb() string, so a
 // plain #rgb/#rrggbb parse (leading '#' optional) is the whole job.
@@ -173,8 +184,13 @@ export async function buildWallElevationPdf(args: {
     drawCentered(b.kind, x, stripTopY + BREAK_LABEL_RISE, BREAK_LABEL_SIZE);
   }
 
-  // Header.
-  const header = `${tag} — ${dev.total_width_ft}'-0" × ${dev.height_ft}'-0" elevation`;
+  // Header. Uses elev.width_ft (the wall's REAL developed width, before the
+  // 0.5ft decorative inter-panel gaps developedElevationLayout inserts at
+  // each corner) — never dev.total_width_ft, which is the gap-INFLATED
+  // drawn width and would misreport the wall's actual length to a human
+  // reading the sheet. The RETURN value below (width_ft: dev.total_width_ft)
+  // is unaffected — this only changes the human-readable text.
+  const header = `${tag} — ${formatFeetInches(elev.width_ft)} × ${formatFeetInches(elev.height_ft)} elevation`;
   page.drawText(header, { x: MARGIN, y: stripTopY + 12, size: HEADER_SIZE, font, color: ink });
 
   const saved = await doc.save();

@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import {
   buildWallElevationPdf,
   ELEV_POINTS_PER_FT,
+  formatFeetInches,
   wallElevationSheetName,
   wallElevationScaleRow,
 } from "../src/lib/wallElevationPdf.ts";
@@ -195,6 +196,28 @@ test("wallElevationSheetName: embeds the tag and the FULL shape id, never trunca
 // records for a generated elevation PDF. It is a KNOWN scale (we drew it),
 // not an agent guess, so unlike agent-set scale rows elsewhere in the app
 // it carries no scale_confirmed field/gate. ──
+
+// ── formatFeetInches — the header's feet value is fractional (e.g. an L-run
+// panel's real width isn't always a whole foot), so the header needs real
+// feet-inches formatting instead of the old `${ft}'-0"` literal, which
+// printed nonsense like "17.5'-0\"" for a 17.5ft run. ──
+
+test("formatFeetInches: whole feet", () => {
+  assert.equal(formatFeetInches(18), "18'-0\"");
+});
+
+test("formatFeetInches: fractional feet round to the nearest inch", () => {
+  assert.equal(formatFeetInches(17.5), "17'-6\"");
+  assert.equal(formatFeetInches(10.25), "10'-3\"");
+});
+
+test("formatFeetInches: carries into the next foot instead of overflowing to 12 inches", () => {
+  assert.equal(formatFeetInches(11.98), "12'-0\"");
+});
+
+test("formatFeetInches: zero", () => {
+  assert.equal(formatFeetInches(0), "0'-0\"");
+});
 
 test("wallElevationScaleRow: carries the exact upp and a source string, no scale_confirmed field", () => {
   const upp = 1 / (ELEV_POINTS_PER_FT * RENDER_SCALE);
