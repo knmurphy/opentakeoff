@@ -10367,6 +10367,14 @@ export default function TakeoffCanvas() {
               } : null}
               effectiveConfig={selEffectiveConfig}
               selectedWall={selectedWall}
+              // Task 3 — WallShapeCard's Generate/Regenerate button needs the
+              // selected wall's condition tag (elevationButtonState derives
+              // the sheet key from tag+shapeId via wallElevationSheetName)
+              // and the CURRENT open sheet-key set (to read Generate vs
+              // Regenerate) — neither lives inside TilePanel's own narrowed
+              // props, so both are threaded straight through from here.
+              wallTag={selTileCond?.finish_tag}
+              existingSheetKeys={sheets.map((s) => s.name)}
               roomSkus={selTileCond?.tile_setup?.skus || []}
               show={tileShow} onShow={setTileShow}
               onTileSetup={(condId, patch) => {

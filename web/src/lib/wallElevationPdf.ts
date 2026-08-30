@@ -143,3 +143,27 @@ export function wallElevationSheetName(tag: string, shapeId: string): string {
 export function wallElevationScaleRow(upp: number): { units_per_px: number; scale_source: string } {
   return { units_per_px: upp, scale_source: "wall-elevation-generated" };
 }
+
+// Task 3 (2026-08-29 wall-tile-slice-b) — the panel's Generate/Regenerate
+// button is a pure function of three things: is a FIGURED wall actually
+// selected (a floor selection, no selection, or a wall this pass hasn't
+// figured yet — unscaled sheet, reversing/degenerate run — all read
+// `selectedWall` as null or wallStrips-empty, and disable the button rather
+// than let it fire on nothing to draw), and whether THIS shape's sheet key
+// is already in the open sheet set. The key is derived by REUSING
+// wallElevationSheetName (never re-derived here) so the button's label and
+// generateWallElevationSheet's own regen-vs-first-gen branch (Task 2,
+// TakeoffCanvas.jsx) can never disagree about which sheet a click replaces
+// — the C1 guard (full shapeId, not just the tag) applies transitively.
+export function elevationButtonState(args: {
+  selectedWall: { wallStrips?: TileLayout[] } | null | undefined;
+  existingSheetKeys: string[];
+  tag: string;
+  shapeId: string;
+}): { enabled: boolean; label: string } {
+  const { selectedWall, existingSheetKeys, tag, shapeId } = args;
+  const enabled = !!selectedWall?.wallStrips?.length;
+  const key = wallElevationSheetName(tag, shapeId);
+  const label = (existingSheetKeys || []).includes(key) ? "Regenerate elevation sheet" : "Generate elevation sheet";
+  return { enabled, label };
+}

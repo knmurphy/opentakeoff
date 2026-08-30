@@ -18,6 +18,7 @@ import { tileConfig } from "../lib/tileSetup.ts";
 import { enumerateSlots } from "../lib/tilePatterns/enumerateSlots.ts";
 import { PLANK_ARITY } from "../lib/tilePatterns/slotKey.ts";
 import { wallElevationLayout } from "../lib/tileWallElevation.ts";
+import { elevationButtonState } from "../lib/wallElevationPdf.ts";
 
 const WALL_CORNER_MODES = [
   { value: "wrap", label: "Wrap" },
@@ -500,7 +501,17 @@ function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
 // afford for its one legibility-critical label: which corner is inside).
 const TARGET_W_PX = 260;
 const TARGET_H_PX = 140;
-function WallShapeCard({ selectedShape, selectedWall, skus, onWallField }) {
+// Task 3 (2026-08-29 wall-tile-slice-b) — `wallTag` and `existingSheetKeys`
+// are threaded down from TakeoffCanvas.jsx purely so this card can compute
+// `elevationButtonState` (wallElevationPdf.ts): `selectedShape` here is
+// TilePanel's own narrowed prop (id/measure_role/tile_layout/face_side/
+// endpoint_exposed only — condition_id is deliberately omitted, see
+// TilePanel's own selectedShape doc comment), so the condition's finish_tag
+// isn't otherwise available, and the open sheet-key set lives on the
+// canvas, not the panel. `onGenerateElevation` is Task 2's already-bound
+// closure (`() => generateWallElevationSheet(selShape)`) — this card calls
+// it with no arguments, never re-deriving or re-passing the shape.
+function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag, existingSheetKeys, onGenerateElevation }) {
   const faceSide = selectedShape.face_side || "left";
   const endpointExposed = Array.isArray(selectedShape.endpoint_exposed) ? selectedShape.endpoint_exposed : [false, false];
   const setFaceSide = (v) => onWallField(selectedShape.id, { face_side: v });
@@ -517,6 +528,11 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField }) {
   const skuColor = (skuId) => (skus || []).find((sk) => sk.id === skuId)?.color || "#888888";
   const elev = selectedWall ? wallElevationLayout(selectedWall.wallStrips, selectedWall.folds, skuColor) : null;
   const hasElev = !!elev && elev.width_ft > 0 && elev.height_ft > 0;
+  // "?" mirrors generateWallElevationSheet's own fallback (TakeoffCanvas.jsx)
+  // for a condition whose finish_tag somehow reads empty — the button's
+  // label/enabled state must never disagree with what the handler it
+  // triggers would actually name the sheet.
+  const btn = elevationButtonState({ selectedWall, existingSheetKeys, tag: wallTag || "?", shapeId: selectedShape.id });
 
   const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
   const toggleBtn = (on) => ({ padding: "3px 7px", border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`, background: on ? "var(--cobalt)" : "var(--paper-bright)", color: on ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)" });
@@ -591,6 +607,20 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField }) {
           No elevation preview yet — this wall isn't figured (unscaled sheet, or a reversing/degenerate run).
         </div>
       )}
+
+      {/* Task 3 (2026-08-29 wall-tile-slice-b) — draws this wall's tiled
+          elevation strip into a real sheet (buildWallElevationPdf via
+          onGenerateElevation, already bound to THIS shape by TakeoffCanvas
+          — no argument needed here). Disabled rather than absent when the
+          wall isn't figured yet, matching the preview's own "no elevation
+          preview yet" messaging above instead of the control just vanishing. */}
+      <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--ink-faint)" }}>
+        <button type="button" disabled={!btn.enabled} onClick={() => onGenerateElevation?.()}
+          title={btn.enabled ? "Draw this wall's tiled elevation into a new sheet, scaled and ready to mark up" : "This wall isn't figured yet — nothing to draw"}
+          style={{ width: "100%", padding: "5px 10px", border: "1px solid var(--ink-faint)", background: btn.enabled ? "var(--cobalt)" : "var(--paper-bright)", color: btn.enabled ? "var(--paper-bright)" : "var(--ink-muted)", cursor: btn.enabled ? "pointer" : "not-allowed", fontSize: 11, fontFamily: "var(--f-mono)" }}>
+          {btn.label}
+        </button>
+      </div>
     </div>
   );
 }
@@ -631,6 +661,15 @@ export default function TilePanel({
   // wall shape this pass hasn't figured yet (unscaled sheet, excluded
   // run) — WallShapeCard must render its controls without it.
   selectedWall,
+  // Task 3 (2026-08-29 wall-tile-slice-b) — the selected wall shape's
+  // condition finish_tag and the current open sheet-key set, threaded down
+  // purely so WallShapeCard's Generate/Regenerate button can compute
+  // elevationButtonState (wallElevationPdf.ts) — neither is otherwise
+  // available inside this panel (`selectedShape` above deliberately omits
+  // condition_id; the sheet list lives on the canvas, not here). `null`/`[]`
+  // on a floor selection or no selection, same as `selectedWall`.
+  wallTag,
+  existingSheetKeys,
   roomSkus, // selectedShape's condition's tile_setup.skus — the band SKU picker's option list (M7 Task 7.3)
   show, onShow,
   onTileSetup, onTileLayout,
@@ -638,6 +677,10 @@ export default function TilePanel({
   // DISTINCT from onTileLayout: those fields live on the shape directly,
   // not nested under tile_layout (shapeCommands.js's `wallFields` command).
   onWallField,
+  // Task 2's already-bound handler (TakeoffCanvas.jsx:
+  // `() => generateWallElevationSheet(selShape)`) — WallShapeCard calls it
+  // with no arguments; this panel does no shape lookup of its own.
+  onGenerateElevation,
   warnings, onFocusWarning,
   onClose,
 }) {
@@ -667,7 +710,8 @@ export default function TilePanel({
             don't apply to a wall run. Ruling 5: a floor selection renders
             RoomOverride exactly as before, gated the same way it always was. */}
         {selectedShape && selectedShape.measure_role === "surface_area" ? (
-          <WallShapeCard selectedShape={selectedShape} selectedWall={selectedWall} skus={roomSkus} onWallField={onWallField} />
+          <WallShapeCard selectedShape={selectedShape} selectedWall={selectedWall} skus={roomSkus} onWallField={onWallField}
+            wallTag={wallTag} existingSheetKeys={existingSheetKeys} onGenerateElevation={onGenerateElevation} />
         ) : (
           selectedShape && effectiveConfig && (
             <RoomOverride selectedShape={selectedShape} effectiveConfig={effectiveConfig} skus={roomSkus} onTileLayout={onTileLayout} />
