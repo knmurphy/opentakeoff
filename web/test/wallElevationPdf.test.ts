@@ -139,6 +139,25 @@ test("an L-run's returned width_ft equals the developed total_width_ft (wider th
   assert.ok(lRun.width_ft > 18, `expected the developed width (raw 18ft run + a corner gap) to exceed the raw run, got ${lRun.width_ft}`);
 });
 
+// The width_ft test above only pins the RETURNED value; it doesn't prove the
+// PAGE was actually drawn that wide. Without this, `pageW` could regress to
+// `elev.width_ft * P + MARGIN*2` (the pre-Task-3v2 formula) while `width_ft`
+// still reported `dev.total_width_ft` — every other test in this file would
+// stay green, but every shape measured on a folded wall's stored sheet would
+// be silently misplaced (the same failure mode the straight-run round-trip
+// test below already guards, which only exercises the unchanged single-panel
+// path and can't catch a page-width/width_ft divergence on the panel path).
+test("an L-run's drawn PAGE width round-trips to width_ft via upp+RENDER_SCALE too (not just the straight-run page)", async () => {
+  const lRun = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  const { PDFDocument } = await import("pdf-lib");
+  const bytes = new Uint8Array(await lRun.file.arrayBuffer());
+  const doc = await PDFDocument.load(bytes);
+  const { width } = doc.getPage(0).getSize();
+  const MARGIN = 24; // pt: matches wallElevationPdf.ts's own left/right margin
+  const stripWidthPt = width - MARGIN * 2;
+  assert.ok(Math.abs(stripWidthPt * RENDER_SCALE * lRun.upp - lRun.width_ft) < 1e-6);
+});
+
 test("upp is IDENTICAL for a straight run and an L-run — a per-foot constant, unaffected by the page growing wider for panel gaps", async () => {
   const straight = await buildWallElevationPdf({ wallStrips: [layout], folds: [], skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
   const lRun = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
