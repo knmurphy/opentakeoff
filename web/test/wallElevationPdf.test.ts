@@ -79,7 +79,30 @@ test("a real fold draws without throwing and changes the output bytes", async ()
   const noFold = await buildWallElevationPdf({ wallStrips: [layout], folds: [], skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
   const a = new Uint8Array(await withFold.file.arrayBuffer());
   const b = new Uint8Array(await noFold.file.arrayBuffer());
-  assert.notEqual(a.length, b.length, "the fold's line + label add real content, not a no-op");
+  // Compare CONTENT, not just byte length: under object-stream compression
+  // two different content streams can compress to coincidentally-equal
+  // lengths, so a length-only check doesn't actually prove the fold changed
+  // the output.
+  assert.notDeepEqual([...a], [...b], "the fold's line + label add real content, not a no-op");
+});
+
+// The two determinism tests above (and the one below) only exercise the
+// NO-FOLDS path (folds:[]). Task 2+ regenerates real walls that always have
+// at least one fold, so determinism has to hold on THAT path too — e.g. a
+// future refactor that iterates a Map/Set for fold labels (insertion order
+// is stable per-process but a Map keyed by object identity or rebuilt from
+// an unordered structure would not be) would silently break cross-session
+// regen determinism while every folds:[] test kept passing.
+test("is DETERMINISTIC with a NON-EMPTY folds array — same real 2-fold wall yields byte-identical output", async () => {
+  const foldedLayout = solveTileLayout({ tile_setup: setup, ring_ft: wallStripRing(18, 8) });
+  const folds = [
+    { u_ft: 6, kind: "inside" as const, vertexIndex: 1 },
+    { u_ft: 12, kind: "outside" as const, vertexIndex: 2 },
+  ];
+  const a = await buildWallElevationPdf({ wallStrips: [foldedLayout], folds, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  const b = await buildWallElevationPdf({ wallStrips: [foldedLayout], folds, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
+  const ba = new Uint8Array(await a.file.arrayBuffer()), bb = new Uint8Array(await b.file.arrayBuffer());
+  assert.deepEqual([...ba], [...bb]); // the fold-drawing branch must be just as deterministic as the folds:[] path
 });
 
 // ── wallElevationSheetName — later tasks store the generated PDF under a
