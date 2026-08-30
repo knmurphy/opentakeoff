@@ -9,11 +9,17 @@
 // as Task 2's own record of the contract it depends on (already covered
 // in full in wallElevationPdf.test.ts; these are the two guarantees this
 // task's handler actually leans on, not a repeat of that whole suite).
+// Whole-branch-review fix (same date) added a third pure piece: the
+// handler's try/catch had no error path at all (silent no-op on a rejected
+// buildWallElevationPdf/store.addPdf). elevationErrorMessage (canvasUtil.js)
+// is the extracted message-selection logic; covered below.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dimsChanged } from "../src/lib/wallElevationSheet.ts";
 import { wallElevationSheetName, wallElevationScaleRow, ELEV_POINTS_PER_FT } from "../src/lib/wallElevationPdf.ts";
 import { RENDER_SCALE } from "../src/lib/sheets.ts";
+import { elevationErrorMessage, isDangerMsg } from "../src/lib/canvasUtil.js";
+import { STALE_TAB_MESSAGE } from "../src/lib/store.js";
 
 // ── dimsChanged (I1 guard) ──────────────────────────────────────────────
 
@@ -55,4 +61,37 @@ test("wallElevationScaleRow: exact upp, a source string, no scale_confirmed key 
   assert.equal(row.units_per_px, upp);
   assert.equal(typeof row.scale_source, "string");
   assert.equal("scale_confirmed" in row, false);
+});
+
+// ── elevationErrorMessage (canvasUtil.js) — the handler's catch, added by
+// the whole-branch-review fix: generateWallElevationSheet had no try/catch,
+// so a rejected buildWallElevationPdf/store.addPdf was a silent no-op. The
+// message-selection logic lives in canvasUtil.js (not inline) precisely so
+// it's testable outside React; the property that matters is that BOTH
+// branches satisfy isDangerMsg — a message that renders in the positive
+// color and auto-expires after 6s is barely a fix for "user sees nothing". ──
+
+test("elevationErrorMessage: stale-tab error (VersionError) -> the sticky STALE_TAB_MESSAGE", () => {
+  const msg = elevationErrorMessage({ name: "VersionError" });
+  assert.equal(msg, STALE_TAB_MESSAGE);
+  assert.equal(isDangerMsg(msg), true);
+});
+
+test("elevationErrorMessage: stale-tab error (BlockedError) -> the sticky STALE_TAB_MESSAGE", () => {
+  const msg = elevationErrorMessage({ name: "BlockedError" });
+  assert.equal(msg, STALE_TAB_MESSAGE);
+  assert.equal(isDangerMsg(msg), true);
+});
+
+test("elevationErrorMessage: quota error -> \"Couldn't generate…\" + the actionable friendlyStoreError copy, red/sticky", () => {
+  const msg = elevationErrorMessage(Object.assign(new Error("raw engine text"), { name: "QuotaExceededError" }));
+  assert.match(msg, /^Couldn't generate the elevation sheet: /);
+  assert.match(msg, /storage space/);
+  assert.equal(isDangerMsg(msg), true);
+});
+
+test("elevationErrorMessage: a plain throw (e.g. pdf-lib) -> \"Couldn't generate…\" + its own message, red/sticky", () => {
+  const msg = elevationErrorMessage(new Error("boom"));
+  assert.equal(msg, "Couldn't generate the elevation sheet: boom");
+  assert.equal(isDangerMsg(msg), true);
 });

@@ -163,7 +163,7 @@ import {
   MEASURE_TOOLS, CUT_TOOLS, MARKUP_TOOLS, MARKUP_IDS, HL_INKS, HL_SIZES,
   MARKUP_IMG_MAX, MAX_IMAGE_MARKUP_BYTES, MARKUP_UPLOAD_MAX_BYTES, MARKUP_DECODE_MAX_AREA,
 } from "../lib/canvasConstants.js";
-import { uid, clamp, isDangerMsg, instantiateTemplate, condToTemplate, seedConditions } from "../lib/canvasUtil.js";
+import { uid, clamp, isDangerMsg, instantiateTemplate, condToTemplate, seedConditions, elevationErrorMessage } from "../lib/canvasUtil.js";
 // Tile-pyramid rendering (#86) — pure math in lib/tiles.ts (tested), worker
 // pool in lib/tilePool.ts, DOM/Worker orchestration glue here via one
 // long-lived compositor instance. Replaces the old single-raster base +
@@ -1900,41 +1900,54 @@ export default function TakeoffCanvas() {
     // never trips the dims-change guard below.
     const skuColor = (id) => skus.find((s) => s.id === id)?.color ?? "#888888";
     const name = wallElevationSheetName(tag, shape.id);
-    const r = await buildWallElevationPdf({ wallStrips: summary.wallStrips, folds: summary.folds || [], skuColor, tag, name });
+    // Whole-body try/catch (Slice B fix, whole-branch review): every step
+    // below is async/throwable — buildWallElevationPdf (pdf-lib) or
+    // store.addPdf (IndexedDB quota, or the stale-tab/multi-session write
+    // conflict a concurrent-session user can actually hit) — and the button
+    // calls this fire-and-forget (TilePanel.jsx onClick), so an uncaught
+    // rejection was a silent no-op: no sheet, no nav, no message. Surfaced
+    // via the same commitMsg channel + isStaleTabError/friendlyStoreError
+    // convention as handleFiles' per-file catch and the autosave catch
+    // above (elevationErrorMessage, canvasUtil.js).
+    try {
+      const r = await buildWallElevationPdf({ wallStrips: summary.wallStrips, folds: summary.folds || [], skuColor, tag, name });
 
-    // I1: only a wall whose sheet already exists AND is actually bound to
-    // shapes AND whose drawn dims changed needs the human's go-ahead — never
-    // a first generation, and never a same-dims SKU/color-only regen.
-    if (sheets.some((s) => s.name === name) && shapes.some((s) => s.sheet_id === name)) {
-      const next = { width_ft: r.width_ft, height_ft: r.height_ft };
-      if (dimsChanged(wallElevDims[name], next)
-        && !window.confirm("This wall's size changed — marks on its elevation sheet may shift. Regenerate anyway?")) {
-        return;
+      // I1: only a wall whose sheet already exists AND is actually bound to
+      // shapes AND whose drawn dims changed needs the human's go-ahead — never
+      // a first generation, and never a same-dims SKU/color-only regen.
+      if (sheets.some((s) => s.name === name) && shapes.some((s) => s.sheet_id === name)) {
+        const next = { width_ft: r.width_ft, height_ft: r.height_ft };
+        if (dimsChanged(wallElevDims[name], next)
+          && !window.confirm("This wall's size changed — marks on its elevation sheet may shift. Regenerate anyway?")) {
+          return;
+        }
       }
+
+      const added = await store.addPdf(r.file);
+      // M1 — idiomatic scale path: a KNOWN scale (we drew the page ourselves),
+      // so scaleUnconfirmed is deliberately left untouched (absence ===
+      // confirmed; the gate is `scaleUnconfirmed[key] === false`).
+      const row = wallElevationScaleRow(r.upp);
+      setScales((m) => ({ ...m, [name]: row.units_per_px }));
+      setScaleSources((m) => ({ ...m, [name]: row.scale_source }));
+      setWallElevDims((m) => ({ ...m, [name]: { width_ft: r.width_ft, height_ft: r.height_ft } }));
+
+      // M2 — cache reset on revision: the same recipe handleFiles uses for a
+      // re-dropped file whose bytes changed.
+      if (added?.revised) {
+        evictDoc(name);
+        forgetPages([name]);
+        setDocEpoch((e) => e + 1);
+      }
+
+      // M2 — open: refreshSheets FIRST so `sheets` already carries `name`
+      // before it's added as a tab — see the recipe note above.
+      await refreshSheets();
+      setOpenTabs((t) => (t.includes(name) ? t : [...t, name]));
+      goToSheet(name);
+    } catch (e) {
+      setCommitMsg(elevationErrorMessage(e));
     }
-
-    const added = await store.addPdf(r.file);
-    // M1 — idiomatic scale path: a KNOWN scale (we drew the page ourselves),
-    // so scaleUnconfirmed is deliberately left untouched (absence ===
-    // confirmed; the gate is `scaleUnconfirmed[key] === false`).
-    const row = wallElevationScaleRow(r.upp);
-    setScales((m) => ({ ...m, [name]: row.units_per_px }));
-    setScaleSources((m) => ({ ...m, [name]: row.scale_source }));
-    setWallElevDims((m) => ({ ...m, [name]: { width_ft: r.width_ft, height_ft: r.height_ft } }));
-
-    // M2 — cache reset on revision: the same recipe handleFiles uses for a
-    // re-dropped file whose bytes changed.
-    if (added?.revised) {
-      evictDoc(name);
-      forgetPages([name]);
-      setDocEpoch((e) => e + 1);
-    }
-
-    // M2 — open: refreshSheets FIRST so `sheets` already carries `name`
-    // before it's added as a tab — see the recipe note above.
-    await refreshSheets();
-    setOpenTabs((t) => (t.includes(name) ? t : [...t, name]));
-    goToSheet(name);
   }
   // The empty-project landing view (the Drive picker for an empty cloud project,
   // else the gallery) depends on BOTH the sheet list and the annotations (open

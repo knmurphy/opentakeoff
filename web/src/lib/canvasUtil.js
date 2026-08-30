@@ -6,7 +6,7 @@
 // this module outside the web app (mcp/ keeps its own mirrored copies).
 
 import { RENDER_SCALE } from "./sheets";
-import { STALE_TAB_MESSAGE } from "./store.js";
+import { STALE_TAB_MESSAGE, isStaleTabError, friendlyStoreError } from "./store.js";
 import { mintUuid, nowIso } from "./provenance.js";
 import { instantiateMaterial } from "./materials.js";
 import { PALETTE } from "../components/hatches.jsx";
@@ -52,6 +52,20 @@ export const clamp = (s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 // shared by the status-bar tone AND the auto-dismiss skip (in the canvas) — one
 // definition of "this message is bad news" for both readers
 export const isDangerMsg = (s) => s === STALE_TAB_MESSAGE || s.startsWith("Commit failed") || s.startsWith("Couldn't");
+// generateWallElevationSheet's catch (Slice B fix) — the union of the two
+// sibling error conventions it's copied from: the stale-tab distinction +
+// sticky STALE_TAB_MESSAGE from the autosave catch (TakeoffCanvas.jsx, the
+// hydrate-load catch and the debounced-save catch), and the "Couldn't …"
+// prefix from handleFiles' per-file catch. The prefix matters as more than
+// wording — isDangerMsg above only reds+stickies a message that either
+// equals STALE_TAB_MESSAGE or starts with "Couldn't"/"Commit failed"; a bare
+// friendlyStoreError(e) (as autosave uses) renders in the POSITIVE color and
+// auto-expires after 6s (see the isDangerMsg guard on that timer), which for
+// a "the user saw nothing happen" finding is barely a fix. Both branches here
+// satisfy isDangerMsg — asserted in the test alongside the message text.
+export const elevationErrorMessage = (e) => (isStaleTabError(e)
+  ? STALE_TAB_MESSAGE
+  : `Couldn't generate the elevation sheet: ${friendlyStoreError(e)}`);
 
 // A template is a condition minus ids (finish_tag, colors, hatch, waste,
 // H/T params, materials) — instantiation mints fresh condition/material ids.
