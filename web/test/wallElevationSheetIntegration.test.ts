@@ -15,6 +15,11 @@
 //      page-1 sheet; a listSheets-shaped [{name}] list is well-formed.
 //   4. Sheet-adjacent subsystems (sheetLevels.js, sheetGroups.ts,
 //      sheetgraph.ts) don't choke on the elevation key form.
+//   5. Marked-set caption path (markedset.js's own imports — sheets.ts's
+//      sheetBaseLabelFromKey + markupImage.ts's sourceCaption) produces a
+//      real (if verbose — the full UUID shape id survives, a cosmetic
+//      finding, see task-4-report.md) caption string for the elevation key,
+//      no throw.
 //
 // None of these spot-checks found a real break (see task-4-report.md), so
 // this file stands entirely as regression guards — no source changes.
@@ -27,7 +32,8 @@ import {
   wallElevationSheetName,
   type WallElevationPdf,
 } from "../src/lib/wallElevationPdf.ts";
-import { RENDER_SCALE } from "../src/lib/sheets.ts";
+import { RENDER_SCALE, sheetBaseLabelFromKey } from "../src/lib/sheets.ts";
+import { sourceCaption } from "../src/lib/markupImage.ts";
 import { solveTileLayout } from "../src/lib/tileSolve.ts";
 import { wallStripRing } from "../src/lib/tileWall/unwrap.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
@@ -214,4 +220,38 @@ test("4c3. sheetgraph — buildSheetGraph indexes the elevation sheet by its own
   assert.equal(graph.sheets[0].role, "elevation");
   assert.deepEqual(graph.rooms, []);
   assert.deepEqual(graph.unmatched_tags, []);
+});
+
+// ── 5. Marked-set caption path (markedset.js's own dependencies) ────────
+//
+// markedset.js imports sheetBaseLabelFromKey from sheets.ts and sourceCaption
+// from markupImage.ts to build a capture's "Source: <label> · p.<n>" caption
+// (markedset.js:835-838) — both pure, so the elevation key's path through
+// them is directly testable without rendering a PDF page.
+
+test("5. markedset — sheetBaseLabelFromKey + sourceCaption produce a real caption for the elevation sheet key, no throw", () => {
+  const label = sheetBaseLabelFromKey(SHEET_KEY);
+  // page===1, so sheetBaseLabelFromKey is just the ".pdf" suffix stripped
+  // (sheets.ts:21-26) — the FULL key, including the shape's whole UUID,
+  // survives untruncated. Cosmetically verbose on a real marked set (a long
+  // caption chip), but not a break: no throw, no truncation-corruption, and
+  // truncating it would be a design decision this task does not make
+  // (verify-only — logged as a ledger minor in task-4-report.md, not guarded).
+  assert.equal(label, SHEET_KEY.replace(/\.pdf$/i, ""));
+  assert.ok(label.length > 0);
+
+  const caption = sourceCaption(label, 1);
+  assert.equal(caption, `Source: ${label} · p.1`);
+});
+
+test("5b. markedset — a stitch-style source key (defensive branch) still degrades to no caption, not a throw", () => {
+  // sheetBaseLabelFromKey's own documented defensive branch (sheets.ts:22) —
+  // re-asserted here with the SAME shape of key format check the elevation
+  // key exercises, so a future edit to that guard can't silently start
+  // treating an elevation key as a stitch key (or vice versa) without a test
+  // noticing either way.
+  assert.equal(sheetBaseLabelFromKey(""), "");
+  assert.equal(sourceCaption(sheetBaseLabelFromKey(""), 1), "", "an empty label renders no caption at all, never a bare 'Source:'");
+  // the real elevation key is never mistaken for a stitch key
+  assert.notEqual(sheetBaseLabelFromKey(SHEET_KEY), "");
 });
