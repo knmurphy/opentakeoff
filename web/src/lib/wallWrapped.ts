@@ -122,3 +122,39 @@ export function wallWrappedLayout(args: {
 
   return { tiles, hinges, bbox };
 }
+
+// Task 2 (2026-08-29 wall-tile-slice-c) — the PLAN-side counterpart to the
+// bend transform above: `wallWrappedLayout` takes `turnAngles` as an input
+// rather than deriving them itself (kept pure/geometry-only, no coupling to
+// how a caller happens to know its run's corners), so something upstream of
+// it has to turn a run's raw plan vertices into that per-fold angle list.
+// This is that something -- TilePanel is the one real caller (it reads the
+// selected wall shape's own `verts_norm` + the SAME `folds` the elevation
+// strip already draws its dashed fold-lines from), but it's exported and
+// tested standalone here because the geometry has nothing to do with React.
+//
+// SIGN: literal `atan2(cross, dot)` on the incoming/outgoing plan-segment
+// vectors, in whatever frame `verts_norm` itself is already in (this repo's
+// convention is normalized image space, y DOWN) -- no coordinate flip, no
+// face_side sign correction (unwrapRun's OWN inside/outside kind already
+// folds face_side in; this helper answers a narrower question -- "which way
+// does the run's plan direction bend" -- independent of which side is
+// tiled). Passed straight through to `wallWrappedLayout`'s `turnAngles` with
+// no further adjustment; the on-screen bend direction that produces is a
+// rendering question the caller's own visual check settles, not something
+// this pure function can decide by staring at the formula harder.
+export function runTurnAngles(
+  verts_norm: [number, number][] | null | undefined,
+  folds: { vertexIndex: number }[] | null | undefined,
+): number[] {
+  const verts = Array.isArray(verts_norm) ? verts_norm : [];
+  const fs = Array.isArray(folds) ? folds : [];
+  return fs.map((f) => {
+    const i = f.vertexIndex;
+    const a = verts[i - 1], b = verts[i], c = verts[i + 1];
+    if (!a || !b || !c) return 0; // out-of-range vertexIndex (defensive, shouldn't happen for a real fold) — no bend rather than NaN
+    const inx = b[0] - a[0], iny = b[1] - a[1];
+    const outx = c[0] - b[0], outy = c[1] - b[1];
+    return Math.atan2(inx * outy - iny * outx, inx * outx + iny * outy);
+  });
+}

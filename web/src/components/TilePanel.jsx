@@ -19,6 +19,7 @@ import { enumerateSlots } from "../lib/tilePatterns/enumerateSlots.ts";
 import { PLANK_ARITY } from "../lib/tilePatterns/slotKey.ts";
 import { wallElevationLayout } from "../lib/tileWallElevation.ts";
 import { elevationButtonState } from "../lib/wallElevationPdf.ts";
+import { wallWrappedLayout, runTurnAngles } from "../lib/wallWrapped.ts";
 
 const WALL_CORNER_MODES = [
   { value: "wrap", label: "Wrap" },
@@ -480,7 +481,7 @@ function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
 // `onWallField`, TOP-LEVEL shape fields the wall engine reads directly —
 // NOT nested under tile_layout, see shapeCommands.js's `wallFields` policy
 // row) plus the per-shape elevation-strip preview. `selectedWall`
-// (`{wallStrips, folds, trim, joints}` or `null`, threaded from
+// (`{wallStrips, folds, trim, joints, verts_norm}` or `null`, threaded from
 // TakeoffCanvas's own `byShape` lookup — M4/ruling 1, NEVER the
 // condition's `ti`) drives the SVG via the pure `wallElevationLayout`
 // helper (tileWallElevation.ts); this component only converts its FEET
@@ -488,6 +489,17 @@ function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
 // here. Renders the controls even when `selectedWall` is null (an
 // unscaled sheet, or a shape excluded this pass — reversing/degenerate
 // run) so the panel never throws on an unfigured wall selection.
+//
+// Task 2 (2026-08-29 wall-tile-slice-c) — an unwrapped/wrapped toggle sits
+// above the strip. "Unwrapped" is the Slice A/B flat strip, byte-identical
+// to before. "Wrapped" reuses the SAME `elev.tiles`/`elev.folds` (no second
+// engine pass) and runs them through `wallWrappedLayout` (wallWrapped.ts)
+// with each fold's plan turn angle (`runTurnAngles`, same module, over
+// `selectedWall.verts_norm` + the raw per-fold `vertexIndex`) so the strip
+// visibly bends at each corner instead of staying a straight seam.
+// `verts_norm` absent (defensive) → `runTurnAngles` sees no vertices to
+// pair up and returns no bend for any fold; wrapped then draws the same
+// flat geometry as unwrapped rather than throwing.
 // Target on-screen box the elevation strip fits INSIDE (preserving aspect,
 // "contain"-style — the binding dimension, width or height, hits its
 // target; the other comes in under). Fixed target dims, NOT a fixed
@@ -512,6 +524,10 @@ const TARGET_H_PX = 140;
 // closure (`() => generateWallElevationSheet(selShape)`) — this card calls
 // it with no arguments, never re-deriving or re-passing the shape.
 function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag, existingSheetKeys, onGenerateElevation }) {
+  // Task 2 (2026-08-29 wall-tile-slice-c) — defaults to unwrapped, so a
+  // reselected wall never surprises with the bent view; Slice A/B behavior
+  // is unchanged until the user opts in.
+  const [wrapView, setWrapView] = useState(false);
   const faceSide = selectedShape.face_side || "left";
   const endpointExposed = Array.isArray(selectedShape.endpoint_exposed) ? selectedShape.endpoint_exposed : [false, false];
   const setFaceSide = (v) => onWallField(selectedShape.id, { face_side: v });
@@ -546,6 +562,57 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
   const w_px = hasElev ? elev.width_ft / elUpp : 0;
   const h_px = hasElev ? elev.height_ft / elUpp : 0;
 
+  // Task 2 — the wrapped (bent) layout, built from the SAME elev.tiles /
+  // elev.folds `wallElevationLayout` already produced above (no second
+  // engine pass) plus each fold's plan turn angle. `elev.folds` is the
+  // `{x, kind}`-only view the flat strip's dashed lines draw from;
+  // `selectedWall.folds` is the raw `Fold[]` (same order/length) carrying
+  // the `vertexIndex` `runTurnAngles` needs to pick out each fold's plan
+  // vertices from `selectedWall.verts_norm`.
+  // Fed straight through, UNNEGATED: `runTurnAngles`'s raw atan2(cross,dot)
+  // on `verts_norm` already lines up with wallWrappedLayout's OWN convention
+  // — Task 1's test literally names turnAngle=+π/2 "a right turn" — because
+  // "positive = a physical right turn (walking the wall in u's direction)"
+  // holds for BOTH: checked numerically across east→south, north→east
+  // (right turns, +π/2) and south→east, east→north (left turns, -π/2), on
+  // this repo's plan convention (x=east, y=south, north up on screen). The
+  // wrapped view's own y-axis is wall HEIGHT, not compass north — there's no
+  // "plan north should still point up after wrapping" claim to preserve, so
+  // no coordinate-frame correction belongs here; the two modules' sign
+  // conventions already compose.
+  const turnAngles = hasElev ? runTurnAngles(selectedWall?.verts_norm, selectedWall?.folds) : [];
+  const wrapped = hasElev
+    ? wallWrappedLayout({
+        elevationTiles: elev.tiles,
+        width_ft: elev.width_ft,
+        foldsU: elev.folds.map((f) => f.x),
+        foldKinds: elev.folds.map((f) => f.kind),
+        turnAngles,
+      })
+    : null;
+  // wallWrappedLayout's own `bbox` is tile-pts-only (Task 1 handoff) — a
+  // hinge can land outside every tile's footprint at a sharp fold, so the
+  // viewBox has to union both here, not just trust `wrapped.bbox`.
+  const wrapBBox = wrapped
+    ? (() => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const grow = (x, y) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
+        for (const t of wrapped.tiles) for (const [x, y] of t.pts) grow(x, y);
+        for (const h of wrapped.hinges) grow(h.x, h.y);
+        return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      })()
+    : { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  const wrapW_ft = wrapBBox.maxX - wrapBBox.minX;
+  const wrapH_ft = wrapBBox.maxY - wrapBBox.minY;
+  // Same "contain"-in-a-fixed-target-box scale policy as elUpp above, over
+  // the wrapped (post-bend) extent instead of the flat one — a folded run
+  // can be taller/narrower than its flat strip, so this is its OWN scale,
+  // not elUpp reused.
+  const wrUpp = hasElev ? Math.max(wrapW_ft / TARGET_W_PX, wrapH_ft / TARGET_H_PX, 0.005) : 0.06;
+  const wrap_w_px = hasElev ? wrapW_ft / wrUpp : 0;
+  const wrap_h_px = hasElev ? wrapH_ft / wrUpp : 0;
+  const toWrapPx = ([x, y]) => [(x - wrapBBox.minX) / wrUpp, (y - wrapBBox.minY) / wrUpp];
+
   return (
     <div style={{ borderBottom: "2px solid var(--ink-faint)", padding: "10px 12px" }}>
       <div style={{ fontSize: 10.5, color: "var(--ink-muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>This wall</div>
@@ -574,7 +641,18 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
         </label>
       </div>
 
-      {hasElev ? (
+      {hasElev && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+          <button type="button" onClick={() => setWrapView(false)}
+            title="The flat elevation strip, corners marked as dashed fold-lines"
+            style={toggleBtn(!wrapView)}>Unwrapped</button>
+          <button type="button" onClick={() => setWrapView(true)}
+            title="The strip folded at each corner's plan turn angle, like the wall run itself"
+            style={toggleBtn(wrapView)}>Wrapped</button>
+        </div>
+      )}
+
+      {hasElev && !wrapView && (
         <svg viewBox={`${-PAD} ${-PAD} ${w_px + PAD * 2} ${h_px + PAD * 2}`} width="100%" style={{ display: "block", border: "1px solid var(--ink-faint)", background: "var(--paper-cream)" }}>
           {/* Floor-at-bottom V-flip (a wall elevation reads floor-up, SVG
               draws top-down): strip y=0 (floor) -> SVG y=h_px (box bottom). */}
@@ -602,7 +680,41 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
             </text>
           ))}
         </svg>
-      ) : (
+      )}
+
+      {hasElev && wrapView && (
+        // Task 2 — the wrapped/fanned view: SAME V-flip convention as the
+        // unwrapped strip above (wallWrappedLayout's tiles/hinges are in the
+        // SAME y-up "natural" elevation frame tileWallElevation.ts's tiles
+        // are, un-rotated segments included — only rotated ones move), just
+        // over `wrapBBox`'s own (possibly off-origin, a rotated segment can
+        // land anywhere) extent instead of the flat [0,width]x[0,height] box.
+        <svg viewBox={`${-PAD} ${-PAD} ${wrap_w_px + PAD * 2} ${wrap_h_px + PAD * 2}`} width="100%" style={{ display: "block", border: "1px solid var(--ink-faint)", background: "var(--paper-cream)" }}>
+          <g transform={`matrix(1,0,0,-1,0,${wrap_h_px})`}>
+            {wrapped.tiles.map((t, i) => {
+              const isCut = t.cls === "cut";
+              const color = t.color;
+              const pts = t.pts.map((p) => toWrapPx(p).join(",")).join(" ");
+              return (
+                <polygon key={i} points={pts}
+                  fill={color + (isCut ? "40" : "88")} stroke={color}
+                  strokeWidth={t.cls === "corner" ? 2 : 1}
+                  strokeDasharray={isCut ? "3 2" : undefined} />
+              );
+            })}
+            {wrapped.hinges.map((h, i) => {
+              const [hx, hy] = toWrapPx([h.x, h.y]);
+              return (
+                <circle key={i} cx={hx} cy={hy} r={3}
+                  fill={h.kind === "inside" ? "var(--cobalt)" : "var(--ink-secondary)"}
+                  stroke="var(--paper-bright)" strokeWidth={1} />
+              );
+            })}
+          </g>
+        </svg>
+      )}
+
+      {!hasElev && (
         <div style={{ fontSize: 10.5, color: "var(--ink-muted)", padding: "8px 0", lineHeight: 1.5 }}>
           No elevation preview yet — this wall isn't figured (unscaled sheet, or a reversing/degenerate run).
         </div>

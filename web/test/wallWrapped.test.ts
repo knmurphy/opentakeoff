@@ -9,7 +9,7 @@
 // without dragging in tileSolve/summarizeWallShape.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { wallWrappedLayout } from "../src/lib/wallWrapped.ts";
+import { wallWrappedLayout, runTurnAngles } from "../src/lib/wallWrapped.ts";
 
 const grid = (cols: number, rows: number) => {
   const t = [];
@@ -81,4 +81,47 @@ test("two 90° folds accumulate: a tile fully past both folds is rotated ~180°"
   });
   assert.ok(flipped, "a post-both-folds tile's bottom edge reversed direction (~180° cumulative rotation)");
   assert.equal(w.tiles.length, 6);
+});
+
+// Task 2 (2026-08-29 wall-tile-slice-c) — runTurnAngles: the plan-side
+// derivation that feeds wallWrappedLayout's turnAngles above. verts_norm
+// here is in this repo's normalized-image convention, y DOWN (screen
+// space) — the brief's own worked example.
+test("runTurnAngles: a straight run (2 verts, no folds) → []", () => {
+  const angles = runTurnAngles([[0, 0], [0.3, 0]], []);
+  assert.deepEqual(angles, []);
+});
+
+test("runTurnAngles: east→south L-run → one angle, literal sign + magnitude ≈ π/2", () => {
+  // in=(0.3,0)-(0,0)=(0.3,0); out=(0.3,0.2)-(0.3,0)=(0,0.2)
+  // cross = 0.3*0.2 - 0*0 = 0.06 (>0); dot = 0.3*0 + 0*0.2 = 0
+  // atan2(0.06, 0) = +π/2
+  const verts_norm: [number, number][] = [[0, 0], [0.3, 0], [0.3, 0.2]];
+  const folds = [{ x: 0.3, kind: "inside", vertexIndex: 1 }];
+  const angles = runTurnAngles(verts_norm, folds);
+  assert.equal(angles.length, 1);
+  assert.ok(angles[0] > 0, "positive sign for this east→south geometry");
+  assert.ok(Math.abs(angles[0] - Math.PI / 2) < 1e-9, `expected +π/2, got ${angles[0]}`);
+});
+
+test("runTurnAngles: the mirror run (east→north) flips the sign, same magnitude", () => {
+  const verts_norm: [number, number][] = [[0, 0], [0.3, 0], [0.3, -0.2]];
+  const folds = [{ x: 0.3, kind: "outside", vertexIndex: 1 }];
+  const angles = runTurnAngles(verts_norm, folds);
+  assert.equal(angles.length, 1);
+  assert.ok(angles[0] < 0, "negative sign for the mirrored (east→north) geometry");
+  assert.ok(Math.abs(angles[0] + Math.PI / 2) < 1e-9, `expected -π/2, got ${angles[0]}`);
+});
+
+test("runTurnAngles: multiple folds align 1:1 with the folds array, in order", () => {
+  // a run with two 90° turns, same-sense (east→south→east — a dogleg)
+  const verts_norm: [number, number][] = [[0, 0], [0.3, 0], [0.3, 0.2], [0.6, 0.2]];
+  const folds = [
+    { x: 0.3, kind: "inside", vertexIndex: 1 },
+    { x: 0.5, kind: "outside", vertexIndex: 2 },
+  ];
+  const angles = runTurnAngles(verts_norm, folds);
+  assert.equal(angles.length, 2);
+  assert.ok(Math.abs(angles[0] - Math.PI / 2) < 1e-9);
+  assert.ok(Math.abs(angles[1] + Math.PI / 2) < 1e-9, "second turn (south→east) bends the opposite way");
 });
