@@ -18,6 +18,7 @@ import { tileConfig } from "../lib/tileSetup.ts";
 import { enumerateSlots } from "../lib/tilePatterns/enumerateSlots.ts";
 import { PLANK_ARITY } from "../lib/tilePatterns/slotKey.ts";
 import { wallElevationLayout } from "../lib/tileWallElevation.ts";
+import { developedElevationLayout, developedViewBox } from "../lib/developedElevation.ts";
 import { elevationButtonState } from "../lib/wallElevationPdf.ts";
 
 const WALL_CORNER_MODES = [
@@ -479,21 +480,28 @@ function RoomOverride({ selectedShape, effectiveConfig, skus, onTileLayout }) {
 // the shape-level face-side flip + endpoint-exposed toggles (written via
 // `onWallField`, TOP-LEVEL shape fields the wall engine reads directly —
 // NOT nested under tile_layout, see shapeCommands.js's `wallFields` policy
-// row) plus the per-shape elevation-strip preview. `selectedWall`
-// (`{wallStrips, folds, trim, joints, verts_norm}` or `null`, threaded from
+// row) plus the per-shape developed-elevation preview. `selectedWall`
+// (`{wallStrips, folds, trim, joints}` or `null`, threaded from
 // TakeoffCanvas's own `byShape` lookup — M4/ruling 1, NEVER the
-// condition's `ti`) drives the SVG via the pure `wallElevationLayout`
-// helper (tileWallElevation.ts); this component only converts its FEET
-// output to a small fixed-scale px viewBox and draws it — no engine math
-// here. Renders the controls even when `selectedWall` is null (an
-// unscaled sheet, or a shape excluded this pass — reversing/degenerate
-// run) so the panel never throws on an unfigured wall selection.
+// condition's `ti`) drives the SVG via `wallElevationLayout`
+// (tileWallElevation.ts, the single continuous flat strip in u/height
+// feet) piped into `developedElevationLayout` (developedElevation.ts, the
+// per-wall panel re-slice); this component only converts FEET output to a
+// small fixed-scale px viewBox and draws it — no engine math here.
+// Renders the controls even when `selectedWall` is null (an unscaled
+// sheet, or a shape excluded this pass — reversing/degenerate run) so the
+// panel never throws on an unfigured wall selection.
 //
 // (2026-08-29 wall-tile-slice-c v2) — the wrapped/fanned 2D-fold preview
 // that used to sit above this strip (wallWrapped.ts) is removed: research
 // found no prior art or drafting source that folds a wall run flat in 2D
 // at its true plan angle. The per-wall "developed elevation" panel view
-// (developedElevation.ts) is its replacement and is wired in separately.
+// (below, Task 2 v2) is its replacement: each wall draws as its own flat,
+// labeled panel ("Wall 1", "Wall 2", …), gap-separated, with a bold
+// vertical break-line + inside/outside marker at each corner — the NKBA
+// drafting convention (interior elevations = separate flat true-length
+// per-wall panels, corner = terminating break line), not a bent/folded
+// preview.
 // Target on-screen box the elevation strip fits INSIDE (preserving aspect,
 // "contain"-style — the binding dimension, width or height, hits its
 // target; the other comes in under). Fixed target dims, NOT a fixed
@@ -534,6 +542,19 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
   const skuColor = (skuId) => (skus || []).find((sk) => sk.id === skuId)?.color || "#888888";
   const elev = selectedWall ? wallElevationLayout(selectedWall.wallStrips, selectedWall.folds, skuColor) : null;
   const hasElev = !!elev && elev.width_ft > 0 && elev.height_ft > 0;
+  // developedElevationLayout re-slices the flat strip into one flat panel
+  // per wall (clip-and-split at each fold — a tile straddling a corner
+  // splits into a clipped piece per side, the wrap offcut-carry), keyed
+  // off `elev.folds`' own `{x, kind}` entries for `foldsU`/`foldKinds`.
+  const dev = hasElev
+    ? developedElevationLayout({
+        tiles: elev.tiles,
+        foldsU: elev.folds.map((f) => f.x),
+        foldKinds: elev.folds.map((f) => f.kind),
+        width_ft: elev.width_ft,
+        height_ft: elev.height_ft,
+      })
+    : null;
   // "?" mirrors generateWallElevationSheet's own fallback (TakeoffCanvas.jsx)
   // for a condition whose finish_tag somehow reads empty — the button's
   // label/enabled state must never disagree with what the handler it
@@ -543,14 +564,25 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
   const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
   const toggleBtn = (on) => ({ padding: "3px 7px", border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`, background: on ? "var(--cobalt)" : "var(--paper-bright)", color: on ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)" });
 
-  // PAD-ringed px viewBox so fold labels above the strip have room to draw.
-  const PAD = 16;
-  // feet-per-viewBox-unit: whichever dimension (width or height) is more
-  // demanding relative to its own target wins, so the drawn strip always
-  // fits fully inside TARGET_W×TARGET_H (never crops, never blows out).
-  const elUpp = hasElev ? Math.max(elev.width_ft / TARGET_W_PX, elev.height_ft / TARGET_H_PX, 0.005) : 0.06;
-  const w_px = hasElev ? elev.width_ft / elUpp : 0;
-  const h_px = hasElev ? elev.height_ft / elUpp : 0;
+  // PAD, in viewBox (px) units, rings the developed layout's own bbox with
+  // room for the "Wall N" label beneath each panel and the inside/outside
+  // marker above each break — `developedViewBox`'s `margin` arg.
+  const PAD = 18;
+  // feet-per-viewBox-unit computed off the DEVELOPED layout's own
+  // `total_width_ft`/`height_ft` (wider than `elev.width_ft` by the
+  // inter-panel gaps) — reusing `elev`'s own scale here would overflow the
+  // box by however many gaps the run folds through. Same "contain within
+  // TARGET_W×TARGET_H" policy as the old flat-strip render.
+  const devUpp = dev ? Math.max(dev.total_width_ft / TARGET_W_PX, dev.height_ft / TARGET_H_PX, 0.005) : 0.06;
+  const h_px = dev ? dev.height_ft / devUpp : 0;
+  // `developedViewBox` works in the SAME units as its input (here, feet) —
+  // PAD is in px/viewBox-units, so it's converted to an equivalent feet
+  // margin at this scale before the call, then the whole returned box is
+  // divided back down to px for the actual `viewBox` attribute.
+  const devVb = dev ? developedViewBox(dev, PAD * devUpp) : null;
+  const viewBoxPx = devVb
+    ? { x: devVb.x / devUpp, y: devVb.y / devUpp, width: devVb.width / devUpp, height: devVb.height / devUpp }
+    : null;
 
   return (
     <div style={{ borderBottom: "2px solid var(--ink-faint)", padding: "10px 12px" }}>
@@ -580,31 +612,55 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
         </label>
       </div>
 
-      {hasElev && (
-        <svg viewBox={`${-PAD} ${-PAD} ${w_px + PAD * 2} ${h_px + PAD * 2}`} width="100%" style={{ display: "block", border: "1px solid var(--ink-faint)", background: "var(--paper-cream)" }}>
+      {/* Task 2 v2 (2026-08-29 wall-tile-slice-c) — the developed
+          elevation: one flat, true-length panel PER WALL (in plan order),
+          gap-separated, each drawn at its own `panel.xOffset` (the panel's
+          OWN tiles are already panel-local, `0..segWidth_ft` — see
+          developedElevation.ts). A straddling tile (wrap mode, a fold at a
+          non-integer u) already arrives pre-split into per-panel pieces
+          from `developedElevationLayout` itself, so this render never
+          clips/crops anything on its own — it only offsets and draws. */}
+      {dev && viewBoxPx && (
+        <svg viewBox={`${viewBoxPx.x} ${viewBoxPx.y} ${viewBoxPx.width} ${viewBoxPx.height}`} width="100%" style={{ display: "block", border: "1px solid var(--ink-faint)", background: "var(--paper-cream)" }}>
           {/* Floor-at-bottom V-flip (a wall elevation reads floor-up, SVG
               draws top-down): strip y=0 (floor) -> SVG y=h_px (box bottom). */}
           <g transform={`matrix(1,0,0,-1,0,${h_px})`}>
-            {elev.tiles.map((t, i) => {
-              const isCut = t.cls === "cut";
-              const color = t.color;
-              return (
-                <rect key={i} x={t.x / elUpp} y={t.y / elUpp} width={t.w / elUpp} height={t.h / elUpp}
-                  fill={color + (isCut ? "40" : "88")} stroke={color}
-                  strokeWidth={t.cls === "corner" ? 2 : 1}
-                  strokeDasharray={isCut ? "3 2" : undefined} />
-              );
-            })}
-            {elev.folds.map((f, i) => (
-              <line key={i} x1={f.x / elUpp} y1={0} x2={f.x / elUpp} y2={h_px}
-                stroke="var(--ink)" strokeWidth={1.5} strokeDasharray="5 4" />
+            {dev.panels.map((p) =>
+              p.tiles.map((t, i) => {
+                const isCut = t.cls === "cut";
+                const color = t.color;
+                return (
+                  <rect key={`${p.index}-${i}`}
+                    x={(p.xOffset + t.x) / devUpp} y={t.y / devUpp}
+                    width={t.w / devUpp} height={t.h / devUpp}
+                    fill={color + (isCut ? "40" : "88")} stroke={color}
+                    strokeWidth={t.cls === "corner" ? 2 : 1}
+                    strokeDasharray={isCut ? "3 2" : undefined} />
+                );
+              })
+            )}
+            {/* Corner break-lines: bold, solid (distinct from a plain fold
+                dash) — the developed-elevation convention's terminating
+                vertical line between two independently-drawn panels. */}
+            {dev.breaks.map((b, i) => (
+              <line key={i} x1={b.x / devUpp} y1={0} x2={b.x / devUpp} y2={h_px}
+                stroke="var(--ink)" strokeWidth={2.5} />
             ))}
           </g>
-          {/* Fold labels drawn OUTSIDE the flipped group — text stays upright. */}
-          {elev.folds.map((f, i) => (
-            <text key={i} x={f.x / elUpp} y={-5} textAnchor="middle" fontSize={10} fontFamily="var(--f-mono)"
-              fill={f.kind === "inside" ? "var(--cobalt)" : "var(--ink-secondary)"}>
-              {f.kind}
+          {/* Labels drawn OUTSIDE the flipped group so text stays upright:
+              each break's inside/outside marker above the strip (same slot
+              the old fold label used), each panel's "Wall N" label beneath
+              its own segment. */}
+          {dev.breaks.map((b, i) => (
+            <text key={i} x={b.x / devUpp} y={-6} textAnchor="middle" fontSize={10} fontFamily="var(--f-mono)"
+              fill={b.kind === "inside" ? "var(--cobalt)" : "var(--ink-secondary)"}>
+              {b.kind}
+            </text>
+          ))}
+          {dev.panels.map((p) => (
+            <text key={p.index} x={(p.xOffset + p.segWidth_ft / 2) / devUpp} y={h_px + 14}
+              textAnchor="middle" fontSize={10} fontFamily="var(--f-mono)" fill="var(--ink-secondary)">
+              {p.label}
             </text>
           ))}
         </svg>
