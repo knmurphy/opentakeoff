@@ -10362,11 +10362,12 @@ export default function TakeoffCanvas() {
           // before the shared loop) — WallShapeCard renders its controls
           // without a preview in that case, never throws.
           const selWallSummary = selIsWall && selHasTile ? tileTakeoff.byShape.get(selShape.id) : null;
-          // Task 2 (2026-08-29 wall-tile-slice-c) — `verts_norm` rides along
-          // here (straight off `selShape`, the SAME plan vertices the wall
-          // engine itself unwrapped) purely so WallShapeCard's wrapped-view
-          // toggle can derive each fold's plan turn angle (runTurnAngles,
-          // wallWrapped.ts) without this component doing that math itself.
+          // `verts_norm` rides along here (straight off `selShape`, the SAME
+          // plan vertices the wall engine itself unwrapped). It fed the
+          // wrapped/fanned 2D-fold preview (wallWrapped.ts, removed —
+          // 2026-08-29 wall-tile-slice-c v2: no prior art folds a wall run
+          // flat in 2D at its true plan angle); left threaded through since
+          // a future per-wall-panel renderer may still want plan context.
           const selectedWall = selWallSummary
             ? { wallStrips: selWallSummary.wallStrips, folds: selWallSummary.folds, trim: selWallSummary.trim, joints: selWallSummary.joints, verts_norm: selShape.verts_norm }
             : null;
