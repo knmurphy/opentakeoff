@@ -130,6 +130,8 @@ import { tileWarnings } from "../lib/tileQA.ts";
 import { tileLayoutSig } from "../lib/tileLayoutSig.ts";
 import { edgeExposures } from "../lib/tileEdges/expose.ts";
 import { fieldRingForBand } from "../lib/tileEdges/band.ts";
+import { buildWallElevationPdf, wallElevationSheetName, wallElevationScaleRow } from "../lib/wallElevationPdf.ts";
+import { dimsChanged } from "../lib/wallElevationSheet.ts";
 // In-canvas takeoff agent — BYO-key tool-use loop (lib/agentLoop) aiming the
 // registry of deterministic tools (lib/agentTools); this file provides the
 // CAPABILITIES those tools close over and the review gate their proposals
@@ -462,6 +464,13 @@ export default function TakeoffCanvas() {
   // (rescaleSheet) clears the flag — the act is the confirmation.
   const [scaleUnconfirmed, setScaleUnconfirmed] = useState({});
   const confirmScale = (key) => setScaleUnconfirmed((m) => { if (!(key in m)) return m; const n = { ...m }; delete n[key]; return n; });
+  // Generated wall-elevation sheets only (Task 2, 2026-08-29 wall-tile-slice-b):
+  // sheet_id → the DRAWN strip dims (width_ft/height_ft) recorded at generation
+  // time — persisted alongside scale_source in the `sheets` payload array (rides
+  // the same per-sheet record, additive fields). Lets generateWallElevationSheet's
+  // dims-change confirm guard (I1) compare a regenerated wall's new dims against
+  // what was last actually drawn, without reloading/re-measuring the stored PDF.
+  const [wallElevDims, setWallElevDims] = useState({});
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const isNarrow = useIsNarrow();
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
@@ -1862,6 +1871,71 @@ export default function TakeoffCanvas() {
       setCommitMsg(`Opened ${names.length} sheet${names.length === 1 ? "" : "s"}${tail}.`);
     }
   }
+  // Slice B Task 2 (2026-08-29 wall-tile-slice-b) — turns a selected wall
+  // shape's Slice A tile summary into a real, stored elevation sheet: draws
+  // it (Task 1's buildWallElevationPdf), adds it to the plan set at its
+  // KNOWN scale (never the agent-set gate — we drew the page ourselves), and
+  // opens it. Reuses handleFiles' proven add/revision-reset/open recipe
+  // verbatim (evictDoc+forgetPages+setDocEpoch on a revision; refreshSheets
+  // THEN setOpenTabs THEN goToSheet — `sheets` must already carry the new
+  // key before it's added as a tab, or the `[sheets, stitchById]`
+  // tab-liveness effect above would prune it right back out). No button
+  // calls this yet (Task 3) — this is the handler + its wired-up seam.
+  async function generateWallElevationSheet(shape) {
+    // defensive — the prop closure that reaches this (TilePanel's
+    // onGenerateElevation, bound to selShape) is built whenever the panel is
+    // open, whether or not a wall is actually selected.
+    if (!shape?.id) return;
+    // the SAME synchronous value the Slice A panel reads (selWallSummary,
+    // below) — no async/staleness. Absent/empty on an unscaled sheet or a
+    // reversing/degenerate run the shared takeoff loop already excluded.
+    const summary = tileTakeoff.byShape.get(shape.id);
+    if (!summary?.wallStrips?.length) return;
+    const cond = condById[shape.condition_id];
+    if (!cond) return;   // defensive — a shape whose condition doesn't resolve has nothing to tag/color from
+    const tag = cond.finish_tag || "?";
+    const skus = cond.tile_setup?.skus || [];
+    // PURE lookup, no allocator/counter (M4, plan review): an unchanged wall
+    // regenerates byte-identically, and a same-dims SKU/color-only regen
+    // never trips the dims-change guard below.
+    const skuColor = (id) => skus.find((s) => s.id === id)?.color ?? "#888888";
+    const name = wallElevationSheetName(tag, shape.id);
+    const r = await buildWallElevationPdf({ wallStrips: summary.wallStrips, folds: summary.folds || [], skuColor, tag, name });
+
+    // I1: only a wall whose sheet already exists AND is actually bound to
+    // shapes AND whose drawn dims changed needs the human's go-ahead — never
+    // a first generation, and never a same-dims SKU/color-only regen.
+    if (sheets.some((s) => s.name === name) && shapes.some((s) => s.sheet_id === name)) {
+      const next = { width_ft: r.width_ft, height_ft: r.height_ft };
+      if (dimsChanged(wallElevDims[name], next)
+        && !window.confirm("This wall's size changed — marks on its elevation sheet may shift. Regenerate anyway?")) {
+        return;
+      }
+    }
+
+    const added = await store.addPdf(r.file);
+    // M1 — idiomatic scale path: a KNOWN scale (we drew the page ourselves),
+    // so scaleUnconfirmed is deliberately left untouched (absence ===
+    // confirmed; the gate is `scaleUnconfirmed[key] === false`).
+    const row = wallElevationScaleRow(r.upp);
+    setScales((m) => ({ ...m, [name]: row.units_per_px }));
+    setScaleSources((m) => ({ ...m, [name]: row.scale_source }));
+    setWallElevDims((m) => ({ ...m, [name]: { width_ft: r.width_ft, height_ft: r.height_ft } }));
+
+    // M2 — cache reset on revision: the same recipe handleFiles uses for a
+    // re-dropped file whose bytes changed.
+    if (added?.revised) {
+      evictDoc(name);
+      forgetPages([name]);
+      setDocEpoch((e) => e + 1);
+    }
+
+    // M2 — open: refreshSheets FIRST so `sheets` already carries `name`
+    // before it's added as a tab — see the recipe note above.
+    await refreshSheets();
+    setOpenTabs((t) => (t.includes(name) ? t : [...t, name]));
+    goToSheet(name);
+  }
   // The empty-project landing view (the Drive picker for an empty cloud project,
   // else the gallery) depends on BOTH the sheet list and the annotations (open
   // tabs), which load in two racing mount effects. These flags let whichever
@@ -2005,6 +2079,7 @@ export default function TakeoffCanvas() {
     const sc = {};
     const src = {};
     const unconf = {};
+    const elevDims = {};
     for (const s of a.sheets || []) if (s.sheet_id && s.units_per_px) {
       sc[s.sheet_id] = s.units_per_px;
       // provenance is additive — old projects lack it (report shows "unknown").
@@ -2013,10 +2088,17 @@ export default function TakeoffCanvas() {
       // autosave would persist the loss. Display already falls back safely.
       if (typeof s.scale_source === "string" && s.scale_source) src[s.sheet_id] = s.scale_source;
       if (s.scale_confirmed === false) unconf[s.sheet_id] = false;   // scale gate: agent-set, awaiting a human
+      // additive, generated-elevation-sheets only (Task 2): the drawn dims at
+      // last generation, for the dims-change confirm guard — absent on every
+      // ordinary (non-generated) sheet and on payloads that predate it.
+      if (Number.isFinite(s.elev_width_ft) && Number.isFinite(s.elev_height_ft)) {
+        elevDims[s.sheet_id] = { width_ft: s.elev_width_ft, height_ft: s.elev_height_ft };
+      }
     }
     setScales(sc);
     setScaleSources(src);
     setScaleUnconfirmed(unconf);
+    setWallElevDims(elevDims);
     // display units ride the payload (additive) — a metric project opens metric
     // on any machine; payloads without the field keep this browser's toggle
     if (a.units === "metric" || a.units === "imperial") setUnits(a.units);
@@ -2678,7 +2760,7 @@ export default function TakeoffCanvas() {
     // units is additive and diff-only (the sheet_levels convention): imperial —
     // the default — omits the key, so an old imperial project's payload is
     // byte-identical on round-trip; only a metric project carries the field.
-    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}), ...(scaleUnconfirmed[sheet_id] === false ? { scale_confirmed: false } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, ...(approvals.length ? { approvals } : {}), ...(rules.length ? { rules } : {}), sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(stitches.length ? { stitches } : {}), ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}), ...(Object.keys(layerOverrides).length ? { layer_overrides: layerOverrides } : {}), ...(Object.keys(provCounters.shapes_deleted).length ? { provenance_counters: provCounters } : {}) };
+    return { project_name: projectName, ...(units === "metric" ? { units } : {}), ...(Object.values(clientInfo).some((v) => v && String(v).trim()) ? { client_info: clientInfo } : {}), sheets: Object.entries(scales).map(([sheet_id, units_per_px]) => ({ sheet_id, units_per_px, ...(scaleSources[sheet_id] ? { scale_source: scaleSources[sheet_id] } : {}), ...(scaleUnconfirmed[sheet_id] === false ? { scale_confirmed: false } : {}), ...(wallElevDims[sheet_id] ? { elev_width_ft: wallElevDims[sheet_id].width_ft, elev_height_ft: wallElevDims[sheet_id].height_ft } : {}) })), conditions, ...(conditionColumns.length ? { condition_columns: conditionColumns } : {}), ...(shapeLabels.length ? { shape_labels: shapeLabels } : {}), ...(pinned.length ? { palette: pinned } : {}), shapes, markups, rfis, ...(approvals.length ? { approvals } : {}), ...(rules.length ? { rules } : {}), sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, ...(stitches.length ? { stitches } : {}), ...(Object.keys(sheetLevels).length ? { sheet_levels: sheetLevels } : {}), ...(Object.keys(layerOverrides).length ? { layer_overrides: layerOverrides } : {}), ...(Object.keys(provCounters.shapes_deleted).length ? { provenance_counters: provCounters } : {}) };
   };
   // Runtime restore of a saved payload — the Revisions panel's Restore lands
   // here. A runtime load (unlike mount) can interrupt work in
@@ -2911,7 +2993,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, markups, approvals, rfis, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units]);
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, wallElevDims, markups, approvals, rfis, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
@@ -10293,6 +10375,11 @@ export default function TakeoffCanvas() {
               }}
               onTileLayout={(shapeId, patch) => dispatchShape({ type: "tileLayout", id: shapeId, patch })}
               onWallField={(shapeId, patch) => dispatchShape({ type: "wallFields", id: shapeId, patch })}
+              // Task 3 wires the actual button (WallShapeCard) — pre-bound to
+              // the CURRENTLY selected shape (not TilePanel's own narrowed
+              // `selectedShape` prop, which omits condition_id) so the button
+              // needs no arguments and no knowledge of the shape's own fields.
+              onGenerateElevation={() => generateWallElevationSheet(selShape)}
               warnings={tileWarningsList} onFocusWarning={focusTileWarning}
               onClose={() => setTilePanelOpen(false)}
             />
