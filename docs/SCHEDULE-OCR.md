@@ -185,6 +185,34 @@ subject to the stale-section gap; its higher exact-recall comes from word-level
 over-segmentation happening to feed the column banding, while its 5–8% CER lands
 as editable field typos.
 
+### Reproduction — 2026-08-31, tesseract.js 7 repair (matched-DPI, same fixture)
+
+The table above's tesseract rows predate **tesseract.js 7**, which removed the
+flat `data.words` output the benchmark adapter read — under v7 the original
+adapter silently emits ZERO words (0/28 rows at every DPI; the published 144-DPI
+row matches the repaired run exactly, so the original numbers are honest for the
+version they ran). `scripts/lib/tesseractEngine.mjs` now walks the
+blocks/paragraphs/lines/words tree. Re-run at matched DPI, tesseract.js 7.0.0,
+PSM 3, same fixture + golden rows:
+
+| DPI | tesseract recall / precision / CER / category | paddle (unchanged, reproduces) |
+|---|---|---|
+| 144 | 96.4% / 100% / 7.2% / **100%** | 78.6% / 88.0% / 0.7% / 59.1% |
+| 216 | 92.9% / 92.9% / 8.3% / 100% | 92.9% / 96.3% / 0.8% / 57.7% |
+| 288 | 96.4% / 96.4% / 5.5% / 100% | 92.9% / 96.3% / 0.9% / 53.8% |
+
+Two corrections to the reading above: (1) the **CER gap is matched-DPI real**
+— 6–10× at every DPI, so "~10× more accurately" stands without any
+best-vs-best framing; (2) the † footnote's "~80%, equally subject to the
+stale-section gap" was pessimistic — the repaired run measures tesseract
+**category at 100%** on this fixture; the stale-section latch is
+PaddleOCR's weakness here, not a shared one. Net engine picture after repair:
+**tesseract finds and classifies the rows as well or better; PaddleOCR types
+them ~6–10× more cleanly.** Raw numbers: `/tmp/engine-bench*.json` (run:
+`node --import tsx scripts/schedule-ocr-engine-benchmark.mjs --engines
+tesseract,paddle --dpi 144,216,288`, engines installed per the header as
+`npm i -D tesseract.js@7.0.0 ppu-paddle-ocr`).
+
 ### The finding that redirects the roadmap again
 
 **PaddleOCR reads characters ~10× more accurately than tesseract (0.8% vs 5.5–8%

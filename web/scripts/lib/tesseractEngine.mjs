@@ -25,12 +25,21 @@ export async function createTesseractEngine({ psm = 3 } = {}) {
     async recognize(rendered, { dpi } = {}) {
       if (dpi) await worker.setParameters({ user_defined_dpi: String(Math.round(dpi)) });
       const { data } = await worker.recognize(rendered.png, {}, { blocks: true });
+      // tesseract.js 7 populates blocks/paragraphs/lines/words — the flat
+      // data.words list is gone (bench repair 2026-08-31: the original read
+      // data.words, which silently yields ZERO words on tesseract.js 7 and
+      // under-measures the tesseract floor)
       const words = [];
-      for (const wd of data.words ?? []) {
-        const str = (wd.text ?? "").trim();
-        if (!str) continue;
-        words.push(cropBoxToWord(str, wd.bbox, rendered.geometry, (wd.confidence ?? 0) / 100));
-      }
+      const walk = (n) => {
+        if (!n) return;
+        if (n.words) for (const wd of n.words) {
+          const str = (wd.text ?? "").trim();
+          if (!str) continue;
+          words.push(cropBoxToWord(str, wd.bbox, rendered.geometry, (wd.confidence ?? 0) / 100));
+        }
+        for (const k of ["lines", "paragraphs", "blocks"]) if (n[k]) for (const c of n[k]) walk(c);
+      };
+      walk(data);
       return words;
     },
     dispose: () => worker.terminate(),
