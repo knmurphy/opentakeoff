@@ -238,17 +238,64 @@ single-thread-WASM / WebGPU envelope is Experiment 4/5.
    is missed — the change converts dropped rows into emitted-but-miscategorized,
    default-checked rows; a strictly better failure, but a real open gap), plus
    the still-pinned remarks→SIZE banding. All numbers are the demo sheet only.
-5. **Browser deployability** — PaddleOCR inside a worker under the real
+5. **Category correctness + corpus breadth (do these before/with deployment).**
+   The two open gaps the adversarial review surfaced, both blocking on the same
+   missing asset: more schedules. (a) *Category* is 38–58% on the OCR path
+   because a stale section latches when a mid-table header is missed — candidate
+   fixes: clear the section at a blank band between rows, or attach a
+   confidence flag to inferred categories and surface it in the import dialog.
+   (b) *Breadth*: today's numbers are n=1. Every additional VECTOR schedule is
+   free ground truth (`scripts/make-schedule-ocr-fixture.mjs` + a hand-authored
+   golden), and a few genuinely SCANNED sets with hand-labeled golden rows are
+   the only irreplaceable asset in this plan — capture them from real projects.
+6. **Browser deployability** — PaddleOCR inside a worker under the real
    constraint envelope (single-thread WASM SIMD / WebGPU, no COOP/COEP),
-   measuring seconds-per-schedule, memory, bundle + model weight. ppu-paddle-ocr
-   ships for exactly this; the Node timings above (~5–12 s) are a loose upper
-   bound.
-6. **Only if a measured gap remains: fine-tune** a recognition model on
-   synthetic schedule cells (mixed fonts/casings/sizes/degradations) and score
-   the delta on held-out real scans. Experiment 3 suggests this is unlikely to
-   be needed for text accuracy — PaddleOCR's CER is already excellent.
+   wired behind the existing `importScheduleFromScan` gate, emitting `OcrWord[]`
+   into the same `parseSchedule`. Measure seconds-per-schedule, memory, and
+   bundle + model weight; stage the model same-origin like the voice model
+   (`docs/VOICE.md`). ppu-paddle-ocr ships for exactly this; the Node timings
+   above (~5–12 s) are a loose upper bound. Fine-tuning a recognizer on
+   synthetic cells is a step 7 only if a *measured* text gap remains —
+   Experiment 3 says PaddleOCR's CER (0.8%) already clears the bar, so this is
+   unlikely to be needed.
 
-The corpus needs breadth to generalize these single-schedule numbers: more
-vector schedules (every one is free ground truth via the fixture script) and a
-handful of genuinely scanned sets with hand-labeled golden rows — the only
-irreplaceable asset in this plan.
+## Continuing this work (resume here)
+
+State as of 2026-08-31, branch `claude/browser-ocr-library-f3le2q` (steps 0–4
+done, green: `cd web && npm run check`). The durable record is this doc + the
+spec + the committed fixtures/tests — the container is disposable, the branch is
+not.
+
+**Where the pieces live**
+- Pure, shipped: `web/src/lib/ocr/{types,noise,score,raster}.ts` (engine
+  contract, noise oracle, scoring, coordinate mapping) and the parser
+  `web/src/lib/scheduleParse.ts` (the `OcrWord[] → ScheduleRow[]` seam).
+- Tests (engine-free, deterministic): `web/test/scheduleOcr.test.ts`,
+  `web/test/scheduleParse.test.ts`. Fixtures + real captured PaddleOCR output:
+  `web/test/fixtures/schedule-ocr/`.
+- Benchmarks (opt-in, NOT committed as deps): `npm i -D tesseract.js
+  ppu-paddle-ocr`, then `web/scripts/schedule-ocr-benchmark.mjs` (oracle sweep)
+  and `web/scripts/schedule-ocr-engine-benchmark.mjs` (engine ceiling). Models
+  download to `~/.cache`; nothing here bloats the repo. Re-capture fixtures with
+  `web/scripts/capture-paddle-tokens.mjs`.
+- Specs: `docs/SCHEDULE-CELL-PARSING-SPEC.md` (step 4) is the SDD template to
+  copy for the next step.
+
+**The method (apply to every step, as steps 1–4 did)**
+1. **SDD** — write a spec first (problem, desired behavior, invariants that must
+   not regress, acceptance criteria as measurable numbers), like
+   `docs/SCHEDULE-CELL-PARSING-SPEC.md`.
+2. **TDD** — encode the acceptance criteria as tests against committed
+   deterministic fixtures (capture real engine output once, commit it, so tests
+   never need the engine); watch them fail, then implement to green.
+3. **Adversarial review cycle** — spawn ≥3 subagents with ML/OCR experience and
+   distinct lenses (methodology/eval-validity, parser correctness, test/spec
+   rigor); fix every finding and re-review the SAME agents until all PASS. Round
+   1 here was unanimous NEEDS-CHANGES and caught real bugs + overclaiming;
+   budget for it.
+4. **Cleanup** — `npm prune` the opt-in engines, clear `~/.cache`, remove temp
+   files; the committed fixtures keep the suite runnable engine-free.
+5. **Guard the invariants** — the shipped vector text-layer path must stay
+   byte-for-byte unchanged (golden-28: 28 rows / 100% / 20 perfect / 0 dup); no
+   conclusion is stated without an "n=1 / demo sheet" qualifier until the corpus
+   has breadth.
