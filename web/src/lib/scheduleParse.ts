@@ -180,6 +180,29 @@ function clusterRows(tokens: Token[]): Token[][] {
 }
 
 const cx = (t: Token) => t.x + 0; // x is the left edge; header cells left-align, so left edge anchors best
+const rowCy = (r: Token[]) => r.reduce((s, t) => s + t.y, 0) / r.length;
+
+// Blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md): a mid-table
+// section header an OCR engine DROPS still leaves a vertical band — a gap larger
+// than the table's typical data-row gap. Keyed on the MEDIAN-RELATIVE gap, never
+// an absolute k·h: the vector text layer (cap-height) and an OCR engine (full
+// glyph extent) scale token height differently, so an absolute multiple that
+// fires on an OCR band also fires on every vector row. Below the header a vector
+// table's gaps are ≤1.36× its median; an OCR band is ≥2.7×. K=1.6 sits in the
+// valley (n=1 demo sheet — the mechanism is layout-agnostic, the constant is not
+// yet corpus-validated: step 5b).
+const BAND_GAP_K = 1.6;
+const MIN_GAP_SAMPLES = 4; // too few rows → the median is noise → reset disabled
+
+// Median gap between consecutive clustered rows from `from` onward, or null when
+// there are too few gaps to trust the median (a tiny table keeps step-4 behavior).
+function medianRowGap(rows: Token[][], from: number): number | null {
+  const gaps: number[] = [];
+  for (let i = from + 1; i < rows.length; i++) gaps.push(rowCy(rows[i]) - rowCy(rows[i - 1]));
+  if (gaps.length < MIN_GAP_SAMPLES) return null;
+  const sorted = [...gaps].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
 
 // Find the header row and return its column anchors (x of each found header
 // token, sorted) plus its INDEX in `rows` (so the caller processes only rows
@@ -238,11 +261,18 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
     if (s) { section = s.key; sectionCat = s.cat; }
   }
 
+  // The reset needs the table's typical row pitch; null on a tiny table (keeps
+  // step-4 behavior there — the median would be noise).
+  const bandGap = medianRowGap(rows, headerIdx);
+  let prevCy = rowCy(rows[headerIdx]);
+
   const out: ScheduleRow[] = [];
   // Only rows BELOW the header are data. The header row itself (first cell
   // "CODE", code-shaped) and any title/page text above it are never rows.
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const r = rows[i];
+    const gap = rowCy(r) - prevCy;
+    prevCy = rowCy(r);
     // A repeated header (a second stacked table) is a separator, never data —
     // its "CODE" cell is code-shaped and would otherwise leak a row. It also
     // starts a NEW table, so clear the section (table 1's last section must not
@@ -251,6 +281,13 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
     // A section label updates the current category and is not itself a row.
     const s = asSectionRow(r);
     if (s) { section = s.key; sectionCat = s.cat; continue; }
+    // Blank-band reset: a gap far larger than the median data-row gap is the
+    // ghost of a section header the OCR engine dropped. Clear the stale section
+    // so this row takes an inferred (or "other") category instead of latching
+    // the section above the band — a base row must not bid as the floor above it
+    // (docs/SCHEDULE-SECTION-RESET-SPEC.md). Never fires on the vector path,
+    // where below-header gaps stay ≤1.36× the median.
+    if (bandGap !== null && gap > BAND_GAP_K * bandGap) { section = ""; sectionCat = null; }
     // A code-shaped first cell IS a row — NOT gated on a preceding section
     // header, which an OCR engine drops unpredictably and would take every row
     // beneath it down with it (docs/SCHEDULE-CELL-PARSING-SPEC.md). Fuzzy code

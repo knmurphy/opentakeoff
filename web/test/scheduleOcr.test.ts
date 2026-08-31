@@ -258,9 +258,15 @@ const paddleWords = (dpi: number): OcrWord[] =>
 
 // The acceptance bars the adversarial review insisted on: NOT a single exact-tag
 // recall number (which double-charges the parser for the engine's code-cell
-// CER), but rows-emitted + fuzzy-tag recall + precision, PLUS category pinned as
-// a documented-bad characterization so it can't silently worsen or be hidden
-// behind a blended average. All figures are the demo material schedule only.
+// CER), but rows-emitted + fuzzy-tag recall + precision, PLUS category — lifted
+// by the blank-band section reset (step 5a, docs/SCHEDULE-SECTION-RESET-SPEC.md)
+// but still pinned as a floor so it can't silently worsen or be hidden behind a
+// blended average. All figures are the demo material schedule only (n=1).
+// Category floor per DPI: the reset fixes the stale-latch DPIs (144: 50.0→59.1%,
+// 288: 38.5→53.8%) and is a no-op where the failure is pure inference, not a
+// stale latch (216 unchanged at 57.7% — most section words dropped, nothing to
+// reset). These are FLOORS below the measured values, not the values themselves.
+const CATEGORY_FLOOR: Record<(typeof PADDLE_DPIS)[number], number> = { 144: 0.55, 216: 0.55, 288: 0.5 };
 for (const dpi of PADDLE_DPIS) {
   test(`PaddleOCR @ ${dpi}dpi: rows survive the engine (emitted + fuzzy recall + precision)`, () => {
     const rows = parseSchedule(wordsToTokens(paddleWords(dpi)));
@@ -273,10 +279,11 @@ for (const dpi of PADDLE_DPIS) {
     assert.ok(fuzzy.rowRecall >= 0.87, `${dpi}dpi fuzzy recall ${(fuzzy.rowRecall * 100).toFixed(1)}% < 87%`);
     // precision guards against invented rows now the section gate is gone.
     assert.ok(exact.rowPrecision >= 0.85, `${dpi}dpi precision ${(exact.rowPrecision * 100).toFixed(1)}% < 85%`);
-    // KNOWN GAP, pinned so it's visible and can't regress to 0: category on the
-    // OCR path is 38–58% (a stale section latches when a mid-table header is
-    // missed; docs/SCHEDULE-CELL-PARSING-SPEC.md scopes this out). NOT solved.
-    assert.ok(exact.fieldAcc.category >= 0.35, `${dpi}dpi category ${(exact.fieldAcc.category * 100).toFixed(1)}% < 35%`);
+    // category floor, lifted by the section reset (was a flat 0.35 "documented
+    // bad"); the reset converts confidently-wrong latched categories into the
+    // correct one (prefix-inferable) or an honest "other". Still a KNOWN GAP on
+    // the OCR path — 216's pure-inference misses are out of scope (the spec).
+    assert.ok(exact.fieldAcc.category >= CATEGORY_FLOOR[dpi], `${dpi}dpi category ${(exact.fieldAcc.category * 100).toFixed(1)}% < ${CATEGORY_FLOOR[dpi] * 100}%`);
   });
 }
 
@@ -398,4 +405,129 @@ test("a section label ABOVE the column header still drives category (layout inva
   ];
   const rows = parseSchedule(wordsToTokens(words));
   assert.equal(rows.find((r) => r.finish_tag === "PT-1")?.category, "floor");
+});
+
+// ── blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md, step 5a) ────
+// A DROPPED mid-table section header must not latch its predecessor's category
+// onto the rows beneath it. The signal is the blank band the header left behind:
+// a vertical gap larger than K× the table's median data-row gap. The rule keys on
+// the MEDIAN-RELATIVE gap, never an absolute k·h — the vector text layer and
+// PaddleOCR measure token height differently, so an absolute multiple that fires
+// on an OCR band also fires on every vector row. Below the header a vector table's
+// gaps are ≤ 1.36× its median (so the reset never fires on the shipped path);
+// an OCR dropped-section band is ≥ 2.7× (so it always does). All real-fixture
+// figures are the demo material schedule only (n=1).
+
+test("the section reset never fires on the vector path: golden-28 category is still 100%", () => {
+  // The shipped invariant. On a vector schedule every section header is present
+  // and every below-header gap is ≤ 1.36× the median, so K=1.6 means no reset —
+  // category comes from the real section headers exactly as before, byte-for-byte.
+  const rows = parseSchedule(wordsToTokens(fixture.words));
+  const s = scoreRows(golden, rows);
+  assert.equal(rows.length, 28);
+  assert.equal(s.rowRecall, 1);
+  assert.equal(s.rowPrecision, 1);
+  assert.equal(s.fieldAcc.category, 1);
+  assert.equal(s.perfectRows, 20);
+});
+
+// Emission is category-only: the reset must not change WHICH rows are emitted at
+// any DPI, only their category. Pinned tag counts + recall/precision guard that.
+const EMITTED_ROWS: Record<(typeof PADDLE_DPIS)[number], number> = { 144: 25, 216: 27, 288: 27 };
+for (const dpi of PADDLE_DPIS) {
+  test(`section reset is category-only: emission at ${dpi}dpi is unchanged`, () => {
+    const rows = parseSchedule(wordsToTokens(paddleWords(dpi)));
+    assert.equal(rows.length, EMITTED_ROWS[dpi], `${dpi}dpi emitted ${rows.length}, expected ${EMITTED_ROWS[dpi]}`);
+    // RB-1 and CBT-1 (the BASE section) must read `base`, NOT the stale `floor`
+    // latched from FLOORING when the BASE header is dropped — the exact defect.
+    const rb = rows.find((r) => r.finish_tag === "RB-1");
+    const cbt = rows.find((r) => r.finish_tag === "CBT-1");
+    if (rb) assert.equal(rb.category, "base", `${dpi}dpi RB-1 latched ${rb.category}`);
+    if (cbt) assert.equal(cbt.category, "base", `${dpi}dpi CBT-1 latched ${cbt.category}`);
+    // and no base row is emitted default-checked as a floor (a silent wrong bid)
+    for (const tag of ["RB-1", "CBT-1"]) {
+      const r = rows.find((x) => x.finish_tag === tag);
+      if (r) assert.notEqual(r.category, "floor", `${dpi}dpi ${tag} still bids as floor`);
+    }
+  });
+}
+
+test("a dropped mid-table section header + a blank band: rows below do NOT inherit the prior category", () => {
+  // FLOORING present, BASE header dropped but its band (a 100px gap vs the 40px
+  // row pitch) remains. RB-1/CBT-1 must reset off FLOORING → prefix-inferred base.
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    ...hdrRow(40),
+    w("FLOORING", 40, 80),
+    w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
+    w("CPT-2", 40, 160), w("SHAW", 360, 160), w("TAN", 960, 160),
+    w("VCT-1", 40, 200), w("ARMSTRONG", 360, 200), w("WHITE", 960, 200),
+    // BASE header dropped by OCR — only the blank band (gap 100 ≫ 1.6×40) is left
+    w("RB-1", 40, 300), w("VPI", 360, 300), w("FAWN", 960, 300),
+    w("CBT-1", 40, 340), w("JJ", 360, 340), w("ROLLER", 960, 340),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  // floor rows above the band keep FLOORING's category
+  assert.equal(rows.find((r) => r.finish_tag === "CPT-1")?.category, "floor");
+  assert.equal(rows.find((r) => r.finish_tag === "VCT-1")?.category, "floor");
+  // rows below the band shed the stale FLOORING and infer base from the prefix
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "base");
+  assert.equal(rows.find((r) => r.finish_tag === "CBT-1")?.category, "base");
+});
+
+test("the reset keys on the band, not the code: a dropped header with NO band still latches (residual #1)", () => {
+  // Same as above but the rows are uniformly spaced (no blank band where BASE
+  // would sit). With no band signal, RB-1 inherits FLOORING — the documented,
+  // unrecoverable case. Pinning it keeps the reset honest about what it can see.
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    ...hdrRow(40),
+    w("FLOORING", 40, 80),
+    w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
+    w("CPT-2", 40, 160), w("SHAW", 360, 160), w("TAN", 960, 160),
+    w("VCT-1", 40, 200), w("ARMSTRONG", 360, 200), w("WHITE", 960, 200),
+    // BASE dropped AND no band — uniform 40px pitch continues
+    w("RB-1", 40, 240), w("VPI", 360, 240), w("FAWN", 960, 240),
+    w("CBT-1", 40, 280), w("JJ", 360, 280), w("ROLLER", 960, 280),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  // no band → stale FLOORING latches (the honest limit; better signal is future work)
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "floor");
+});
+
+test("a PRESENT mid-table section header wins over the reset (reset is a no-op there)", () => {
+  // Band present AND the BASE header survived: category comes from the real
+  // header, not from prefix inference — the reset clears then the header re-sets.
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    ...hdrRow(40),
+    w("FLOORING", 40, 80),
+    w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
+    w("CPT-2", 40, 160), w("SHAW", 360, 160), w("TAN", 960, 160),
+    w("VCT-1", 40, 200), w("ARM", 360, 200), w("WHITE", 960, 200),
+    w("BASE", 40, 300), // header survived, after the band
+    w("CT-3", 40, 340), w("DAL", 360, 340), w("WHITE", 960, 340), // CT prefix is ambiguous
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  // CT-3's prefix is ambiguous ("other"), but the BASE header is authoritative
+  assert.equal(rows.find((r) => r.finish_tag === "CT-3")?.category, "base");
+});
+
+test("the <4-gaps guard disables the reset on a tiny table", () => {
+  // Only 3 gaps below the header → the median is too small a sample to trust, so
+  // the reset is off and behavior is exactly step 4's (stale section latches).
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    ...hdrRow(40),
+    w("FLOORING", 40, 80),
+    w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
+    // a big gap, but too few rows to compute a stable median → reset suppressed
+    w("RB-1", 40, 260), w("VPI", 360, 260), w("FAWN", 960, 260),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "floor");
 });
