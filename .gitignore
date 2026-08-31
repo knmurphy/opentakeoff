@@ -49,3 +49,7 @@ mcp/dist-smithery/
 # Voice model artifacts (~45 MB) — staged by web/scripts/fetch-voice-model.mjs
 # into public/ for same-origin serving; never committed (RFC #59)
 web/public/models/
+
+# OCR reader artifacts (~25 MB) — staged by web/scripts/stage-ocr.mjs
+# into public/ for same-origin serving; never committed (Copy-text tool)
+web/public/ocr/

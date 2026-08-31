@@ -8,7 +8,9 @@
 // the canvas instantiates. Kept here (not in the canvas) so the column math is
 // testable — the sheets.ts / oneclick.ts precedent.
 
-export type Token = { str: string; x: number; y: number; h: number };
+// ang: baseline tilt in degrees, [0,180) — 0 horizontal, 90 vertical
+// (extractDimTexts' convention). Optional: OCR words carry no angle.
+export type Token = { str: string; x: number; y: number; h: number; ang?: number };
 
 export type Category = "floor" | "base" | "wall" | "transition" | "ceiling" | "other";
 

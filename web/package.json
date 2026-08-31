@@ -7,7 +7,9 @@
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/stage-ocr.mjs && vite build",
+    "postinstall": "node scripts/stage-ocr.mjs",
+    "stage:ocr": "node scripts/stage-ocr.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
@@ -34,9 +36,11 @@
     "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router": "^7.18.2"
+    "react-router": "^7.18.2",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
     "@types/node": "^22.19.21",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

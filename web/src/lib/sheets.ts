@@ -263,21 +263,32 @@ export function extractDimTexts(textContent: TextContentLike, viewport: Viewport
 // grows downward, h is the cap height — exactly what parseSchedule() clusters on.
 // A vector plan needs no OCR: this IS the extraction. Returns [] for a raster
 // page (no text items in the box) so the caller can fall back to the OCR path.
+// ang is the baseline tilt (extractDimTexts' formula) — the Copy-text marquee
+// filters rotated runs on it; the schedule path ignores it. opts.boxIntersects
+// widens containment from "left edge + baseline point inside" (the schedule
+// contract, unchanged) to "glyph box [x,x+w]×[y−h,y] meets the rect" — a prose
+// line whose baseline sits a hair below the box still copies.
 export function extractRegionText(
   textContent: TextContentLike,
   viewport: Viewport,
   rect: { x0: number; y0: number; x1: number; y1: number },
+  opts?: { boxIntersects?: boolean },
 ): Token[] {
   const x0 = Math.min(rect.x0, rect.x1), x1 = Math.max(rect.x0, rect.x1);
   const y0 = Math.min(rect.y0, rect.y1), y1 = Math.max(rect.y0, rect.y1);
+  const vs = Math.hypot(viewport.transform[0], viewport.transform[1]) || 1;
   const out: Token[] = [];
   for (const it of textContent.items || []) {
     const str = it.str || "";
     if (!str.trim()) continue;
     const t = pdfjsLib.Util.transform(viewport.transform, it.transform);
     const x = t[4], y = t[5], h = Math.hypot(t[2], t[3]) || it.height || 0;
-    if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-    out.push({ str, x, y, h });
+    const ang = ((Math.atan2(t[1], t[0]) * 180 / Math.PI % 180) + 180) % 180;
+    if (opts?.boxIntersects) {
+      const w = (it.width || 0) * vs;   // extractTextMarks' px conversion
+      if (x + w < x0 || x > x1 || y < y0 || y - h > y1) continue;
+    } else if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+    out.push({ str, x, y, h, ang });
   }
   return out;
 }

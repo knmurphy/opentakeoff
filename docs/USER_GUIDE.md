@@ -459,6 +459,12 @@ The top-right readout tracks the armed tool: totals for the tracing tools, `W ×
 
 Under the condition total sits **MEASUREMENTS**—a numbered tally, in draw order, of every linear run and wall on the active condition across the open sheets. A linear run reads its length (`01 47.2 LF linear`); a wall reads the tape math (`03 39.1 LF × 8 ft = 313.1 SF`), using that wall's own height where one is set and the condition height otherwise. The lines add up to the totals above them, so a wall-tile number can be checked line by line without opening the panel. Metric reports convert each line (`11.9 m × 2.44 m = 29.1 m²`). Floor areas and counts are not listed—their check is the shape itself.
 
+### Copy text
+
+**Copy text** (`T`) lifts words off the sheet onto your clipboard—spec notes, a schedule block, a title-block paragraph. Two clicks, the marquee idiom of Import from schedule: the first click drops a corner, the second draws the box and copies what's inside. A receipt at the top right shows the line count, a preview to check against the sheet, and where the words came from—**text layer** (vector sheets: exact, instant, offline) or **OCR** with its confidence (scans and text-less exports: recognition runs entirely on your device, and the reader's files are fetched same-origin only when you first read a scan). Rotated text—dimension strings, vertical headers—never garbles a line: it's skipped and the receipt says how many. If the environment refuses clipboard writes (an embedded frame, say), the receipt stays up with the full text and a Copy button instead of pretending.
+
+One paragraph per box: marquee the paragraph itself. A box drawn across two columns interleaves their lines—copy each column separately.
+
 ---
 
 ## 6. One-Click Area
@@ -861,6 +867,7 @@ Every shortcut in the app, verified against the code. Letter keys are suppressed
 | `⇧D` | Deduct rectangle |
 | `H` | Highlighter |
 | `N` | Dimension line—a standalone length label at the sheet's scale (markup, never counted) |
+| `T` | Copy text—marquee a note, paragraph, or schedule block; what the box says goes on your clipboard (see [§5](#5-the-measuring-tools)) |
 | `K` | Check a dimension |
 | `V` | Select |
 | `G` | Sheet gallery |

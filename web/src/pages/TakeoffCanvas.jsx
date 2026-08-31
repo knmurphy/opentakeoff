@@ -41,6 +41,9 @@ import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEdit
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
+import { assembleLines, linesToText } from "../lib/textlines";
+import { wordsToTokens } from "../lib/ocr/types";
+import { ocrRegion, OCR_NOT_STAGED } from "../lib/ocr/tesseract";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isStitchKey, mintStitchId, sanitizeStitches, autoButt, stitchExtent, alignMembers, seamClips, mergePoints, mergeSegs, stitchAlive, stitchLayoutSig } from "../lib/stitches";
 import { isCanvasBusy } from "../lib/canvasBusy";
@@ -251,6 +254,7 @@ const TOOL_VERB = {
   schedule: "find_schedule", highlighter: "annotate", cloud: "annotate",
   callout: "annotate", text: "annotate", highlight: "annotate",
   arrow: "annotate", dimension: "annotate", stamp: "annotate", bubble: "annotate",
+  textcopy: "read_sheet_text",
 };
 
 // Pure geometry helpers (star/cloud paths, snap grid, angle lock, metrics,
@@ -726,6 +730,16 @@ export default function TakeoffCanvas() {
   // ── the Symbol tool (#264) — same two-click marquee idiom as schedule ─────
   const [symbolAnchor, setSymbolAnchor] = useState(null);     // first marquee corner, isolated like scheduleAnchor
   const [imageAnchor, setImageAnchor] = useState(null);       // first marquee corner for the "image" screenshot tool, isolated like scheduleAnchor/symbolAnchor
+  const [textAnchor, setTextAnchor] = useState(null);         // first marquee corner for the "textcopy" tool, isolated like scheduleAnchor/symbolAnchor
+  const [copyToast, setCopyToast] = useState(null);           // the Copy-text receipt: { text, lineCount, chars, source, conf, failed, at }
+  // the receipt lives ~7s — long enough to read the preview, short enough that
+  // it never outstays the paste it exists to serve. The failed case (clipboard
+  // refused) does NOT auto-expire: its textarea is the only copy path left.
+  useEffect(() => {
+    if (!copyToast || copyToast.failed) return;
+    const t = setTimeout(() => setCopyToast(null), 7000);
+    return () => clearTimeout(t);
+  }, [copyToast]);
   const [placingImageId, setPlacingImageId] = useState(null); // an image markup being (re)placed: it follows the cursor until the next click drops it (re-enterable from the panel, not just at capture)
   const placeGrabRef = useRef(null);                          // {key, dx, dy}: cursor→image-centre offset captured on the pointer's FIRST canvas contact during a place, so the image is grabbed where it sits (no teleport) and moves relative after
   // Cross-sheet place flag: holds the markup id when beginPlace (below) armed
@@ -774,6 +788,7 @@ export default function TakeoffCanvas() {
   const pdfDocsRef = useRef(new Map());      // file name → pdf.js loading task (doc cache)
   const renderSeqRef = useRef(0);            // monotonic token — stale render chains bail out
   const scanBusyRef = useRef(false);         // a paid schedule OCR read is in flight — blocks re-fire from a rapid re-draw
+  const ocrBusyRef = useRef(false);          // an on-device Copy-text OCR read is in flight (same re-fire guard; free, but not reentrant)
   const panRef = useRef(null);
   const spaceRef = useRef(false);
   const crossVRef = useRef(null);
@@ -1726,6 +1741,7 @@ export default function TakeoffCanvas() {
   // measure/select tool must never drop a stamp
   useEffect(() => { if (tool !== "stamp") setArmedStamp(null); }, [tool]);
   useEffect(() => { if (tool !== "image") setImageAnchor(null); }, [tool]);   // leaving the image marquee drops a half-set anchor (mirrors scheduleAnchor/symbolAnchor reset)
+  useEffect(() => { if (tool !== "textcopy") setTextAnchor(null); }, [tool]); // same for the Copy-text marquee — a half-set box never survives a tool switch
   // A One-Click proposal is only actionable while One-Click is armed (Enter
   // already requires it) — discard it on tool switch, like the stamp above.
   // Also keeps Create out of the ACTION slot while Finish occupies it, so the
@@ -2802,7 +2818,7 @@ export default function TakeoffCanvas() {
         }
         if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); setSweep(null); return; }
       }
-      const map = { v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter", n: "dimension", y: "symbol" };
+      const map = { v: "select", a: "area", r: "rect", l: "linear", s: "surface", c: "count", d: "deduct", o: "oneclick", k: "check", h: "highlighter", n: "dimension", y: "symbol", t: "textcopy" };
       const t = map[lower];
       if (t) setTool(t);
     };
@@ -2862,7 +2878,7 @@ export default function TakeoffCanvas() {
         // tool's points, on-screen or hidden
         else if (tool === "calibrate") { setCalib((c) => c.slice(0, -1)); }
         else if (tool === "check") { setCheck((c) => c.slice(0, -1)); }
-      } else if (e.key === "Escape") { if (agentOfferFnsRef.current?.pending()) { agentOfferFnsRef.current.dismiss(); } else if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { clearPoly(); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); setSymbolAnchor(null); setImageAnchor(null); setPlacingImageId(null); placeGrabRef.current = null; placeCrossSheetRef.current = null; setAlignPt(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
+      } else if (e.key === "Escape") { if (agentOfferFnsRef.current?.pending()) { agentOfferFnsRef.current.dismiss(); } else if (ocSel) { setOcSel(null); } else if (selVert != null) { setSelVert(null); } else { clearPoly(); setCalib([]); setCheck([]); setCheckStated(""); setScaleGuide(null); selectShape(null); setMarkupDraft(null); setProposal(null); setArmedStamp(null); setScheduleAnchor(null); setSymbolAnchor(null); setImageAnchor(null); setTextAnchor(null); setPlacingImageId(null); placeGrabRef.current = null; placeCrossSheetRef.current = null; setAlignPt(null); resetZone(); hlRef.current = null; if (hlPathRef.current) hlPathRef.current.style.display = "none"; } }
       // ⌘Z: the drawing context wins — mid-trace it still pops the last placed
       // point (with or without ⇧, matching the old behavior byte-for-byte);
       // only with no trace in progress does the command stack engage
@@ -2970,7 +2986,7 @@ export default function TakeoffCanvas() {
     // cursor here; otherwise a stale ref freezes the drag or jumps it on grab.
     // schedule (marquee) wants the raw cursor like select — snapping a corner to
     // a vector vertex would shift the box off the schedule and misread the region
-    const rawCursor = tool === "select" || tool === "schedule";
+    const rawCursor = tool === "select" || tool === "schedule" || tool === "textcopy";
     const p = (!rawCursor && snapOn && snapRef.current) ? snapRef.current
       : (!rawCursor && angleOn && angleRef.current) ? angleRef.current
         : toImage(e.clientX, e.clientY);
@@ -3026,6 +3042,12 @@ export default function TakeoffCanvas() {
       // two-click marquee, isolated state: first click drops the anchor, second reads the box
       if (!scheduleAnchor) setScheduleAnchor(p);
       else { importScheduleFromRect(scheduleAnchor, p); setScheduleAnchor(null); setTool("select"); }
+    }
+    else if (tool === "textcopy") {
+      // Copy-text marquee: same two-click idiom — first click anchors, second
+      // reads the box and puts its text on the clipboard
+      if (!textAnchor) setTextAnchor(p);
+      else { copyTextFromRect(textAnchor, p); setTextAnchor(null); setTool("select"); }
     }
     else if (tool === "symbol") {
       // the Symbol tool's marquee (#264): tight box around ONE instance
@@ -3631,8 +3653,9 @@ export default function TakeoffCanvas() {
       const schedDraw = tool === "schedule" && scheduleAnchor;
       const symDraw = tool === "symbol" && symbolAnchor;
       const imgDraw = tool === "image" && imageAnchor;
-      if (!panRef.current && ((tool === "rect" || tool === "deduct-rect") && poly.length === 1 || schedDraw || symDraw || imgDraw)) {
-        const a = imgDraw ? imageAnchor : symDraw ? symbolAnchor : schedDraw ? scheduleAnchor : poly[0];
+      const txtDraw = tool === "textcopy" && textAnchor;
+      if (!panRef.current && ((tool === "rect" || tool === "deduct-rect") && poly.length === 1 || schedDraw || symDraw || imgDraw || txtDraw)) {
+        const a = imgDraw ? imageAnchor : symDraw ? symbolAnchor : schedDraw ? scheduleAnchor : txtDraw ? textAnchor : poly[0];
         rectRef.current.setAttribute("x", Math.min(a[0], cur[0])); rectRef.current.setAttribute("y", Math.min(a[1], cur[1]));
         rectRef.current.setAttribute("width", Math.abs(cur[0] - a[0])); rectRef.current.setAttribute("height", Math.abs(cur[1] - a[1]));
         rectRef.current.style.display = "block";
@@ -6643,6 +6666,112 @@ export default function TakeoffCanvas() {
     return { b64: dataUrl.split(",")[1] || "", width: bw, height: bh };
   }
 
+  // ── Copy text (T) — marquee the words, they land on the clipboard ─────────
+  // One path, two readers, one receipt (the importScheduleFromRect shape):
+  //   • vector sheets: the text layer IS the extraction (extractRegionText +
+  //     textlines.assembleLines) — free, exact, offline;
+  //   • text-less boxes (scans, flattened exports): on-device OCR
+  //     (lib/ocr/tesseract.ts, same-origin staged files) feeding the SAME
+  //     assembleLines through wordsToTokens — the copy path never learns
+  //     which engine read the sheet.
+  // The receipt is the copyToast (preview + source badge); commitMsg carries
+  // only the failure/diagnostic lines, as everywhere else.
+  async function copyTextFromRect(a, b) {
+    if (status !== "ready") { setCommitMsg("Sheet still loading — try again in a moment."); return; }
+    const panel = panelAt(a[0]);
+    if (panelAt(b[0]).key !== panel.key) { setCommitMsg("Draw the box within a single sheet."); return; }
+    const pageObj = pageObjsRef.current.get(panel.key);
+    if (!pageObj) { setCommitMsg("Open a sheet first."); return; }
+    const rs = renderScalesRef.current.get(panel.key) || RENDER_SCALE;
+    // rect in image (rs-viewport) px, clamped to the panel bounds (the
+    // captureRegionMarkup rule — an over-drag never parks the read off-sheet)
+    const cl = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const rect = {
+      x0: cl(Math.min(a[0], b[0]) - panel.xOffset, 0, panel.img.w),
+      x1: cl(Math.max(a[0], b[0]) - panel.xOffset, 0, panel.img.w),
+      y0: cl(Math.min(a[1], b[1]), 0, panel.img.h),
+      y1: cl(Math.max(a[1], b[1]), 0, panel.img.h),
+    };
+    if (!(rect.x1 - rect.x0 >= 4 && rect.y1 - rect.y0 >= 4)) { setCommitMsg("Drag a larger box around the text."); return; }
+    const seq = renderSeqRef.current;   // a sheet switch mid-await must not paste a stale receipt
+    let tokens;
+    try {
+      const vp = pageObj.getViewport({ scale: rs });
+      const tc = await pageObj.getTextContent();
+      if (seq !== renderSeqRef.current) return;
+      tokens = extractRegionText(tc, vp, rect, { boxIntersects: true });
+    } catch { setCommitMsg("Couldn't read that region."); return; }
+    if (tokens.length) {
+      const { lines, skipped } = assembleLines(tokens);
+      if (lines.length) await deliverCopy(lines, "text", null, skipped.length);
+      else setCommitMsg(skipped.length
+        ? "Only rotated text in that box (dimension strings, vertical headers) — there's no line to read horizontally."
+        : "No readable text in that box.");
+      return;
+    }
+    // No text layer in the box → the region's pixels are the only witness.
+    await copyTextFromScan(pageObj, rs, rect, seq);
+  }
+
+  // The scan reader. NOT login-gated (unlike importScheduleFromScan's paid AI
+  // read): tesseract runs on-device from same-origin staged files — the
+  // client-only pledge holds, so there is no account to gate.
+  async function copyTextFromScan(pageObj, rs, rect, seq) {
+    if (ocrBusyRef.current) { setCommitMsg("Still reading the last region — one moment."); return; }
+    ocrBusyRef.current = true;
+    setCommitMsg("Reading the scan…");
+    try {
+      const { canvas, zoom } = await renderRegionForOcr(pageObj, rs, rect);
+      if (seq !== renderSeqRef.current) return;
+      const { words, meanConfidence } = await ocrRegion(canvas, { rect, zoom });
+      if (seq !== renderSeqRef.current) return;
+      const { lines } = assembleLines(wordsToTokens(words));
+      if (lines.length) await deliverCopy(lines, "ocr", meanConfidence, 0);
+      else setCommitMsg("No text recognized in that box.");
+    } catch (e) {
+      setCommitMsg(e && e.message === OCR_NOT_STAGED
+        ? "This deployment doesn't carry the OCR reader's files — on a scan, the text layer is the only copy source here."
+        : "Couldn't read that scan — try a tighter box or a steadier zoom.");
+    } finally {
+      ocrBusyRef.current = false;
+      bumpIdle();   // OCR done → let the idle-drain observe the busy→idle edge (importScheduleFromScan precedent)
+    }
+  }
+
+  // Render the marquee'd region for OCR — the rasterizeRegion idiom with its
+  // OWN magnification rule: small crops are UPSCALED (tesseract reads ~10px
+  // plan text far better at 2–3×; the harness's DPI sweep put its best CER at
+  // the 288-DPI-equivalent, i.e. zoom 2), big crops clamp at 1× and then only
+  // down to the backing-store caps. Returns the canvas itself — tesseract
+  // encodes it — plus the zoom the boxes must be divided by.
+  async function renderRegionForOcr(pageObj, rs, rect) {
+    const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
+    const regW = Math.max(1, Math.abs(rect.x1 - rect.x0)), regH = Math.max(1, Math.abs(rect.y1 - rect.y0));
+    const want = Math.max(1, Math.min(3, 1600 / Math.max(regW, regH)));
+    const factor = Math.min(want, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)));
+    const bw = Math.max(1, Math.round(regW * factor)), bh = Math.max(1, Math.round(regH * factor));
+    const vp = pageObj.getViewport({ scale: rs * factor });
+    const canvas = document.createElement("canvas");
+    canvas.width = bw; canvas.height = bh;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    await pageObj.render({ canvasContext: ctx, viewport: vp, transform: [1, 0, 0, 1, -x0 * factor, -y0 * factor] }).promise;
+    return { canvas, zoom: factor };
+  }
+
+  // The receipt: clipboard first (the completing click is a user gesture, so
+  // writeText is authorized), then the toast. `failed` flips the toast into
+  // its manual-copy fallback — an embedded iframe (or a non-secure context)
+  // can refuse the clipboard API outright.
+  async function deliverCopy(lines, source, conf, skippedCount) {
+    const text = linesToText(lines);
+    let failed = false;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("no clipboard api");
+      await navigator.clipboard.writeText(text);
+    } catch { failed = true; }
+    setCopyToast({ text, lineCount: lines.length, chars: text.length, source, conf, skipped: skippedCount, failed, at: Date.now() });
+  }
+
   // ── image markup (#…) — two entry points, one record type ────────────────
   // Marquee screenshot: a,b are the two marquee corners in stage px. Render the
   // boxed region of the plan offscreen (the rasterizeRegion idiom, but with its
@@ -8180,8 +8309,10 @@ export default function TakeoffCanvas() {
              is the ONLY way an estimator seal is minted (no MCP tool, no agent
              path), so the mark means a person looked. */}
          {railTile("approve", "approve", "Approval stamp — the estimator's ink. Click a committed takeoff to approve it, or empty plan to approve the sheet; click a seal to lift it. ⌘Z undoes. Human-only.", null,
-           () => setTool((t) => (t === "approve" ? "select" : "approve")), { tint: tool === "approve" ? "var(--c-positive)" : undefined, armed: tool === "approve" })}
-         {railLabel("CAL")}
+          () => setTool((t) => (t === "approve" ? "select" : "approve")), { tint: tool === "approve" ? "var(--c-positive)" : undefined, armed: tool === "approve" })}
+        {railLabel("READ")}
+        {railTile("textcopy", "copy", "Copy text — marquee a note, paragraph, or schedule block; what the box says goes on your clipboard. Vector sheets read the text layer; scans read on-device OCR.", "T")}
+        {railLabel("CAL")}
          {railTile("calibrate", "calibrate", "Calibrate — click two points of a known dimension", null)}
        </nav>
        )}
@@ -9173,7 +9304,7 @@ export default function TakeoffCanvas() {
                   fill; rect & symbol marquees are measure tools, themed via DS. */}
               {(() => {
                 const rectDeduct = tool === "deduct" || tool === "deduct-rect";
-                const rectNeutral = tool === "schedule";   // selection gesture, not measurement — never themed
+                const rectNeutral = tool === "schedule" || tool === "textcopy";   // selection gesture, not measurement — never themed
                 return <rect ref={rectRef}
                   fill={rectDeduct ? "rgba(176,58,38,.22)" : rectNeutral ? shapeFill(aCond) : draftFill}
                   stroke={rectDeduct ? "#b03a26" : rectNeutral ? "#1f3fc7" : DS.accent}
@@ -9959,6 +10090,41 @@ export default function TakeoffCanvas() {
           </div>
         );
       })()}
+      {/* Copy-text receipt — fixed top-right (the sweep panel's berth), one
+          glance: what was copied, from which reader, and the first words to
+          verify against the sheet. Click dismisses; if the clipboard refused,
+          the full text stays up with its own Copy button. */}
+      {copyToast && (
+        <div
+          role={copyToast.failed ? "dialog" : "status"}
+          aria-label="Copy result"
+          onClick={() => { if (!copyToast.failed) setCopyToast(null); }}
+          style={{ position: "fixed", right: 12, top: "calc(var(--topbar-h) + 12px)", width: 300, zIndex: Z.popover, background: "var(--paper-cream)", border: `1px solid ${copyToast.failed ? "var(--c-danger)" : "var(--ink-faint)"}`, boxShadow: "var(--shadow-pop)", fontFamily: "var(--f-mono)", fontSize: "var(--fs-xs)", color: "var(--ink)", cursor: copyToast.failed ? "default" : "pointer" }}>
+          <div style={{ padding: "8px 10px", borderBottom: "1px solid var(--ink-faint)", display: "flex", gap: 8, alignItems: "baseline", fontVariantNumeric: "tabular-nums" }}>
+            <b style={{ color: copyToast.failed ? "var(--c-danger)" : "var(--c-positive)" }}>{copyToast.failed ? "Clipboard blocked" : "Copied"}</b>
+            <span>{copyToast.lineCount} line{copyToast.lineCount === 1 ? "" : "s"} · {copyToast.chars} chars</span>
+            <span style={{ marginLeft: "auto", opacity: 0.7 }}>
+              {copyToast.source === "ocr"
+                ? `OCR${copyToast.conf != null ? ` ${Math.round(copyToast.conf * 100)}%` : ""}`
+                : copyToast.skipped > 0 ? `text · ${copyToast.skipped} rotated skipped` : "text layer"}
+            </span>
+          </div>
+          {!copyToast.failed ? (
+            <div style={{ padding: "8px 10px", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 96, overflow: "hidden", lineHeight: 1.5 }}>
+              {copyToast.text.length > 220 ? `${copyToast.text.slice(0, 220)}…` : copyToast.text}
+            </div>
+          ) : (
+            <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+              <textarea readOnly value={copyToast.text} onFocus={(e) => e.currentTarget.select()}
+                style={{ width: "100%", boxSizing: "border-box", height: 110, resize: "none", fontFamily: "var(--f-mono)", fontSize: "var(--fs-xs)", border: "1px solid var(--ink-faint)", padding: 6, background: "var(--paper-bright)", color: "var(--ink)" }} />
+              <div style={{ display: "flex", gap: 6 }}>
+                <button type="button" onClick={() => { navigator.clipboard?.writeText?.(copyToast.text)?.then(() => setCopyToast({ ...copyToast, failed: false }))?.catch(() => {}); }} style={{ flex: 1, padding: "5px 10px", border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600 }}>Copy</button>
+                <button type="button" onClick={() => setCopyToast(null)} style={{ padding: "5px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer" }}>Close</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       <footer className="ink-panel ticks"
         style={{ height: "var(--status-h)", flex: "0 0 auto", display: "flex", alignItems: "center", gap: 12, padding: "0 14px", fontFamily: "var(--f-mono)", fontSize: "var(--fs-xs)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", overflow: "hidden", userSelect: "none" }}>
         <span style={{ color: "var(--status-acc)", textShadow: "var(--glow)" }}>{TOOL_VERB[tool] || tool}</span>
