@@ -96,6 +96,11 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
   const lbl = { fontFamily: "var(--f-mono)", fontSize: 9, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--ink-muted)" };
   const flagFor = { "in-use": "in use", duplicate: "duplicate", empty: "needs a code" };
 
+  // How many rows carry a GUESSED category (no section header was read). A per-row
+  // "verify" chip pinpoints them when few; this banner keeps the signal legible when
+  // most rows are guesses (a scan that dropped its section headers wholesale).
+  const inferredCount = rows.filter((r) => r.category_inferred).length;
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.32)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 40 }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}
@@ -109,6 +114,12 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
         {skipped > 0 && (
           <div style={{ padding: "5px 14px", background: "var(--paper)", borderBottom: "1px solid var(--ink-faint)", ...lbl, opacity: 0.85 }}>
             {skipped} row{skipped === 1 ? "" : "s"} skipped (couldn't be read as a single finish)
+          </div>
+        )}
+
+        {inferredCount > 0 && (
+          <div style={{ padding: "5px 14px", background: "var(--paper)", borderBottom: "1px solid var(--ink-faint)", ...lbl, color: "var(--c-warning)" }}>
+            {inferredCount} of {rows.length} categor{inferredCount === 1 ? "y was" : "ies were"} guessed — verify the flagged row{inferredCount === 1 ? "" : "s"} before creating.
           </div>
         )}
 
@@ -156,7 +167,7 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
                           {st?.tag || "set code"}
                         </button>
                       )}
-                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {r.description || <span style={{ color: "var(--ink-muted)" }}>—</span>}
                         {(r.manufacturer || r.size) && (
                           <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>  ·  {[r.manufacturer, r.size].filter(Boolean).join(" · ")}</span>
@@ -164,12 +175,14 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
                       </span>
                       {r.category_inferred && (
                         <span
-                          title={`Category "${grp.label}" was guessed from the code — no section header was read here. Verify before creating.`}
-                          style={{ ...lbl, color: "var(--c-warning)", border: "1px solid var(--c-warning)", borderRadius: 2, padding: "0 4px", opacity: 0.9, flex: "0 0 auto" }}>
+                          title={r.category === "other"
+                            ? `Category couldn't be matched to a section header or a code prefix — defaulting to "Other". Verify, and uncheck it if it's wrong.`
+                            : `Category "${grp.label}" was guessed from the code prefix — no section header was read here. Verify, and uncheck it if it's wrong.`}
+                          style={{ ...lbl, color: "var(--c-warning)", border: "1px solid var(--c-warning)", borderRadius: "var(--r-1)", padding: "0 4px", flex: "0 0 auto" }}>
                           verify
                         </span>
                       )}
-                      {flag && <span style={{ ...lbl, opacity: 0.8 }}>{flag}</span>}
+                      {flag && <span style={{ ...lbl, opacity: 0.8, flex: "0 0 auto" }}>{flag}</span>}
                     </label>
                   );
                 })}

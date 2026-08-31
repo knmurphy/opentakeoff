@@ -40,10 +40,16 @@ beat (glance, fix, uncheck, Create) includes "verify this category."
    boolean and otherwise defaults `false` (the server VLM reader has its own
    reliability; our parser's inference uncertainty is the thing this flag names).
 4. **The dialog surfaces it, non-destructively.** A row whose category is inferred
-   shows a subtle "verify" marker. It does NOT change whether the row is checked
-   (`suggested` is unchanged), does NOT drop or reorder rows, and does NOT block
-   Create — it only makes the guess visible, so the residual-2 wrong-checked category
-   is now something the estimator can catch.
+   shows a subtle amber "verify" chip; a summary banner counts the guessed
+   categories so the signal stays legible when a scan dropped its headers wholesale
+   and most rows are guesses. The chip's tooltip is honest about provenance — a
+   prefix-inferred row reads "guessed from the code prefix", an `"other"` fallback
+   reads "couldn't be matched … defaulting to Other" (an `"other"` row is flagged
+   precisely because the code was NOT recognized) — and it names the only affordance
+   the dialog offers: "verify, and uncheck it if it's wrong." It does NOT change
+   whether the row is checked (`suggested` is unchanged), does NOT drop or reorder
+   rows, and does NOT block Create — it only makes the guess visible, so the
+   residual-2 wrong-checked category is now something the estimator can catch.
 
 ## Invariants (must not regress)
 
@@ -70,9 +76,11 @@ Scan (`scheduleScan.test.ts`):
 - `toRow` defaults `category_inferred` to `false` when the server omits it;
 - a server-sent `category_inferred:true` is preserved.
 
-Dialog: no unit harness exists (the panel is view-only, per its header comment). The
-marker is driven by the single boolean `row.category_inferred`; the decision logic has
-no branch worth a test beyond the field read. Verified by a real render in the app.
+Dialog (`importSchedulePanel.test.ts`, static-markup render — no DOM): the "verify"
+chip renders for an inferred row and not for a confident one; the tooltip takes the
+prefix-guess branch for a categorized row and the "defaulting to Other" branch for an
+`"other"` row; the summary banner counts the guessed categories and is absent when
+none. This pins the render guard and the tooltip branch the parser/scan tests can't see.
 
 ## Explicitly out of scope
 

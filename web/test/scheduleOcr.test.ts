@@ -317,6 +317,10 @@ test("a data row with NO section header above it is still emitted", () => {
   // conservative prefix inference fills category when no section is active
   assert.equal(rows.find((r) => r.finish_tag === "CPT-1")?.category, "floor");
   assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "base");
+  // a never-sectioned row's category is a GUESS → flagged inferred (the direct
+  // pin for the spec's "no-section → true" case; reset rows share this path).
+  assert.equal(rows.find((r) => r.finish_tag === "CPT-1")?.category_inferred, true);
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category_inferred, true);
 });
 
 test("prefix inference is conservative: ambiguous prefixes fall back to 'other'", () => {
