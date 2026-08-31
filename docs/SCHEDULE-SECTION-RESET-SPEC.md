@@ -69,7 +69,7 @@ OCR band also fires on vector rows.
 `K = 1.6` separates the two: on the demo sheet the largest non-section data→data gap
 is 1.06× the pitch and the smallest dropped-section band is 1.94×. **This is a ~0.34
 margin to the nearest firing band, not a wide valley** — the earlier "clean valley /
-margin ≥1.1" framing was wrong, and gaps at 1.84–2.09× do fire. The constant is tuned
+margin ≥1.1" framing was wrong, and dropped-section bands at ~1.94–2.01× do fire. The constant is tuned
 on n=1 and is not corpus-validated (step 5b). `MIN_GAP_SAMPLES = 4`: below four
 adjacent data→data gaps the pitch is noise and the reset is disabled (step-4 behavior).
 
