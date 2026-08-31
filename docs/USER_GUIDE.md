@@ -355,7 +355,9 @@ Agents get the same thing headlessly—`roll_setup` is a field on the MCP server
 
 Why type conditions the architect already tabulated? Arm **Schedule** in the toolbar and click two corners around the finish schedule on the sheet. The table parses in the browser, and a verify dialog lists every finish it found—grouped Floor / Base / Wall / Transition / Ceiling / Other, each row with the code (click to fix it), description, and flags (**in use**, **duplicate**, **needs a code**). Ceiling and other rows arrive unchecked; you approve what becomes conditions. Each created condition gets category-appropriate color, hatch, and default waste (floor 5%, base and wall 10%), and the schedule's product data (manufacturer, style, color, size) rides along as read-only spec fields that surface as the Report's *Product spec (imported)* columns.
 
-On scanned pages there's no text to parse; team builds with the optional AI backend can read the schedule from pixels—the message tells you when that's what's needed.
+A row whose category the importer had to **guess**—because its section header (`FLOORING`, `BASE`, …) was missed—carries an amber **verify** chip, and a banner tallies how many; the category is a best-effort guess from the finish code, so glance at those before you Create (a base row read as a floor bids the wrong waste and hatch). Rows read under a real section header carry no chip.
+
+On a scanned page there's no text layer to parse. Where the deployment ships the on-device OCR model, the same marquee reads the schedule straight from the pixels—**in your browser, no sign-in and no server**—and the finishes flow into the same verify dialog (most will wear the **verify** chip, since a scan rarely gives the reader clean section headers). Where the model isn't installed, a team build with the optional AI backend can read the pixels instead; either way the status message tells you which reader ran, and if neither is available it says so.
 
 ---
 
