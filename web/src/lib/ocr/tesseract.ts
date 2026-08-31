@@ -56,9 +56,18 @@ async function fetchWorker(): Promise<TessWorker> {
       // spoofed by the site's own fallback — only a non-HTML content-type
       // counts as "present".
       const base = import.meta.env.BASE_URL ?? "/";
-      if (/^[a-z][a-z0-9+.-]*:/i.test(base)) throw new Error(OCR_NOT_STAGED);
+      // absolute OR protocol-relative bases read cross-origin — refuse both
+      if (/^([a-z][a-z0-9+.-]*:)?\/\//i.test(base)) throw new Error(OCR_NOT_STAGED);
       const probe = async (f: string) => {
-        const res = await fetch(`${OCR_BASE}/${f}`, { method: "HEAD" });
+        let res: Response;
+        try {
+          res = await fetch(`${OCR_BASE}/${f}`, { method: "HEAD" });
+        } catch {
+          // a fetch REJECTION (offline, DNS) is an environment failure, not
+          // missing files — it belongs to the engine-unavailable family, not
+          // the "tighter box" one the caller's generic catch would say
+          throw new Error(OCR_ENGINE_UNAVAILABLE);
+        }
         const ct = res.headers.get("content-type") || "";
         if (!res.ok || ct.includes("text/html")) throw new Error(OCR_NOT_STAGED);
       };
@@ -72,14 +81,16 @@ async function fetchWorker(): Promise<TessWorker> {
         probe("tesseract-core-lstm.wasm"),
         probe("eng.traineddata.gz"),
       ]);
-      // dynamic on purpose: the only call site that ever loads it, and the
-      // engine must stay a lazy chunk — a static import would put tesseract's
-      // wasm glue in every visitor's initial bundle (stt/recognizer.ts
-      // precedent for the same reason)
-      const mod = await import("tesseract.js/dist/tesseract.esm.min.js");
-      // the ESM dist is a CJS-interop wrapper: everything hangs off `default`
-      const { createWorker } = mod.default ?? mod;
       try {
+        // dynamic on purpose: the only call site that ever loads it, and the
+        // engine must stay a lazy chunk — a static import would put tesseract's
+        // wasm glue in every visitor's initial bundle (stt/recognizer.ts
+        // precedent for the same reason). A chunk-load failure (stale deploy,
+        // 404, network) is an engine-START failure — inside this try on
+        // purpose, so it maps to OCR_ENGINE_UNAVAILABLE too.
+        const mod = await import("tesseract.js/dist/tesseract.esm.min.js");
+        // the ESM dist is a CJS-interop wrapper: everything hangs off `default`
+        const { createWorker } = mod.default ?? mod;
         const w = await createWorker("eng", 1, {
           workerPath: `${OCR_BASE}/worker.min.js`,
           corePath: `${OCR_BASE}/`,   // directory: the worker picks its simd/relaxedsimd core variant
@@ -94,9 +105,9 @@ async function fetchWorker(): Promise<TessWorker> {
         await w.setParameters({ tessedit_pageseg_mode: "6" });
         return w;
       } catch (e) {
-        // staged but won't start (spawn/wasm/init): a condition the marquee
-        // cannot fix — say THAT, not "tighter box". The cause stays in the
-        // console for field reports.
+        // staged but won't start (chunk load, spawn, wasm, init): a condition
+        // the marquee cannot fix — say THAT, not "tighter box". The cause
+        // stays in the console for field reports.
         console.warn("ocr: engine failed to start", e);
         throw new Error(OCR_ENGINE_UNAVAILABLE);
       }

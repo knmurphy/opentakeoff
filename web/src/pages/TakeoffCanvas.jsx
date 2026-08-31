@@ -6732,10 +6732,14 @@ export default function TakeoffCanvas() {
       if (lines.length) await deliverCopy(lines, "ocr", meanConfidence, 0, seq);
       else setCommitMsg("No text recognized in that box.");
     } catch (e) {
+      // an error resolving after a sheet switch must not paint its message on
+      // the sheet the user moved to — same staleness rule as the happy path
+      // (clear the never-expiring "Reading the scan…" and say nothing)
+      if (seq !== renderSeqRef.current) { setCommitMsg(""); return; }
       // Three failure families, three honest messages: files absent from the
-      // deployment; engine won't start (spawn/wasm/context — nothing a
-      // marquee can fix); everything else, where the box itself is genuinely
-      // the variable (size, memory, recognition).
+      // deployment; engine won't start (chunk load, spawn, wasm, context —
+      // nothing a marquee can fix); everything else, where the box itself is
+      // genuinely the variable (size, memory, recognition).
       const m = e && e.message;
       setCommitMsg(m === OCR_NOT_STAGED
         ? "This deployment doesn't carry the OCR reader's files — on a scan, the text layer is the only copy source here."
