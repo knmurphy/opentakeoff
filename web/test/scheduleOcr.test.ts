@@ -262,10 +262,14 @@ const paddleWords = (dpi: number): OcrWord[] =>
 // by the blank-band section reset (step 5a, docs/SCHEDULE-SECTION-RESET-SPEC.md)
 // but still pinned as a floor so it can't silently worsen or be hidden behind a
 // blended average. All figures are the demo material schedule only (n=1).
-// Category floor per DPI: the reset fixes the stale-latch DPIs (144: 50.0→59.1%,
-// 288: 38.5→53.8%) and is a no-op where the failure is pure inference, not a
-// stale latch (216 unchanged at 57.7% — most section words dropped, nothing to
-// reset). These are FLOORS below the measured values, not the values themselves.
+// Category floor per DPI. NOTE what this number does and doesn't capture: the
+// reset's category-accuracy gain (144: 50.0→59.1%, 288: 38.5→53.8%) is entirely
+// the handful of rows whose code prefix is unambiguous (RB/CBT→base, ACT→ceiling)
+// — the band DETECTION contributes nothing to THIS metric; its real work (turning
+// the other latched rows from confidently-wrong-and-checked into honest "other")
+// is measured by the checked-wrong differential below, not here. 216 is a pure
+// regression pin, NOT a result the change moved (reset is a no-op there — most
+// headers dropped, no stale latch). Floors sit below the measured values (n=1).
 const CATEGORY_FLOOR: Record<(typeof PADDLE_DPIS)[number], number> = { 144: 0.55, 216: 0.55, 288: 0.5 };
 for (const dpi of PADDLE_DPIS) {
   test(`PaddleOCR @ ${dpi}dpi: rows survive the engine (emitted + fuzzy recall + precision)`, () => {
@@ -410,44 +414,82 @@ test("a section label ABOVE the column header still drives category (layout inva
 // ── blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md, step 5a) ────
 // A DROPPED mid-table section header must not latch its predecessor's category
 // onto the rows beneath it. The signal is the blank band the header left behind:
-// a vertical gap larger than K× the table's median data-row gap. The rule keys on
-// the MEDIAN-RELATIVE gap, never an absolute k·h — the vector text layer and
-// PaddleOCR measure token height differently, so an absolute multiple that fires
-// on an OCR band also fires on every vector row. Below the header a vector table's
-// gaps are ≤ 1.36× its median (so the reset never fires on the shipped path);
-// an OCR dropped-section band is ≥ 2.7× (so it always does). All real-fixture
-// figures are the demo material schedule only (n=1).
+// between two ADJACENT data rows, a gap larger than K=1.6× the table's data-row
+// PITCH (the median of adjacent data→data gaps). Keyed on the pitch-relative gap,
+// never an absolute k·h — the vector text layer (cap-height) and PaddleOCR (full
+// glyph extent) measure token height differently. On the demo sheet the largest
+// non-section data→data gap is 1.06× the pitch and the smallest dropped-section
+// band is 1.94×, so 1.6 separates them — a ~0.34 margin to the nearest firing
+// band, NOT a wide valley (n=1; the constant is not yet corpus-validated).
+// These tests read the reset's effect by comparing sectionReset on vs off.
 
 test("the section reset never fires on the vector path: golden-28 category is still 100%", () => {
-  // The shipped invariant. On a vector schedule every section header is present
-  // and every below-header gap is ≤ 1.36× the median, so K=1.6 means no reset —
-  // category comes from the real section headers exactly as before, byte-for-byte.
-  const rows = parseSchedule(wordsToTokens(fixture.words));
-  const s = scoreRows(golden, rows);
-  assert.equal(rows.length, 28);
+  // The shipped invariant. It holds NOT because vector gaps are small — a vector
+  // section boundary gap reaches ~1.94× the pitch — but because those large gaps
+  // land on recognized section-label rows, which break the data→data adjacency
+  // the reset requires. So on the shipped path category comes from the real
+  // headers exactly as before, byte-for-byte, and the reset is a no-op.
+  const off = parseSchedule(wordsToTokens(fixture.words), { sectionReset: false });
+  const on = parseSchedule(wordsToTokens(fixture.words));
+  assert.deepEqual(on, off, "reset changed the vector parse");
+  const s = scoreRows(golden, on);
+  assert.equal(on.length, 28);
   assert.equal(s.rowRecall, 1);
   assert.equal(s.rowPrecision, 1);
   assert.equal(s.fieldAcc.category, 1);
   assert.equal(s.perfectRows, 20);
 });
 
-// Emission is category-only: the reset must not change WHICH rows are emitted at
-// any DPI, only their category. Pinned tag counts + recall/precision guard that.
-const EMITTED_ROWS: Record<(typeof PADDLE_DPIS)[number], number> = { 144: 25, 216: 27, 288: 27 };
+// The differential: parse each fixture with the reset OFF and ON. This is what
+// pins the spec's claims — that the reset is a section-ATTRIBUTION change only
+// (emission + content cells identical), that it strictly reduces confidently-
+// wrong default-checked rows on the stale-latch DPIs, and that 216 (a pure-
+// inference miss, no stale latch) is genuinely untouched. All figures n=1.
+const contentFields = (r: ScheduleRow) =>
+  [r.finish_tag, r.description, r.manufacturer, r.style, r.spec_color, r.size];
+// "checked-and-wrong": a row default-checked in the import dialog (suggested) whose
+// category disagrees with golden — a SILENT wrong bid, the exact failure the reset
+// exists to remove. This measures the honesty win the category % can't see.
+const goldenCat = new Map(golden.map((g) => [g.finish_tag, g.category]));
+const checkedWrong = (rows: ScheduleRow[]) =>
+  rows.filter((r) => r.suggested && goldenCat.get(r.finish_tag) !== r.category).length;
+// The DPIs where a stale section actually latches (FLOORING carries onto BASE/
+// WALLS); 216 drops nearly every header, so there is no stale latch to clear.
+const STALE_LATCH_DPIS = new Set([144, 288]);
 for (const dpi of PADDLE_DPIS) {
-  test(`section reset is category-only: emission at ${dpi}dpi is unchanged`, () => {
-    const rows = parseSchedule(wordsToTokens(paddleWords(dpi)));
-    assert.equal(rows.length, EMITTED_ROWS[dpi], `${dpi}dpi emitted ${rows.length}, expected ${EMITTED_ROWS[dpi]}`);
-    // RB-1 and CBT-1 (the BASE section) must read `base`, NOT the stale `floor`
-    // latched from FLOORING when the BASE header is dropped — the exact defect.
-    const rb = rows.find((r) => r.finish_tag === "RB-1");
-    const cbt = rows.find((r) => r.finish_tag === "CBT-1");
-    if (rb) assert.equal(rb.category, "base", `${dpi}dpi RB-1 latched ${rb.category}`);
-    if (cbt) assert.equal(cbt.category, "base", `${dpi}dpi CBT-1 latched ${cbt.category}`);
-    // and no base row is emitted default-checked as a floor (a silent wrong bid)
-    for (const tag of ["RB-1", "CBT-1"]) {
-      const r = rows.find((x) => x.finish_tag === tag);
-      if (r) assert.notEqual(r.category, "floor", `${dpi}dpi ${tag} still bids as floor`);
+  test(`section reset is a category-only change at ${dpi}dpi (emission + content identical off vs on)`, () => {
+    const off = parseSchedule(wordsToTokens(paddleWords(dpi)), { sectionReset: false });
+    const on = parseSchedule(wordsToTokens(paddleWords(dpi)));
+    // WHICH rows are emitted, and their content cells, are byte-for-byte identical
+    assert.deepEqual(on.map((r) => r.finish_tag), off.map((r) => r.finish_tag), `${dpi}dpi emission changed`);
+    assert.deepEqual(on.map(contentFields), off.map(contentFields), `${dpi}dpi content cells changed`);
+    // scored row recall/precision are unchanged by the reset (not just above a floor)
+    const so = scoreRows(golden, off), sn = scoreRows(golden, on);
+    assert.equal(sn.rowRecall, so.rowRecall, `${dpi}dpi recall moved`);
+    assert.equal(sn.rowPrecision, so.rowPrecision, `${dpi}dpi precision moved`);
+  });
+
+  test(`section reset removes confidently-wrong default-checked rows at ${dpi}dpi`, () => {
+    const off = parseSchedule(wordsToTokens(paddleWords(dpi)), { sectionReset: false });
+    const on = parseSchedule(wordsToTokens(paddleWords(dpi)));
+    // the honesty metric: checked-and-wrong never rises, and strictly falls where
+    // a stale section latches. category accuracy never regresses either.
+    assert.ok(checkedWrong(on) <= checkedWrong(off), `${dpi}dpi checked-wrong rose ${checkedWrong(off)}→${checkedWrong(on)}`);
+    assert.ok(scoreRows(golden, on).fieldAcc.category >= scoreRows(golden, off).fieldAcc.category, `${dpi}dpi category regressed`);
+    if (STALE_LATCH_DPIS.has(dpi)) {
+      assert.ok(checkedWrong(on) < checkedWrong(off), `${dpi}dpi expected fewer checked-wrong (${checkedWrong(off)}→${checkedWrong(on)})`);
+      // the exact defect: RB-1/CBT-1 (BASE) latch `floor` with the reset OFF and
+      // recover to `base` with it ON. Presence asserted so neither pin is vacuous.
+      for (const tag of ["RB-1", "CBT-1"]) {
+        const before = off.find((r) => r.finish_tag === tag);
+        const after = on.find((r) => r.finish_tag === tag);
+        assert.ok(before && after, `${dpi}dpi ${tag} missing from fixture parse`);
+        assert.equal(before!.category, "floor", `${dpi}dpi ${tag} not latched floor with reset off`);
+        assert.equal(after!.category, "base", `${dpi}dpi ${tag} not recovered to base`);
+      }
+    } else {
+      // 216: no stale latch, so the reset changes nothing (genuinely "unchanged")
+      assert.deepEqual(on, off, `${dpi}dpi reset changed a no-stale-latch parse`);
     }
   });
 }
@@ -517,17 +559,73 @@ test("a PRESENT mid-table section header wins over the reset (reset is a no-op t
 });
 
 test("the <4-gaps guard disables the reset on a tiny table", () => {
-  // Only 3 gaps below the header → the median is too small a sample to trust, so
-  // the reset is off and behavior is exactly step 4's (stale section latches).
+  // Only ONE adjacent data→data gap below the header (CPT-1→RB-1) — too small a
+  // sample to trust a pitch, so the reset is off and behavior is exactly step 4's
+  // (stale section latches).
   const H = 14;
   const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
   const words: OcrWord[] = [
     ...hdrRow(40),
     w("FLOORING", 40, 80),
     w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
-    // a big gap, but too few rows to compute a stable median → reset suppressed
+    // a big gap, but too few data rows to compute a stable pitch → reset suppressed
     w("RB-1", 40, 260), w("VPI", 360, 260), w("FAWN", 960, 260),
   ];
   const rows = parseSchedule(wordsToTokens(words));
   assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "floor");
+});
+
+test("header padding does not fire the reset: a section seeded ABOVE the header survives (≥4 data rows)", () => {
+  // Adversarial-review (parser F1 / eval F8): prevCy must not be seeded from the
+  // column header. Here FLOORING sits above the header, the header→row-1 gap is
+  // wide (header rule-line padding), and there are enough rows to arm the pitch.
+  // The first data row must NOT reset the seeded FLOORING — the reset fires only
+  // between two adjacent DATA rows, and row-1's predecessor is the header.
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    w("FLOORING", 40, 20),         // section seeded ABOVE the header
+    ...hdrRow(60),
+    // wide header→row-1 gap (100 vs the 40px data pitch), then uniform rows
+    w("PT-1", 40, 160), w("DAL", 360, 160), w("WHITE", 960, 160),
+    w("PT-2", 40, 200), w("DAL", 360, 200), w("PUTTY", 960, 200),
+    w("PT-3", 40, 240), w("DAL", 360, 240), w("GREY", 960, 240),
+    w("PT-4", 40, 280), w("DAL", 360, 280), w("TAN", 960, 280),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  // PT prefix is ambiguous ("other"); only the seeded FLOORING makes these floor.
+  // If the header→row-1 gap had reset it, PT-1 would be "other".
+  assert.equal(rows.find((r) => r.finish_tag === "PT-1")?.category, "floor");
+  for (const t of ["PT-1", "PT-2", "PT-3", "PT-4"]) assert.equal(rows.find((r) => r.finish_tag === t)?.category, "floor", t);
+});
+
+test("residual: a within-section band on a DETECTED section can false-fire the reset", () => {
+  // Honestly pinned (parser F3 / eval F3): the reset can't tell a dropped-header
+  // band from a legitimate large gap between two data rows of the SAME detected
+  // section (a wrapped multi-line remark that clusters as its own row, a spacer).
+  // Here WALLS is present and detected, but a big gap before P-5 false-fires the
+  // reset — and because P's prefix is unmapped, P-5 lands on "other". Worse, a
+  // FLOOR-prefixed code in that position would become a WRONG *checked* category,
+  // not just honest-unknown (RF-9 → floor, suggested:true). This documents the
+  // net-negative case the reset can produce off the demo sheet.
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    ...hdrRow(40),
+    w("WALLS", 40, 80),
+    w("P-1", 40, 120), w("BM", 360, 120), w("WHITE", 960, 120),
+    w("P-2", 40, 160), w("BM", 360, 160), w("BEIGE", 960, 160),
+    w("P-3", 40, 200), w("BM", 360, 200), w("GREY", 960, 200),
+    w("P-4", 40, 240), w("BM", 360, 240), w("TAN", 960, 240),
+    // a within-section band (100 vs 40 pitch) — a wrapped remark spacer, say
+    w("RF-9", 40, 340), w("SHAW", 360, 340), w("BLUE", 960, 340),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  // WALLS rows before the band are wall
+  assert.equal(rows.find((r) => r.finish_tag === "P-1")?.category, "wall");
+  // RF-9 (still WALLS, truly wall) false-resets → RF prefix says floor → a WRONG,
+  // default-checked category. The reset is not free: this is its downside.
+  const rf = rows.find((r) => r.finish_tag === "RF-9");
+  assert.equal(rf?.category, "floor");
+  assert.equal(rf?.suggested, true);
 });

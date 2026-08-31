@@ -183,25 +183,30 @@ const cx = (t: Token) => t.x + 0; // x is the left edge; header cells left-align
 const rowCy = (r: Token[]) => r.reduce((s, t) => s + t.y, 0) / r.length;
 
 // Blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md): a mid-table
-// section header an OCR engine DROPS still leaves a vertical band — a gap larger
-// than the table's typical data-row gap. Keyed on the MEDIAN-RELATIVE gap, never
-// an absolute k·h: the vector text layer (cap-height) and an OCR engine (full
-// glyph extent) scale token height differently, so an absolute multiple that
-// fires on an OCR band also fires on every vector row. Below the header a vector
-// table's gaps are ≤1.36× its median; an OCR band is ≥2.7×. K=1.6 sits in the
-// valley (n=1 demo sheet — the mechanism is layout-agnostic, the constant is not
-// yet corpus-validated: step 5b).
+// section header an OCR engine DROPS leaves its two neighbouring data rows
+// ADJACENT, separated by a band — a gap larger than the table's data-row pitch.
+// The reset keys on that gap MEASURED RELATIVE TO the pitch, never an absolute
+// k·h: the vector text layer (cap-height) and an OCR engine (full glyph extent)
+// scale token height differently, so any absolute multiple that fires on an OCR
+// band also fires on vector rows. Two guards keep it off the shipped vector
+// path: (1) it fires only BETWEEN TWO ADJACENT DATA ROWS — a *present* section
+// header sits between its neighbours as a section row and breaks the adjacency,
+// so a band around a detected header never resets; (2) the pitch is the median
+// of adjacent data→data gaps only, so a minority of dropped-header bands can't
+// inflate it. K=1.6 is tuned on the demo sheet (n=1): there the largest
+// non-section data→data gap is 1.06× the pitch and the smallest dropped-section
+// band is 1.94×, so 1.6 separates them — but the nearest firing band is ~0.34
+// away, not a wide valley, and the constant is not yet corpus-validated (step 5b).
 const BAND_GAP_K = 1.6;
-const MIN_GAP_SAMPLES = 4; // too few rows → the median is noise → reset disabled
+const MIN_GAP_SAMPLES = 4; // too few data→data gaps → the median is noise → reset disabled
 
-// Median gap between consecutive clustered rows from `from` onward, or null when
-// there are too few gaps to trust the median (a tiny table keeps step-4 behavior).
-function medianRowGap(rows: Token[][], from: number): number | null {
-  const gaps: number[] = [];
-  for (let i = from + 1; i < rows.length; i++) gaps.push(rowCy(rows[i]) - rowCy(rows[i - 1]));
-  if (gaps.length < MIN_GAP_SAMPLES) return null;
-  const sorted = [...gaps].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+// True median (the two central values averaged for an even count, so the estimate
+// isn't biased to the upper-middle gap), or null when there are too few samples.
+function medianOf(xs: number[]): number | null {
+  if (xs.length < MIN_GAP_SAMPLES) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 // Find the header row and return its column anchors (x of each found header
@@ -240,16 +245,51 @@ function columnFor(x: number, anchors: { col: Column; x: number }[]): Column {
   return best.col;
 }
 
+export interface ParseOptions {
+  // The blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md, step 5a).
+  // Default true (production). The harness/tests pass false to measure the reset's
+  // effect against the pre-reset parse (it is a section-attribution change only —
+  // it never alters which rows are emitted or their content cells).
+  sectionReset?: boolean;
+}
+
+// Classify a below-header row: a repeated table header, a discipline section
+// label, a data row (code-shaped first cell), or junk. The band reset and the
+// pitch estimate both key on DATA rows, so this is computed once and shared.
+type RowKind = "header" | "section" | "data" | "skip";
+
 /**
  * Parse positioned tokens (already cropped to the marquee region) into rows.
  * Returns [] when no header/section structure is found — the caller shows
  * "no schedule detected here" rather than inventing rows.
  */
-export function parseSchedule(tokens: Token[]): ScheduleRow[] {
+export function parseSchedule(tokens: Token[], opts: ParseOptions = {}): ScheduleRow[] {
+  const sectionReset = opts.sectionReset ?? true;
   const rows = clusterRows(tokens);
   const found = findAnchors(rows);
   if (!found) return [];
   const { anchors, headerIdx } = found;
+
+  // One classification pass below the header, reused by the pitch estimate and
+  // the loop (so the two can never drift). asSectionRow is cached per row.
+  const sectionRow: ReturnType<typeof asSectionRow>[] = rows.map(() => null);
+  const kind: RowKind[] = rows.map((r, i) => {
+    if (i <= headerIdx) return "skip";
+    if (isHeaderRow(r)) return "header";
+    const s = asSectionRow(r);
+    if (s) { sectionRow[i] = s; return "section"; }
+    return looksLikeCode(norm(r[0].str).replace(/[^A-Z0-9-]/g, "")) ? "data" : "skip";
+  });
+
+  // Pitch = median gap between ADJACENT data rows. A dropped section header
+  // leaves its neighbours adjacent (both "data"); a present header sits between
+  // them as a "section" row and breaks the adjacency — so the pitch excludes the
+  // very bands it will be compared against, and a band around a detected header
+  // is never even a candidate. null on a tiny table → reset disabled (step-4).
+  const dataGaps: number[] = [];
+  for (let i = headerIdx + 1; i < rows.length; i++)
+    if (kind[i] === "data" && kind[i - 1] === "data") dataGaps.push(rowCy(rows[i]) - rowCy(rows[i - 1]));
+  const pitch = medianOf(dataGaps);
 
   let section = "";
   let sectionCat: Category | null = null;
@@ -261,40 +301,37 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
     if (s) { section = s.key; sectionCat = s.cat; }
   }
 
-  // The reset needs the table's typical row pitch; null on a tiny table (keeps
-  // step-4 behavior there — the median would be noise).
-  const bandGap = medianRowGap(rows, headerIdx);
-  let prevCy = rowCy(rows[headerIdx]);
-
   const out: ScheduleRow[] = [];
   // Only rows BELOW the header are data. The header row itself (first cell
   // "CODE", code-shaped) and any title/page text above it are never rows.
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const r = rows[i];
-    const gap = rowCy(r) - prevCy;
-    prevCy = rowCy(r);
     // A repeated header (a second stacked table) is a separator, never data —
     // its "CODE" cell is code-shaped and would otherwise leak a row. It also
     // starts a NEW table, so clear the section (table 1's last section must not
     // bleed into table 2's rows).
-    if (isHeaderRow(r)) { section = ""; sectionCat = null; continue; }
+    if (kind[i] === "header") { section = ""; sectionCat = null; continue; }
     // A section label updates the current category and is not itself a row.
-    const s = asSectionRow(r);
-    if (s) { section = s.key; sectionCat = s.cat; continue; }
-    // Blank-band reset: a gap far larger than the median data-row gap is the
-    // ghost of a section header the OCR engine dropped. Clear the stale section
-    // so this row takes an inferred (or "other") category instead of latching
-    // the section above the band — a base row must not bid as the floor above it
-    // (docs/SCHEDULE-SECTION-RESET-SPEC.md). Never fires on the vector path,
-    // where below-header gaps stay ≤1.36× the median.
-    if (bandGap !== null && gap > BAND_GAP_K * bandGap) { section = ""; sectionCat = null; }
+    if (kind[i] === "section") { section = sectionRow[i]!.key; sectionCat = sectionRow[i]!.cat; continue; }
+    if (kind[i] !== "data") continue; // junk (a lone bubble/note) — never a row
+    // Blank-band reset: between two ADJACENT data rows, a gap far larger than the
+    // data-row pitch is the ghost of a section header the OCR engine dropped.
+    // Clear the stale section so this row is categorized by prefix inference (or
+    // "other") instead of latching the section above the band — a base row must
+    // not bid as the floor above it (docs/SCHEDULE-SECTION-RESET-SPEC.md). Only
+    // between adjacent data rows, so a *present* header (a section row between the
+    // neighbours) is never a false trigger; still, a within-section band (a
+    // wrapped-remark spacer row) can false-fire — a documented residual.
+    if (sectionReset && pitch !== null && kind[i - 1] === "data"
+        && rowCy(rows[i]) - rowCy(rows[i - 1]) > BAND_GAP_K * pitch) {
+      section = ""; sectionCat = null;
+    }
     // A code-shaped first cell IS a row — NOT gated on a preceding section
     // header, which an OCR engine drops unpredictably and would take every row
     // beneath it down with it (docs/SCHEDULE-CELL-PARSING-SPEC.md). Fuzzy code
     // shape so a confused glyph (CPT-1 → CP7-1) doesn't silently drop the row.
     const first = r[0];
     const codeTok = norm(first.str).replace(/[^A-Z0-9-]/g, "");
-    if (!looksLikeCode(codeTok)) continue;
 
     const cells: Record<Column, string[]> = { CODE: [], MATERIAL: [], MANUFACTURER: [], STYLE: [], COLOR: [], SIZE: [], REMARKS: [] };
     for (const t of r) cells[columnFor(cx(t), anchors)].push(t.str.trim());
