@@ -539,9 +539,13 @@ test("the reset keys on the band, not the code: a dropped header with NO band st
   assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "floor");
 });
 
-test("a PRESENT mid-table section header wins over the reset (reset is a no-op there)", () => {
-  // Band present AND the BASE header survived: category comes from the real
-  // header, not from prefix inference — the reset clears then the header re-sets.
+test("a PRESENT mid-table section header wins over the reset, with the pitch ARMED", () => {
+  // The pitch is armed (4 adjacent CPT gaps) and CT-3 sits a full band (100 vs the
+  // 40px pitch) below the BASE header. The adjacency guard is what saves it: CT-3's
+  // predecessor is the BASE *section* row, not a data row, so the reset never fires
+  // and CT-3 takes BASE's category. Remove the `kind[i-1]==="data"` guard and this
+  // band would reset BASE → CT-3 (ambiguous CT prefix) falls to "other" — so this
+  // test now fails if that guard is dropped (it previously ran with pitch=null).
   const H = 14;
   const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
   const words: OcrWord[] = [
@@ -549,54 +553,89 @@ test("a PRESENT mid-table section header wins over the reset (reset is a no-op t
     w("FLOORING", 40, 80),
     w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
     w("CPT-2", 40, 160), w("SHAW", 360, 160), w("TAN", 960, 160),
-    w("VCT-1", 40, 200), w("ARM", 360, 200), w("WHITE", 960, 200),
-    w("BASE", 40, 300), // header survived, after the band
-    w("CT-3", 40, 340), w("DAL", 360, 340), w("WHITE", 960, 340), // CT prefix is ambiguous
+    w("CPT-3", 40, 200), w("SHAW", 360, 200), w("RED", 960, 200),
+    w("CPT-4", 40, 240), w("SHAW", 360, 240), w("BLUE", 960, 240),
+    w("CPT-5", 40, 280), w("SHAW", 360, 280), w("TEAL", 960, 280), // 5 rows → 4 gaps → pitch=40
+    w("BASE", 40, 380),                                             // header survived, after a band
+    w("CT-3", 40, 480), w("DAL", 360, 480), w("WHITE", 960, 480),   // a band (100) below BASE
   ];
   const rows = parseSchedule(wordsToTokens(words));
-  // CT-3's prefix is ambiguous ("other"), but the BASE header is authoritative
+  // CT-3's prefix is ambiguous ("other"), but the BASE header is authoritative and
+  // the adjacency guard stops the band-below-BASE from resetting it.
   assert.equal(rows.find((r) => r.finish_tag === "CT-3")?.category, "base");
 });
 
-test("the <4-gaps guard disables the reset on a tiny table", () => {
-  // Only ONE adjacent data→data gap below the header (CPT-1→RB-1) — too small a
-  // sample to trust a pitch, so the reset is off and behavior is exactly step 4's
-  // (stale section latches).
+test("the <4-gaps guard disables the reset, and is sensitive to MIN_GAP_SAMPLES", () => {
+  // EXACTLY 3 adjacent data→data gaps (CPT-1→CPT-2→CPT-3→RB-1), the last a band
+  // (100 vs a 40px pitch). With MIN_GAP_SAMPLES=4 the pitch is null and the reset
+  // is off, so RB-1 latches the stale FLOORING (asserted). If MIN_GAP_SAMPLES were
+  // lowered to ≤3 the pitch would arm (median 40), the band would exceed 1.6×40=64,
+  // and RB-1 would reset to `base` — so this test fails if the guard is weakened.
   const H = 14;
   const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
   const words: OcrWord[] = [
     ...hdrRow(40),
     w("FLOORING", 40, 80),
     w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
-    // a big gap, but too few data rows to compute a stable pitch → reset suppressed
-    w("RB-1", 40, 260), w("VPI", 360, 260), w("FAWN", 960, 260),
+    w("CPT-2", 40, 160), w("SHAW", 360, 160), w("TAN", 960, 160),
+    w("CPT-3", 40, 200), w("SHAW", 360, 200), w("RED", 960, 200),
+    // a band (100), but only 3 data→data gaps total → pitch=null → reset suppressed
+    w("RB-1", 40, 300), w("VPI", 360, 300), w("FAWN", 960, 300),
   ];
   const rows = parseSchedule(wordsToTokens(words));
   assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "floor");
 });
 
-test("header padding does not fire the reset: a section seeded ABOVE the header survives (≥4 data rows)", () => {
-  // Adversarial-review (parser F1 / eval F8): prevCy must not be seeded from the
-  // column header. Here FLOORING sits above the header, the header→row-1 gap is
-  // wide (header rule-line padding), and there are enough rows to arm the pitch.
-  // The first data row must NOT reset the seeded FLOORING — the reset fires only
-  // between two adjacent DATA rows, and row-1's predecessor is the header.
+test("the adjacency guard: header padding does not fire the reset (pitch ARMED, 5 data rows)", () => {
+  // Adversarial-review (parser F1 / eval F8): the reset must not treat the
+  // header→first-row gap as a data band. FLOORING is seeded above the header, the
+  // header→PT-1 gap is wide (100 vs the 40px pitch), and 5 data rows arm the pitch
+  // (4 gaps ≥ MIN_GAP_SAMPLES). PT-1's predecessor is the header row (kind "skip"),
+  // so the adjacency guard blocks the reset and the seeded FLOORING survives.
+  // Remove the guard and the header→PT-1 band resets FLOORING → PT-1 (ambiguous PT
+  // prefix) becomes "other" — so this now fails if the adjacency guard is dropped.
   const H = 14;
   const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
   const words: OcrWord[] = [
     w("FLOORING", 40, 20),         // section seeded ABOVE the header
     ...hdrRow(60),
-    // wide header→row-1 gap (100 vs the 40px data pitch), then uniform rows
+    // wide header→row-1 gap (100 vs the 40px data pitch), then 5 uniform rows
     w("PT-1", 40, 160), w("DAL", 360, 160), w("WHITE", 960, 160),
     w("PT-2", 40, 200), w("DAL", 360, 200), w("PUTTY", 960, 200),
     w("PT-3", 40, 240), w("DAL", 360, 240), w("GREY", 960, 240),
     w("PT-4", 40, 280), w("DAL", 360, 280), w("TAN", 960, 280),
+    w("PT-5", 40, 320), w("DAL", 360, 320), w("BLUE", 960, 320),
   ];
   const rows = parseSchedule(wordsToTokens(words));
   // PT prefix is ambiguous ("other"); only the seeded FLOORING makes these floor.
-  // If the header→row-1 gap had reset it, PT-1 would be "other".
-  assert.equal(rows.find((r) => r.finish_tag === "PT-1")?.category, "floor");
-  for (const t of ["PT-1", "PT-2", "PT-3", "PT-4"]) assert.equal(rows.find((r) => r.finish_tag === t)?.category, "floor", t);
+  for (const t of ["PT-1", "PT-2", "PT-3", "PT-4", "PT-5"]) assert.equal(rows.find((r) => r.finish_tag === t)?.category, "floor", t);
+});
+
+test("the pitch excludes section/header gaps: an all-gaps median would suppress a real band", () => {
+  // Pins the data→data-only pitch (parser F4 / eval — the refinement whose revert to
+  // v1's all-gaps median left the suite green). Deliberately SYNTHETIC: four floor
+  // rows, a dropped-BASE band (100 vs the 40px data pitch), then a run of trailing
+  // section-label rows (100px apart) that carry no data. The reset must still fire on
+  // RB-1: the data→data pitch is 40, so the 100px band clears 1.6×40=64. But if the
+  // pitch reverted to the median of ALL below-header gaps, those five 100px section
+  // gaps drag the median to 100, 1.6×100=160 > 100, and the band would be suppressed —
+  // RB-1 would latch FLOORING instead. Asserting `base` fails on that revert.
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    w("FLOORING", 40, 20),         // seed floor above the header
+    ...hdrRow(60),
+    w("CPT-1", 40, 100), w("SHAW", 360, 100), w("GREY", 960, 100),
+    w("CPT-2", 40, 140), w("SHAW", 360, 140), w("TAN", 960, 140),
+    w("CPT-3", 40, 180), w("SHAW", 360, 180), w("RED", 960, 180),
+    w("CPT-4", 40, 220), w("SHAW", 360, 220), w("BLUE", 960, 220),
+    // dropped BASE header — only the band (100 vs 40) is left, between two data rows
+    w("RB-1", 40, 320), w("VPI", 360, 320), w("FAWN", 960, 320),
+    // trailing section labels, no data: they inflate an all-gaps median, not data→data
+    w("WALLS", 40, 420), w("CEILINGS", 40, 520), w("MILLWORK", 40, 620), w("TRIM", 40, 720),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category, "base");
 });
 
 test("residual: a within-section band on a DETECTED section can false-fire the reset", () => {

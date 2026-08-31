@@ -202,6 +202,8 @@ const MIN_GAP_SAMPLES = 4; // too few data→data gaps → the median is noise �
 
 // True median (the two central values averaged for an even count, so the estimate
 // isn't biased to the upper-middle gap), or null when there are too few samples.
+// The even-count averaging is defensive: on the demo layouts it doesn't change a
+// reset outcome (no committed test distinguishes it from the upper-middle gap).
 function medianOf(xs: number[]): number | null {
   if (xs.length < MIN_GAP_SAMPLES) return null;
   const s = [...xs].sort((a, b) => a - b);
