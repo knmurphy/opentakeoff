@@ -18,30 +18,40 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The PP-OCRv5 English mobile pair — the "ceiling" engine measured in
-// docs/SCHEDULE-OCR.md Experiment 3 (0.8% CER). Bump MODEL_REV deliberately; the
-// cache key and PR notes reference it.
-const MODEL_REV = "main";
+// docs/SCHEDULE-OCR.md Experiment 3 (0.8% CER). MODEL_REV is pinned to an
+// IMMUTABLE HuggingFace commit (not the moving "main" ref) for reproducible
+// builds, and each file's sha256 is VERIFIED against the pin below — a
+// re-pushed/tampered repo is rejected, never staged. To update: bump MODEL_REV
+// to the new commit, refresh the sha256s (the script prints the actual on
+// mismatch), and bump the CI cache key.
+const MODEL_REV = "bf1d5edb0335d3262be7caf13f766ba274b4cadd";
 const BASE = `https://huggingface.co/snowfluke/ppu-paddle-ocr-models/resolve/${MODEL_REV}`;
-// remote path → local basename (flattened; the worker points the service here)
+// remote path → local basename (flattened; the worker points the service here) + sha256.
 const FILES = [
-  ["detection/PP-OCRv5_mobile_det_infer.ort", "det.ort"],
-  ["recognition/multi/en/v5/en_PP-OCRv5_mobile_rec_infer.ort", "rec.ort"],
-  ["recognition/multi/en/v5/ppocrv5_en_dict.txt", "dict.txt"],
+  ["detection/PP-OCRv5_mobile_det_infer.ort", "det.ort", "30acfc4e21f2a23669d01a75aaeb92190f96874613108a0f7086bed264420abc"],
+  ["recognition/multi/en/v5/en_PP-OCRv5_mobile_rec_infer.ort", "rec.ort", "74ff9e508379375b5149a3c7764221fa9ba7680b7e2f2e458f26b7c7993a89b0"],
+  ["recognition/multi/en/v5/ppocrv5_en_dict.txt", "dict.txt", "c60d46e9e01d500ed6388fe8681051eac9cf6692e0d57238315be171927a0a1b"],
 ];
 
 const here = dirname(fileURLToPath(import.meta.url));
 const destRoot = join(here, "..", "public", "models", "paddle-ocr");
 const force = process.argv.includes("--force");
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
+const verify = (local, buf, want) => {
+  const got = sha256(buf);
+  if (got !== want) { console.error(`\nSHA256 MISMATCH ${local}\n  want ${want}\n  got  ${got}`); process.exit(1); }
+  return got;
+};
 
 let total = 0;
-for (const [remote, local] of FILES) {
+for (const [remote, local, want] of FILES) {
   const dest = join(destRoot, local);
   mkdirSync(dirname(dest), { recursive: true });
   if (!force && existsSync(dest)) {
     const buf = readFileSync(dest);
+    verify(local, buf, want);   // a cached-but-corrupt file is caught too
     total += buf.length;
-    console.log(`  = ${local}  ${(buf.length / 1e6).toFixed(1)} MB  sha256 ${sha256(buf).slice(0, 12)}… (cached)`);
+    console.log(`  = ${local}  ${(buf.length / 1e6).toFixed(1)} MB  sha256 ${want.slice(0, 12)}… (cached, verified)`);
     continue;
   }
   const url = `${BASE}/${remote}`;
@@ -52,9 +62,10 @@ for (const [remote, local] of FILES) {
     process.exit(1);
   }
   const buf = Buffer.from(await res.arrayBuffer());
+  verify(local, buf, want);     // reject a tampered/re-pushed model before writing
   writeFileSync(dest, buf);
   total += buf.length;
-  console.log(`${(buf.length / 1e6).toFixed(2)} MB  sha256 ${sha256(buf).slice(0, 12)}…`);
+  console.log(`${(buf.length / 1e6).toFixed(2)} MB  sha256 ${want.slice(0, 12)}… (verified)`);
 }
 // onnxruntime-web's WASM runtime is NOT staged here: the worker pins it to the
 // bundler's SAME-ORIGIN assets via `?url` imports (src/scheduleOcr.worker.ts, the

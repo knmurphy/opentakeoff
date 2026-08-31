@@ -14,7 +14,7 @@ const installed = async () => ({ ok: true, contentType: "application/octet-strea
 // A fake worker driven by a `responder(msg, reply)`: it echoes replies back
 // through whatever onmessage the client currently has set.
 function fakeWorker(responder: (msg: any, reply: (data: unknown) => void) => void): WorkerLike & { posted: { msg: any; transfer?: Transferable[] }[]; terminated: boolean } {
-  const w: any = { onmessage: null, posted: [], terminated: false };
+  const w: any = { onmessage: null, onerror: null, posted: [], terminated: false };
   w.postMessage = (msg: any, transfer?: Transferable[]) => {
     w.posted.push({ msg, transfer });
     Promise.resolve().then(() => responder(msg, (data) => w.onmessage?.({ data })));
@@ -108,4 +108,51 @@ test("dispose terminates the worker", async () => {
   client.dispose();
   assert.equal(w.terminated, true);
   await assert.rejects(() => client.recognize(region()), /not ready/); // recognize after dispose
+});
+
+test("uninstalled is memoized — a no-model origin probes ONCE (F: re-probe 404)", async () => {
+  let probes = 0;
+  const client = createScheduleOcrClient(() => {}, {
+    probe: async () => { probes++; return { ok: false, contentType: "" }; },
+    spawnWorker: () => fakeWorker(() => {}),
+  });
+  assert.equal(await client.ensureReady(), false);
+  assert.equal(await client.ensureReady(), false);
+  assert.equal(await client.ensureReady(), false);
+  assert.equal(probes, 1, "re-probed a known-uninstalled origin");
+});
+
+test("two concurrent recognizes both resolve to their own reply (F3: no reassigned handler hang)", async () => {
+  const w = fakeWorker((msg, reply) => {
+    if (msg.type === "init") reply({ type: "ready" });
+    else if (msg.type === "recognize") {
+      // reply out of order + after a tick, so a per-call onmessage would drop one
+      const delay = msg.id === 1 ? 5 : 0;
+      setTimeout(() => reply({ type: "result", id: msg.id, words: [{ str: `w${msg.id}`, x: 0, y: 0, w: 1, h: 1 }] }), delay);
+    }
+  });
+  const client = createScheduleOcrClient(() => {}, { probe: installed, spawnWorker: () => w });
+  await client.ensureReady();
+  const [a, b] = await Promise.all([client.recognize(region()), client.recognize(region())]);
+  assert.deepEqual([a[0].str, b[0].str].sort(), ["w1", "w2"]);
+});
+
+test("a worker error EVENT (construct/eval failure) fails init instead of hanging (F2)", async () => {
+  const { seen, onStatus } = statuses();
+  const w = fakeWorker(() => {}); // never replies to init
+  const client = createScheduleOcrClient(onStatus, { probe: installed, spawnWorker: () => w });
+  const readyP = client.ensureReady();
+  await Promise.resolve();
+  (w as unknown as { onerror: (e: unknown) => void }).onerror?.({ message: "Failed to construct worker" });
+  assert.equal(await readyP, false);
+  assert.equal(seen.at(-1)?.phase, "error");
+});
+
+test("dispose rejects an in-flight recognize (F4: no orphaned promise)", async () => {
+  const w = fakeWorker((msg, reply) => { if (msg.type === "init") reply({ type: "ready" }); /* never replies to recognize */ });
+  const client = createScheduleOcrClient(() => {}, { probe: installed, spawnWorker: () => w });
+  await client.ensureReady();
+  const rec = client.recognize(region());
+  client.dispose();
+  await assert.rejects(() => rec, /disposed/);
 });

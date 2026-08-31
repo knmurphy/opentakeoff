@@ -23,7 +23,7 @@ uses.
 marquee → rasterizeRegion (canvas RGBA + geometry)
         → scheduleOcrClient.recognize()  ── postMessage(transfer rgba) ─▶ scheduleOcr.worker
                                                                             │ PaddleOcrService (PP-OCRv5 en mobile)
-                                                                            │   onnxruntime-web (WebGPU▸WASM, 1 thread)
+                                                                            │   onnxruntime-web (single-thread WASM; WebGPU if negotiated)
                                                                             │   cell boxes → cropBoxToWord → OcrWord[]
         ◀──────────────────────────── postMessage(words) ───────────────────┘
         → parseSchedule(wordsToTokens(words)) → ScheduleRow[] → the one import dialog
@@ -47,7 +47,11 @@ The running app never talks to a model CDN. Two same-origin assets make that tru
 - **Models** (`scripts/stage-schedule-ocr-model.mjs` → `public/models/paddle-ocr/`,
   gitignored, ~13 MB): the PP-OCRv5 English mobile det + rec `.ort` + char dict, which
   ppu-paddle-ocr would otherwise fetch from HuggingFace. Staged at build/dev time,
-  mirroring `fetch-voice-model.mjs`. CI restores from `actions/cache`.
+  mirroring `fetch-voice-model.mjs`, and **pinned to an immutable HF commit with each
+  file's sha256 verified** (a re-pushed/tampered model is rejected, not staged). Wired
+  into the Netlify deploy command and the CI `actions/cache` step (keyed on both
+  staging scripts) so the hosted site ships the feature, not a dormant one — a deploy
+  that can't fetch the model logs it and ships without on-device OCR.
 - **The onnxruntime-web WASM runtime** is pinned to the **bundler's** same-origin
   assets via `?url` imports in the worker (`ort-wasm-simd-threaded.jsep.{mjs,wasm}`),
   set as `ort.env.wasm.wasmPaths = { mjs, wasm }` — the exact pattern
@@ -57,8 +61,11 @@ The running app never talks to a model CDN. Two same-origin assets make that tru
   CDN fetch until `wasmPaths` was pinned.
 
 **Deployment constraints, all satisfied** (the same envelope voice ships under):
-no COOP/COEP ⇒ no SharedArrayBuffer ⇒ `numThreads = 1` (WebGPU, when present, needs no
-cross-origin isolation); CSP `worker-src 'self' blob:`, `script-src 'self'
+no COOP/COEP ⇒ no SharedArrayBuffer ⇒ `numThreads = 1`. The validated path ran on
+**single-thread WASM** (matching the Node-benchmark numbers); WebGPU engages only if
+the library negotiates it (it needs no cross-origin isolation) and was not confirmed
+in our headless validation — treat the perf below as the WASM floor. CSP
+`worker-src 'self' blob:`, `script-src 'self'
 'wasm-unsafe-eval'`, `connect-src *` all cover the worker, the wasm compile, and the
 same-origin model fetch — the STT path already loads onnxruntime-web this way in
 production, so CSP compatibility is a settled precedent, not a new risk.

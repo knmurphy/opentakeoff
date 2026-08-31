@@ -5880,15 +5880,20 @@ export default function TakeoffCanvas() {
       // ON-DEVICE (no login, no network, no paid call) and feeds the SAME
       // parseSchedule the vector path uses. Falls through to the AI reader below
       // when the model isn't staged here, or it read the box but parsed no table.
+      // raster is reused by the AI fallback so a parsed-nothing fallthrough never
+      // re-renders the region; ocrRan tracks whether the on-device model actually
+      // ran (so the "no table" message is honest on a model-staged deployment).
+      let raster = null;
+      let ocrRan = false;
       try {
         const ocr = (ocrClientRef.current ??= createScheduleOcrClient());
         if (await ocr.ensureReady()) {
           if (seq !== renderSeqRef.current) return;
-          let raster;
-          try { raster = await rasterizeRegion(pageObj, rs, rect); }
+          try { raster = await rasterizeRegion(pageObj, rs, rect, { rgba: true }); }
           catch { setCommitMsg("Couldn't read that region."); return; }
           if (seq !== renderSeqRef.current) return;
           setCommitMsg("Reading the scanned schedule on-device…");
+          ocrRan = true;
           const words = await ocr.recognize({ rgba: raster.rgba, width: raster.width, height: raster.height, geometry: raster.geometry });
           if (seq !== renderSeqRef.current) return;
           const rows = parseSchedule(wordsToTokens(words));
@@ -5898,26 +5903,32 @@ export default function TakeoffCanvas() {
             return;
           }
           // read the pixels but parsed no table — fall through to the AI reader
-          // (or, if it isn't reachable, its "drag around the header" advice).
+          // (or, if it isn't reachable, the on-device "drag tighter" advice below).
         }
       } catch { /* OCR not staged / worker failed → the AI reader path is the fallback */ }
 
       // ── AI reader (the optional, login/org-gated Gemini path) — fallback when
       // on-device OCR is absent or found nothing.
       if (!isGoogleConfigured()) {
-        setCommitMsg(hadTokens
-          ? "No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header)."
-          : "No schedule found — this looks like a scanned page (no text layer). Importing from scanned plans needs the on-device OCR model or the AI backend.");
+        setCommitMsg(ocrRan
+          ? "Read the region on-device but found no schedule table — drag tighter around the CODE / MATERIAL header."
+          : hadTokens
+            ? "No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header)."
+            : "No schedule found — this looks like a scanned page (no text layer). Importing from scanned plans needs the on-device OCR model or the AI backend.");
         return;
       }
       if (!isSignedIn()) { setCommitMsg("Sign in to import from scanned plans."); return; }
       // Org-only: a signed-in account outside the configured domain must not reach
       // the paid reader (the server 403s it too — this just avoids the round-trip).
       if (!isAllowedDomain()) { setCommitMsg("Your sign-in doesn't have access to the scanned-schedule reader."); return; }
-      let png;
-      try { png = await rasterizeRegion(pageObj, rs, rect); }
-      catch { setCommitMsg("Couldn't read that region."); return; }
-      if (seq !== renderSeqRef.current) return;
+      // Reuse the render from the OCR attempt (its rgba was transferred, but b64
+      // remains) so a fallthrough never rasterizes twice; else render for Gemini.
+      let png = raster;
+      if (!png) {
+        try { png = await rasterizeRegion(pageObj, rs, rect); }
+        catch { setCommitMsg("Couldn't read that region."); return; }
+        if (seq !== renderSeqRef.current) return;
+      }
       // The token is what actually authorizes the paid read — the server verifies
       // it before spending. A missing/expired token here means re-consent, not a
       // silent public call.
@@ -5984,7 +5995,7 @@ export default function TakeoffCanvas() {
   // near-full-sheet marquee downscales to fit instead of being rejected with a
   // 400 "invalid image dimensions". Downscales only as far as the cap, so a
   // tighter box still goes at full resolution (better read on small schedule text).
-  async function rasterizeRegion(pageObj, rs, rect) {
+  async function rasterizeRegion(pageObj, rs, rect, opts = {}) {
     const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
     const regW = Math.max(1, Math.abs(rect.x1 - rect.x0)), regH = Math.max(1, Math.abs(rect.y1 - rect.y0));
     const factor = Math.min(1, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)), scanRasterScale(regW, regH));
@@ -6003,10 +6014,11 @@ export default function TakeoffCanvas() {
     // a crop-px box back to the rs-viewport px the parser tokens live in, so an
     // OCR'd scan and a vector text layer land in the SAME coordinate space and
     // feed the one parseSchedule. zoom = factor (the render downscale); rect is
-    // the marquee in rs px. (raster.ts cropBoxToWord is the inverse.)
-    const rgba = ctx.getImageData(0, 0, bw, bh).data;
-    const geometry = { rect: { x0, y0, x1: x0 + regW, y1: y0 + regH }, zoom: factor };
-    return { b64: dataUrl.split(",")[1] || "", width: bw, height: bh, rgba, geometry };
+    // the marquee in rs px. (raster.ts cropBoxToWord is the inverse.) Only read
+    // back when asked — the Gemini path wants b64 only, not a full getImageData.
+    const base = { b64: dataUrl.split(",")[1] || "", width: bw, height: bh };
+    if (!opts.rgba) return base;
+    return { ...base, rgba: ctx.getImageData(0, 0, bw, bh).data, geometry: { rect: { x0, y0, x1: x0 + regW, y1: y0 + regH }, zoom: factor } };
   }
 
   // Approved rows → conditions. Category drives color/hatch/waste (rowToSeed);

@@ -24,15 +24,19 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      # Voice model (RFC #59): ~44 MB, cached between runs; the fetch script
-      # is the cache key, so bumping MODEL_REV/files in it invalidates cleanly.
-      # With the model staged, the corpus + privacy voice tests run for real
-      # (they skip loudly when it's absent, e.g. on forks with cache misses).
+      # Same-origin models (voice ~44 MB + the schedule-OCR PP-OCRv5 pair ~13 MB),
+      # cached between runs. BOTH staging scripts are in the cache key so bumping
+      # MODEL_REV/files in either invalidates cleanly (they write the same
+      # public/models path, so a single-script key would let one go stale). With
+      # the models staged, the voice + schedule-OCR tests run for real (they skip
+      # loudly when absent, e.g. on forks with cache misses), and the web build
+      # ships the on-device OCR feature instead of a dormant one.
       - uses: actions/cache@v4
         with:
           path: web/public/models
-          key: voice-model-${{ hashFiles('web/scripts/fetch-voice-model.mjs') }}
+          key: models-${{ hashFiles('web/scripts/fetch-voice-model.mjs', 'web/scripts/stage-schedule-ocr-model.mjs') }}
       - run: node scripts/fetch-voice-model.mjs
+      - run: node scripts/stage-schedule-ocr-model.mjs
       - run: npm run typecheck
       - run: npm test
       # The bench is a ruler, and a ruler that silently stops matching the

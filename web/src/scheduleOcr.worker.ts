@@ -13,12 +13,13 @@
 // ships no COOP/COEP, so SharedArrayBuffer (multi-thread) is unavailable; WebGPU
 // is used when the browser offers it (it needs no cross-origin isolation).
 //
-// Protocol (one in-flight recognize at a time — the import flow is serial):
-//   in : { type: "init", modelBase, ortWasmBase? }
+// Protocol:
+//   in : { type: "init", modelBase }
 //        { type: "recognize", id, rgba: Uint8ClampedArray, width, height, geometry }
 //        { type: "dispose" }
-//   out: { type: "ready" } | { type: "progress", note }
+//   out: { type: "ready" }
 //        { type: "result", id, words } | { type: "error", id?, message }
+//        (an init error carries no id.)
 import { cropBoxToWord, type RenderGeometry } from "./lib/ocr/raster.ts";
 import type { OcrWord } from "./lib/ocr/types.ts";
 
@@ -48,14 +49,19 @@ async function init(modelBase: string): Promise<void> {
   // engage anyway (WebGPU, when present, needs none).
   ort.env.wasm.numThreads = 1;
   const { PaddleOcrService } = await import("ppu-paddle-ocr/web");
-  service = new PaddleOcrService({
+  const svc = new PaddleOcrService({
     model: {
       detection: `${modelBase}/det.ort`,
       recognition: `${modelBase}/rec.ort`,
       charactersDictionary: `${modelBase}/dict.txt`,
     },
-  }) as unknown as typeof service;
-  await (service as unknown as { initialize: () => Promise<void> }).initialize();
+  }) as unknown as NonNullable<typeof service>;
+  // Assign ONLY after initialize() resolves — a failed init (wasm compile, model
+  // 404, EP probe) must not leave the idempotence guard (`if (service) return`)
+  // pointing at a half-built engine that a retry would then treat as ready
+  // (adversarial review F1).
+  await (svc as unknown as { initialize: () => Promise<void> }).initialize();
+  service = svc;
 }
 
 // One recognized region → OcrWord[]. Builds an OffscreenCanvas from the raw RGBA
