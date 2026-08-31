@@ -1,9 +1,11 @@
 // Rasterization geometry for the schedule-OCR harness (docs/SCHEDULE-OCR.md).
 // PURE and DOM-free: the pixel rendering itself is environment-specific (Node
-// @napi-rs/canvas in the benchmark, OffscreenCanvas in the browser worker), but
-// the COORDINATE MATH that maps an engine's crop-pixel boxes back to the
-// {str,x,y,h} space the fixtures and parseSchedule share lives here, tested, so
-// every engine and every render path agree on one convention.
+// @napi-rs/canvas in the benchmark, OffscreenCanvas in the browser worker; the
+// shipping Copy-text tool renders on the MAIN thread — recognition alone runs
+// in tesseract's worker), but the COORDINATE MATH that maps an engine's
+// crop-pixel boxes back to the {str,x,y,h} space the fixtures and parseSchedule
+// share lives here, tested, so every engine and every render path agree on one
+// convention.
 //
 // Coordinate spaces:
 //   • image-px @ RENDER_SCALE — the canvas's stage space; fixture rects and

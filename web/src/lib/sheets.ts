@@ -267,7 +267,11 @@ export function extractDimTexts(textContent: TextContentLike, viewport: Viewport
 // filters rotated runs on it; the schedule path ignores it. opts.boxIntersects
 // widens containment from "left edge + baseline point inside" (the schedule
 // contract, unchanged) to "glyph box [x,x+w]×[y−h,y] meets the rect" — a prose
-// line whose baseline sits a hair below the box still copies.
+// line whose baseline sits a hair below the box still copies. The box is
+// AXIS-ALIGNED even for rotated runs (w is the advance along a tilted
+// baseline), so which rotated strings land in a Copy-text box — and thus its
+// "N rotated skipped" census — is approximate at the box edge; harmless,
+// since every >12° run is excluded from the assembled text regardless.
 export function extractRegionText(
   textContent: TextContentLike,
   viewport: Viewport,

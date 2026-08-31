@@ -19,10 +19,12 @@ import type { Token } from "./scheduleParse";
 export const MAX_TILT_DEG = 12;
 
 /** y-distance between baselines that still means "same visual line", as a
- * fraction of text height. Same value as scheduleParse's clusterRows so the
- * two clusterers share one notion of a row; scaled by the LARGER of the two
- * heights so a small token beside a tall one (a note under a header, a
- * fraction in a dimension) joins the line it visually belongs to. */
+ * fraction of text height. Shares the 0.6 FRACTION with scheduleParse's
+ * clusterRows, deliberately not its whole rule: here the tolerance scales
+ * with the LARGER of the pair's heights (a small token beside a tall one — a
+ * note under a header — joins the line it visually belongs to) and there is
+ * no clusterRows 4px floor (prose at plan font sizes never needs it). The
+ * running-average baseline is clusterRows' rule unchanged. */
 const LINE_TOL = 0.6;
 
 /** tilt of a baseline angle in degrees, normalized to [0,180): 0 and ~180 are

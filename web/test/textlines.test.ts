@@ -41,18 +41,18 @@ test("tolerance scales with the TALLER member of the pair", () => {
   assert.equal(lines[0].text, "HEADER note");
 });
 
-test("running average keeps a long line from drifting apart", () => {
-  // five tokens each +5px below the last: pairwise-diff clustering would
-  // chain them into one line forever; the running average pulls the center
-  // down gradually and the chain BREAKS once a token outruns 0.6·h
+test("running average bounds drift: +4px steps at h=10 (tol 6) break every third token", () => {
+  // seven tokens, each 4px below the last (y = 100..124, h = 10, tol = 6).
+  // The running average creeps 100 → 102 → 104, so token 4 (y=112) misses by
+  // 8px and starts a new row; the pattern repeats. A pairwise-diff clusterer
+  // would chain all seven into one line; the running average splits 3/3/1.
   const toks = [0, 1, 2, 3, 4, 5, 6].map((i) => tok(`t${i}`, 10 + i * 40, 100 + i * 4));
   const { lines } = assembleLines(toks);
-  // every token is within 0.6·10 of the moving average here (spread 24px vs
-  // ~12px tolerance at the ends) — expect a break, i.e. MORE than one line…
-  // but the assertion that matters is order stability: whatever the split,
-  // y is monotonic and no token is lost
-  assert.equal(lines.reduce((n, l) => n + l.tokens.length, 0), toks.length);
-  for (let i = 1; i < lines.length; i++) assert.ok(lines[i].y >= lines[i - 1].y);
+  assert.deepEqual(lines.map((l) => l.tokens.map((t) => t.str)), [
+    ["t0", "t1", "t2"],
+    ["t3", "t4", "t5"],
+    ["t6"],
+  ]);
 });
 
 test("tilt: rotated tokens are skipped and reported, near-horizontal kept", () => {
@@ -76,10 +76,13 @@ test("custom maxTiltDeg overrides the default", () => {
   assert.equal(assembleLines(toks, { maxTiltDeg: 5 }).skipped.length, 1);
 });
 
-test("empty and whitespace-only inputs produce no lines", () => {
+test("empty input yields no lines; whitespace-only tokens are passed through, not dropped", () => {
   assert.equal(assembleLines([]).lines.length, 0);
+  // the assembly trusts its input: whitespace-only runs cannot reach it
+  // (extractRegionText drops !str.trim(); OCR words are trimmed), so a blank
+  // token is carried as a line of its own rather than silently filtered —
+  // pinned here so the contract is explicit
   const { lines } = assembleLines([tok("  ", 0, 0)]);
-  // a whitespace run can't reach here (extractRegionText drops it) but the
-  // assembly must not crash or emit an empty line if one does
-  assert.deepEqual(lines.map((l) => l.text).filter((t) => t.trim()), []);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].text, "  ");
 });

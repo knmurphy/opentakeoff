@@ -43,7 +43,7 @@ import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
 import { assembleLines, linesToText } from "../lib/textlines";
 import { wordsToTokens } from "../lib/ocr/types";
-import { ocrRegion, OCR_NOT_STAGED } from "../lib/ocr/tesseract";
+import { ocrRegion, OCR_NOT_STAGED, OCR_ENGINE_UNAVAILABLE } from "../lib/ocr/tesseract";
 import { normalizeLoadedGroups } from "../lib/sheetGroups";
 import { isStitchKey, mintStitchId, sanitizeStitches, autoButt, stitchExtent, alignMembers, seamClips, mergePoints, mergeSegs, stitchAlive, stitchLayoutSig } from "../lib/stitches";
 import { isCanvasBusy } from "../lib/canvasBusy";
@@ -6703,7 +6703,7 @@ export default function TakeoffCanvas() {
     } catch { setCommitMsg("Couldn't read that region."); return; }
     if (tokens.length) {
       const { lines, skipped } = assembleLines(tokens);
-      if (lines.length) await deliverCopy(lines, "text", null, skipped.length);
+      if (lines.length) await deliverCopy(lines, "text", null, skipped.length, seq);
       else setCommitMsg(skipped.length
         ? "Only rotated text in that box (dimension strings, vertical headers) — there's no line to read horizontally."
         : "No readable text in that box.");
@@ -6722,16 +6722,26 @@ export default function TakeoffCanvas() {
     setCommitMsg("Reading the scan…");
     try {
       const { canvas, zoom } = await renderRegionForOcr(pageObj, rs, rect);
-      if (seq !== renderSeqRef.current) return;
+      // "…" messages never auto-expire (the commitMsg timer skips them), so a
+      // stale return MUST clear this one itself — the raster-mask path's rule
+      // (~L4840): otherwise "Reading the scan…" outlives the sheet switch.
+      if (seq !== renderSeqRef.current) { setCommitMsg(""); return; }
       const { words, meanConfidence } = await ocrRegion(canvas, { rect, zoom });
-      if (seq !== renderSeqRef.current) return;
+      if (seq !== renderSeqRef.current) { setCommitMsg(""); return; }
       const { lines } = assembleLines(wordsToTokens(words));
-      if (lines.length) await deliverCopy(lines, "ocr", meanConfidence, 0);
+      if (lines.length) await deliverCopy(lines, "ocr", meanConfidence, 0, seq);
       else setCommitMsg("No text recognized in that box.");
     } catch (e) {
-      setCommitMsg(e && e.message === OCR_NOT_STAGED
+      // Three failure families, three honest messages: files absent from the
+      // deployment; engine won't start (spawn/wasm/context — nothing a
+      // marquee can fix); everything else, where the box itself is genuinely
+      // the variable (size, memory, recognition).
+      const m = e && e.message;
+      setCommitMsg(m === OCR_NOT_STAGED
         ? "This deployment doesn't carry the OCR reader's files — on a scan, the text layer is the only copy source here."
-        : "Couldn't read that scan — try a tighter box or a steadier zoom.");
+        : m === OCR_ENGINE_UNAVAILABLE
+          ? "The OCR reader couldn't start (a deployment or browser issue, not the box you drew) — vector sheets still copy from the text layer."
+          : "Couldn't read that scan — try a tighter box or a steadier zoom.");
     } finally {
       ocrBusyRef.current = false;
       bumpIdle();   // OCR done → let the idle-drain observe the busy→idle edge (importScheduleFromScan precedent)
@@ -6754,21 +6764,30 @@ export default function TakeoffCanvas() {
     const canvas = document.createElement("canvas");
     canvas.width = bw; canvas.height = bh;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    // a lost 2D context (context loss, browser canvas limit) is an environment
+    // failure, not a box-size one — route it to the engine-family message
+    if (!ctx) throw new Error(OCR_ENGINE_UNAVAILABLE);
     await pageObj.render({ canvasContext: ctx, viewport: vp, transform: [1, 0, 0, 1, -x0 * factor, -y0 * factor] }).promise;
     return { canvas, zoom: factor };
   }
 
-  // The receipt: clipboard first (the completing click is a user gesture, so
-  // writeText is authorized), then the toast. `failed` flips the toast into
-  // its manual-copy fallback — an embedded iframe (or a non-secure context)
-  // can refuse the clipboard API outright.
-  async function deliverCopy(lines, source, conf, skippedCount) {
+  // The receipt: clipboard first, then the toast. On the VECTOR path the
+  // completing click is a user gesture and writeText runs within its
+  // activation, so the copy is authorized outright. The SCAN path pays
+  // render+OCR between the click and this call — if that outlasts the
+  // browser's transient-activation window the write is refused, `failed`
+  // flips, and the toast becomes its manual-copy fallback (an embedded frame
+  // or non-secure context refuses the API outright, same flip).
+  async function deliverCopy(lines, source, conf, skippedCount, seq) {
     const text = linesToText(lines);
     let failed = false;
     try {
       if (!navigator.clipboard?.writeText) throw new Error("no clipboard api");
       await navigator.clipboard.writeText(text);
-    } catch { failed = true; }
+    } catch (e) { failed = true; console.warn("clipboard writeText refused", e); }
+    // the write may suspend on a permission prompt — re-check staleness so a
+    // sheet switch during that window can't pop a receipt for a sheet you left
+    if (seq != null && seq !== renderSeqRef.current) return;
     setCopyToast({ text, lineCount: lines.length, chars: text.length, source, conf, skipped: skippedCount, failed, at: Date.now() });
   }
 
@@ -10118,9 +10137,20 @@ export default function TakeoffCanvas() {
               <textarea readOnly value={copyToast.text} onFocus={(e) => e.currentTarget.select()}
                 style={{ width: "100%", boxSizing: "border-box", height: 110, resize: "none", fontFamily: "var(--f-mono)", fontSize: "var(--fs-xs)", border: "1px solid var(--ink-faint)", padding: 6, background: "var(--paper-bright)", color: "var(--ink)" }} />
               <div style={{ display: "flex", gap: 6 }}>
-                <button type="button" onClick={() => { navigator.clipboard?.writeText?.(copyToast.text)?.then(() => setCopyToast({ ...copyToast, failed: false }))?.catch(() => {}); }} style={{ flex: 1, padding: "5px 10px", border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600 }}>Copy</button>
+                <button type="button" onClick={() => {
+                  // a retry that fails again (or a missing clipboard API) must
+                  // not no-op silently — the textarea is the real remedy, so
+                  // say that the moment the button can't deliver
+                  const hint = "Still blocked — select the text above and press ⌘C / Ctrl-C.";
+                  const w = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+                  if (!w) { setCopyToast({ ...copyToast, hint }); return; }
+                  w(copyToast.text)
+                    .then(() => setCopyToast({ ...copyToast, failed: false }))
+                    .catch(() => setCopyToast({ ...copyToast, hint }));
+                }} style={{ flex: 1, padding: "5px 10px", border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontWeight: 600 }}>Copy</button>
                 <button type="button" onClick={() => setCopyToast(null)} style={{ padding: "5px 10px", border: "1px solid var(--ink-faint)", background: "transparent", color: "var(--ink)", cursor: "pointer" }}>Close</button>
               </div>
+              {copyToast.hint && <div style={{ fontSize: "var(--fs-xs)", color: "var(--c-danger)", lineHeight: 1.4 }}>{copyToast.hint}</div>}
             </div>
           )}
         </div>
