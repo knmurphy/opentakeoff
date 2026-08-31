@@ -239,15 +239,29 @@ single-thread-WASM / WebGPU envelope is Experiment 4/5.
    default-checked rows; a strictly better failure, but a real open gap), plus
    the still-pinned remarks→SIZE banding. All numbers are the demo sheet only.
 5. **Category correctness + corpus breadth (do these before/with deployment).**
-   The two open gaps the adversarial review surfaced, both blocking on the same
-   missing asset: more schedules. (a) *Category* is 38–58% on the OCR path
-   because a stale section latches when a mid-table header is missed — candidate
-   fixes: clear the section at a blank band between rows, or attach a
-   confidence flag to inferred categories and surface it in the import dialog.
+   (a) ~~*Category* is 38–58% on the OCR path because a stale section latches
+   when a mid-table header is missed.~~ **Step 5a done** (spec:
+   `docs/SCHEDULE-SECTION-RESET-SPEC.md`): the *blank-band section reset* clears
+   a stale section at the band a dropped mid-table header leaves between two
+   adjacent data rows, so a base row no longer bids as the floor above it. The
+   measured win is the **honesty** metric — confidently-wrong, default-checked
+   rows drop to 0 on the stale-latch DPIs (144: 8→0, 288: 9→0) — plus a narrower
+   category-accuracy gain that is exactly the unambiguous-prefix rows (144:
+   50.0→59.1%, 288: 38.5→53.8%; 216 is a no-op, a pure-inference miss). Vector
+   golden-28 byte-for-byte unchanged. Passed three adversarial reviews
+   (methodology/parser/test-rigor). NOT solved, and the honest reasons to build
+   the confidence surface next: a within-section band (a wrapped-remark spacer)
+   can *false-fire* the reset into a wrong checked category off-sheet (residual
+   2), and `K=1.6` / the margin are n=1. The remaining candidate — a
+   **category-confidence flag** on inferred categories, surfaced in the import
+   dialog (step 5a-part-2, touches `ImportSchedulePanel`/`TakeoffCanvas`) — is
+   the honest fix for those residuals and for the 216 pure-inference miss.
    (b) *Breadth*: today's numbers are n=1. Every additional VECTOR schedule is
    free ground truth (`scripts/make-schedule-ocr-fixture.mjs` + a hand-authored
    golden), and a few genuinely SCANNED sets with hand-labeled golden rows are
    the only irreplaceable asset in this plan — capture them from real projects.
+   Corpus breadth is also what earns `K`'s valley and would let the reset move
+   from a single constant to a per-layout or learned threshold.
 6. **Browser deployability** — PaddleOCR inside a worker under the real
    constraint envelope (single-thread WASM SIMD / WebGPU, no COOP/COEP),
    wired behind the existing `importScheduleFromScan` gate, emitting `OcrWord[]`
