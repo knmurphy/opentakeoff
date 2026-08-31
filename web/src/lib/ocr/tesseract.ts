@@ -151,12 +151,22 @@ export async function ocrRegion(source: HTMLCanvasElement, g: RenderGeometry): P
       console.warn("ocr: recognizer returned a populated tree but no words were walked — output shape changed?");
     }
   }
+  // Confidence floor: tesseract's sparse-ink junk (fragments of wall
+  // linework read as "OO", "EM", "LC"…) scores far below real words, and the
+  // head-to-head bench measured that dropping words below 0.60 raises sparse
+  // region precision ~2.5-3x (0.235→0.667 / 0.571→0.8 / 0.667→1.0 across
+  // region×zoom cells) with ZERO recall loss in every cell. Words with no
+  // reported confidence are kept — absence of a score is not a low score.
+  // (The paddle adapter must NOT copy this floor: its confidence is per-LINE,
+  // and filtering on it drops real text — measured 0.846→0.385 recall.)
+  const CONF_FLOOR = 0.6;
   const words: OcrWord[] = [];
   let confSum = 0, confN = 0;
   for (const wd of raw) {
     const str = (wd.text || "").trim();
     if (!str || !wd.bbox) continue;
     const conf = typeof wd.confidence === "number" ? wd.confidence / 100 : undefined;
+    if (conf != null && conf < CONF_FLOOR) continue;
     words.push(cropBoxToWord(str, wd.bbox, g, conf));
     if (conf != null) { confSum += conf; confN++; }
   }
