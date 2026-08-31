@@ -267,16 +267,22 @@ single-thread-WASM / WebGPU envelope is Experiment 4/5.
    the only irreplaceable asset in this plan — capture them from real projects.
    Corpus breadth is also what earns `K`'s valley and would let the reset move
    from a single constant to a per-layout or learned threshold.
-6. **Browser deployability** — PaddleOCR inside a worker under the real
-   constraint envelope (single-thread WASM SIMD / WebGPU, no COOP/COEP),
-   wired behind the existing `importScheduleFromScan` gate, emitting `OcrWord[]`
-   into the same `parseSchedule`. Measure seconds-per-schedule, memory, and
-   bundle + model weight; stage the model same-origin like the voice model
-   (`docs/VOICE.md`). ppu-paddle-ocr ships for exactly this; the Node timings
-   above (~5–12 s) are a loose upper bound. Fine-tuning a recognizer on
-   synthetic cells is a step 7 only if a *measured* text gap remains —
-   Experiment 3 says PaddleOCR's CER (0.8%) already clears the bar, so this is
-   unlikely to be needed.
+6. ~~**Browser deployability** — PaddleOCR inside a worker…~~ **Done** (spec:
+   `docs/SCHEDULE-OCR-BROWSER-SPEC.md`). PP-OCRv5 English mobile runs in a Worker
+   (`web/src/scheduleOcr.worker.ts`) via ppu-paddle-ocr/web + onnxruntime-web,
+   single-thread WASM / WebGPU under the no-COOP/COEP envelope, emitting `OcrWord[]`
+   into the same `parseSchedule`. Wired as the PRIMARY reader in
+   `importScheduleFromScan` (on-device, no login/network/paid call), with the
+   Gemini AI path kept as the fallback and the vector path untouched. Models are
+   staged same-origin (`scripts/stage-schedule-ocr-model.mjs`, ~13 MB, gitignored,
+   like the voice model); the ORT wasm runtime is pinned to bundled same-origin
+   assets via `?url` (the STT-adapter pattern — no CDN, no duplicate copy).
+   **Validated end-to-end in real Chromium** (Playwright): a rendered finish
+   schedule read correctly (`CPT-1`/`RB-1`/`ACT-1` + descriptions), ~2.6 s per
+   region after init; `npm run check` green. Graceful absence: a deployment that
+   doesn't stage the model falls through to the AI reader exactly as before.
+   Fine-tuning a recognizer is a step 7 only if a *measured* text gap remains —
+   Experiment 3's 0.8% CER already clears the bar, so it's unlikely to be needed.
 
 ## Continuing this work (resume here)
 

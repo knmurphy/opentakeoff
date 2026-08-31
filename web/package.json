@@ -29,8 +29,10 @@
     "@turf/difference": "^7.3.5",
     "@turf/helpers": "^7.3.5",
     "fflate": "^0.8.3",
+    "onnxruntime-web": "^1.29.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",
+    "ppu-paddle-ocr": "^6.4.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router": "^7.18.2"
