@@ -148,6 +148,30 @@ test("a worker error EVENT (construct/eval failure) fails init instead of hangin
   assert.equal(seen.at(-1)?.phase, "error");
 });
 
+test("after a worker crash (onerror), a retry respawns a fresh worker and succeeds", async () => {
+  let spawns = 0;
+  const workers: ReturnType<typeof fakeWorker>[] = [];
+  const client = createScheduleOcrClient(() => {}, {
+    probe: installed,
+    spawnWorker: () => {
+      spawns++;
+      const w = spawns === 1
+        ? fakeWorker(() => {})                                                        // dead: never replies
+        : fakeWorker((msg, reply) => { if (msg.type === "init") reply({ type: "ready" }); }); // healthy
+      workers.push(w);
+      return w;
+    },
+  });
+  const first = client.ensureReady();
+  await new Promise((r) => setTimeout(r, 0)); // let the probe resolve + attach() set onerror
+  workers[0].onerror?.({ message: "worker crashed" } as unknown as Event);
+  assert.equal(await first, false);
+  assert.equal(workers[0].terminated, true, "crashed worker not terminated");
+  // the retry must spawn a NEW worker (the dead one was discarded) and reach ready
+  assert.equal(await client.ensureReady(), true, "did not respawn a healthy worker");
+  assert.equal(spawns, 2);
+});
+
 test("dispose rejects an in-flight recognize (F4: no orphaned promise)", async () => {
   const w = fakeWorker((msg, reply) => { if (msg.type === "init") reply({ type: "ready" }); /* never replies to recognize */ });
   const client = createScheduleOcrClient(() => {}, { probe: installed, spawnWorker: () => w });

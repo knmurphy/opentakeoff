@@ -9,7 +9,8 @@
 //   node scripts/stage-schedule-ocr-model.mjs --force  # re-download everything
 //
 // The directory is gitignored (~13 MB doesn't belong in git history); CI restores
-// it from actions/cache keyed on MODEL_REV. Scanned-schedule import simply stays
+// it from actions/cache keyed on this script's hash (which carries MODEL_REV + the
+// sha pins, so a bump invalidates cleanly). Scanned-schedule import simply stays
 // off ("not installed on this deployment") when the files are absent — the same
 // feature-absence-never-breakage discipline voice uses.
 import { createHash } from "node:crypto";

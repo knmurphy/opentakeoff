@@ -76,6 +76,11 @@ export function createScheduleOcrClient(onStatus: (s: ScanOcrStatus) => void = (
     w.onerror = (e: unknown) => {
       const message = (e as { message?: string })?.message ?? "worker error";
       rejectAll(new Error(message));
+      // Discard the crashed worker so the NEXT ensureReady() respawns a fresh one
+      // — a dead worker that fires no further message/error would otherwise hang a
+      // retry (adversarial review, both reviewers' residual).
+      try { w.terminate(); } catch { /* already gone */ }
+      if (worker === w) worker = null;
     };
   }
 
