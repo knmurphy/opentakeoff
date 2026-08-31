@@ -22,6 +22,11 @@ export type ScheduleRow = {
   spec_color: string;        // COLOR cell (the spec'd color, e.g. "1408 RIVERSTONE")
   size: string;              // SIZE cell
   suggested: boolean;        // default-checked in the dialog (ceiling/other start off)
+  // true when the category was GUESSED (prefix inference or "other", because no
+  // section header was active) rather than READ from a detected section — the
+  // import dialog surfaces it as "verify" (docs/SCHEDULE-CATEGORY-CONFIDENCE-SPEC.md).
+  // Optional so existing row literals / server payloads default to confident.
+  category_inferred?: boolean;
 };
 
 // Section header text → category. A flooring tool cares about floor/base/wall
@@ -347,6 +352,9 @@ export function parseSchedule(tokens: Token[], opts: ParseOptions = {}): Schedul
     // from the code prefix (conservative, unambiguous only); else "other".
     // Inference NEVER overrides a section — the vector path always has sections
     // in order, so this branch only fires on OCR-missed-section rows.
+    // No active section ⇒ the category was GUESSED, not read — flag it so the
+    // dialog asks for a verify (docs/SCHEDULE-CATEGORY-CONFIDENCE-SPEC.md).
+    const inferred = sectionCat === null;
     const category = sectionCat ?? prefixCategory(codeTok) ?? "other";
     out.push({
       finish_tag: codeTok,
@@ -358,6 +366,7 @@ export function parseSchedule(tokens: Token[], opts: ParseOptions = {}): Schedul
       spec_color: cells.COLOR.join(" ").trim(),
       size: cells.SIZE.join(" ").trim(),
       suggested: SUGGESTED[category],
+      category_inferred: inferred,
     });
   }
   return out;

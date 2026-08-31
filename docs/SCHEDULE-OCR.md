@@ -252,10 +252,15 @@ single-thread-WASM / WebGPU envelope is Experiment 4/5.
    (methodology/parser/test-rigor). NOT solved, and the honest reasons to build
    the confidence surface next: a within-section band (a wrapped-remark spacer)
    can *false-fire* the reset into a wrong checked category off-sheet (residual
-   2), and `K=1.6` / the margin are n=1. The remaining candidate — a
-   **category-confidence flag** on inferred categories, surfaced in the import
-   dialog (step 5a-part-2, touches `ImportSchedulePanel`/`TakeoffCanvas`) — is
-   the honest fix for those residuals and for the 216 pure-inference miss.
+   2), and `K=1.6` / the margin are n=1. **Step 5a-part-2 done** (spec:
+   `docs/SCHEDULE-CATEGORY-CONFIDENCE-SPEC.md`): `ScheduleRow.category_inferred`
+   flags a category the parser GUESSED (no detected section — a reset row, a
+   pure-inference row, or the within-section false-fire) rather than read from a
+   header; the import dialog (`ImportSchedulePanel`) surfaces it as a subtle
+   "verify" chip, advisory only (checkbox defaults unchanged). On the vector path
+   every row is under its section, so the flag is always false and the dialog is
+   unchanged. This makes the residual-2 wrong-checked category catchable and gives
+   the 216 pure-inference misses a visible "verify" instead of a silent wrong bid.
    (b) *Breadth*: today's numbers are n=1. Every additional VECTOR schedule is
    free ground truth (`scripts/make-schedule-ocr-fixture.mjs` + a hand-authored
    golden), and a few genuinely SCANNED sets with hand-labeled golden rows are

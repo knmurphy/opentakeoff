@@ -162,6 +162,13 @@ export default function ImportSchedulePanel({ rows = [], existing = new Set(), p
                           <span style={{ color: "var(--ink-muted)", fontSize: 11 }}>  ·  {[r.manufacturer, r.size].filter(Boolean).join(" · ")}</span>
                         )}
                       </span>
+                      {r.category_inferred && (
+                        <span
+                          title={`Category "${grp.label}" was guessed from the code — no section header was read here. Verify before creating.`}
+                          style={{ ...lbl, color: "var(--c-warning)", border: "1px solid var(--c-warning)", borderRadius: 2, padding: "0 4px", opacity: 0.9, flex: "0 0 auto" }}>
+                          verify
+                        </span>
+                      )}
                       {flag && <span style={{ ...lbl, opacity: 0.8 }}>{flag}</span>}
                     </label>
                   );

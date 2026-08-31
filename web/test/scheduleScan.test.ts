@@ -40,6 +40,7 @@ test("drops rows without a finish tag; fills missing fields with empty strings",
   assert.deepEqual(rows[0], {
     finish_tag: "P-1", section: "", category: "other", description: "",
     manufacturer: "", style: "", spec_color: "", size: "", suggested: false,
+    category_inferred: false,
   });
 });
 
@@ -54,6 +55,17 @@ test("explicit suggested boolean overrides the category default", () => {
   assert.equal(ceil.suggested, true);
   const [flr] = normalizeScanRows({ rows: [{ finish_tag: "CPT-1", category: "floor", suggested: false }] });
   assert.equal(flr.suggested, false);
+});
+
+test("category_inferred defaults false, and honors a server-sent boolean", () => {
+  // the VLM reader is confident by default; only a real `true` marks a guess
+  const [d] = normalizeScanRows({ rows: [{ finish_tag: "CPT-1", category: "floor" }] });
+  assert.equal(d.category_inferred, false);
+  const [t] = normalizeScanRows({ rows: [{ finish_tag: "P-1", category: "wall", category_inferred: true }] });
+  assert.equal(t.category_inferred, true);
+  // a non-boolean (garbage) is not trusted → confident
+  const [g] = normalizeScanRows({ rows: [{ finish_tag: "RB-1", category: "base", category_inferred: "yes" }] });
+  assert.equal(g.category_inferred, false);
 });
 
 test("de-dupes by finish_tag, first wins", () => {

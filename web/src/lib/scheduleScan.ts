@@ -110,6 +110,9 @@ function toRow(raw: unknown): ScheduleRow | null {
     // trust the server's checkbox intent only if it sent a real boolean;
     // otherwise fall back to the category default (ceiling/other start off).
     suggested: typeof o.suggested === "boolean" ? o.suggested : SUGGESTED[category],
+    // preserve a server-sent inferred flag; default confident (the VLM reader has
+    // its own reliability — this flag names OUR parser's inference uncertainty).
+    category_inferred: o.category_inferred === true,
   };
 }
 

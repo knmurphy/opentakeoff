@@ -668,3 +668,58 @@ test("residual: a within-section band on a DETECTED section can false-fire the r
   assert.equal(rf?.category, "floor");
   assert.equal(rf?.suggested, true);
 });
+
+// ── category-confidence flag (docs/SCHEDULE-CATEGORY-CONFIDENCE-SPEC.md, 5a-part-2)
+// A category the parser GUESSED (prefix inference or "other", because no section
+// was active) is flagged category_inferred:true so the import dialog can ask the
+// estimator to verify it. The parser sets `section` and the flag in lockstep, so
+// the flag is exactly "this row had no detected section" — the honest signal for
+// the 5a residuals (reset rows, pure-inference rows, the within-section false-fire).
+
+test("category_inferred === (no detected section) across every fixture", () => {
+  // The invariant that ties the flag to provenance: a row is flagged inferred iff
+  // it carries no section (which is set/cleared in lockstep with the category source).
+  const all: OcrWord[][] = [fixture.words, ...PADDLE_DPIS.map((d) => paddleWords(d))];
+  for (const ws of all) {
+    for (const r of parseSchedule(wordsToTokens(ws))) {
+      assert.equal(r.category_inferred === true, r.section === "", `${r.finish_tag}: flag=${r.category_inferred} section="${r.section}"`);
+    }
+  }
+});
+
+test("the vector path never flags a category as inferred (every row is read from a section)", () => {
+  const rows = parseSchedule(wordsToTokens(fixture.words));
+  assert.ok(rows.every((r) => r.category_inferred === false), "a vector row was flagged inferred");
+});
+
+test("the OCR path flags the rows it guesses (at least one inferred per stale-latch DPI)", () => {
+  for (const dpi of [144, 288]) {
+    const rows = parseSchedule(wordsToTokens(paddleWords(dpi)));
+    assert.ok(rows.some((r) => r.category_inferred === true), `${dpi}dpi flagged nothing inferred`);
+    // the reset rows specifically: RB-1/CBT-1 shed their section, so they're flagged
+    for (const tag of ["RB-1", "CBT-1"]) {
+      const r = rows.find((x) => x.finish_tag === tag);
+      assert.ok(r && r.category_inferred === true, `${dpi}dpi ${tag} not flagged inferred`);
+    }
+  }
+});
+
+test("a reset row is flagged inferred; a sectioned row is not", () => {
+  const H = 14;
+  const w = (str: string, x: number, y: number): OcrWord => ({ str, x, y, w: 60, h: H });
+  const words: OcrWord[] = [
+    ...hdrRow(40),
+    w("FLOORING", 40, 80),
+    w("CPT-1", 40, 120), w("SHAW", 360, 120), w("GREY", 960, 120),
+    w("CPT-2", 40, 160), w("SHAW", 360, 160), w("TAN", 960, 160),
+    w("VCT-1", 40, 200), w("ARM", 360, 200), w("WHITE", 960, 200),
+    // BASE dropped, band remains → RB-1 resets off FLOORING
+    w("RB-1", 40, 300), w("VPI", 360, 300), w("FAWN", 960, 300),
+    w("CBT-1", 40, 340), w("JJ", 360, 340), w("ROLLER", 960, 340),
+  ];
+  const rows = parseSchedule(wordsToTokens(words));
+  // CPT-1 read its category from the FLOORING section → confident
+  assert.equal(rows.find((r) => r.finish_tag === "CPT-1")?.category_inferred, false);
+  // RB-1 was reset off FLOORING → its base is a prefix guess → flagged
+  assert.equal(rows.find((r) => r.finish_tag === "RB-1")?.category_inferred, true);
+});
