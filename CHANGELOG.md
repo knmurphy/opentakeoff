@@ -2,6 +2,11 @@
 
 All notable changes to OpenTakeoff. Dates are release/merge dates on `main`.
 
+## 2026-09-01 — an OCR evaluation instrument and doctrine
+
+### Added
+- **The OCR scorer every OCR effort is held to, plus the doctrine that makes it binding.** `lib/ocr/score.ts` lands on `main` with its two attribution layers—word-level (IoU box matching, floor 0.5, detection recall/precision, corpus CER over matched pairs) and row-level (key-field multiset matching, where a misread key is a vanished row, not a typo)—along with the deterministic noise oracle (`lib/ocr/noise.ts`) that judges parsers without an engine, the golden/word fixtures they are tested against (`test/fixtures/schedule-ocr/`, regenerable via `scripts/make-schedule-ocr-fixture.mjs`), and `docs/OCR-EVAL-DOCTRINE.md`: one instrument, matched-DPI-only cross-engine claims, authored ground truth with ink-split precision, the zero-words-is-an-error canary (the tesseract.js 7 `data.words` removal silently zeroed two independent benches), reproduction passes for measured claims, captured fixtures in CI with engines kept out, browser-runtime timing, and stated corpus size. Numbers without a regenerate command are rumors.
+
 ## 2026-08-24 — the takeoff goes back into CAD
 
 ### Added
