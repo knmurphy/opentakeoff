@@ -14,7 +14,8 @@ Every remappable shortcut becomes a **named command**. A **binding** is one **ch
 
 ## 3. Scope — what is remappable, what is not
 
-**Remappable (25 commands):** discrete keypress/chord commands only.
+**Remappable (26 commands):** discrete keypress/chord commands only. (26th
+added 2026-09-25 by the `origin/main` rebase: `repeat`, below.)
 
 | Category | Command id | Default chord |
 |---|---|---|
@@ -29,8 +30,8 @@ Every remappable shortcut becomes a **named command**. A **binding** is one **ch
 | | `highlighter` | `h` |
 | | `dimension` | `n` |
 | | `check` | `k` |
-| | `select` | `v` |
 | | `symbol` | `y` |
+| | `repeat` | `t` |
 | | `curveFlip` | `q` |
 | Navigation | `gallery` | `g` |
 | | `focusMode` | `f` |
