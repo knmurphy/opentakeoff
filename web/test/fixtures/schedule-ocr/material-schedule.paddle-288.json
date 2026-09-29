@@ -1,0 +1,1327 @@
+{
+  "source": "demo/sample-finish-plan.pdf",
+  "page": 2,
+  "dpi": 288,
+  "renderScale": 2,
+  "rect": {
+    "x0": 2300,
+    "y0": 250,
+    "x1": 5050,
+    "y1": 2000
+  },
+  "engine": "paddle-ppocrv5-en-mobile",
+  "words": [
+    {
+      "str": "1",
+      "x": 2595.5,
+      "y": 387.5,
+      "w": 42.5,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "CODE",
+      "x": 2989,
+      "y": 391.5,
+      "w": 89.5,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "MATERIAL/PRODUCT",
+      "x": 3075.5,
+      "y": 391.5,
+      "w": 251.5,
+      "h": 26,
+      "confidence": 0.93
+    },
+    {
+      "str": "MANUFACTURER",
+      "x": 3335.5,
+      "y": 391.5,
+      "w": 206.5,
+      "h": 26,
+      "confidence": 0.93
+    },
+    {
+      "str": "STYLE",
+      "x": 3691.5,
+      "y": 397,
+      "w": 93.5,
+      "h": 37,
+      "confidence": 0.93
+    },
+    {
+      "str": "COLOR",
+      "x": 4023,
+      "y": 397,
+      "w": 102,
+      "h": 37,
+      "confidence": 0.93
+    },
+    {
+      "str": "SIZE",
+      "x": 4256.5,
+      "y": 397,
+      "w": 73,
+      "h": 37,
+      "confidence": 0.93
+    },
+    {
+      "str": "REMARKS",
+      "x": 4549.5,
+      "y": 390.5,
+      "w": 130.5,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "FLOORING",
+      "x": 2979.5,
+      "y": 431.5,
+      "w": 137.5,
+      "h": 27.5,
+      "confidence": 1
+    },
+    {
+      "str": "CPT-1 _",
+      "x": 2978,
+      "y": 478,
+      "w": 66,
+      "h": 31.5,
+      "confidence": 0.88
+    },
+    {
+      "str": "BROADLOOM CARPET",
+      "x": 3077,
+      "y": 474.5,
+      "w": 187,
+      "h": 25,
+      "confidence": 0.88
+    },
+    {
+      "str": "J+J INVISION",
+      "x": 3324.5,
+      "y": 474,
+      "w": 115.5,
+      "h": 26,
+      "confidence": 0.88
+    },
+    {
+      "str": "PAY DAY",
+      "x": 3548.5,
+      "y": 475.5,
+      "w": 89.5,
+      "h": 27.5,
+      "confidence": 0.88
+    },
+    {
+      "str": "1408 HIGH ROLLE",
+      "x": 3921,
+      "y": 474.5,
+      "w": 162.5,
+      "h": 25,
+      "confidence": 0.88
+    },
+    {
+      "str": "CPT-2_",
+      "x": 2978,
+      "y": 518,
+      "w": 67.5,
+      "h": 31.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "MODULAR CARPET TILE",
+      "x": 3077,
+      "y": 514.5,
+      "w": 206.5,
+      "h": 25,
+      "confidence": 0.95
+    },
+    {
+      "str": "J+J INVISION",
+      "x": 3326,
+      "y": 514.5,
+      "w": 114,
+      "h": 25,
+      "confidence": 0.95
+    },
+    {
+      "str": "CITY BLOCKS",
+      "x": 3554,
+      "y": 514.5,
+      "w": 121,
+      "h": 25,
+      "confidence": 0.95
+    },
+    {
+      "str": "1304 HARVARD SQUARE",
+      "x": 3920,
+      "y": 511,
+      "w": 207.5,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "VCT-1_",
+      "x": 2978,
+      "y": 556.5,
+      "w": 67.5,
+      "h": 31.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "VINYL COMPOSITION TILE",
+      "x": 3079.5,
+      "y": 549.5,
+      "w": 220,
+      "h": 20.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "ARMSTRONG",
+      "x": 3326,
+      "y": 549.5,
+      "w": 119.5,
+      "h": 20.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "STANDARD EXCELON IMPERIAL",
+      "x": 3554,
+      "y": 549.5,
+      "w": 264,
+      "h": 20.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "FORTRESS WHITE 51839",
+      "x": 3920,
+      "y": 549.5,
+      "w": 209,
+      "h": 20.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "12\" x 12\"",
+      "x": 4223.5,
+      "y": 552.5,
+      "w": 81,
+      "h": 26,
+      "confidence": 0.96
+    },
+    {
+      "str": "PT-1_",
+      "x": 2972.5,
+      "y": 598,
+      "w": 63.5,
+      "h": 38.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "PORCELAIN CERAMIC TILE",
+      "x": 3077,
+      "y": 588,
+      "w": 227,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "DALTILE",
+      "x": 3323,
+      "y": 591,
+      "w": 84,
+      "h": 27.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "KEYSTONES MOSAIC",
+      "x": 3554,
+      "y": 588,
+      "w": 181.5,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "PEPPER WHITE D137",
+      "x": 3920,
+      "y": 588,
+      "w": 180,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "_2\" x 2\"_",
+      "x": 4219.5,
+      "y": 596.5,
+      "w": 73,
+      "h": 37,
+      "confidence": 0.95
+    },
+    {
+      "str": "GROUT: MAPEI KERACOLOR - 107 IRON",
+      "x": 4360,
+      "y": 588,
+      "w": 330,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "PT-2_",
+      "x": 2976.5,
+      "y": 632,
+      "w": 58,
+      "h": 31.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "PORCELAIN CERAMIC TILE",
+      "x": 3077,
+      "y": 626.5,
+      "w": 229.5,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "DALTILE",
+      "x": 3323,
+      "y": 629.5,
+      "w": 86.5,
+      "h": 27.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "KEYSTONES MOSAIC",
+      "x": 3554,
+      "y": 628.5,
+      "w": 181.5,
+      "h": 25,
+      "confidence": 0.95
+    },
+    {
+      "str": "URBAN PUTTY D161",
+      "x": 3920,
+      "y": 628.5,
+      "w": 172,
+      "h": 25,
+      "confidence": 0.95
+    },
+    {
+      "str": "2\" x 2\"",
+      "x": 4221,
+      "y": 632,
+      "w": 69,
+      "h": 31.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "GROUT: MAPEI KERACOLOR - 107 IRON",
+      "x": 4360,
+      "y": 626.5,
+      "w": 328.5,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "C_",
+      "x": 2971,
+      "y": 675,
+      "w": 44,
+      "h": 44,
+      "confidence": 0.94
+    },
+    {
+      "str": "CONCRETE SEALER",
+      "x": 3079.5,
+      "y": 665,
+      "w": 173.5,
+      "h": 20.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "SHERWIN WILLIALS",
+      "x": 3326,
+      "y": 665,
+      "w": 169,
+      "h": 20.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "H&C DECORATIVE CONCRETE SEALER",
+      "x": 3554,
+      "y": 665,
+      "w": 326,
+      "h": 20.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "CLEAR",
+      "x": 3915.5,
+      "y": 666.5,
+      "w": 74.5,
+      "h": 27.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "RB-1_",
+      "x": 2976.5,
+      "y": 789,
+      "w": 59,
+      "h": 37,
+      "confidence": 0.88
+    },
+    {
+      "str": "RESILIENT BASE",
+      "x": 3077,
+      "y": 783.5,
+      "w": 148.5,
+      "h": 26,
+      "confidence": 0.88
+    },
+    {
+      "str": "VPI FLOORING",
+      "x": 3321.5,
+      "y": 783.5,
+      "w": 137.5,
+      "h": 27.5,
+      "confidence": 0.88
+    },
+    {
+      "str": "RUBBER WALL BASE",
+      "x": 3554,
+      "y": 782.5,
+      "w": 179,
+      "h": 25,
+      "confidence": 0.88
+    },
+    {
+      "str": "97 FAWN",
+      "x": 3915.5,
+      "y": 783.5,
+      "w": 89.5,
+      "h": 26,
+      "confidence": 0.88
+    },
+    {
+      "str": "4\"",
+      "x": 4217,
+      "y": 789,
+      "w": 44,
+      "h": 38.5,
+      "confidence": 0.88
+    },
+    {
+      "str": "CBT-1",
+      "x": 2978,
+      "y": 824.5,
+      "w": 66,
+      "h": 31.5,
+      "confidence": 0.79
+    },
+    {
+      "str": "CARPET WALL BASE",
+      "x": 3077,
+      "y": 821,
+      "w": 176,
+      "h": 25,
+      "confidence": 0.79
+    },
+    {
+      "str": "J+J INVISION",
+      "x": 3323,
+      "y": 822,
+      "w": 119.5,
+      "h": 26,
+      "confidence": 0.79
+    },
+    {
+      "str": "PAY DAY",
+      "x": 3548.5,
+      "y": 822,
+      "w": 89.5,
+      "h": 27.5,
+      "confidence": 0.79
+    },
+    {
+      "str": "1408 HIGH ROLLER",
+      "x": 3920,
+      "y": 821,
+      "w": 165,
+      "h": 25,
+      "confidence": 0.79
+    },
+    {
+      "str": "4\"",
+      "x": 4218,
+      "y": 826,
+      "w": 42.5,
+      "h": 37,
+      "confidence": 0.79
+    },
+    {
+      "str": "CT-3_",
+      "x": 2978,
+      "y": 862,
+      "w": 58,
+      "h": 31.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "CERAMC WALL TILE",
+      "x": 3077,
+      "y": 856.5,
+      "w": 173.5,
+      "h": 20.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "DALTILE_",
+      "x": 3321.5,
+      "y": 860.5,
+      "w": 88,
+      "h": 27.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "COLORWHEEL CLASSIC FLAT TOP COVE .",
+      "x": 3554,
+      "y": 856.5,
+      "w": 348,
+      "h": 20.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "WHITE 0100_",
+      "x": 3917,
+      "y": 859,
+      "w": 110,
+      "h": 26,
+      "confidence": 0.94
+    },
+    {
+      "str": "6\" x 6\"",
+      "x": 4221,
+      "y": 860.5,
+      "w": 69,
+      "h": 27.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "P-1_",
+      "x": 2972.5,
+      "y": 980,
+      "w": 51,
+      "h": 37,
+      "confidence": 0.81
+    },
+    {
+      "str": "PAINT",
+      "x": 3075.5,
+      "y": 974.5,
+      "w": 66,
+      "h": 26,
+      "confidence": 0.81
+    },
+    {
+      "str": "BENJAMIN MOORE",
+      "x": 3326,
+      "y": 973,
+      "w": 162.5,
+      "h": 20.5,
+      "confidence": 0.81
+    },
+    {
+      "str": "ECO SPEC EGGSHELL",
+      "x": 3554,
+      "y": 973,
+      "w": 188.5,
+      "h": 20.5,
+      "confidence": 0.81
+    },
+    {
+      "str": "WHITE 962",
+      "x": 3918.5,
+      "y": 975,
+      "w": 99,
+      "h": 25,
+      "confidence": 0.81
+    },
+    {
+      "str": "P-2",
+      "x": 2971,
+      "y": 1020,
+      "w": 58,
+      "h": 40,
+      "confidence": 0.85
+    },
+    {
+      "str": "PAINT_",
+      "x": 3071.5,
+      "y": 1016,
+      "w": 71.5,
+      "h": 33,
+      "confidence": 0.85
+    },
+    {
+      "str": "BENJAMIN MOORE",
+      "x": 3326,
+      "y": 1011.5,
+      "w": 162.5,
+      "h": 20.5,
+      "confidence": 0.85
+    },
+    {
+      "str": "ECO SPEC EGGSHELL",
+      "x": 3554,
+      "y": 1011.5,
+      "w": 187,
+      "h": 20.5,
+      "confidence": 0.85
+    },
+    {
+      "str": "SMOKEY MOUNTAIN AC-18",
+      "x": 3920,
+      "y": 1012,
+      "w": 227,
+      "h": 25,
+      "confidence": 0.85
+    },
+    {
+      "str": "P-3_",
+      "x": 2972.5,
+      "y": 1058.5,
+      "w": 56.5,
+      "h": 38.5,
+      "confidence": 0.84
+    },
+    {
+      "str": "PAINT_",
+      "x": 3074,
+      "y": 1055.5,
+      "w": 67.5,
+      "h": 31.5,
+      "confidence": 0.84
+    },
+    {
+      "str": "BENJAMIN MOORE",
+      "x": 3326,
+      "y": 1050,
+      "w": 162.5,
+      "h": 20.5,
+      "confidence": 0.84
+    },
+    {
+      "str": "ECO SPEC EGGSHELL",
+      "x": 3554,
+      "y": 1050,
+      "w": 191,
+      "h": 20.5,
+      "confidence": 0.84
+    },
+    {
+      "str": "SHAKER BEIGE HC-45",
+      "x": 3920,
+      "y": 1052,
+      "w": 185.5,
+      "h": 25,
+      "confidence": 0.84
+    },
+    {
+      "str": "CT-1_",
+      "x": 2976.5,
+      "y": 1097,
+      "w": 60.5,
+      "h": 37,
+      "confidence": 0.92
+    },
+    {
+      "str": "CERAMIC WALL TILE",
+      "x": 3077,
+      "y": 1092,
+      "w": 176,
+      "h": 25,
+      "confidence": 0.92
+    },
+    {
+      "str": "DALTILE",
+      "x": 3323,
+      "y": 1093,
+      "w": 84,
+      "h": 27.5,
+      "confidence": 0.92
+    },
+    {
+      "str": "COLORWHEEL CLASSIC",
+      "x": 3554,
+      "y": 1092,
+      "w": 202,
+      "h": 25,
+      "confidence": 0.92
+    },
+    {
+      "str": "WHITE 0100",
+      "x": 3918.5,
+      "y": 1092,
+      "w": 106,
+      "h": 25,
+      "confidence": 0.92
+    },
+    {
+      "str": "3\" x 6\"",
+      "x": 4221,
+      "y": 1095.5,
+      "w": 69,
+      "h": 31.5,
+      "confidence": 0.92
+    },
+    {
+      "str": "GROUT: MAPEI KERACOLOR - 0O WHITE",
+      "x": 4361,
+      "y": 1087.5,
+      "w": 328.5,
+      "h": 18,
+      "confidence": 0.92
+    },
+    {
+      "str": "CT-4_",
+      "x": 2976.5,
+      "y": 1172.5,
+      "w": 62,
+      "h": 33,
+      "confidence": 0.67
+    },
+    {
+      "str": "CERAMIC WALL TIL",
+      "x": 3077,
+      "y": 1167.5,
+      "w": 177.5,
+      "h": 25,
+      "confidence": 0.67
+    },
+    {
+      "str": "DALTILE",
+      "x": 3323,
+      "y": 1168.5,
+      "w": 86.5,
+      "h": 27.5,
+      "confidence": 0.67
+    },
+    {
+      "str": "SEMI GLOS",
+      "x": 3554,
+      "y": 1167.5,
+      "w": 113,
+      "h": 25,
+      "confidence": 0.67
+    },
+    {
+      "str": "ALMOND PL22",
+      "x": 3918.5,
+      "y": 1168.5,
+      "w": 128,
+      "h": 26,
+      "confidence": 0.67
+    },
+    {
+      "str": "4.25\" X 4.25\"",
+      "x": 4223.5,
+      "y": 1168.5,
+      "w": 111.5,
+      "h": 26,
+      "confidence": 0.67
+    },
+    {
+      "str": "GROUT MAPEI KERACOLOR 00 WHITE",
+      "x": 4360,
+      "y": 1167.5,
+      "w": 333,
+      "h": 25,
+      "confidence": 0.67
+    },
+    {
+      "str": "SC-1_",
+      "x": 2975,
+      "y": 1212.5,
+      "w": 60.5,
+      "h": 37,
+      "confidence": 0.95
+    },
+    {
+      "str": "SPECIAL COATING",
+      "x": 3077,
+      "y": 1206,
+      "w": 162.5,
+      "h": 25,
+      "confidence": 0.95
+    },
+    {
+      "str": "BENJAMIN MOORE",
+      "x": 3324.5,
+      "y": 1207,
+      "w": 165,
+      "h": 26,
+      "confidence": 0.95
+    },
+    {
+      "str": "COROTECH POLYAMIDE EPOXY COATING",
+      "x": 3554,
+      "y": 1204,
+      "w": 349.5,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "TINTABLE WHITE - TINT TO SHAKE .",
+      "x": 3918.5,
+      "y": 1204,
+      "w": 300,
+      "h": 20.5,
+      "confidence": 0.95
+    },
+    {
+      "str": "MILLWORK",
+      "x": 2979.5,
+      "y": 1241.5,
+      "w": 141.5,
+      "h": 27.5,
+      "confidence": 1
+    },
+    {
+      "str": "PLAM-1_",
+      "x": 2978,
+      "y": 1286.5,
+      "w": 77,
+      "h": 31.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "PLASTIC LAMINATE",
+      "x": 3077,
+      "y": 1283,
+      "w": 168,
+      "h": 25,
+      "confidence": 0.93
+    },
+    {
+      "str": "WILSONART",
+      "x": 3321.5,
+      "y": 1284,
+      "w": 117,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "STANDARD HPL",
+      "x": 3554,
+      "y": 1283,
+      "w": 139,
+      "h": 25,
+      "confidence": 0.93
+    },
+    {
+      "str": "MANITOBA MAPLE 7911",
+      "x": 3918.5,
+      "y": 1281,
+      "w": 199.5,
+      "h": 20.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "60 MATTE",
+      "x": 4354.5,
+      "y": 1284,
+      "w": 100.5,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "PLAM-2_",
+      "x": 2978,
+      "y": 1325,
+      "w": 78.5,
+      "h": 31.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "PLASTIC LAMINATE",
+      "x": 3077,
+      "y": 1321.5,
+      "w": 169,
+      "h": 25,
+      "confidence": 0.94
+    },
+    {
+      "str": "WILSONART",
+      "x": 3323,
+      "y": 1322.5,
+      "w": 114,
+      "h": 27.5,
+      "confidence": 0.94
+    },
+    {
+      "str": "STANDARD HPL",
+      "x": 3554,
+      "y": 1321.5,
+      "w": 137.5,
+      "h": 25,
+      "confidence": 0.94
+    },
+    {
+      "str": "RIVER CHERRY 7937",
+      "x": 3918.5,
+      "y": 1321.5,
+      "w": 176,
+      "h": 25,
+      "confidence": 0.94
+    },
+    {
+      "str": "38 FINE VELVET",
+      "x": 4358.5,
+      "y": 1321.5,
+      "w": 140.5,
+      "h": 25,
+      "confidence": 0.94
+    },
+    {
+      "str": "S-1 _",
+      "x": 2972.5,
+      "y": 1370.5,
+      "w": 53.5,
+      "h": 38.5,
+      "confidence": 0.9
+    },
+    {
+      "str": "SOLID SURFACE",
+      "x": 3077,
+      "y": 1361,
+      "w": 147,
+      "h": 26,
+      "confidence": 0.9
+    },
+    {
+      "str": "LH HAUSYS",
+      "x": 3324.5,
+      "y": 1361,
+      "w": 107.5,
+      "h": 26,
+      "confidence": 0.9
+    },
+    {
+      "str": "HI-MACS_",
+      "x": 3550,
+      "y": 1362.5,
+      "w": 88,
+      "h": 27.5,
+      "confidence": 0.9
+    },
+    {
+      "str": "R118 REST",
+      "x": 3917,
+      "y": 1361,
+      "w": 103,
+      "h": 26,
+      "confidence": 0.9
+    },
+    {
+      "str": "MATTE",
+      "x": 4354.5,
+      "y": 1362.5,
+      "w": 75.5,
+      "h": 27.5,
+      "confidence": 0.9
+    },
+    {
+      "str": "S-2_",
+      "x": 2972.5,
+      "y": 1406.5,
+      "w": 55,
+      "h": 38.5,
+      "confidence": 0.91
+    },
+    {
+      "str": "SOLID SURFACE SINK",
+      "x": 3077,
+      "y": 1400,
+      "w": 187,
+      "h": 25,
+      "confidence": 0.91
+    },
+    {
+      "str": "LH HAUSYS_",
+      "x": 3324.5,
+      "y": 1401,
+      "w": 108.5,
+      "h": 26,
+      "confidence": 0.91
+    },
+    {
+      "str": "HI-MACS SINK BOWL 1612-AC",
+      "x": 3554,
+      "y": 1398,
+      "w": 247.5,
+      "h": 20.5,
+      "confidence": 0.91
+    },
+    {
+      "str": "IVORY",
+      "x": 3914.5,
+      "y": 1403.5,
+      "w": 73,
+      "h": 31.5,
+      "confidence": 0.91
+    },
+    {
+      "str": "ACT-1_",
+      "x": 2975,
+      "y": 1520.5,
+      "w": 71.5,
+      "h": 33,
+      "confidence": 0.89
+    },
+    {
+      "str": "ACOUSTIAL CEILING TILE",
+      "x": 3077,
+      "y": 1515.5,
+      "w": 216,
+      "h": 25,
+      "confidence": 0.89
+    },
+    {
+      "str": "USG_",
+      "x": 3317.5,
+      "y": 1522,
+      "w": 64.5,
+      "h": 37,
+      "confidence": 0.89
+    },
+    {
+      "str": "2110 RADAR BASIC ACOUSTICAL PANELS",
+      "x": 3554,
+      "y": 1513.5,
+      "w": 346.5,
+      "h": 20.5,
+      "confidence": 0.89
+    },
+    {
+      "str": "WHITE_",
+      "x": 3914.5,
+      "y": 1518,
+      "w": 74.5,
+      "h": 27.5,
+      "confidence": 0.89
+    },
+    {
+      "str": "2' × 2'",
+      "x": 4219.5,
+      "y": 1519,
+      "w": 66,
+      "h": 31.5,
+      "confidence": 0.89
+    },
+    {
+      "str": "ACT-2_",
+      "x": 2976.5,
+      "y": 1556.5,
+      "w": 70,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "ACOUSTIAL CEILING TILE",
+      "x": 3077,
+      "y": 1552,
+      "w": 216,
+      "h": 20.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "USG_",
+      "x": 3319,
+      "y": 1559,
+      "w": 63.5,
+      "h": 37,
+      "confidence": 0.93
+    },
+    {
+      "str": "RADAR CERAMIC ACOUSTICAL PANELS",
+      "x": 3554,
+      "y": 1552,
+      "w": 333,
+      "h": 20.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "WHITE_",
+      "x": 3914.5,
+      "y": 1556.5,
+      "w": 74.5,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "2' x 2'_",
+      "x": 4218,
+      "y": 1557.5,
+      "w": 67.5,
+      "h": 33,
+      "confidence": 0.93
+    },
+    {
+      "str": "P-1 _",
+      "x": 2975,
+      "y": 1674.5,
+      "w": 62,
+      "h": 33,
+      "confidence": 0.71
+    },
+    {
+      "str": "METAL TILE TRIM",
+      "x": 3077,
+      "y": 1672,
+      "w": 152.5,
+      "h": 25,
+      "confidence": 0.71
+    },
+    {
+      "str": "SCHLUTER",
+      "x": 3324.5,
+      "y": 1671.5,
+      "w": 104.5,
+      "h": 26,
+      "confidence": 0.71
+    },
+    {
+      "str": "QUADEC",
+      "x": 3548.5,
+      "y": 1673,
+      "w": 89.5,
+      "h": 27.5,
+      "confidence": 0.71
+    },
+    {
+      "str": "SATIN NICKEL ANODIZE",
+      "x": 3920,
+      "y": 1672,
+      "w": 213,
+      "h": 25,
+      "confidence": 0.71
+    },
+    {
+      "str": "TO FIT TILE",
+      "x": 4223.5,
+      "y": 1671.5,
+      "w": 108.5,
+      "h": 26,
+      "confidence": 0.71
+    },
+    {
+      "str": "TS-1 _",
+      "x": 2976.5,
+      "y": 1717,
+      "w": 59,
+      "h": 37,
+      "confidence": 0.82
+    },
+    {
+      "str": "METAL TRANSITION STRIP",
+      "x": 3079.5,
+      "y": 1710.5,
+      "w": 224,
+      "h": 25,
+      "confidence": 0.82
+    },
+    {
+      "str": "SCHLUTER",
+      "x": 3324.5,
+      "y": 1711.5,
+      "w": 104.5,
+      "h": 26,
+      "confidence": 0.82
+    },
+    {
+      "str": "RENO-U",
+      "x": 3548.5,
+      "y": 1711.5,
+      "w": 86.5,
+      "h": 27.5,
+      "confidence": 0.82
+    },
+    {
+      "str": "SATIN NICKEL ANODIZED",
+      "x": 3920,
+      "y": 1710.5,
+      "w": 213,
+      "h": 25,
+      "confidence": 0.82
+    },
+    {
+      "str": "TO FIT TILE",
+      "x": 4225,
+      "y": 1710.5,
+      "w": 104.5,
+      "h": 25,
+      "confidence": 0.82
+    },
+    {
+      "str": "TS-2_",
+      "x": 2976.5,
+      "y": 1755.5,
+      "w": 60.5,
+      "h": 37,
+      "confidence": 0.92
+    },
+    {
+      "str": "VINYL TRANSITION STRIP",
+      "x": 3079.5,
+      "y": 1747.5,
+      "w": 216,
+      "h": 20.5,
+      "confidence": 0.92
+    },
+    {
+      "str": "JOHNSONITE",
+      "x": 3326,
+      "y": 1749,
+      "w": 117,
+      "h": 25,
+      "confidence": 0.92
+    },
+    {
+      "str": "CTA-63-D",
+      "x": 3550,
+      "y": 1750,
+      "w": 92,
+      "h": 26,
+      "confidence": 0.92
+    },
+    {
+      "str": "63 BURNT UMBER",
+      "x": 3918.5,
+      "y": 1749,
+      "w": 158,
+      "h": 25,
+      "confidence": 0.92
+    },
+    {
+      "str": "HR-1",
+      "x": 2976.5,
+      "y": 1793,
+      "w": 62,
+      "h": 33,
+      "confidence": 0.96
+    },
+    {
+      "str": "HANDRAIL",
+      "x": 3077,
+      "y": 1788.5,
+      "w": 97.5,
+      "h": 26,
+      "confidence": 0.96
+    },
+    {
+      "str": "ACROVYN",
+      "x": 3323,
+      "y": 1788.5,
+      "w": 102,
+      "h": 27.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "HRB-4CN",
+      "x": 3548.5,
+      "y": 1788.5,
+      "w": 95,
+      "h": 27.5,
+      "confidence": 0.96
+    },
+    {
+      "str": "#100 EGGSHELL",
+      "x": 3918.5,
+      "y": 1789,
+      "w": 143,
+      "h": 25,
+      "confidence": 0.96
+    },
+    {
+      "str": "CR-1",
+      "x": 2976.5,
+      "y": 1831.5,
+      "w": 62,
+      "h": 33,
+      "confidence": 0.89
+    },
+    {
+      "str": "CRASH RAIL",
+      "x": 3077,
+      "y": 1827,
+      "w": 111.5,
+      "h": 26,
+      "confidence": 0.89
+    },
+    {
+      "str": "ACROVYN",
+      "x": 3323,
+      "y": 1827,
+      "w": 100.5,
+      "h": 27.5,
+      "confidence": 0.89
+    },
+    {
+      "str": "SCR-48N",
+      "x": 3550,
+      "y": 1827,
+      "w": 89.5,
+      "h": 27.5,
+      "confidence": 0.89
+    },
+    {
+      "str": "#100 EGGSHELL",
+      "x": 3918.5,
+      "y": 1826,
+      "w": 141.5,
+      "h": 25,
+      "confidence": 0.89
+    },
+    {
+      "str": "CG-1 _",
+      "x": 2975,
+      "y": 1870,
+      "w": 63.5,
+      "h": 33,
+      "confidence": 0.93
+    },
+    {
+      "str": "CORNER GUARDS",
+      "x": 3077,
+      "y": 1866,
+      "w": 158,
+      "h": 25,
+      "confidence": 0.93
+    },
+    {
+      "str": "ACROVYN_",
+      "x": 3321.5,
+      "y": 1867,
+      "w": 102,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "SSM-25AN",
+      "x": 3548.5,
+      "y": 1867,
+      "w": 102,
+      "h": 27.5,
+      "confidence": 0.93
+    },
+    {
+      "str": "#100 EGGSHELL",
+      "x": 3917,
+      "y": 1865.5,
+      "w": 144.5,
+      "h": 26,
+      "confidence": 0.93
+    }
+  ]
+}

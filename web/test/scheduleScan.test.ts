@@ -9,7 +9,7 @@
 //   - de-dupes by finish_tag (first wins), since the dialog keys on it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, SCAN_MAX_DIM, SCAN_RETRY_STATUS, scanRasterScale } from "../src/lib/scheduleScan.js";
+import { normalizeScanRows, OCR_TARGET_DPI, ocrRasterScale, postScanWithRetry, routeUnparsedMarquee, SCAN_ENDPOINT, SCAN_MAX_DIM, SCAN_RETRY_STATUS, scanRasterScale, STRAY_TEXT_MAX_TOKENS } from "../src/lib/scheduleScan.js";
 
 test("normalizes a well-formed { rows } payload", () => {
   const rows = normalizeScanRows({
@@ -40,6 +40,7 @@ test("drops rows without a finish tag; fills missing fields with empty strings",
   assert.deepEqual(rows[0], {
     finish_tag: "P-1", section: "", category: "other", description: "",
     manufacturer: "", style: "", spec_color: "", size: "", suggested: false,
+    category_inferred: false,
   });
 });
 
@@ -54,6 +55,17 @@ test("explicit suggested boolean overrides the category default", () => {
   assert.equal(ceil.suggested, true);
   const [flr] = normalizeScanRows({ rows: [{ finish_tag: "CPT-1", category: "floor", suggested: false }] });
   assert.equal(flr.suggested, false);
+});
+
+test("category_inferred defaults false, and honors a server-sent boolean", () => {
+  // the VLM reader is confident by default; only a real `true` marks a guess
+  const [d] = normalizeScanRows({ rows: [{ finish_tag: "CPT-1", category: "floor" }] });
+  assert.equal(d.category_inferred, false);
+  const [t] = normalizeScanRows({ rows: [{ finish_tag: "P-1", category: "wall", category_inferred: true }] });
+  assert.equal(t.category_inferred, true);
+  // a non-boolean (garbage) is not trusted → confident
+  const [g] = normalizeScanRows({ rows: [{ finish_tag: "RB-1", category: "base", category_inferred: "yes" }] });
+  assert.equal(g.category_inferred, false);
 });
 
 test("de-dupes by finish_tag, first wins", () => {
@@ -182,4 +194,47 @@ test("504 retry: a thrown error then a 504 returns the 504", async () => {
   }, { sleep: noSleep });
   assert.equal(res.status, SCAN_RETRY_STATUS);
   assert.equal(calls, 2);
+});
+
+// ── routing a box whose text layer parsed to nothing ────────────────────────
+// Found in the running app: a scan with ONE stray text run in the box never
+// reached on-device OCR unless the user was signed in to the AI reader.
+
+test("a text-less box (true raster page) always goes to the scan readers", () => {
+  assert.equal(routeUnparsedMarquee(0, false), "scan");
+  assert.equal(routeUnparsedMarquee(0, true), "scan");
+});
+
+test("a scan with a few stray text runs reaches the scan readers without sign-in", () => {
+  assert.equal(routeUnparsedMarquee(1, false), "scan");
+  assert.equal(routeUnparsedMarquee(STRAY_TEXT_MAX_TOKENS, false), "scan");
+});
+
+test("a text-rich box that parsed nothing is advice, not a model load, without the AI reader", () => {
+  assert.equal(routeUnparsedMarquee(STRAY_TEXT_MAX_TOKENS + 1, false), "advise");
+  assert.equal(routeUnparsedMarquee(400, false), "advise");
+});
+
+test("the AI reader, when reachable, still gets a text-rich box (unchanged)", () => {
+  assert.equal(routeUnparsedMarquee(400, true), "scan");
+});
+
+// ── on-device OCR render scale ──────────────────────────────────────────────
+
+test("OCR renders at the measured target DPI: RENDER_SCALE 2 (144 DPI) → ×1.5", () => {
+  assert.equal(OCR_TARGET_DPI, 216);
+  assert.equal(ocrRasterScale(2, 1000, 800), 1.5);
+});
+
+test("OCR render is capped at SCAN_MAX_DIM a side, so the AI fallback can reuse it", () => {
+  // The demo schedule marquee: 2750 × 1750 rs-px. ×1.5 would be 4125 wide.
+  const f = ocrRasterScale(2, 2750, 1750);
+  assert.ok(Math.round(2750 * f) <= SCAN_MAX_DIM);
+  assert.ok(f > 1.45 && f < 1.5);
+  // A whole-sheet box shrinks, like the AI path.
+  assert.ok(Math.round(6048 * ocrRasterScale(2, 6048, 4320)) <= SCAN_MAX_DIM);
+});
+
+test("a lower page render scale gets a bigger OCR factor to the same DPI", () => {
+  assert.equal(ocrRasterScale(1, 500, 500), 3);
 });

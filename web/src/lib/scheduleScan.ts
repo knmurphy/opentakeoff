@@ -31,6 +31,43 @@ export function scanRasterScale(regW: number, regH: number, maxDim: number = SCA
   return Math.min(1, maxDim / w, maxDim / h);
 }
 
+// Render DPI for the ON-DEVICE reader. Measured, not guessed (docs/SCHEDULE-OCR.md
+// Experiment 3, PaddleOCR on the demo schedule): 78.6% exact row recall at 144 DPI,
+// 92.9% at 216, no better at 288. The canvas renders at RENDER_SCALE (144 DPI), so
+// the OCR raster is UPSCALED from the PDF (a real re-render, not a pixel stretch).
+export const OCR_TARGET_DPI = 216;
+const PDF_POINTS_PER_INCH = 72;
+
+// Render factor (× the region's rs-px size) for the on-device reader: reach
+// OCR_TARGET_DPI, but never past `maxDim` a side — the same cap as scanRasterScale,
+// so a raster rendered for OCR is still one the AI fallback accepts when OCR reads
+// nothing and the canvas reuses it. May be > 1 (upscale) or < 1 (a huge box).
+export function ocrRasterScale(renderScale: number, regW: number, regH: number, maxDim: number = SCAN_MAX_DIM): number {
+  const w = Math.max(1, regW), h = Math.max(1, regH);
+  const target = OCR_TARGET_DPI / (PDF_POINTS_PER_INCH * Math.max(1e-6, renderScale));
+  return Math.min(target, maxDim / w, maxDim / h);
+}
+
+// A marquee with text the vector parser can't read is either a scanned schedule
+// under a few stray text runs (title-block text, a stamp, a scanner's label) or a
+// vector sheet where the box missed the table. The count tells them apart: a real
+// vector table area carries dozens of runs; a scan's stray layer, a handful. So a
+// box at or under this count goes to the scan readers (on-device OCR first, which
+// probes for its model with one HEAD before loading anything); above it, only the
+// AI reader may try, else the estimator gets the "drag around the header" advice at
+// once — no 40 MB model load for a sloppy box on a vector sheet. A scan with a FULL
+// embedded OCR text layer lands above the count; that is a known limit.
+export const STRAY_TEXT_MAX_TOKENS = 8;
+
+export type UnparsedMarqueeRoute = "scan" | "advise";
+
+// Route a box whose text layer parsed to no schedule rows. tokenCount 0 (a true
+// raster page) always goes to the scan readers, exactly as before.
+export function routeUnparsedMarquee(tokenCount: number, aiReaderReachable: boolean): UnparsedMarqueeRoute {
+  if (tokenCount <= STRAY_TEXT_MAX_TOKENS) return "scan";
+  return aiReaderReachable ? "scan" : "advise";
+}
+
 // Netlify's synchronous function cap (measured ~30s on this deployment's plan)
 // returns a 504 gateway page — HTML, not our JSON — when a COLD start plus a slow
 // vision call overruns it; the immediately-following WARM call succeeds (#102).
@@ -110,6 +147,9 @@ function toRow(raw: unknown): ScheduleRow | null {
     // trust the server's checkbox intent only if it sent a real boolean;
     // otherwise fall back to the category default (ceiling/other start off).
     suggested: typeof o.suggested === "boolean" ? o.suggested : SUGGESTED[category],
+    // preserve a server-sent inferred flag; default confident (the VLM reader has
+    // its own reliability — this flag names OUR parser's inference uncertainty).
+    category_inferred: o.category_inferred === true,
   };
 }
 

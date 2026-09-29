@@ -22,6 +22,11 @@ export type ScheduleRow = {
   spec_color: string;        // COLOR cell (the spec'd color, e.g. "1408 RIVERSTONE")
   size: string;              // SIZE cell
   suggested: boolean;        // default-checked in the dialog (ceiling/other start off)
+  // true when the category was GUESSED (prefix inference or "other", because no
+  // section header was active) rather than READ from a detected section — the
+  // import dialog surfaces it as "verify" (docs/SCHEDULE-CATEGORY-CONFIDENCE-SPEC.md).
+  // Optional so existing row literals / server payloads default to confident.
+  category_inferred?: boolean;
 };
 
 // Section header text → category. A flooring tool cares about floor/base/wall
@@ -49,9 +54,117 @@ type Column = (typeof COLUMNS)[number];
 // ACT-1, PLAM-2, RES-W), or a lone letter (C = concrete sealer). Section words
 // are caps too, so the caller checks those first.
 const CODE_RE = /^[A-Z]{1,4}(-[A-Z0-9]{1,4})?$/;
+// OCR-tolerant code shape (issue: browser-OCR noise budget). When the strict
+// form fails, accept 1–5 alnum + optional "-" + 1–5 alnum PROVIDED there is at
+// least one letter — so a glyph confusion in the alpha prefix (CPT-1 → CP7-1)
+// still reads as a code, while a lone number (a keynote, a dim, a stray color
+// index like 51839) never does. Only reached when the strict form misses, so
+// clean vector text is byte-for-byte unaffected.
+const CODE_RE_FUZZY = /^[A-Z0-9]{1,5}(-[A-Z0-9]{1,5})?$/;
+const looksLikeCode = (s: string): boolean => CODE_RE.test(s) || (CODE_RE_FUZZY.test(s) && /[A-Z]/.test(s));
 
 const norm = (s: string) => (s || "").trim().toUpperCase();
 const sectionKey = (s: string) => norm(s).replace(/[^A-Z]/g, "");
+
+// Bounded edit distance: is `a` within `k` edits of `b`? Early-exits when a
+// whole DP row exceeds k, so it stays cheap for the k∈{1,2} the fuzzy fallbacks
+// use. The harness (lib/ocr/score.ts) has a full levenshtein for measurement;
+// this bounded twin keeps scheduleParse self-contained and pdfjs-free.
+function withinEdits(a: string, b: string, k: number): boolean {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > k) return false;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= n; j++) {
+      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > k) return false;
+    prev = cur;
+  }
+  return prev[n] <= k;
+}
+
+// A header word matches its column name when it starts with the 5-char prefix
+// (the strict rule) OR the same length of prefix is within 1 edit (a confusion
+// like MANUF→MANDF, or COLOR→C0LOR). Comparing only the prefix keeps a wrapped
+// two-word header ("MATERIAL/PRODUCT") matching MATERIAL.
+const headerHit = (u: string, col: Column): boolean => {
+  const p = col.slice(0, 5);
+  return u.startsWith(p) || withinEdits(u.slice(0, p.length), p, 1);
+};
+const fuzzyIncludes = (ups: string[], target: string, k: number): boolean =>
+  ups.includes(target) || ups.some((u) => withinEdits(u, target, k));
+
+// The section vocabulary as a list, for prefix/fuzzy resolution when the exact
+// stripped key misses. Order is longest-first so a longer word wins a prefix
+// tie (MISCFINISHES → MISC before any 4-letter near-miss).
+const SECTION_WORDS = Object.keys(SECTION_CATEGORY).sort((a, b) => b.length - a.length);
+
+// Resolve a stripped section key to its category, OCR-tolerantly. Exact wins;
+// then a prefix relationship of ≥4 shared leading chars (this is what catches
+// "MISC. FINISHES" → MISCFINISHES → MISC, a real-layout miss the strict map has
+// always had); then within 1 edit (2 for the longer words). Returns null when
+// nothing plausibly matches, so a data row is never mistaken for a section.
+function sectionCategory(key: string): Category | null {
+  if (SECTION_CATEGORY[key]) return SECTION_CATEGORY[key];
+  for (const w of SECTION_WORDS) {
+    if (w.length >= 4 && key.length >= 4 && (key.startsWith(w) || w.startsWith(key))) return SECTION_CATEGORY[w];
+  }
+  for (const w of SECTION_WORDS) {
+    if (withinEdits(key, w, w.length >= 7 ? 2 : 1)) return SECTION_CATEGORY[w];
+  }
+  return null;
+}
+
+// Conservative finish-code prefix → category, consulted ONLY when no section
+// header is active (docs/SCHEDULE-CELL-PARSING-SPEC.md): an OCR engine drops the
+// isolated section words unpredictably, so a rescued row still gets a sensible
+// category. ONLY unambiguous flooring-trade prefixes are listed — a prefix that
+// spans categories in real schedules (PT porcelain floor-or-wall, CT ceramic
+// wall-or-base, P paint) is deliberately ABSENT so it falls back to "other"
+// instead of guessing wrong. Never overrides a detected section (see parseSchedule).
+// Kept deliberately SMALL and defensible — every prefix here is an unambiguous
+// flooring-trade convention (carpet/vinyl/resilient → floor; resilient/carpet
+// base → base; acoustic ceiling → ceiling). Prefixes that span categories in
+// real schedules are omitted (PT/CT/P) as are weaker two-letter guesses
+// (WB/VB/SB). Inference is a best-effort gap-filler, never authoritative.
+const CODE_PREFIX_CATEGORY: Record<string, Category> = {
+  CPT: "floor", VCT: "floor", LVT: "floor", LVP: "floor", RF: "floor", WSF: "floor", RES: "floor",
+  RB: "base", CBT: "base",
+  ACT: "ceiling", ACP: "ceiling",
+};
+// The alpha prefix of a finish code: the leading A–Z run before any digit/dash.
+const prefixCategory = (code: string): Category | null =>
+  CODE_PREFIX_CATEGORY[/^[A-Z]+/.exec(code)?.[0] ?? ""] ?? null;
+
+// A clustered row that is a column-HEADER (not data): the header signature is
+// CODE + a MANUFACTURER/COLOR anchor. Used to skip the header AND any repeated
+// header (a second stacked table's header row) so neither leaks a "CODE" row.
+function isHeaderRow(r: Token[]): boolean {
+  const ups = r.map((t) => norm(t.str).replace(/[^A-Z]/g, ""));
+  return fuzzyIncludes(ups, "CODE", 1) && (fuzzyIncludes(ups, "MANUFACTURER", 2) || fuzzyIncludes(ups, "COLOR", 1));
+}
+
+// A clustered row that is a SECTION label, else null. A section label is a BARE
+// discipline word (no dash/digit): "BASE-1" is a finish code, NOT the BASE
+// section — without this guard the fuzzy resolver eats the code AND its whole
+// data row, then mis-categorizes every row beneath it (adversarial review M4).
+function asSectionRow(r: Token[]): { key: string; cat: Category } | null {
+  const first = r[0];
+  // A finish code carries a dash-suffix ("BASE-1", "FLOOR-2"); a section label
+  // does not. Keying on the dash (not on digits) still lets a digit-CONFUSED
+  // section word through — "FL0ORING" has no dash and resolves to FLOORING.
+  if (first.str.includes("-")) return null;
+  const joined = r.map((t) => t.str).join(" ").trim();
+  if (joined.length >= 24) return null;
+  const key = sectionKey(first.str);
+  const cat = sectionCategory(key);
+  return cat ? { key, cat } : null;
+}
 
 // Cluster tokens into visual rows by y, then order each row left→right. A row's
 // y is the running average so a tall cell doesn't split. tolFrac scales the gap
@@ -72,25 +185,62 @@ function clusterRows(tokens: Token[]): Token[][] {
 }
 
 const cx = (t: Token) => t.x + 0; // x is the left edge; header cells left-align, so left edge anchors best
+const rowCy = (r: Token[]) => r.reduce((s, t) => s + t.y, 0) / r.length;
+
+// Blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md): a mid-table
+// section header an OCR engine DROPS leaves its two neighbouring data rows
+// ADJACENT, separated by a band — a gap larger than the table's data-row pitch.
+// The reset keys on that gap MEASURED RELATIVE TO the pitch, never an absolute
+// k·h: the vector text layer (cap-height) and an OCR engine (full glyph extent)
+// scale token height differently, so any absolute multiple that fires on an OCR
+// band also fires on vector rows. Two guards keep it off the shipped vector
+// path: (1) it fires only BETWEEN TWO ADJACENT DATA ROWS — a *present* section
+// header sits between its neighbours as a section row and breaks the adjacency,
+// so a band around a detected header never resets; (2) the pitch is the median
+// of adjacent data→data gaps only, so a minority of dropped-header bands can't
+// inflate it. K=1.6 is tuned on the demo sheet (n=1): there the largest
+// non-section data→data gap is 1.06× the pitch and the smallest dropped-section
+// band is 1.94×, so 1.6 separates them — but the nearest firing band is ~0.34
+// away, not a wide valley, and the constant is not yet corpus-validated (step 5b).
+const BAND_GAP_K = 1.6;
+const MIN_GAP_SAMPLES = 4; // too few data→data gaps → the median is noise → reset disabled
+
+// True median (the two central values averaged for an even count, so the estimate
+// isn't biased to the upper-middle gap), or null when there are too few samples.
+// The even-count averaging is defensive: on the demo layouts it doesn't change a
+// reset outcome (no committed test distinguishes it from the upper-middle gap).
+function medianOf(xs: number[]): number | null {
+  if (xs.length < MIN_GAP_SAMPLES) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
 
 // Find the header row and return its column anchors (x of each found header
-// token, sorted). Requires CODE plus one of MANUFACTURER/COLOR so we don't
+// token, sorted) plus its INDEX in `rows` (so the caller processes only rows
+// below it — the header's own first cell "CODE" is code-shaped and must never
+// be read as data). Requires CODE plus one of MANUFACTURER/COLOR so we don't
 // mistake a data row for the header.
-function findAnchors(rows: Token[][]): { col: Column; x: number }[] | null {
-  for (const r of rows) {
+interface HeaderMatch { anchors: { col: Column; x: number }[]; headerIdx: number }
+function findAnchors(rows: Token[][]): HeaderMatch | null {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     const ups = r.map((t) => norm(t.str).replace(/[^A-Z]/g, ""));
-    const hasCode = ups.includes("CODE");
-    const hasAnchor = ups.includes("MANUFACTURER") || ups.includes("COLOR");
+    // Header words tolerate noise: CODE within 1 edit, MANUFACTURER within 2
+    // (it's long), COLOR within 1 — so a single glyph confusion in a header
+    // cell no longer drops the whole schedule (the parser's sharpest cliff).
+    const hasCode = fuzzyIncludes(ups, "CODE", 1);
+    const hasAnchor = fuzzyIncludes(ups, "MANUFACTURER", 2) || fuzzyIncludes(ups, "COLOR", 1);
     if (!hasCode || !hasAnchor) continue;
     const anchors: { col: Column; x: number }[] = [];
     for (const t of r) {
       const u = norm(t.str).replace(/[^A-Z]/g, "");
-      for (const c of COLUMNS) if (u.startsWith(c.slice(0, 5))) { anchors.push({ col: c, x: cx(t) }); break; }
+      for (const c of COLUMNS) if (headerHit(u, c)) { anchors.push({ col: c, x: cx(t) }); break; }
     }
     // de-dupe (a wrapped header can repeat) keeping the leftmost, need ≥3 to band
     const seen = new Set<string>();
     const uniq = anchors.filter((a) => (seen.has(a.col) ? false : (seen.add(a.col), true))).sort((a, b) => a.x - b.x);
-    if (uniq.length >= 3) return uniq;
+    if (uniq.length >= 3) return { anchors: uniq, headerIdx: i };
   }
   return null;
 }
@@ -102,31 +252,110 @@ function columnFor(x: number, anchors: { col: Column; x: number }[]): Column {
   return best.col;
 }
 
+export interface ParseOptions {
+  // The blank-band section reset (docs/SCHEDULE-SECTION-RESET-SPEC.md, step 5a).
+  // Default true (production). The harness/tests pass false to measure the reset's
+  // effect against the pre-reset parse (it is a section-attribution change only —
+  // it never alters which rows are emitted or their content cells).
+  sectionReset?: boolean;
+}
+
+// Classify a below-header row: a repeated table header, a discipline section
+// label, a data row (code-shaped first cell), or junk. The band reset and the
+// pitch estimate both key on DATA rows, so this is computed once and shared.
+type RowKind = "header" | "section" | "data" | "skip";
+
 /**
  * Parse positioned tokens (already cropped to the marquee region) into rows.
  * Returns [] when no header/section structure is found — the caller shows
  * "no schedule detected here" rather than inventing rows.
  */
-export function parseSchedule(tokens: Token[]): ScheduleRow[] {
+export function parseSchedule(tokens: Token[], opts: ParseOptions = {}): ScheduleRow[] {
+  const sectionReset = opts.sectionReset ?? true;
   const rows = clusterRows(tokens);
-  const anchors = findAnchors(rows);
-  if (!anchors) return [];
+  const found = findAnchors(rows);
+  if (!found) return [];
+  const { anchors, headerIdx } = found;
 
-  let section: string | null = null;
+  // One classification pass below the header, reused by the pitch estimate and
+  // the loop (so the two can never drift). asSectionRow is cached per row.
+  const sectionRow: ReturnType<typeof asSectionRow>[] = rows.map(() => null);
+  const kind: RowKind[] = rows.map((r, i) => {
+    if (i <= headerIdx) return "skip";
+    if (isHeaderRow(r)) return "header";
+    const s = asSectionRow(r);
+    if (s) { sectionRow[i] = s; return "section"; }
+    return looksLikeCode(norm(r[0].str).replace(/[^A-Z0-9-]/g, "")) ? "data" : "skip";
+  });
+
+  // Pitch = median gap between ADJACENT data rows. A dropped section header
+  // leaves its neighbours adjacent (both "data"); a present header sits between
+  // them as a "section" row and breaks the adjacency — so the pitch excludes the
+  // very bands it will be compared against, and a band around a detected header
+  // is never even a candidate. null on a tiny table → reset disabled (step-4).
+  const dataGaps: number[] = [];
+  for (let i = headerIdx + 1; i < rows.length; i++)
+    if (kind[i] === "data" && kind[i - 1] === "data") dataGaps.push(rowCy(rows[i]) - rowCy(rows[i - 1]));
+  const pitch = medianOf(dataGaps);
+
+  let section = "";
+  let sectionCat: Category | null = null;
+  // Seed the section from a discipline label sitting ABOVE the column header
+  // (some layouts put "FLOORING" over the header row). Without this the section
+  // would be lost when we start reading below the header (adversarial review M3).
+  for (let i = 0; i < headerIdx; i++) {
+    const s = asSectionRow(rows[i]);
+    if (s) { section = s.key; sectionCat = s.cat; }
+  }
+
   const out: ScheduleRow[] = [];
-  for (const r of rows) {
+  // Only rows BELOW the header are data. The header row itself (first cell
+  // "CODE", code-shaped) and any title/page text above it are never rows.
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const r = rows[i];
+    // A repeated header (a second stacked table) is a separator, never data —
+    // its "CODE" cell is code-shaped and would otherwise leak a row. It also
+    // starts a NEW table, so clear the section (table 1's last section must not
+    // bleed into table 2's rows).
+    if (kind[i] === "header") { section = ""; sectionCat = null; continue; }
+    // A section label updates the current category and is not itself a row.
+    if (kind[i] === "section") { section = sectionRow[i]!.key; sectionCat = sectionRow[i]!.cat; continue; }
+    if (kind[i] !== "data") continue; // junk (a lone bubble/note) — never a row
+    // Blank-band reset: between two ADJACENT data rows, a gap far larger than the
+    // data-row pitch is the ghost of a section header the OCR engine dropped.
+    // Clear the stale section so this row is categorized by prefix inference (or
+    // "other") instead of latching the section above the band — a base row must
+    // not bid as the floor above it (docs/SCHEDULE-SECTION-RESET-SPEC.md). Only
+    // between adjacent data rows, so a *present* header (a section row between the
+    // neighbours) is never a false trigger; still, a within-section band (a
+    // wrapped-remark spacer row) can false-fire — a documented residual.
+    if (sectionReset && pitch !== null && kind[i - 1] === "data"
+        && rowCy(rows[i]) - rowCy(rows[i - 1]) > BAND_GAP_K * pitch) {
+      section = ""; sectionCat = null;
+    }
+    // A code-shaped first cell IS a row — NOT gated on a preceding section
+    // header, which an OCR engine drops unpredictably and would take every row
+    // beneath it down with it (docs/SCHEDULE-CELL-PARSING-SPEC.md). Fuzzy code
+    // shape so a confused glyph (CPT-1 → CP7-1) doesn't silently drop the row.
     const first = r[0];
-    const key = sectionKey(first.str);
-    const joined = r.map((t) => t.str).join(" ").trim();
-    // a lone-ish section header row
-    if (SECTION_CATEGORY[key] && joined.length < 24) { section = key; continue; }
-    // data rows need a section and a code-shaped first cell
     const codeTok = norm(first.str).replace(/[^A-Z0-9-]/g, "");
-    if (!section || !CODE_RE.test(codeTok)) continue;
 
     const cells: Record<Column, string[]> = { CODE: [], MATERIAL: [], MANUFACTURER: [], STYLE: [], COLOR: [], SIZE: [], REMARKS: [] };
     for (const t of r) cells[columnFor(cx(t), anchors)].push(t.str.trim());
-    const category = SECTION_CATEGORY[section] ?? "other";
+    // Junk guard (the section gate used to suppress this, and it's gone): a real
+    // data row fills the CODE column PLUS at least one other. A lone token — a
+    // revision bubble "A", a stray "GC" note — fills only one column and is not
+    // a row. Keeps the spec's "nothing is invented" invariant (review M1).
+    const filled = (Object.keys(cells) as Column[]).filter((c) => cells[c].length).length;
+    if (filled < 2) continue;
+    // A detected section is authoritative; with none active, infer category
+    // from the code prefix (conservative, unambiguous only); else "other".
+    // Inference NEVER overrides a section — the vector path always has sections
+    // in order, so this branch only fires on OCR-missed-section rows.
+    // No active section ⇒ the category was GUESSED, not read — flag it so the
+    // dialog asks for a verify (docs/SCHEDULE-CATEGORY-CONFIDENCE-SPEC.md).
+    const inferred = sectionCat === null;
+    const category = sectionCat ?? prefixCategory(codeTok) ?? "other";
     out.push({
       finish_tag: codeTok,
       section,
@@ -137,6 +366,7 @@ export function parseSchedule(tokens: Token[]): ScheduleRow[] {
       spec_color: cells.COLOR.join(" ").trim(),
       size: cells.SIZE.join(" ").trim(),
       suggested: SUGGESTED[category],
+      category_inferred: inferred,
     });
   }
   return out;
