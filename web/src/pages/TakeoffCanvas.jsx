@@ -55,7 +55,7 @@ import { isCanvasBusy } from "../lib/canvasBusy";
 import { parseSchedule, rowToSeed } from "../lib/scheduleParse";
 import { wordsToTokens } from "../lib/ocr/types";
 import { createScheduleOcrClient } from "../lib/scheduleOcrClient";
-import { normalizeScanRows, postScanWithRetry, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
+import { normalizeScanRows, ocrRasterScale, postScanWithRetry, routeUnparsedMarquee, SCAN_ENDPOINT, scanRasterScale } from "../lib/scheduleScan";
 import { normalizeTag } from "../lib/scheduleEdit";
 // Condition twins — the whole inheritance rule is in lib/variants.ts (test/variants.test.ts);
 // this file only calls it from the material write paths and the condition deletes.
@@ -6765,9 +6765,10 @@ export default function TakeoffCanvas() {
   // (ScheduleRow[] → the same dialog):
   //   • vector plans: the page text layer inside the box IS the extraction —
   //     no OCR, open to everyone (parseSchedule);
-  //   • scanned plans: the box has no text tokens, so we rasterize it and hand
-  //     the PNG to the optional AI backend (/ai/parse-schedule). That path is
-  //     login-gated (see importScheduleFromScan).
+  //   • scanned plans: the box has no text tokens (or only a few stray runs), so
+  //     we rasterize it and read the pixels — on-device OCR when this deployment
+  //     ships the model, else the optional login-gated AI backend
+  //     (/ai/parse-schedule). See importScheduleFromScan.
   // Corners a,b are stage px (raw cursor, snapping exempted at pointer-down).
   async function importScheduleFromRect(a, b) {
     if (status !== "ready") { setCommitMsg("Sheet still loading — try again in a moment."); return; }
@@ -6790,20 +6791,22 @@ export default function TakeoffCanvas() {
     // isn't proof of a vector page: scanned plans often carry a stray text layer
     // (embedded OCR, a title block, dimension text) that lands in the marquee yet
     // holds no schedule. So a token-bearing box that parses to NOTHING is not a
-    // dead end — fall through to the AI scan path when it's reachable, exactly as
-    // a truly text-less raster page would.
+    // dead end — fall through to the scan readers, exactly as a truly text-less
+    // raster page would, when the box looks like a scan (a few stray runs) or the
+    // AI reader is reachable (routeUnparsedMarquee in scheduleScan.ts).
     if (tokens.length) {
       const rows = parseSchedule(tokens);
       if (rows.length) { setImportRows(rows); return; }
-      // Parsed nothing. If the scan reader isn't reachable — not configured, not
-      // signed in, or the account is outside the org domain — the only actionable
-      // advice is to re-drag around the table header. Don't fire a paid OCR call
-      // and don't claim the page is scanned.
-      if (!isGoogleConfigured() || !isSignedIn() || !isAllowedDomain()) {
+      // Parsed nothing. Dozens of runs and no AI reader ⇒ a vector sheet where the
+      // box missed the table: the only actionable advice is to re-drag around the
+      // header. Don't load the OCR model or fire a paid call, and don't claim the
+      // page is scanned.
+      const aiReachable = isGoogleConfigured() && isSignedIn() && isAllowedDomain();
+      if (routeUnparsedMarquee(tokens.length, aiReachable) === "advise") {
         setCommitMsg("No schedule found in that box — drag around the finish/material schedule (its CODE / MATERIAL / … header).");
         return;
       }
-      // else: the reader is available — let it read the pixels below.
+      // else: a scan-like box, or the AI reader is available — read the pixels below.
     }
     await importScheduleFromScan(pageObj, rs, rect, seq, tokens.length);
   }
@@ -6841,7 +6844,7 @@ export default function TakeoffCanvas() {
         const ocr = (ocrClientRef.current ??= createScheduleOcrClient());
         if (await ocr.ensureReady()) {
           if (seq !== renderSeqRef.current) return;
-          try { raster = await rasterizeRegion(pageObj, rs, rect, { rgba: true }); }
+          try { raster = await rasterizeRegion(pageObj, rs, rect, { rgba: true, ocr: true }); }
           catch { setCommitMsg("Couldn't read that region."); return; }
           if (seq !== renderSeqRef.current) return;
           setCommitMsg("Reading the scanned schedule on-device…");
@@ -6950,7 +6953,10 @@ export default function TakeoffCanvas() {
   async function rasterizeRegion(pageObj, rs, rect, opts = {}) {
     const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
     const regW = Math.max(1, Math.abs(rect.x1 - rect.x0)), regH = Math.max(1, Math.abs(rect.y1 - rect.y0));
-    const factor = Math.min(1, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)), scanRasterScale(regW, regH));
+    // opts.ocr: render at the on-device reader's measured DPI (may upscale past
+    // rs); otherwise the AI path's never-upscale factor. Both respect SCAN_MAX_DIM.
+    const want = opts.ocr ? ocrRasterScale(rs, regW, regH) : scanRasterScale(regW, regH);
+    const factor = Math.min(want, MAX_CANVAS_DIM / regW, MAX_CANVAS_DIM / regH, Math.sqrt(MAX_CANVAS_AREA / (regW * regH)));
     const bw = Math.max(1, Math.round(regW * factor)), bh = Math.max(1, Math.round(regH * factor));
     const vp = pageObj.getViewport({ scale: rs * factor });
     const canvas = document.createElement("canvas");
@@ -6965,7 +6971,7 @@ export default function TakeoffCanvas() {
     // rgba + geometry feed the client-side OCR worker (step 6): the geometry maps
     // a crop-px box back to the rs-viewport px the parser tokens live in, so an
     // OCR'd scan and a vector text layer land in the SAME coordinate space and
-    // feed the one parseSchedule. zoom = factor (the render downscale); rect is
+    // feed the one parseSchedule. zoom = factor (the render scale vs rs); rect is
     // the marquee in rs px. (raster.ts cropBoxToWord is the inverse.) Only read
     // back when asked — the Gemini path wants b64 only, not a full getImageData.
     const base = { b64: dataUrl.split(",")[1] || "", width: bw, height: bh };

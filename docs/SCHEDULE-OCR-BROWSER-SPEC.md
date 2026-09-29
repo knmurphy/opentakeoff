@@ -56,9 +56,21 @@ The running app never talks to a model CDN. Two same-origin assets make that tru
   assets via `?url` imports in the worker (`ort-wasm-simd-threaded.jsep.{mjs,wasm}`),
   set as `ort.env.wasm.wasmPaths = { mjs, wasm }` — the exact pattern
   `src/lib/stt/transformersJs.ts` already uses. So Vite hashes the runtime into
-  `dist/assets` (no CDN, no separate staging, no duplicate copy). The package's
-  default (a jsdelivr CDN) is never reached — proven by the spike, which failed on the
-  CDN fetch until `wasmPaths` was pinned.
+  `dist/assets` (no CDN, no separate staging). The package's default (a jsdelivr CDN)
+  is never reached — proven by the spike, which failed on the CDN fetch until
+  `wasmPaths` was pinned.
+- **One onnxruntime-web for voice and OCR.** `@huggingface/transformers` pins an exact
+  onnxruntime-web build, and voice sets its `wasmPaths` from bare
+  `onnxruntime-web/…?url` imports — which resolve to the TOP-LEVEL copy. A second,
+  newer top-level version (this branch first added `^1.29.0`) pushed transformers'
+  copy into a nested `node_modules`, so voice ran 1.26 JS glue against a 1.30 wasm
+  binary — an unsupported pairing that Node CI (onnxruntime-node) cannot see. So
+  `web/package.json` pins onnxruntime-web to transformers' exact version and forces it
+  with `overrides` (ppu-paddle-ocr's optional peer range `^1.23.2` excludes the
+  prerelease; it uses only `InferenceSession`/`Tensor`/`env`). `npm ls onnxruntime-web`
+  must show ONE version. Bumping transformers means bumping this pin with it. Two wasm
+  variants still ship — `asyncify` (voice) and `jsep` (OCR, the flavour bare
+  `onnxruntime-web` loads) — both from that one version.
 
 **Deployment constraints, all satisfied** (the same envelope voice ships under):
 no COOP/COEP ⇒ no SharedArrayBuffer ⇒ `numThreads = 1`. The validated path ran on
@@ -89,6 +101,45 @@ existing AI-reader path** unchanged.
 The vector path is untouched: a token-bearing box still parses straight from the text
 layer before any of this.
 
+### Routing a marquee (added 2026-09-29)
+
+A token-bearing box that parses to NO rows used to stop with "drag around the header"
+unless the AI reader was configured and signed in — so on a public deployment a scan
+with any stray text in the box (title-block text, a stamp, a scanner label) never
+reached on-device OCR. Reproduced in the running app: a 200 DPI image-only copy of the
+demo schedule page plus one inserted text run gave the advice and no read.
+`routeUnparsedMarquee` (`src/lib/scheduleScan.ts`) now decides:
+
+- **≤ `STRAY_TEXT_MAX_TOKENS` (8) runs** → the scan readers (on-device OCR first). A
+  deployment without the model spends one HEAD probe and gives the same advice.
+- **More runs, no AI reader** → the advice at once. A real vector table area has
+  dozens of runs, so a sloppy box on a vector sheet never loads the ~40 MB model.
+- **More runs, AI reader reachable** → the scan readers, unchanged.
+
+Known limit: a scan with a FULL embedded OCR text layer lands above the count and is
+not read on-device without the AI reader.
+
+### OCR render DPI (added 2026-09-29)
+
+The OCR raster renders the region at `OCR_TARGET_DPI` = 216 (`ocrRasterScale`), a
+real re-render from the PDF, not a stretch of the 144 DPI canvas bitmap — Experiment 3
+measured 78.6% exact row recall at 144 DPI and 92.9% at 216. It stays within
+`SCAN_MAX_DIM` (4096 px a side) so the AI fallback can reuse the same raster.
+
+Measured in the running app (production build served with the production CSP,
+headless Chromium, WASM backend — no WebGPU in that environment), on a 200 DPI
+grayscale image-only copy of the demo schedule page, scored against
+`web/test/fixtures/schedule-ocr/material-schedule.golden.json` (28 rows):
+
+| OCR render | rows in dialog | tags exact | misread tags | category right (of exact) | cold / warm read |
+|---|---|---|---|---|---|
+| 144 DPI (before) | 20 | 17/28 | 3 | 10/17 | 22.1 s (dev server) / — |
+| ~214 DPI (after; 4096 px cap) | 24 | 24/28 | 0 | 14/24 | 17.0 s / 1.9 s |
+
+Same page plus one stray text run in the box: before, no read ("drag around the
+header"); after, 25 rows, 24/28 exact. A sloppy box over 79 text runs on the vector
+demo sheet: the advice at once, and no model file fetched. n=1 — one schedule.
+
 ## Measured (n=1, the harness sheet; real Chromium)
 
 - **Correctness**: a rendered finish schedule read to `CPT-1 / BROADLOOM CARPET /
@@ -99,6 +150,8 @@ layer before any of this.
   for a deliberate import action; the worker keeps the canvas responsive throughout.
 - **Weight**: models ~13 MB (staged, gitignored); onnxruntime-web jsep runtime ~27 MB
   (bundled asset, code-split — loads only when a scan is imported). Both are same-origin.
+  The model is fetched only when a box actually goes to the on-device reader (see
+  "Routing a marquee" below); a HEAD probe decides whether it is installed.
 
 ## Invariants (must not regress)
 
