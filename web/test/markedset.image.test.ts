@@ -11,6 +11,15 @@ const RS = 2.0; // RENDER_SCALE (web/src/lib/sheets.ts)
 // a 1×1 PNG — enough for embedPng to produce a real image XObject
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
+test("workspace pins never create a marked sheet or embed their reference image", async () => {
+  await assert.rejects(buildMarkedSetPdf({
+    projectName: "Pin only", dark: false, sheets: [{ key: "sample.pdf" }], shapes: [],
+    markups: [{ id: "pin", type: "image", reference_only: true, sheet_id: "sample.pdf", src: PNG, at: [.5, .5], w: .2, aspect: 1 }],
+    conditions: [], company: null, clientInfo: null, loadPdfData: null,
+    getPage: () => { throw new Error("A reference must not load a page for export"); },
+  }), /Nothing to export/);
+});
+
 // pdf.js-style viewport transform: rotate 0 → [s,0,0,-s,0,H·s]; a 90°-rotated page
 // gets a swap-form transform so toPage carries rotation (exact pdf.js values don't
 // matter here — only that the map is a valid, non-axis-aligned similarity).
@@ -261,4 +270,21 @@ test("marked set: a legacy capture without src_label falls back (stitch key ⇒ 
   const text = await pageText(bytes, 1);
   assert.ok(text.includes("Sheet 1"), "pageText decoded real text off this page (sheet footer label)");
   assert.ok(!text.includes("Source: "), "no caption for a legacy stitch-key source (fallback returns '')");
+});
+
+test("marked set cover prints linear waste in LF (and m), not zero area", async () => {
+  const srcBytes = await makeSourcePdf();
+  for (const units of ["imperial", "metric"]) {
+    const { bytes } = await buildMarkedSetPdf({
+      projectName: "Linear allowance", dark: false, units,
+      sheets: [{ key: "S1", file: "plan.pdf", page: 1, label: "Sheet 1" }],
+      shapes: [{ id: "base", sheet_id: "S1", condition_id: "c1", measure_role: "linear", verts_norm: [[0.1, 0.1], [0.5, 0.1]], computed: { perimeter_lf: 100, area_sf: 0 } }],
+      conditions: [{ id: "c1", finish_tag: "BASE", color: "#123456", waste_pct: 10 }],
+      markups: [], approvals: [], rfis: [], company: undefined, clientInfo: undefined,
+      getPage: async () => mockPage(612, 792, 0), loadPdfData: async () => srcBytes,
+    });
+    const text = await pageText(bytes, 0);
+    assert.ok(text.includes(units === "imperial" ? "waste 10% -> 110 LF" : "waste 10% -> 33.5 m"), text);
+    assert.ok(!text.includes("waste 10% -> 0 SF"), text);
+  }
 });

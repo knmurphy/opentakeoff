@@ -1,3 +1,4 @@
+import { oneClickEnabled, ONE_CLICK_GATE_MESSAGE } from "./gate.js";
 // In-canvas takeoff agent — the TOOL REGISTRY. Pure-ish and Node-testable:
 // every tool is a name + JSON schema + an execute(ctx, args) that closes over
 // canvas-provided CAPABILITIES (the `ctx` contract below), so the registry
@@ -144,7 +145,7 @@ export const AGENT_TOOL_DEFS = [
   },
   {
     name: "one_click",
-    description: "Run the deterministic flood-fill takeoff engine at a seed point inside a room (normalized coordinates). Returns the traced boundary ring (verts_norm), area_sf, perimeter_lf, and trace flags WITHOUT committing anything. This is how you measure a room — never invent geometry yourself.",
+    description: "Run the deterministic flood-fill takeoff engine at a seed point inside a room (normalized coordinates). Returns the traced boundary ring (verts_norm), retained interior void rings (verts_norm_holes, when present), area_sf, perimeter_lf, and trace flags WITHOUT committing anything. This is how you measure a room — never invent geometry yourself.",
     input_schema: {
       type: "object",
       properties: {
@@ -171,7 +172,7 @@ export const AGENT_TOOL_DEFS = [
   },
   {
     name: "propose_shapes",
-    description: "Stage takeoff proposals for human review. Each shape needs the sheet, the boundary ring from one_click (verts_norm), a condition_id, a measure_role (floor_area or deduct), and EVIDENCE: the schedule row tag and/or the matched room/finish text token and/or the one_click seed. Proposals render as dashed pencil outlines the estimator accepts or rejects — nothing you stage is committed.",
+    description: "Stage takeoff proposals for human review. Each shape needs the sheet, the boundary and any interior voids from one_click (verts_norm and verts_norm_holes), a condition_id, a measure_role (floor_area or deduct), and EVIDENCE: the schedule row tag and/or the matched room/finish text token and/or the one_click seed. Proposals render as dashed pencil outlines the estimator accepts or rejects — nothing you stage is committed.",
     input_schema: {
       type: "object",
       properties: {
@@ -181,6 +182,7 @@ export const AGENT_TOOL_DEFS = [
             type: "object",
             properties: {
               sheet: { type: "string" },
+              verts_norm_holes: { type: "array", description: "Interior void rings normalized 0..1. Carry every hole returned by one_click unchanged." },
               verts_norm: { type: "array", description: "Boundary ring [[x,y],...] normalized 0..1 — use the ring one_click returned." },
               condition_id: { type: "string" },
               measure_role: { type: "string", description: "floor_area or deduct" },
@@ -205,6 +207,19 @@ export const AGENT_TOOL_DEFS = [
 
 const DEFS_BY_NAME = Object.fromEntries(AGENT_TOOL_DEFS.map((d) => [d.name, d]));
 
+// The tool list the MODEL is handed. While the One-Click gate is up
+// (lib/gate.js) one_click is not in it — an agent must never be told about a
+// verb it cannot call — and propose_shapes stops describing its rings as
+// one_click output. AGENT_TOOL_DEFS above stays the full registry (the tests
+// and the mock server read it); this is the surface.
+export function agentToolDefs() {
+  if (oneClickEnabled()) return AGENT_TOOL_DEFS;
+  return AGENT_TOOL_DEFS.filter((d) => d.name !== "one_click").map((d) => d.name !== "propose_shapes" ? d : {
+    ...d,
+    description: "Stage takeoff proposals for human review. Each shape needs the sheet, a boundary ring you read off the sheet's wall faces (verts_norm, normalized 0..1) and any interior voids (verts_norm_holes), a condition_id, a measure_role (floor_area or deduct), and EVIDENCE: the schedule row tag and/or the matched room/finish text token and/or the seed point you measured from. One-Click is temporarily gated, so there is no engine ring to forward — trace the wall faces you can see in view_region and cite them. Proposals render as dashed pencil outlines the estimator accepts or rejects — nothing you stage is committed.",
+  });
+}
+
 const clampRegion = (r) => ({
   x0: Math.max(0, Math.min(1, Math.min(r.x0, r.x1))),
   y0: Math.max(0, Math.min(1, Math.min(r.y0, r.y1))),
@@ -222,7 +237,8 @@ const MEASURE_ROLES = new Set(["floor_area", "deduct"]);
  */
 export async function executeAgentTool(ctx, name, args) {
   const def = DEFS_BY_NAME[name];
-  if (!def) return { error: `Unknown tool: ${name}. Available: ${AGENT_TOOL_DEFS.map((d) => d.name).join(", ")}.` };
+  if (!def) return { error: `Unknown tool: ${name}. Available: ${agentToolDefs().map((d) => d.name).join(", ")}.` };
+  if (name === "one_click" && !oneClickEnabled()) return { error: ONE_CLICK_GATE_MESSAGE };   // the TEMPORARY gate (lib/gate.js)
   const bad = validateToolArgs(def.input_schema, args);
   if (bad) return { error: `Invalid arguments for ${name}: ${bad}.` };
   try {
@@ -276,11 +292,16 @@ export async function executeAgentTool(ctx, name, args) {
             ? s.verts_norm.filter((v) => Array.isArray(v) && v.length >= 2 && Number.isFinite(v[0]) && Number.isFinite(v[1]))
             : [];
           if (verts.length < 3 || verts.length !== s.verts_norm.length) { rejected.push("verts_norm must be a ring of at least 3 [x,y] points — use the ring one_click returned"); continue; }
+          const holes = s.verts_norm_holes ?? [];
+          if (!Array.isArray(holes) || holes.some((h) => !Array.isArray(h) || h.length < 3 || h.some((v) => !Array.isArray(v) || v.length !== 2 || v.some((n) => !Number.isFinite(n) || n < 0 || n > 1)))) {
+            rejected.push("verts_norm_holes must contain rings of at least 3 finite [x,y] points normalized 0..1"); continue;
+          }
           const evidence = pickAgentEvidence(s.evidence);
           if (!evidence) { rejected.push("every proposal must cite evidence: schedule_row_tag and/or matched_text and/or seed_norm"); continue; }
           clean.push({
             sheet: s.sheet,
             verts_norm: verts.map(([x, y]) => [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))]),
+            ...(holes.length ? { verts_norm_holes: holes.map((h) => h.map((v) => [...v])) } : {}),
             condition_id: s.condition_id,
             measure_role: s.measure_role,
             evidence,

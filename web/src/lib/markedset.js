@@ -1,3 +1,4 @@
+import { annotationScene, pathString } from './annotationTools.js';
 // Marked-Set PDF export — distribute the takeoff off-app, fully client-side.
 //
 // One click builds a distribution-ready PDF: every sheet that carries takeoff
@@ -49,11 +50,15 @@ export function authorTallyLine(shapes) {
 import { pointInPoly, starPath, arrowheadPath, cloudBezier, chiselRibbon } from "./geometry.js";
 import { transformPath, svgPlacedBox } from "./svgpath.js";
 import { imagePlacedBox, pickEmbedFormat, imageDrawParams, sourceCaption } from "./markupImage";
-import { rfiStatus } from "./rfi.js";
+import { rfiStatus, liveRfis } from "./rfi.js";
 import { RENDER_SCALE, parseSheetKey, sheetBaseLabelFromKey, STANDARD_SCALES } from "./sheets";
 import { stitchPagePlan, memberEmbed } from "./stitches";
 import { pdfDashFor, boostForDark, clampWeight } from "./lineStyles.js";
+// Notes burn as the block the canvas drew them as: NOTE_PT, wrapped at three
+// inches, anchored baseline-left (lib/markupText is the one owner of that layout).
+import { NOTE_PT, layoutNote, noteBox, lineBaseline } from "./markupText.js";
 import { dimLabel } from "./units";
+import { sourcePageMode, sourceStampNote, noCanvasForRasterMessage } from "./markedsetSource.js";
 
 const COBALT = "#1f3fc7";
 const DEDUCT_RED = "#b03a26";
@@ -244,7 +249,13 @@ function invertPixels(cv) {
 // sheet below) at the SAME normalization verts_norm uses. A caller that
 // never supplies it (every caller today) exports byte-identical: no tile
 // page can ever be added without a real per-sheet scale.
-export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial", uppFor = () => null }) {
+export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, markups, approvals = [], rfis: rfisIn = [], conditions, getPage, loadPdfData, company, clientInfo, credit = null, provenance = null, coverTitle = "Marked Set", units = "imperial", uppFor = () => null }) {
+  // a withdrawn RFI is a tombstone (rfi.js liveRfis): its number stays
+  // reserved but it prints nowhere — the schedule keeps the gap. An agent-
+  // raised RFI prints exactly like a panel-raised one; who asked is on the
+  // record (origin.actor), not on the page.
+  markups = (markups || []).filter(m => !m.reference_only);
+  const rfis = liveRfis(rfisIn);
   // display-unit edge (lib/units contract): quantities arrive as internal feet;
   // metric converts at the drawn string only — legend rows, by-sheet rows, and
   // the per-shape chips. ASCII "m2" (Helvetica WinAnsi has no superscript 2).
@@ -252,7 +263,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
   const uA = (sf) => (M ? sf * 0.09290304 : sf);
   const uL = (lf) => (M ? lf * 0.3048 : lf);
   const AU = M ? "m2" : "SF", LU = M ? "m" : "LF";
-  const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle } = await import("pdf-lib");
+  const { PDFDocument, StandardFonts, rgb, degrees, LineCapStyle, BlendMode } = await import("pdf-lib");
   const condById = Object.fromEntries(conditions.map((c) => [c.id, c]));
   // resolve a linked markup's RFI number for the on-sheet marker (ASCII, WinAnsi-safe)
   const rfiNum = new Map((rfis || []).map((r) => [r.id, r.number]));
@@ -405,7 +416,14 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
         shows(uA(r.border_sf)) ? `${num(uA(r.border_sf))} ${AU} border` : "", shows(uL(r.lf)) ? `${num(uL(r.lf))} ${LU}` : "", shows(r.ea, 0) ? `${num(r.ea, 0)} EA` : "",
       ].filter(Boolean).join(" · ");
       draw(qty || "-", { x: 190, y, size: 10, font, color: ink });
-      draw(`${c.hatch && c.hatch !== "solid" ? c.hatch + " · " : ""}waste ${r.waste_pct}% -> ${num(uA(r.total_sf_net))} ${AU}`, { x: 420, y, size: 8.5, font, color: muted });
+      const orderQty = [
+        shows(uA(r.total_sf_net)) ? `${num(uA(r.total_sf_net))} ${AU}` : "",
+        shows(uL(r.lf_net)) ? `${num(uL(r.lf_net))} ${LU}` : "",
+      ].filter(Boolean).join(" · ");
+      // Count totals have no waste-adjusted field. Do not invent an area
+      // quantity for a linear/count condition on the cover.
+      const allowance = orderQty ? `waste ${r.waste_pct}% -> ${orderQty}` : "";
+      draw([c.hatch && c.hatch !== "solid" ? c.hatch : "", allowance].filter(Boolean).join(" · "), { x: 420, y, size: 8.5, font, color: muted });
       y -= 15;
       if (y < 120) break;
     }
@@ -506,7 +524,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     return src;
   };
   for (const sh of marked) {
-    let pg, toPage, chipRot = degrees(0), W, H;
+    let pg, toPage, chipRot = degrees(0), W, H, mode = "vector";
 
     if (sh.stitch) {
       // ── composite stitch page (#200): the stitched surface as ONE page at
@@ -530,7 +548,13 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const plan = stitchPagePlan(members, dims);
       W = plan.extent.w; H = plan.extent.h;
       const pageW = W / RENDER_SCALE, pageH = H / RENDER_SCALE;
-      if (dark) {
+      // an encrypted member cannot be embedded as vector (lib/markedsetSource:
+      // pdf-lib copies ciphertext; embedPage throws at save) — the whole
+      // composite goes the raster way, un-inverted unless the set is dark
+      const encrypted = !dark && (await Promise.all(members.map((m) => srcDocFor(m.file)))).some((d) => d.isEncrypted);
+      mode = sourcePageMode({ dark, encrypted });
+      if (mode === "raster" && typeof document === "undefined") throw new Error(noCanvasForRasterMessage(sh.label));
+      if (mode !== "vector") {
         // one composite raster: members painted seam-clipped onto a white
         // ground (so the gap outside every member inverts to the dark stage),
         // then the whole canvas inverted ONCE — the involution stays exact.
@@ -555,7 +579,7 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
           ctx.drawImage(mc, pm.dx * k, pm.dy * k);
           ctx.restore();
         }
-        invertPixels(cv);
+        if (dark) invertPixels(cv);
         const png = await doc.embedPng(cv.toDataURL("image/png"));
         pg = doc.addPage([pageW, pageH]);
         pg.drawImage(png, { x: 0, y: 0, width: pageW, height: pageH });
@@ -583,15 +607,22 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     const vpR = page.getViewport({ scale: RENDER_SCALE });   // the space verts are normalized to
     W = vpR.width; H = vpR.height;
 
-    if (dark) {
-      // raster → invert → image page (unrotated by construction)
+    // the vector copy needs a source pdf-lib can read; an encrypted source
+    // (owner password, empty user password — pdf.js renders it, so the canvas
+    // never said a word) copies as ciphertext and prints as a blank sheet in
+    // every viewer. Decide before touching the page (lib/markedsetSource).
+    const src = dark ? null : await srcDocFor(sh.file);
+    mode = sourcePageMode({ dark, encrypted: !!src?.isEncrypted });
+    if (mode === "raster" && typeof document === "undefined") throw new Error(noCanvasForRasterMessage(sh.label));
+    if (mode !== "vector") {
+      // raster → (invert when dark) → image page (unrotated by construction)
       const vp1 = page.getViewport({ scale: 1 });
       const s = Math.min(RASTER_MAX / Math.max(vp1.width, vp1.height), 4);
       const vp = page.getViewport({ scale: s });
       const cv = document.createElement("canvas");
       cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
       await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
-      invertPixels(cv);
+      if (dark) invertPixels(cv);
       const png = await doc.embedPng(cv.toDataURL("image/png"));
       pg = doc.addPage([vp1.width, vp1.height]);
       pg.drawImage(png, { x: 0, y: 0, width: vp1.width, height: vp1.height });
@@ -600,8 +631,6 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     } else {
       // vector copy of the source page; image px → PDF user space through the
       // inverse viewport transform (rotation + viewBox offsets included)
-      let src = srcDocs.get(sh.file);
-      if (!src) { src = await PDFDocument.load(await loadPdfData(sh.file), { ignoreEncryption: true }); srcDocs.set(sh.file, src); }
       const [copied] = await doc.copyPages(src, [sh.page - 1]);
       pg = doc.addPage(copied);
       const [a, b, c, d, e, f] = vpR.transform;
@@ -622,6 +651,24 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     const text = (t, x, y, size, colorRgb, fnt = font) => {
       const [px, py] = toPage(x, y);
       pg.drawText(winAnsiSafe(t), { x: px, y: py, size, font: fnt, color: colorRgb, rotate: chipRot });
+    };
+    // A note (callout / text note) as a wrapped BLOCK — the canvas's layout at
+    // pure ink size (no screen floor here: the print is exact). Widths are
+    // measured with the PDF face so no line overruns its box; the box itself is
+    // an image-px rectangle through imageDrawParams (proven on rotated pages),
+    // the lines go through text() so they carry the same rotation.
+    const noteBlock = (raw, ax, ay, colorRgb, backing) => {
+      const t = winAnsiSafe(raw);
+      const fs = NOTE_PT / ptScale;   // image px for NOTE_PT on THIS page
+      const L = layoutNote({ text: t, fontPx: fs, measure: (str) => bold.widthOfTextAtSize(str, NOTE_PT) / ptScale });
+      if (!L.lines.length) return;
+      const b = noteBox(ax, ay, L);
+      const dp = imageDrawParams(toPage, b.x0, b.y0, L.w, L.h);
+      pg.drawRectangle({
+        x: dp.x, y: dp.y, width: dp.width, height: dp.height, rotate: degrees(dp.rotateDeg),
+        color: backing, opacity: 0.92, borderColor: colorRgb, borderWidth: 0.7,
+      });
+      L.lines.forEach((ln, i) => { if (ln) text(ln, ax, lineBaseline(ay, L, i), NOTE_PT, colorRgb, bold); });
     };
     const chip = (raw, x, y, borderRgb) => {
       const t = winAnsiSafe(raw);
@@ -695,7 +742,20 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
       const mcol = rgb(...hex(dark ? boostForDark(mbase) : mbase));
       const mdash = pdfDashFor(m.line_style || "solid");
       const mw = clampWeight(m.weight);   // stroke-width multiplier (markups only), default ×1
-      if (m.type === "highlight" && (m.pts || []).length >= 2) {
+      if (m.annotation_style && ["arrow", "highlight", "callout", "cloud", "text"].includes(m.type)) {
+        const scene = annotationScene(m, W, H, RENDER_SCALE);
+        const P = ([x, y]) => { const [px, py] = toPage(x, y); return [px, -py]; };
+        for (const ink of scene.paths) pg.drawSvgPath(pathString(ink.commands, P), {
+          x: 0, y: 0,
+          ...(ink.fill ? { color: rgb(...hex(ink.fill)), opacity: ink.opacity } : {}),
+          ...(ink.stroke ? { borderColor: rgb(...hex(ink.stroke)), borderWidth: ink.width * ptScale, borderOpacity: ink.opacity } : {}),
+          ...(ink.dash ? { borderDashArray: ink.dash.map(n => n * ptScale) } : {}),
+          ...(ink.blend ? { blendMode: BlendMode.Multiply } : {}),
+          borderLineCap: LineCapStyle.Round,
+        });
+        for (const ink of scene.texts) text(ink.text, ink.x, ink.y, ink.size * ptScale, rgb(...hex(ink.color)));
+        if (rlabel) { const at = m.at || m.from || m.rect?.[0] || m.pts?.[0]; if (at) text(rlabel, at[0] * W, at[1] * H - 10 / ptScale, 8, mcol, bold); }
+      } else if (m.type === "highlight" && (m.pts || []).length >= 2) {
         // freehand highlighter stroke — ink stays its own color in both export
         // modes (a highlight IS its hue); width is stored as a fraction of sheet
         // width → image px → page points. Weight (×) multiplies like the canvas.
@@ -793,7 +853,12 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
           const [ptx, pty] = toPage(m.target[0] * W, m.target[1] * H);
           pg.drawSvgPath(arrowheadPath(pax, -pay, ptx, -pty, 5), { x: 0, y: 0, color: mcol, opacity: 0.9 });
         }
-        text(lbl(m.text), m.at[0] * W, m.at[1] * H, 8.5, mcol, bold);
+        noteBlock(lbl(m.text), m.at[0] * W, m.at[1] * H, mcol, dark ? rgb(0.08, 0.1, 0.12) : rgb(1, 1, 1));
+      } else if (m.type === "text" && m.at) {
+        // a plain text note — never burned before this branch existed: a note
+        // written on the canvas simply vanished from the print. Same block as a
+        // callout, on the canvas's cream backing.
+        noteBlock(lbl(m.text), m.at[0] * W, m.at[1] * H, mcol, dark ? rgb(0.08, 0.1, 0.12) : rgb(1, 0.97, 0.93));
       } else if (m.type === "svg" && m.at && Array.isArray(m.vb) && typeof m.path === "string") {
         // a vector symbol — bake local→page px, NEGATING y like every sibling path
         // (drawSvgPath internally applies scale(1,-1), so toPage output must be
@@ -900,9 +965,9 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     // sheet stamp, top-left in visual space. A stitch page exists in no source
     // planset, so its stamp says so — the composite is disclosed, not passed
     // off as a drawing the architect issued.
-    const stamp = sh.stitch
+    const stamp = (sh.stitch
       ? `${sh.label} · stitched composite (${sh.stitch.members.map((m) => m.label || m.key).join(" + ")}) · marked set`
-      : `${sh.label} · marked set`;
+      : `${sh.label} · marked set`) + sourceStampNote(mode);
     text(stamp, 14, 20, 8, muted);
     // ── tile shop-drawing sheet (M8 -> shop-drawing redesign) — one NEW page
     // per tiled sheet: a fixed-furniture drawing (heading, legend, title
@@ -1237,10 +1302,11 @@ export async function buildMarkedSetPdf({ projectName, dark, sheets, shapes, mar
     lastPg.drawText(winAnsiSafe(credit), { x: (612 - cw) / 2, y: 22, size: 7, font, color: muted });
   }
 
+  const pages = doc.getPageCount();
   const bytes = await doc.save();
   const base = (projectName || "").trim();
   const filename = `${base ? base + " - " : ""}marked set${dark ? " (dark)" : ""}.pdf`;
-  return { bytes, filename };
+  return { bytes, filename, pages };
 }
 
 export function downloadBytes(filename, bytes, type = "application/pdf") {

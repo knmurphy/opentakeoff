@@ -7,7 +7,8 @@ import { isStitchKey } from "./stitches";
 export { parseSheetKey, compareSheetKeys } from "./sheetKey"; // moved to a pdfjs-free module; re-exported for existing importers
 export type { ParsedSheetKey } from "./sheetKey";
 
-export const RENDER_SCALE = 2.0;
+import { RENDER_SCALE } from "./takeoffConstants.ts";
+export { RENDER_SCALE }; // owned by takeoffConstants; re-exported for existing importers
 
 // Pure fallback branch of the canvas `sheetBaseLabel` closure (TakeoffCanvas.jsx
 // `sheetBaseLabel`, ~:1001) — just the file/page math, none of the runtime-state
@@ -202,18 +203,27 @@ function _findScales(canon: string): ScaleWithKeys[] {
 // → {upp, label, multi} or null. Title-block region is authoritative; a single
 // page-wide note is accepted; several distinct scales with no title-block note
 // is ambiguous (details are often drawn larger) → suggest nothing.
+// Two reads of the same items (#375): per-item canon joined with "|" first, so a
+// neighbouring run that ends in a digit (a schedule cell "PT-1" before the note)
+// can never fuse into "11/8\"" and trip the boundary guard; then the old
+// whitespace-stripped concatenation as the fallback, which is what still catches a
+// note the exporter split across runs ("1/8\"" then "= 1'-0\"").
+function _scaleHits(parts: string[]): ScaleWithKeys[] {
+  const joined = _findScales(parts.map(_canonScaleText).filter(Boolean).join("|"));
+  return joined.length ? joined : _findScales(_canonScaleText(parts.join(" ")));
+}
 export function detectScale(textContent: TextContentLike, viewport: Viewport): DetectedScale | null {
   const W = viewport.width, H = viewport.height;
-  let all = "", tb = "";
+  const all: string[] = [], tb: string[] = [];
   for (const it of textContent.items || []) {
     const str = it.str || "";
     if (!str.trim()) continue;
-    all += str + " ";
+    all.push(str);
     const t = pdfjsLib.Util.transform(viewport.transform, it.transform);
-    if (t[4] > W * 0.55 && t[5] > H * 0.5) tb += str + " ";
+    if (t[4] > W * 0.55 && t[5] > H * 0.5) tb.push(str);
   }
-  const tbHits = _findScales(_canonScaleText(tb));
-  const allHits = _findScales(_canonScaleText(all));
+  const tbHits = _scaleHits(tb);
+  const allHits = _scaleHits(all);
   if (tbHits.length) return { upp: tbHits[0].upp, label: tbHits[0].label, multi: allHits.length > 1 };
   if (allHits.length === 1) return { upp: allHits[0].upp, label: allHits[0].label, multi: false };
   return null;
