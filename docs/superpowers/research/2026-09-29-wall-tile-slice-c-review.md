@@ -270,3 +270,29 @@ low because the branch is unmerged, but the semantics drift is real.
   (straight and L-run), and so are its T3 tests (width, determinism, straight run unchanged). The
   only deviation, clip-and-split in place of center-x assignment, is an improvement and is
   documented (`developedElevation.ts:15-35`).
+
+---
+
+## Fix pass (2026-09-29)
+
+| Finding | Status | Change |
+|---|---|---|
+| I1 phantom wall from a coincident vertex | Fixed | `unwrap.ts` `collapseCollinear` drops coincident vertices before the collinear pass (keeps the first raw index); an all-coincident run returns null. `developedElevationLayout` also drops any fold that does not advance or sits on the run end. The doubled-corner L-run now summarizes identically to the clean run in wrap and reset (Slice A counts included). |
+| I2 sheet not to scale across breaks | Fixed (preferred fix) | The sheet passes `gap_ft: 0`; panels abut with the break-line on the shared edge. `width_ft` is the physical run length again. The unscaled preview keeps `PREVIEW_GAP_FT` (0.5 ft). |
+| I3 `face_side: "right"` drawn mirrored | Fixed | `elevationMirrored(face_side)` + `developedElevationLayout({ mirror })`, used by both the preview and the sheet. Labels stay plan-keyed (Wall 1 = first traced segment). Pinned by `tileWallViewSide.test.ts`: one physical L traced from each end draws the same. |
+| I4 stale "wrapped view" spec text | Fixed | Design spec §2/§6/§12 describe the developed elevation (status v2.2); the M10 spec banner updated. |
+| M1 wall numbers not keyed to the plan | Partly | The sheet states "Viewed facing the tiled face. Wall 1 = first traced segment." Segment numbers on the plan overlay remain a follow-up. |
+| M2 no per-wall length | Fixed | Panels read `Wall N · 10'-6"` (sheet and preview), to the nearest 1/8" (`formatFeetInchesEighths`); the header uses the same precision. |
+| M3 ambiguous, overprinting corner marks | Fixed | `INSIDE CORNER` / `OUTSIDE CORNER`; `staggerRows` moves a mark to a second row when it would overlap its neighbour (sheet and preview). |
+| M4 `elev_width_ft` meaning drift | Resolved by I2 | `width_ft` is the physical run length again. Sheets generated on this branch before the fix will show one "size changed" prompt on regenerate (their stored width included the gap). |
+| M5 test gaps | Fixed | `tileWallSliceCFixes.test.ts`: pure `elevationHeader` pinned; real-pipeline L-run through the developed layout in wrap and reset (in range, area conserved, both gap values); coincident-vertex fixtures. |
+| M6 stale comments / loose types | Fixed | `wallElevationPdf.ts` header comment corrected; `CornerKind` typed through `DevBreak`/`foldKinds`; the fold-order contract is now enforced, not assumed. The defensive negative-width branch in `developedViewBox` is left as is. |
+
+**Open follow-up found during the fix pass (F1):** regenerating an elevation sheet that already
+carries user marks does not warn when only the VIEW ORIENTATION changes — a right-faced wall's
+first regenerate after this fix, or any regenerate after flipping `face_side`. The width and
+height are unchanged, so the `dimsChanged` guard stays quiet while the tiles under the marks
+mirror. Fix: persist the orientation beside `elev_width_ft`/`elev_height_ft` (register both in
+`protocol/INVENTORY.md`) and include it in the guard. Branch-only today (no released sheets).
+
+Verification: `npm run check --prefix web` green (2290 tests, 2287 pass, 0 fail, 3 skipped; bench; build); doc links OK. Rendered sheets for an L-run traced from each end and a U-run with a 3⅝" return were inspected: identical layouts for both traces, marks staggered, no corner gap.

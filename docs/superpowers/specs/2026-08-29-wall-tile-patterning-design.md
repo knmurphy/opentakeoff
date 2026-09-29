@@ -1,8 +1,9 @@
 # Wall-Tile Patterning — Design Spec
 
 **Date:** 2026-08-29 · **Branch:** `feat/tile-walls` (lands on `feat/tile-patterning`)
-**Status:** DESIGN v2 — 3-lens adversarial review (domain / engine / scope) folded; see
-§14 revision log. Ready for a re-review pass, then implementation plan.
+**Status:** DESIGN v2.2 — 3-lens adversarial review (domain / engine / scope) folded; see
+§14 revision log. v2.2 (2026-09-29): Slice C's "wrapped view" replaced by the developed
+elevation (§6), per the Slice C plan v2 and its final review. Ready for a re-review pass, then implementation plan.
 **Supersedes:** `docs/superpowers/specs/2026-08-29-tile-wall-m10.md` (the strip-only
 M10). That spec tiled a *single straight* wall run into one L×H strip and explicitly
 deferred multi-wall / corners; this spec makes the multi-wall run with corners the
@@ -41,14 +42,15 @@ are opt-in. (`design-for-options-not-one-size` memory.)
   classification; corner-cut and corner-trim counting; movement joints at corners.
 - Reconciliation to the engine's measured `wall_sf`.
 - Repeat-unit "sketch the pattern" painting reused over the wall strip (already shipped).
-- Unwrapped elevation as a real synthetic sheet + a wrapped (folded) view of the same
-  strip.
+- Unwrapped elevation as a real synthetic sheet + a developed (per-wall panel)
+  elevation of the same strip.
 
 **Out of scope (deferred to M11+, named so the design isn't shortsighted):**
 - Openings/niches as holes in the strip; niche interior faces (an *addition*).
 - Base courses (cove/bullnose base as a distinct course), wainscot band stacks.
 - Wet-area / membrane engine (wet-tag, wet-height, seam/corner/pipe waterproofing).
-- Full 3D surface engine (the wrapped view is a 2D fold-back, not 3D — YAGNI).
+- Full 3D surface engine; a 3D wrap preview (the research's evidenced runner-up) is
+  deferred.
 - Curbs / benches / soffits.
 - **Unequal-height / stepped runs** (one `H` per run — §3.1); model as separate shapes.
 - **Reversing / self-touching runs** (a U-turn switches the tiled face mid-run — §3.1);
@@ -292,8 +294,9 @@ enum a defined output). *(scope/domain M3)* Movement joints are **inside-only** 
 
 ## 6. Two views, one model
 
-TileSim's strongest reusable idea: one strip render feeds both a flat editor and a
-folded view (`prior-art…:159-169`, `SurfaceTexture.ts` → `useSurfaceTexture.ts:31`).
+TileSim's strongest reusable idea: one strip render feeds more than one view
+(`prior-art…:159-169`, `SurfaceTexture.ts` → `useSurfaceTexture.ts:31`). Here one layout
+(`developedElevation.ts`) feeds both the panel preview and the Slice B sheet.
 
 - **Unwrapped elevation → a real synthetic sheet.** The sheet model is not PDF-only: a
   *stitch* is already a synthetic sheet with its own key and shapes (`sheets.ts:6,22`,
@@ -307,10 +310,17 @@ folded view (`prior-art…:159-169`, `SurfaceTexture.ts` → `useSurfaceTexture.
   TileSim `SurfaceEditor.tsx:128-130`); corner fold-lines and movement joints drawn;
   reference/centerlines and cut dimensions shown (shop-drawing convention,
   `…conventions.md:99-113`).
-- **Wrapped view.** The same strip folded back at each `u_k` onto the run's plan
-  footprint (a 2D fold, not 3D). Reuses one renderer; shows the pattern turning corners.
+- **Developed elevation.** One flat, true-length panel per wall in plan order, a
+  break-line plus an inside/outside corner mark at each corner, each panel labeled with
+  its wall number and length (NKBA developed-elevation convention; research
+  `docs/superpowers/research/2026-08-29-wrapped-elevation-conventions.md`). Drawn as seen
+  facing the tiled face: a `face_side: "right"` run is mirrored so the same wall reads the
+  same whichever end it was traced from. The preview separates panels with a small gap;
+  the scaled sheet abuts them so measurements across a corner stay exact.
+  *(Replaces the earlier "wrapped view" — a 2D fold-back at true plan angle — which the
+  research found no drafting support for; decision recorded in the Slice C plan v2.)*
 
-Slice B delivers the sheet; Slice C the wrapped view (§12). Slice A ships the
+Slice B delivers the sheet; Slice C the developed elevation (§12). Slice A ships the
 quantities + a panel preview of the strip so value lands before the sheet plumbing.
 
 ---
@@ -468,7 +478,8 @@ space (Slice A panel / Slice B sheet), never the plan placement.
   (walls with openings over-order until M11 — honest boundary). *(scope M7, N4)*
 - **Slice B — elevation sheet:** promote the strip to a synthetic (stitch-precedent)
   wall-elevation sheet — canvas view, gallery, annotate, export.
-- **Slice C — wrapped view:** the 2D fold-back render of the same strip.
+- **Slice C — developed elevation:** per-wall panels with corner breaks, for the preview
+  and the sheet (§6).
 - **M11+:** openings/niches (holes), base courses, wet-membrane, 3D.
 
 Each slice is its own plan → SDD/TDD → adversarial review, landing on

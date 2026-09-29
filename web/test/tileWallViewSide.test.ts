@@ -4,7 +4,8 @@
 // as seen by someone STANDING IN FRONT OF THE TILED FACE: the wall end on their
 // left is at the sheet's left. The pipeline always draws u (distance along the
 // run, from verts_norm[0]) left→right, so that only holds when the drawn run
-// direction points to the viewer's right.
+// direction points to the viewer's right; a right-faced run is mirrored
+// (developedElevation.ts elevationMirrored) so both traces draw the same.
 //
 // The oracle below derives the viewer's right from first principles, NOT from
 // unwrap.ts: face_side "left" = the tiled face lies on the (-dy, dx) side of the
@@ -19,7 +20,7 @@ import assert from "node:assert/strict";
 import { summarizeWallShape } from "../src/lib/tileWall/index.ts";
 import { mintTileSetup } from "../src/lib/tileSetup.ts";
 import { wallElevationLayout } from "../src/lib/tileWallElevation.ts";
-import { developedElevationLayout } from "../src/lib/developedElevation.ts";
+import { developedElevationLayout, elevationMirrored } from "../src/lib/developedElevation.ts";
 
 type Pt = [number, number];
 const dims = { w: 100, h: 100 };
@@ -52,7 +53,7 @@ function drawnPanels(verts: Pt[], face: "left" | "right") {
   const elev = wallElevationLayout(sum.wallStrips, sum.folds, (id: string) => `#${id}`);
   const dev = developedElevationLayout({
     tiles: elev.tiles, foldsU: elev.folds.map((f) => f.x), foldKinds: elev.folds.map((f) => f.kind),
-    width_ft: elev.width_ft, height_ft: elev.height_ft,
+    width_ft: elev.width_ft, height_ft: elev.height_ft, mirror: elevationMirrored(face),
   });
   return [...dev.panels].sort((p, q) => p.xOffset - q.xOffset);
 }
@@ -87,9 +88,7 @@ for (const t of traces) {
     assert.equal(runPointsRight, t.face === "left");
   });
 
-  test(`${t.name}: the 10.5 ft wall is drawn on the LEFT, the 7.5 ft wall on the RIGHT (as seen facing the tile)`, {
-    todo: t.face === "right" ? "Slice C review I3: face_side \"right\" draws mirrored — the fix pass flips it" : undefined,
-  }, () => {
+  test(`${t.name}: the 10.5 ft wall is drawn on the LEFT, the 7.5 ft wall on the RIGHT (as seen facing the tile)`, () => {
     const panels = drawnPanels(t.verts, t.face);
     assert.equal(panels.length, 2);
     assert.ok(Math.abs(panels[0].segWidth_ft - 10.5) < 1e-6, `leftmost panel should be the 10.5 ft wall (got ${panels[0].segWidth_ft})`);

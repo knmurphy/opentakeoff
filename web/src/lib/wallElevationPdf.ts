@@ -12,10 +12,10 @@
 // Date/Math.random/other nondeterminism anywhere in the draw path.
 //
 // Task 3 v2 (2026-08-29 wall-tile-slice-c) — the generated SHEET now draws
-// the DEVELOPED elevation (per-wall flat panels, gap-separated, with a bold
-// break-line + inside/outside marker at each corner) instead of one
-// continuous folded/bent strip, matching the NKBA drafting convention the
-// TilePanel preview (Task 2 v2) already draws. `developedElevationLayout`
+// the DEVELOPED elevation (per-wall flat panels with a bold break-line +
+// corner marker at each corner) instead of one continuous flat strip with
+// dashed fold marks, matching the NKBA drafting convention the TilePanel
+// preview (Task 2 v2) already draws. `developedElevationLayout`
 // (developedElevation.ts) is the SINGLE source of truth for that re-slice —
 // this module feeds it `wallElevationLayout`'s own tiles/folds/dims
 // verbatim, same as TilePanel does, and only converts the result's feet to
@@ -23,18 +23,21 @@
 // SAME orientation `wallElevationLayout`/`developedElevationLayout` already
 // use (floor at y=0, height up the wall), so panel tiles draw straight off
 // `panel.xOffset`/tile x/y with no V-flip (unlike TilePanel's SVG, which
-// flips because SVG is y-down). `upp` is UNCHANGED — still the per-foot
-// constant `1/(ELEV_POINTS_PER_FT*RENDER_SCALE)` — only the page WIDTH
-// grows (by the inter-panel gaps); Slice B's handler reads `upp` for scale,
-// never `width_ft` as a physical wall-length (verified: TakeoffCanvas.jsx's
-// only use of the returned width_ft is `dimsChanged`'s same-wall-regen
-// comparator and its own round-tripped persisted record, both of which
-// only care that the SAME wall reproduces the SAME value, not what it
-// physically means).
+// flips because SVG is y-down).
+//
+// Slice C fix pass (2026-09-29, review I2/I3/M2/M3):
+// - The sheet carries a KNOWN scale, so panels ABUT (gap_ft: 0) with the
+//   break-line on the shared edge; the page is the true run length and any
+//   measurement across a corner is exact. Only the unscaled panel preview
+//   keeps a gap. `width_ft` is therefore the physical run length again.
+// - A right-faced run is mirrored (elevationMirrored) so the sheet reads as
+//   seen facing the tile.
+// - Each panel is labeled with its length; corner marks say "INSIDE CORNER" /
+//   "OUTSIDE CORNER" and stagger when neighbours would overprint.
 import type { TileLayout } from "./tileSolve.ts";
 import type { Fold } from "./tileWall/unwrap.ts";
 import { wallElevationLayout } from "./tileWallElevation.ts";
-import { developedElevationLayout } from "./developedElevation.ts";
+import { developedElevationLayout, elevationMirrored } from "./developedElevation.ts";
 import { RENDER_SCALE } from "./sheets.ts";
 
 // 36 pt/ft == 1/2" = 1'-0" architectural scale (36pt = 0.5in @ 72pt/in, the
@@ -55,13 +58,17 @@ export type WallElevationPdf = {
 };
 
 const MARGIN = 24; // pt: left/right/bottom margin around the drawn strip
-const HEADER_H = 28; // pt: space reserved above the strip for the header line
-const BREAK_LABEL_SIZE = 7; // pt: each break's inside/outside marker
+const HEADER_H = 48; // pt: space above the strip for corner marks (2 rows), the view note and the header
+const BREAK_LABEL_SIZE = 7; // pt: each break's corner marker
 const PANEL_LABEL_SIZE = 8; // pt: each panel's "Wall N" label
 const HEADER_SIZE = 10;
 const BREAK_LINE_W = 2; // pt: bold corner break-line — distinct from the 0.25pt tile/grout stroke
 const PANEL_LABEL_DROP = 16; // pt below FLOOR_Y (the floor datum) for the panel label baseline
-const BREAK_LABEL_RISE = 2; // pt above stripTopY for the inside/outside marker
+const BREAK_LABEL_RISE = 2; // pt above stripTopY for the corner marker (first row)
+const BREAK_LABEL_ROW = 9; // pt between the two staggered corner-marker rows
+const NOTE_SIZE = 7;
+const NOTE_RISE = 21; // pt above stripTopY: the viewing note
+const HEADER_RISE = 32; // pt above stripTopY: the header line
 
 // Renders a feet value as architectural feet-inches (nearest inch), e.g.
 // 17.5 -> "17'-6\"". Rounds to the nearest INCH first (not feet, then
@@ -72,6 +79,44 @@ export function formatFeetInches(ft: number): string {
   const feet = Math.floor(totalInches / 12);
   const inches = totalInches % 12;
   return `${feet}'-${inches}"`;
+}
+
+// Feet-inches to the nearest 1/8" — the precision a setter cuts to — e.g.
+// 12.53125 -> "12'-6 3/8\"". Rounds once on eighths so carries are exact.
+export function formatFeetInchesEighths(ft: number): string {
+  const total = Math.round(ft * 96);
+  const feet = Math.floor(total / 96);
+  const rem = total % 96;
+  const inches = Math.floor(rem / 8);
+  let n = rem % 8, d = 8;
+  while (n && n % 2 === 0) { n /= 2; d /= 2; }
+  return `${feet}'-${inches}${n ? ` ${n}/${d}` : ""}"`;
+}
+
+export function cornerMarkLabel(kind: string): string {
+  return kind === "inside" ? "INSIDE CORNER" : "OUTSIDE CORNER";
+}
+
+// The sheet's header text. Pure so the real-width rule is pinned by a test:
+// it states the physical run length, never a drawn width.
+export function elevationHeader(tag: string, width_ft: number, height_ft: number): string {
+  return `${tag} — ${formatFeetInchesEighths(width_ft)} × ${formatFeetInchesEighths(height_ft)} elevation`;
+}
+
+export const ELEVATION_VIEW_NOTE = "Viewed facing the tiled face. Wall 1 = first traced segment.";
+
+// Two-row stagger for corner marks: a mark moves to the upper row when it
+// would overlap the previous mark on the lower row. Widths and x in the same
+// units. Returns the row (0 or 1) for each mark, in input order.
+export function staggerRows(xs: number[], widths: number[], pad = 0): number[] {
+  const rows: number[] = [];
+  let lastRight0 = -Infinity;
+  xs.forEach((x, i) => {
+    const left = x - widths[i] / 2;
+    if (left >= lastRight0 + pad) { rows.push(0); lastRight0 = x + widths[i] / 2; }
+    else rows.push(1);
+  });
+  return rows;
 }
 
 // wallElevationLayout's tile colors are always caller-resolved hex (the
@@ -90,36 +135,39 @@ export async function buildWallElevationPdf(args: {
   skuColor: (id: string) => string;
   tag: string;
   name: string;
+  face_side?: "left" | "right";
 }): Promise<WallElevationPdf> {
   const { wallStrips, folds, skuColor, tag, name } = args;
   const { PDFDocument, StandardFonts, rgb } = await import("pdf-lib");
 
   const elev = wallElevationLayout(wallStrips, folds, skuColor);
   // developedElevationLayout is the SAME re-slice TilePanel's preview uses
-  // (module header) — fed elev's tiles/folds/dims verbatim, no gap_ft
-  // override here, so both consumers share the ONE default (0.5ft) defined
-  // in developedElevation.ts rather than two literals that could drift.
+  // (module header), fed elev's tiles/folds/dims verbatim — with gap_ft: 0,
+  // because this page is at a known scale (review I2), and the same mirror
+  // rule the preview uses (review I3).
   const dev = developedElevationLayout({
     tiles: elev.tiles,
     foldsU: elev.folds.map((f) => f.x),
     foldKinds: elev.folds.map((f) => f.kind),
     width_ft: elev.width_ft,
     height_ft: elev.height_ft,
+    gap_ft: 0,
+    mirror: elevationMirrored(args.face_side),
   });
   const P = ELEV_POINTS_PER_FT;
   const FLOOR_Y = MARGIN;
-  // Page width is the DEVELOPED total (raw run width + inter-panel gaps),
-  // wider than elev.width_ft whenever there's more than one panel; a
-  // straight run (one panel, no gap) has dev.total_width_ft === elev.width_ft,
-  // so the page is byte-for-byte the same size as before this task.
-  const pageW = Math.max(1, dev.total_width_ft * P + MARGIN * 2);
-  const pageH = Math.max(1, dev.height_ft * P + FLOOR_Y + HEADER_H);
 
   // updateMetadata:false is the whole determinism story (see module header):
   // without it pdf-lib stamps CreationDate/ModificationDate with the wall
   // clock, so the SAME wall regenerated twice would produce different bytes.
   const doc = await PDFDocument.create({ updateMetadata: false });
   const font = await doc.embedFont(StandardFonts.Helvetica);
+  const header = elevationHeader(tag, elev.width_ft, elev.height_ft);
+  // The page is the run at scale plus margins, widened only when the header
+  // text is longer than a short wall (the strip itself stays at scale).
+  const textW = Math.max(font.widthOfTextAtSize(header, HEADER_SIZE), font.widthOfTextAtSize(ELEVATION_VIEW_NOTE, NOTE_SIZE));
+  const pageW = Math.max(1, dev.total_width_ft * P + MARGIN * 2, textW + MARGIN * 2);
+  const pageH = Math.max(1, dev.height_ft * P + FLOOR_Y + HEADER_H);
   const page = doc.addPage([pageW, pageH]);
 
   const grout = rgb(0.35, 0.35, 0.35);
@@ -165,12 +213,18 @@ export async function buildWallElevationPdf(args: {
       thickness: 1,
       color: ink,
     });
-    // Panel label ("Wall N"), centered under the panel, below the floor line.
+    // Panel label ("Wall N · 10'-6\""), centered under the panel, below the floor line.
     const cx = MARGIN + (p.xOffset + p.segWidth_ft / 2) * P;
-    drawCentered(p.label, cx, FLOOR_Y - PANEL_LABEL_DROP, PANEL_LABEL_SIZE);
+    drawCentered(`${p.label} · ${formatFeetInchesEighths(p.segWidth_ft)}`, cx, FLOOR_Y - PANEL_LABEL_DROP, PANEL_LABEL_SIZE);
   }
 
-  for (const b of dev.breaks) {
+  const marks = dev.breaks.map((b) => cornerMarkLabel(b.kind));
+  const rows = staggerRows(
+    dev.breaks.map((b) => MARGIN + b.x * P),
+    marks.map((m) => font.widthOfTextAtSize(m, BREAK_LABEL_SIZE)),
+    4,
+  );
+  for (const [i, b] of dev.breaks.entries()) {
     const x = MARGIN + b.x * P;
     // Bold corner break-line (solid, thicker than the tile/grout stroke) —
     // the NKBA drafting convention's terminating vertical line between two
@@ -181,17 +235,13 @@ export async function buildWallElevationPdf(args: {
       thickness: BREAK_LINE_W,
       color: ink,
     });
-    drawCentered(b.kind, x, stripTopY + BREAK_LABEL_RISE, BREAK_LABEL_SIZE);
+    drawCentered(marks[i], x, stripTopY + BREAK_LABEL_RISE + rows[i] * BREAK_LABEL_ROW, BREAK_LABEL_SIZE);
   }
 
-  // Header. Uses elev.width_ft (the wall's REAL developed width, before the
-  // 0.5ft decorative inter-panel gaps developedElevationLayout inserts at
-  // each corner) — never dev.total_width_ft, which is the gap-INFLATED
-  // drawn width and would misreport the wall's actual length to a human
-  // reading the sheet. The RETURN value below (width_ft: dev.total_width_ft)
-  // is unaffected — this only changes the human-readable text.
-  const header = `${tag} — ${formatFeetInches(elev.width_ft)} × ${formatFeetInches(elev.height_ft)} elevation`;
-  page.drawText(header, { x: MARGIN, y: stripTopY + 12, size: HEADER_SIZE, font, color: ink });
+  // Header states the physical run length (elevationHeader), plus a one-line
+  // note on how the sheet is oriented and how walls are numbered.
+  page.drawText(ELEVATION_VIEW_NOTE, { x: MARGIN, y: stripTopY + NOTE_RISE, size: NOTE_SIZE, font, color: ink });
+  page.drawText(header, { x: MARGIN, y: stripTopY + HEADER_RISE, size: HEADER_SIZE, font, color: ink });
 
   const saved = await doc.save();
   // Copy into a fresh Uint8Array(length) — TS's DOM lib types BlobPart as
@@ -202,11 +252,9 @@ export async function buildWallElevationPdf(args: {
   const bytes = new Uint8Array(saved.length);
   bytes.set(saved);
   const file = new File([bytes], name, { type: "application/pdf" });
-  // upp is UNCHANGED by this task — still the reciprocal of a per-foot
-  // constant (module header), never a function of the page's drawn width —
-  // only width_ft below grows, to dev.total_width_ft (the DRAWN width,
-  // including inter-panel gaps; module header explains why Slice B's
-  // handler never treats this as a physical wall-length).
+  // upp is the reciprocal of a per-foot constant (module header), never a
+  // function of the page's drawn width. width_ft is the physical run length
+  // (no gaps on the sheet — review I2).
   const upp = 1 / (ELEV_POINTS_PER_FT * RENDER_SCALE);
   return { file, upp, width_ft: dev.total_width_ft, height_ft: dev.height_ft };
 }

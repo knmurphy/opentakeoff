@@ -118,26 +118,15 @@ test("is DETERMINISTIC with a NON-EMPTY folds array — same real 2-fold wall yi
 
 const L_RUN_FOLDS = [{ u_ft: 6, kind: "inside" as const, vertexIndex: 1 }];
 
-test("an L-run's returned width_ft equals the developed total_width_ft (wider than the raw run); a straight run's width is unchanged", async () => {
+// Slice C review I2: the sheet carries a KNOWN scale, so its panels abut
+// (no decorative gap) — the returned width is the physical run length for a
+// folded run exactly as for a straight one, and a measurement across a
+// corner is exact.
+test("width_ft is the physical run length — an L-run's sheet adds no corner gap", async () => {
   const straight = await buildWallElevationPdf({ wallStrips: [layout], folds: [], skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
-  assert.equal(straight.width_ft, 18, "one panel, no gap — same as the raw run width");
-
+  assert.equal(straight.width_ft, 18, "one panel — the raw run width");
   const lRun = await buildWallElevationPdf({ wallStrips: [layout], folds: L_RUN_FOLDS, skuColor: () => "#3b82f6", tag: "WT-1", name: "WT-1-elevation.pdf" });
-  // Recompute the expected developed layout independently (same inputs,
-  // same pipeline buildWallElevationPdf itself runs) rather than hardcode a
-  // literal, so this test pins the CONTRACT (returned width_ft ==
-  // developedElevationLayout's total_width_ft) and not a magic number tied
-  // to today's default gap.
-  const elev = wallElevationLayout([layout], L_RUN_FOLDS, () => "#3b82f6");
-  const dev = developedElevationLayout({
-    tiles: elev.tiles,
-    foldsU: elev.folds.map((f) => f.x),
-    foldKinds: elev.folds.map((f) => f.kind),
-    width_ft: elev.width_ft,
-    height_ft: elev.height_ft,
-  });
-  assert.equal(lRun.width_ft, dev.total_width_ft);
-  assert.ok(lRun.width_ft > 18, `expected the developed width (raw 18ft run + a corner gap) to exceed the raw run, got ${lRun.width_ft}`);
+  assert.equal(lRun.width_ft, 18, "two abutting panels — still the raw 18 ft run");
 });
 
 // The width_ft test above only pins the RETURNED value; it doesn't prove the

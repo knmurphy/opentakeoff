@@ -216,15 +216,10 @@ export function summarizeWallShape(
     // pair wrap uses for the whole run — U rebalances from that segment's
     // own centerline, V stays pinned to the shared floor datum 0.
     //
-    // A duplicated interior vertex (zero-length edge) clears BOTH
-    // collapseCollinear's drop test and unwrapRun's U-turn reject (cross AND
-    // dot are both exactly 0), so it can surface as a fold at the SAME u_ft
-    // as its neighbor -- boundaries then contains a repeat, producing a
-    // zero-length segment here. Left as-is deliberately: wallStripRing(0,H)
-    // -> solveTileLayout's own ringBounds guard (`!(maxX>minX)`) returns an
-    // empty layout (no throw, no warning), so it just degrades to one extra
-    // empty wallStrips entry rather than corrupting the F+1 invariant by
-    // filtering it out.
+    // A duplicated vertex (zero-length edge) never reaches here:
+    // unwrapRun's collapseCollinear drops coincident vertices first (Slice C
+    // review I1), so every fold sits at a distinct u and every segment has
+    // positive length.
     //
     // `wallShape.tile_layout.origin`, when pinned, is passed to EVERY
     // sub-strip's wallEffectiveTileSetup call literally as-is (never

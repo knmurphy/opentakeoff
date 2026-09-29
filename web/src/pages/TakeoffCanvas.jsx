@@ -1991,7 +1991,7 @@ export default function TakeoffCanvas() {
     // convention as handleFiles' per-file catch and the autosave catch
     // above (elevationErrorMessage, canvasUtil.js).
     try {
-      const r = await buildWallElevationPdf({ wallStrips: summary.wallStrips, folds: summary.folds || [], skuColor, tag, name });
+      const r = await buildWallElevationPdf({ wallStrips: summary.wallStrips, folds: summary.folds || [], skuColor, tag, name, face_side: shape.face_side === "right" ? "right" : "left" });
 
       // I1: only a wall whose sheet already exists AND is actually bound to
       // shapes AND whose drawn dims changed needs the human's go-ahead — never

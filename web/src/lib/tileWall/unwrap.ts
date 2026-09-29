@@ -16,19 +16,30 @@ function toFeet(verts_norm: [number, number][], dims: { w: number; h: number }, 
   return verts_norm.map(([nx, ny]) => [nx * dims.w * upp, ny * dims.h * upp]);
 }
 
-// drop consecutive vertices whose incoming/outgoing edges are collinear (cross≈0, same dir)
-function collapseCollinear(pts: [number, number][]): { pts: [number, number][]; keptIndex: number[] } {
-  if (pts.length <= 2) return { pts, keptIndex: pts.map((_, i) => i) };
-  const out: [number, number][] = [pts[0]]; const keptIndex = [0];
+// drop coincident vertices (a zero-length edge — e.g. a finishing double-click),
+// then vertices whose incoming/outgoing edges are collinear (cross≈0, same dir).
+// A coincident vertex must go FIRST: its zero-length edge has cross = dot = 0, so
+// it would otherwise pass both the collinear drop and the U-turn reject and
+// surface as a phantom "outside" fold with an empty wall (Slice C review I1).
+// keptIndex keeps the FIRST raw index of each coincident run.
+function collapseCollinear(raw: [number, number][]): { pts: [number, number][]; keptIndex: number[] } {
+  const pts: [number, number][] = []; const rawIndex: number[] = [];
+  raw.forEach((p, i) => {
+    const q = pts[pts.length - 1];
+    if (q && Math.hypot(p[0] - q[0], p[1] - q[1]) < EPS) return;
+    pts.push(p); rawIndex.push(i);
+  });
+  if (pts.length <= 2) return { pts, keptIndex: rawIndex };
+  const out: [number, number][] = [pts[0]]; const keptIndex = [rawIndex[0]];
   for (let i = 1; i < pts.length - 1; i++) {
     const [ax, ay] = pts[i - 1], [bx, by] = pts[i], [cx, cy] = pts[i + 1];
     const inx = bx - ax, iny = by - ay, outx = cx - bx, outy = cy - by;
     const cross = inx * outy - iny * outx;
     const dot = inx * outx + iny * outy;
     if (Math.abs(cross) < EPS && dot > 0) continue; // straight-through → drop
-    out.push(pts[i]); keptIndex.push(i);
+    out.push(pts[i]); keptIndex.push(rawIndex[i]);
   }
-  out.push(pts[pts.length - 1]); keptIndex.push(pts.length - 1);
+  out.push(pts[pts.length - 1]); keptIndex.push(rawIndex[pts.length - 1]);
   return { pts: out, keptIndex };
 }
 
@@ -40,6 +51,7 @@ export function unwrapRun(args: {
   if (!Array.isArray(verts_norm) || verts_norm.length < 2) return null;
   const rawFeet = toFeet(verts_norm, dims, upp);
   const { pts, keptIndex } = collapseCollinear(rawFeet);
+  if (pts.length < 2) return null; // every vertex coincident — nothing to tile
   const warnings: string[] = [];
 
   // reversal (U-turn) detection: antiparallel adjacent edges (cross≈0, dot<0)

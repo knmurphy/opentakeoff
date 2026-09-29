@@ -18,8 +18,8 @@ import { tileConfig } from "../lib/tileSetup.ts";
 import { enumerateSlots } from "../lib/tilePatterns/enumerateSlots.ts";
 import { PLANK_ARITY } from "../lib/tilePatterns/slotKey.ts";
 import { wallElevationLayout } from "../lib/tileWallElevation.ts";
-import { developedElevationLayout, developedViewBox } from "../lib/developedElevation.ts";
-import { elevationButtonState } from "../lib/wallElevationPdf.ts";
+import { developedElevationLayout, developedViewBox, elevationMirrored } from "../lib/developedElevation.ts";
+import { elevationButtonState, cornerMarkLabel, formatFeetInchesEighths, staggerRows } from "../lib/wallElevationPdf.ts";
 
 const WALL_CORNER_MODES = [
   { value: "wrap", label: "Wrap" },
@@ -553,8 +553,10 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
         foldKinds: elev.folds.map((f) => f.kind),
         width_ft: elev.width_ft,
         height_ft: elev.height_ft,
+        mirror: elevationMirrored(faceSide),
       })
     : null;
+
   // "?" mirrors generateWallElevationSheet's own fallback (TakeoffCanvas.jsx)
   // for a condition whose finish_tag somehow reads empty — the button's
   // label/enabled state must never disagree with what the handler it
@@ -564,10 +566,6 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
   const fld = { display: "flex", flexDirection: "column", gap: 2, fontSize: 10.5, color: "var(--ink-muted)" };
   const toggleBtn = (on) => ({ padding: "3px 7px", border: `1px solid ${on ? "var(--cobalt)" : "var(--ink-faint)"}`, background: on ? "var(--cobalt)" : "var(--paper-bright)", color: on ? "var(--paper-bright)" : "var(--ink-muted)", cursor: "pointer", fontSize: 10.5, fontFamily: "var(--f-mono)" });
 
-  // PAD, in viewBox (px) units, rings the developed layout's own bbox with
-  // room for the "Wall N" label beneath each panel and the inside/outside
-  // marker above each break — `developedViewBox`'s `margin` arg.
-  const PAD = 18;
   // feet-per-viewBox-unit computed off the DEVELOPED layout's own
   // `total_width_ft`/`height_ft` (wider than `elev.width_ft` by the
   // inter-panel gaps) — reusing `elev`'s own scale here would overflow the
@@ -575,6 +573,18 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
   // TARGET_W×TARGET_H" policy as the old flat-strip render.
   const devUpp = dev ? Math.max(dev.total_width_ft / TARGET_W_PX, dev.height_ft / TARGET_H_PX, 0.005) : 0.06;
   const h_px = dev ? dev.height_ft / devUpp : 0;
+  // corner marks: plain words, staggered onto a second row when neighbours
+  // would overprint (same rule as the sheet). Widths are estimated at
+  // ~0.6em/char in viewBox px; the second row needs a taller top margin.
+  const MARK_FONT_PX = 10;
+  const markRows = dev ? staggerRows(
+    dev.breaks.map((b) => b.x / devUpp),
+    dev.breaks.map((b) => cornerMarkLabel(b.kind).length * MARK_FONT_PX * 0.6),
+  ) : [];
+  // PAD, in viewBox (px) units, rings the developed layout's own bbox with
+  // room for the "Wall N" label beneath each panel and the inside/outside
+  // marker above each break — `developedViewBox`'s `margin` arg.
+  const PAD = markRows.some((r) => r) ? 30 : 18;
   // `developedViewBox` works in the SAME units as its input (here, feet) —
   // PAD is in px/viewBox-units, so it's converted to an equivalent feet
   // margin at this scale before the call, then the whole returned box is
@@ -652,15 +662,15 @@ function WallShapeCard({ selectedShape, selectedWall, skus, onWallField, wallTag
               the old fold label used), each panel's "Wall N" label beneath
               its own segment. */}
           {dev.breaks.map((b, i) => (
-            <text key={i} x={b.x / devUpp} y={-6} textAnchor="middle" fontSize={10} fontFamily="var(--f-mono)"
+            <text key={i} x={b.x / devUpp} y={-6 - markRows[i] * 12} textAnchor="middle" fontSize={MARK_FONT_PX} fontFamily="var(--f-mono)"
               fill={b.kind === "inside" ? "var(--cobalt)" : "var(--ink-secondary)"}>
-              {b.kind}
+              {cornerMarkLabel(b.kind).toLowerCase()}
             </text>
           ))}
           {dev.panels.map((p) => (
             <text key={p.index} x={(p.xOffset + p.segWidth_ft / 2) / devUpp} y={h_px + 14}
               textAnchor="middle" fontSize={10} fontFamily="var(--f-mono)" fill="var(--ink-secondary)">
-              {p.label}
+              {`${p.label} · ${formatFeetInchesEighths(p.segWidth_ft)}`}
             </text>
           ))}
         </svg>

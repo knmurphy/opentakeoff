@@ -45,7 +45,8 @@ export type DevPanel = {
   segWidth_ft: number;
   tiles: { x: number; y: number; w: number; h: number; cls: string; color: string }[]; // x is PANEL-LOCAL (0..segWidth_ft)
 };
-export type DevBreak = { x: number; kind: string }; // x in the laid-out (offset) frame, at each interior corner
+export type CornerKind = "inside" | "outside";
+export type DevBreak = { x: number; kind: CornerKind }; // x in the laid-out (offset) frame, at each interior corner
 export type DevelopedLayout = {
   panels: DevPanel[];
   breaks: DevBreak[];
@@ -53,21 +54,49 @@ export type DevelopedLayout = {
   height_ft: number;
 };
 
-const DEFAULT_GAP_FT = 0.5;
+// The unscaled panel preview separates panels with a small gap. The generated
+// SHEET passes gap_ft: 0 — it carries a known scale, so a gap would overstate
+// every measurement across a corner (Slice C review I2).
+export const PREVIEW_GAP_FT = 0.5;
+
+// An elevation is drawn as seen standing IN FRONT OF THE TILED FACE. u runs
+// from verts_norm[0], and it points to that viewer's right only when
+// face_side is "left" (the face on the (-dy, dx) side of the run, unwrap.ts
+// CONVENTION, y-down). A "right"-faced run is mirrored so the same physical
+// wall draws the same way whichever end it was traced from (Slice C review
+// I3; pinned by test/tileWallViewSide.test.ts).
+export function elevationMirrored(face_side: string | undefined): boolean {
+  return face_side === "right";
+}
+
+const SLIVER_EPS_FT = 1e-6;
 
 export function developedElevationLayout(args: {
   tiles: { x: number; y: number; w: number; h: number; cls: string; color: string }[];
   foldsU: number[];
-  foldKinds: string[];
+  foldKinds: CornerKind[];
   width_ft: number;
   height_ft: number;
   gap_ft?: number;
+  mirror?: boolean;
 }): DevelopedLayout {
-  const { tiles, foldsU, foldKinds, width_ft, height_ft } = args;
-  const gap_ft = args.gap_ft ?? DEFAULT_GAP_FT;
+  const { tiles, width_ft, height_ft } = args;
+  const gap_ft = args.gap_ft ?? PREVIEW_GAP_FT;
 
-  // Segment boundaries: [0, ...foldsU, width_ft]. foldsU is ascending,
-  // interior (per the brief — not re-sorted/de-duped here).
+  // Segment boundaries: [0, ...folds, width_ft]. The engine hands folds
+  // ascending and strictly interior (unwrap.ts drops coincident vertices);
+  // this is enforced again here rather than trusted, so a fold that does not
+  // advance past its predecessor, or sits on the run's end, can never draw an
+  // empty wall or a doubled corner mark (Slice C review I1).
+  const foldsU: number[] = [];
+  const foldKinds: CornerKind[] = [];
+  args.foldsU.forEach((u, k) => {
+    const prev = foldsU.length ? foldsU[foldsU.length - 1] : 0;
+    if (u - prev > SLIVER_EPS_FT && width_ft - u > SLIVER_EPS_FT) {
+      foldsU.push(u);
+      foldKinds.push(args.foldKinds[k]);
+    }
+  });
   const boundaries = [0, ...foldsU, width_ft];
   const panelCount = boundaries.length - 1;
 
@@ -91,7 +120,6 @@ export function developedElevationLayout(args: {
   // under ~1e-6 ft (float drift at an exact boundary, e.g. reset mode's
   // sub-strips landing exactly on a fold u_ft) is dropped rather than kept
   // as a near-zero-width rect.
-  const SLIVER_EPS_FT = 1e-6;
   for (const t of tiles) {
     const t0 = t.x;
     const t1 = t.x + t.w;
@@ -116,6 +144,18 @@ export function developedElevationLayout(args: {
   }));
 
   const total_width_ft = width_ft + (panelCount - 1) * gap_ft;
+
+  // Mirror the laid-out frame for a right-faced run (elevationMirrored). Each
+  // panel keeps its plan-keyed label ("Wall 1" = first traced segment); only
+  // positions flip, so Wall 1 lands on the right.
+  if (args.mirror) {
+    for (const p of panels) {
+      p.xOffset = total_width_ft - (p.xOffset + p.segWidth_ft);
+      for (const t of p.tiles) t.x = p.segWidth_ft - (t.x + t.w);
+    }
+    for (const b of breaks) b.x = total_width_ft - b.x;
+    breaks.reverse();
+  }
 
   return { panels, breaks, total_width_ft, height_ft };
 }
