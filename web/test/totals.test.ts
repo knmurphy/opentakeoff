@@ -129,12 +129,16 @@ test("reportJson: v1 key set pinned — top level, sheets[], markups[], by_sheet
   // shape_labels + by_label appended after it (#112, additive-only, always
   // emitted); units + display_units appended after that (metric display port —
   // quantities stay RAW feet, the export says which system the user was
-  // reading); roll_goods appended last (#136, always emitted, empty without
-  // roll-goods conditions)
+  // reading); roll_goods appended after that (#136, always emitted, empty
+  // without roll-goods conditions); tile_goods appended last (Task 8,
+  // always emitted, empty without tile-goods conditions); labor_rom appended
+  // last (M8, always emitted, empty without labor figures)
   assert.deepEqual(Object.keys(j),
-    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns", "shape_labels", "by_label", "units", "display_units", "roll_goods"]);
+    ["schema", "project_name", "generated_with", "sheets", "conditions", "by_sheet", "totals", "materials", "markups", "rfis", "condition_columns", "shape_labels", "by_label", "units", "display_units", "roll_goods", "tile_goods", "labor_rom"]);
   assert.equal(j.display_units, "imperial");
   assert.deepEqual(j.roll_goods, []);   // #136 — always emitted; empty when nothing carries a roll_setup
+  assert.deepEqual(j.tile_goods, []);   // Task 8 — always emitted; empty when nothing carries a tile_setup
+  assert.deepEqual(j.labor_rom, []);    // M8 — always emitted; empty without labor figures
   // rfis[] appends after markups (additive v1); linked_markups/linked_sheets derived
   assert.deepEqual(Object.keys(j.rfis[0]),
     ["id", "number", "subject", "question", "status", "to", "priority", "cost_impact", "schedule_impact",
@@ -175,6 +179,22 @@ test("reportJson: roll_goods rides through verbatim; a non-array coerces to [] (
   const rows = [{ condition_id: "ct", finish_tag: "CPT-1", material: "carpet", roll_width_ft: 12, roll_length_ft: 0, direction: "ns", cuts: 3, order_lf: 46.5, rolls: 1, order_qty: 62, order_unit: "sy", oversize: false }];
   assert.deepEqual(reportJson({ rollGoods: rows }).roll_goods, rows);
   assert.deepEqual(reportJson({ rollGoods: "corrupt" as any }).roll_goods, []);
+});
+
+test("reportJson: tile_goods rides through verbatim; a non-array coerces to [] (Task 8)", () => {
+  const rows = [{ condition_id: "ct", finish_tag: "CT-1", multiplier: 1, full: 40, cut: 6, corner: 2, hole: 0, kept_area_sf: 100, safe: 50, boxes: 5, figured: 48, with_margin: 50, grout_bags: 2, cutsheet: [], warnings: [] }];
+  assert.deepEqual(reportJson({ tileGoods: rows }).tile_goods, rows);
+  // @ts-expect-error — intentionally malformed input; reportJson must coerce, not throw
+  assert.deepEqual(reportJson({ tileGoods: "corrupt" }).tile_goods, []);
+  assert.deepEqual(reportJson({}).tile_goods, [], "omitted -> always emitted empty");
+});
+
+test("reportJson: labor_rom rides through verbatim; a non-array coerces to [] (M8)", () => {
+  const rows = [{ condition_id: "ct", finish_tag: "CT-1", multiplier: 1, weighted_sf: 130, pattern_factor: 1.0, size_factor: 1.3, cut_ea: 6, corner_ea: 2, trim_lf: 10, joint_lf: 40 }];
+  assert.deepEqual(reportJson({ laborRom: rows }).labor_rom, rows);
+  // @ts-expect-error — intentionally malformed input; reportJson must coerce, not throw
+  assert.deepEqual(reportJson({ laborRom: "corrupt" }).labor_rom, []);
+  assert.deepEqual(reportJson({}).labor_rom, [], "omitted -> always emitted empty");
 });
 
 test("reportJson: by_sheet rows serialize round2-ed — incl. ea — with key order intact", () => {

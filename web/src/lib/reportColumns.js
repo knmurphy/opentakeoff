@@ -252,6 +252,32 @@ export function rollColProfile(rollByCond) {
   }));
 }
 
+// ── Tile takeoff (M8) ────────────────────────────────────────────────────────
+// The tile layout's full figure (counts, cut sheet, trim, movement joints,
+// labor ROM) is NOT report-table data — it is acted on in the docked TilePanel
+// and shipped as the JSON tile_goods/labor_rom blocks, the cut-sheet CSV, and
+// the optional "Tile pattern" shop-drawing page. The ONE figure that earns a
+// table cell is the PO-line order quantity, mirroring roll goods' `Rolls`
+// column — and it is OFF by default so the matrix stays clean (reachable via
+// the column picker).
+export const TILE_FIELDS = [
+  { key: "tile:boxes", header: "Tile Boxes", get: (ti, mult) => ti.order.boxes * mult },
+];
+
+export function tileColProfile(tileByCond) {
+  if (!(tileByCond instanceof Map) || !tileByCond.size) return [];
+  return TILE_FIELDS.map((f) => ({
+    key: f.key,
+    header: f.header,
+    defaultVisible: false,
+    tile: true,
+    get: (r, ctx) => {
+      const ti = ctx?.tileByCond?.get(r.id);
+      return ti ? f.get(ti, r.multiplier || 1) : "";
+    },
+  }));
+}
+
 // Partition condition rows by one custom column's assigned value, for the
 // report's grouped view → [{ value: string|null, label, rows }]. Order:
 // vocabulary order first, then ad-hoc values (assigned strings missing from

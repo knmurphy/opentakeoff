@@ -88,7 +88,8 @@ test("reportJson: proposed_condition_edits is present ONLY with content — the 
   const withEdits = reportJson({ rows, proposedConditionEdits: proposedConditionEditRows(conds, [{ id: "p", condition_id: "ct", proposed: { waste_pct: 12 }, rationale: "r" }]) });
   assert.equal(withEdits.conditions[0].waste_pct, 10, "the row prints the CURRENT knob");
   assert.deepEqual(withEdits.proposed_condition_edits!.map((r: any) => [r.condition, r.current.waste_pct, r.proposed.waste_pct]), [["CT-1", 10, 12]]);
-  assert.deepEqual(Object.keys(withEdits).slice(-2), ["roll_goods", "proposed_condition_edits"], "appended last");
+  // last key, whatever additive v1 blocks (roll_goods, tile_goods, labor_rom) precede it
+  assert.equal(Object.keys(withEdits).at(-1), "proposed_condition_edits", "appended last");
 });
 
 const doc = (over: Record<string, unknown> = {}) => ({

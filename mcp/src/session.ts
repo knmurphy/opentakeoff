@@ -68,6 +68,8 @@ import { sanitizeApprovals as sanitizeApprovalsJs, applyApprovalCommand as apply
 import { nextRfiNumber, liveRfis } from "../../web/src/lib/rfi.js";
 import { conditionTotals, grandTotals, sheetTotals, reportJson } from "../../web/src/lib/totals.js";
 import { hasRollSetup, mintRollSetup, computeRollTakeoff, rollReportRows, seamLfByShape } from "../../web/src/lib/rollTakeoff.js";
+import { computeTileTakeoff, tileReportRows } from "../../web/src/lib/tileTakeoff.js";
+import { hasTileSetup, mintTileSetup, type TileSetup, type TileConfig } from "../../web/src/lib/tileSetup.ts";
 import { gridPxPerFoot, drawGrid, drawShapes, drawMarks, type Ctx2D, type ToCanvas, type ViewMarks } from "./view.ts";
 
 // Conditions and snap behavior minted here are identical to the browser's
@@ -159,7 +161,7 @@ export interface ConditionEditFields {
 }
 
 /** The knobs edit_condition writes — one type, three call sites. */
-export type ConditionKnobPatch = { waste_pct?: number; multiplier?: number; height_ft?: number; rise_ft?: number; drop_ft?: number; roll_setup?: Record<string, unknown> | null };
+export type ConditionKnobPatch = { waste_pct?: number; multiplier?: number; height_ft?: number; rise_ft?: number; drop_ft?: number; roll_setup?: Record<string, unknown> | null; tile_setup?: Record<string, unknown> | null };
 
 /** A condition-edit proposal (#365): a diff against a condition held as
  * pending. Nothing about the condition changes until the estimator accepts
@@ -198,6 +200,10 @@ export interface Condition {
    * condition roll goods — material class + the packing engine's spec fields,
    * exactly the object the canvas persists (web/src/lib/rollTakeoff.js). */
   roll_setup?: Record<string, unknown>;
+  /** Tile-patterning opt-in (#tile): presence of a usable setup is what makes the
+   * condition tile-patterned — the same object the canvas persists
+   * (web/src/lib/tileSetup.ts). */
+  tile_setup?: Record<string, unknown>;
   materials: MaterialRow[];
 }
 
@@ -365,6 +371,14 @@ export interface Shape {
    * as a real hole — totals.js skips it (the parent's computed already nets
    * the hole), and delete restores the parent it cut. */
   cuts_shape_id?: string;
+  /** Tile-patterning per-room override (M5, #tile) — origin/rotation/
+   * edge_overrides/wet_tags that override the condition's
+   * tile_setup defaults for THIS room, written by the canvas's undoable
+   * tileLayout shape command (web/src/lib/shapeCommands.js). Opaque here,
+   * same posture as Condition.tile_setup — this server never solves against
+   * it directly, it only carries it through export_takeoff's tile_layouts
+   * snapshot for a headless reader. Absent = inherits the condition default. */
+  tile_layout?: Record<string, unknown>;
   origin?: ShapeOrigin;
 }
 
@@ -374,6 +388,21 @@ export interface CutoutParentPrev {
   verts_norm: [number, number][];
   verts_norm_holes?: [number, number][][];
   computed?: Shape["computed"];
+}
+
+/** Task 7 (M5) — export_takeoff's additive per-shape tile layout snapshot.
+ * One entry per floor_area shape sitting under a tile_setup condition:
+ * config is that condition's tile_setup resolved to a solve config,
+ * classified_summary is the SAME classify pass exportReport's tile_goods
+ * figures from (never re-solved), and tile_layout is the shape's own
+ * per-room override, carried through verbatim when present. */
+export interface TileLayoutSnapshot {
+  shape_id: string;
+  condition_id: string;
+  finish_tag: string;
+  config: TileConfig;
+  classified_summary: { full: number; cut: number; corner: number; hole: number };
+  tile_layout?: Record<string, unknown>;
 }
 
 /** An annotation — a note ABOUT the work, never a measurement of it.
@@ -638,7 +667,7 @@ export type JournalPayload =
   | { op: "delete"; tool: string; removed: { shape: Shape; index: number }[] }
   | { op: "materials"; tool: string; condition_id: string; before: MaterialRow[]; dropped_before?: string[];
       family?: { condition_id: string; before: MaterialRow[]; dropped_before?: string[] }[] }
-  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number; height_ft?: number; rise_ft?: number; drop_ft?: number; roll_setup?: Record<string, unknown> } }
+  | { op: "condition"; tool: string; condition_id: string; before: { waste_pct: number; multiplier: number; height_ft?: number; rise_ft?: number; drop_ft?: number; roll_setup?: Record<string, unknown>; tile_setup?: Record<string, unknown> } }
   | { op: "duplicate_condition"; tool: string; condition_id: string; parent_id: string; parent_had_family: boolean }
   | { op: "split_condition"; tool: string; condition_id: string; before: { variant_of?: string; materials?: unknown; materials_dropped?: string[] } }
   | { op: "approval"; tool: string; inverse: ApprovalCommand }
@@ -4161,11 +4190,20 @@ export class Session {
         c.roll_setup = { ...base, ...given, material };
       }
     }
+    if (opts.tile_setup !== undefined) {
+      if (opts.tile_setup === null) {
+        delete c.tile_setup; // opt out — trade-agnostic again
+      } else {
+        const given = Object.fromEntries(Object.entries(opts.tile_setup).filter(([, v]) => v !== undefined));
+        const base = hasTileSetup(c) ? (c.tile_setup as object) : (mintTileSetup() as object);
+        c.tile_setup = { ...base, ...given };
+      }
+    }
   }
 
   editCondition(tag: string, opts: ConditionKnobPatch) {
-    if (opts.waste_pct === undefined && opts.multiplier === undefined && opts.height_ft === undefined && opts.rise_ft === undefined && opts.drop_ft === undefined && opts.roll_setup === undefined) {
-      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier, height_ft, rise_ft, drop_ft, roll_setup.");
+    if (opts.waste_pct === undefined && opts.multiplier === undefined && opts.height_ft === undefined && opts.rise_ft === undefined && opts.drop_ft === undefined && opts.roll_setup === undefined && opts.tile_setup === undefined) {
+      throw new UserError("Nothing to change — pass at least one of waste_pct, multiplier, height_ft, rise_ft, drop_ft, roll_setup, tile_setup.");
     }
     const c = this.conditions.find((x) => x.finish_tag === tag);
     if (!c) {
@@ -4175,6 +4213,7 @@ export class Session {
     const before = {
       waste_pct: c.waste_pct, multiplier: c.multiplier, height_ft: c.height_ft, rise_ft: c.rise_ft, drop_ft: c.drop_ft,
       roll_setup: c.roll_setup ? structuredClone(c.roll_setup) : undefined,
+      tile_setup: c.tile_setup ? structuredClone(c.tile_setup) : undefined,
     };
     this.applyConditionKnobs(c, opts);
     this.record({ op: "condition", tool: "edit_condition", condition_id: c.id, before });
@@ -4199,6 +4238,7 @@ export class Session {
       ...(c.drop_ft !== undefined ? { drop_ft: c.drop_ft } : {}),
       ...(c.roll_setup ? { roll_setup: c.roll_setup } : {}),
       ...(roll ? { roll } : {}),
+      ...(c.tile_setup ? { tile_setup: c.tile_setup } : {}),
     };
   }
 
@@ -4357,6 +4397,8 @@ export class Session {
           else c.drop_ft = e.before.drop_ft;
           if (e.before.roll_setup === undefined) delete c.roll_setup;
           else c.roll_setup = e.before.roll_setup;
+          if (e.before.tile_setup === undefined) delete c.tile_setup;
+          else c.tile_setup = e.before.tile_setup;
           this.reflowLinears(c);
         }
         undone.push({ seq: e.seq, op: e.op, tool: e.tool, shapes: 0 });
@@ -4941,14 +4983,49 @@ export class Session {
     return { sheet: s, build };
   }
 
-  exportPayload(): TakeoffDocument {
+  /** Task 7 (M5) — one floor_area shape's solved tile layout snapshot for
+   * export_takeoff, so a headless agent can read what the canvas would draw
+   * without re-solving the engine itself. */
+  private tileLayoutSnapshots(): TileLayoutSnapshot[] {
+    const { dimsFor, uppFor } = this.rollInputs();
+    // Reuses computeTileTakeoff's byShape figures — the SAME classify pass
+    // exportReport's tile_goods reads (session.ts:3843) — never re-solved, so
+    // a headless snapshot and the report block can never disagree about a
+    // shape's classified counts.
+    const { byShape } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor);
+    if (!byShape.size) return [];
+    const condById = new Map(this.conditions.map((c) => [c.id, c]));
+    const out: TileLayoutSnapshot[] = [];
+    for (const s of this.shapes) {
+      const summary = byShape.get(s.id);
+      if (!summary) continue;
+      const cond = condById.get(s.condition_id);
+      if (!cond?.tile_setup) continue;
+      out.push({
+        shape_id: s.id,
+        condition_id: s.condition_id,
+        finish_tag: cond.finish_tag,
+        config: summary.layout.config,
+        classified_summary: {
+          full: summary.counts.full,
+          cut: summary.counts.cut,
+          corner: summary.counts.corner,
+          hole: summary.counts.hole,
+        },
+        ...(s.tile_layout ? { tile_layout: s.tile_layout } : {}),
+      });
+    }
+    return out;
+  }
+
+  exportPayload(): TakeoffDocument & { tile_layouts?: TileLayoutSnapshot[] } {
     if (!this.docs.size) throw new UserError("No plan loaded — call load_plan first.");
     // The envelope is the canvas's own writer (web/src/lib/takeoffDocument.js):
     // key order, omit-when-empty and the units rule are decided there once.
     // What the server contributes is its field bag; provenance rides the sheet
     // entries (scale_source for the report, scale_confirmed:false for the gate).
     // RFIs go through liveRfis(): withdrawn tombstones never reach the app.
-    return buildTakeoffDocument({
+    const doc = buildTakeoffDocument({
       project_name: "",
       units: "imperial",
       sheets: [...this.sheets.values()].filter((s) => s.upp != null).map((s) => sheetEntry({ sheet_id: s.key, units_per_px: s.upp as number, scale_source: s.scaleSource, scale_confirmed: s.scaleConfirmed })),
@@ -4960,6 +5037,11 @@ export class Session {
       proposals: this.proposals,
       condition_edit_proposals: this.conditionEditProposals,
     }) as TakeoffDocument;
+    // tile layout snapshots (Task 7/M5) are a server-side read aid, not part of
+    // the canvas's document — appended after the shared writer, absent when
+    // empty, so a tile-less export stays byte-identical to the canvas's
+    const tileLayouts = this.tileLayoutSnapshots();
+    return tileLayouts.length ? { ...doc, tile_layouts: tileLayouts } : doc;
   }
 
   /** The computed Report document — "opentakeoff.report.v1", the SAME schema
@@ -4978,6 +5060,10 @@ export class Session {
     const { dimsFor, uppFor } = this.rollInputs();
     const { byCond } = computeRollTakeoff(this.conditions, this.shapes, dimsFor, uppFor) as { byCond: Map<string, unknown> };
     const rows = (conditionTotals(this.conditions, this.shapes, { seamByShape: seamLfByShape(byCond) }) as Record<string, unknown>[]).filter((r) => (r.shape_count as number) > 0);
+    // tile goods (Task 8): the same pure seam the canvas report will use —
+    // figured off the SAME dimsFor/uppFor rollInputs() already resolved, so a
+    // tile condition and a roll condition on the same sheet agree on scale.
+    const { byCond: tileByCond } = computeTileTakeoff(this.conditions, this.shapes, dimsFor, uppFor);
     return reportJson({
       projectName,
       rows,
@@ -4986,6 +5072,7 @@ export class Session {
       markups: this.markups,
       rfis: this.liveRfis(),
       rollGoods: rollReportRows(byCond, rows),
+      tileGoods: tileReportRows(tileByCond, rows),
       // proposals (#365): the report prints the CURRENT knobs in its rows and
       // carries every pending diff beside them — additive, present only when
       // any exist, so the document is byte-identical otherwise
