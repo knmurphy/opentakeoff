@@ -1,16 +1,17 @@
 // Geometry core tests — the One-Click pipeline is pure (no DOM, no pdf.js), so
 // it runs straight under node. Run with: npm test
-import { test } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildMask, floodRegion, traceRegion, snapVertices, ringArea, rdpClosed,
-  extractVectorGeometry, classifyHatchSegs, classifyOffsetAnnotationSegs, classifyDimensionStringSegs, markPolylineArcs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY, SEG_POLYARC,
+  extractVectorGeometry, classifyHatchSegs, classifyOffsetAnnotationSegs, classifyDimensionStringSegs, classifyFleckSegs, markPolylineArcs, SEG_CURVE, SEG_CLIP, SEG_FILLONLY, SEG_POLYARC,
+  type SubPath,
   SENS_STRICT, SENS_BALANCED, SENS_AGGRESSIVE, MASK_CURVE_BIT,
   floodRegionSealed, dilateHardMask, SEAL_RADII, sealRadiiFor, DOOR_SEAL_MAX_FT, SEAL_R_MAX, doorWedgeCapPx,
   splitMergedArcs, doorLeafCells, arcClusterFit,
   type Point, type MaskObj,
 } from "../src/lib/oneclick.ts";
-import { cloudBezier, cloudPath, arrowheadPath, reflectVertsNorm, closedMetrics } from "../src/lib/geometry.js";
+import { cloudBezier, cloudPath, arrowheadPath, reflectVertsNorm, closedMetrics, segsIntersect, ringSelfIntersects, minAreaRect } from "../src/lib/geometry.js";
 
 // a closed square room, as flat boundary segments in image px
 function squareSegs(x0: number, y0: number, x1: number, y1: number): number[] {
@@ -615,6 +616,137 @@ test("reflectVertsNorm: applying the same flip twice returns the original ring",
   }
 });
 
+// ── subpaths: the drawn FIGURE each segment belongs to ──────────────────────
+// Built from a hand-rolled op list, because the invariant under test is that
+// the ranges track exactly what landed in segs — a fixture that reused the
+// extractor's own bookkeeping would be a tautology.
+function opsFor(items: Array<[number, unknown[]]>, _OPSX?: Record<string, number>) {
+  return { fnArray: items.map((i) => i[0]), argsArray: items.map((i) => i[1]) };
+}
+const OPSX = { moveTo: 1, lineTo: 2, curveTo: 3, curveTo2: 4, curveTo3: 5, closePath: 6, rectangle: 7,
+  constructPath: 10, save: 11, restore: 12, transform: 13, setLineWidth: 14, setGState: 15,
+  setStrokeRGBColor: 16, endPath: 17, fill: 18, eoFill: 19, clip: 20, eoClip: 21, stroke: 22,
+  paintFormXObjectBegin: 30, paintFormXObjectEnd: 31, beginMarkedContent: 32, beginMarkedContentProps: 33,
+  endMarkedContent: 34, paintImageXObject: 40, paintInlineImageXObject: 41, paintImageMaskXObject: 42,
+  paintImageXObjectRepeat: 43, paintImageMaskXObjectRepeat: 44, paintImageMaskXObjectGroup: 45,
+  paintInlineImageXObjectGroup: 46 };
+const IDENT = [1, 0, 0, 1, 0, 0];
+
+test("subpaths: one moveTo run is one figure; its range covers exactly its segments", () => {
+  const ops = opsFor([
+    [OPSX.constructPath, [[OPSX.moveTo, OPSX.lineTo, OPSX.lineTo], [0, 0, 10, 0, 10, 10]]],
+    [OPSX.stroke, []],
+  ], OPSX);
+  const g = extractVectorGeometry(ops, IDENT, OPSX);
+  assert.equal(g.subpaths!.length, 1);
+  const s = g.subpaths![0];
+  assert.deepEqual([s.i0, s.i1], [0, 2], "two segments from three points");
+  assert.deepEqual([s.x0, s.y0, s.x1, s.y1], [0, 0, 10, 10], "bbox is the figure's own extent");
+  assert.equal(s.closed, false);
+});
+
+test("subpaths: each moveTo starts a NEW figure — a stipple field is many, not one", () => {
+  const items: Array<[number, unknown[]]> = [];
+  const path: number[] = [];
+  const coords: number[] = [];
+  for (let k = 0; k < 5; k++) {
+    path.push(OPSX.moveTo, OPSX.lineTo);
+    coords.push(k * 100, 0, k * 100 + 1, 1);       // five isolated flecks, far apart
+  }
+  items.push([OPSX.constructPath, [path, coords]], [OPSX.stroke, []]);
+  const g = extractVectorGeometry(opsFor(items, OPSX), IDENT, OPSX);
+  assert.equal(g.subpaths!.length, 5, "five figures, not one compound path");
+  for (const s of g.subpaths!) assert.equal(s.i1 - s.i0, 1, "one segment each");
+});
+
+test("subpaths: closePath and rectangle mark a figure closed; a rect is its own figure", () => {
+  const ops = opsFor([
+    [OPSX.constructPath, [[OPSX.moveTo, OPSX.lineTo, OPSX.lineTo, OPSX.closePath, OPSX.rectangle],
+      [0, 0, 10, 0, 10, 10, 50, 50, 20, 20]]],
+    [OPSX.fill, []],
+  ], OPSX);
+  const g = extractVectorGeometry(ops, IDENT, OPSX);
+  assert.equal(g.subpaths!.length, 2);
+  assert.equal(g.subpaths![0].closed, true, "closePath closes the run");
+  assert.equal(g.subpaths![1].closed, true, "a rectangle is closed by construction");
+  assert.deepEqual([g.subpaths![1].x0, g.subpaths![1].y0], [50, 50], "and carries its own bbox");
+  for (const s of g.subpaths!) assert.ok(s.flags & SEG_FILLONLY, "the paint fact rides on the figure");
+});
+
+test("subpaths: every segment is covered exactly once", () => {
+  const ops = opsFor([
+    [OPSX.constructPath, [[OPSX.moveTo, OPSX.lineTo, OPSX.rectangle, OPSX.moveTo, OPSX.lineTo, OPSX.lineTo],
+      [0, 0, 5, 5, 20, 20, 10, 10, 40, 40, 45, 45, 50, 50]]],
+    [OPSX.stroke, []],
+  ], OPSX);
+  const g = extractVectorGeometry(ops, IDENT, OPSX);
+  const n = g.segs.length >> 2;
+  const seen = new Uint8Array(n);
+  for (const s of g.subpaths!) for (let i = s.i0; i < s.i1; i++) seen[i]++;
+  assert.ok(n > 0);
+  for (let i = 0; i < n; i++) assert.equal(seen[i], 1, `segment ${i} covered exactly once`);
+});
+
+// ── finish texture (oneclick.ts section 2d) ─────────────────────────────────
+// 18 px/ft throughout, matching the other fixtures here.
+
+/** `count` flecks on a `pitch`-px grid starting at (x0, y0), each a 2 px tick. */
+function fleckField(x0: number, y0: number, cols: number, rows: number, pitch: number) {
+  const segs: number[] = [];
+  const subpaths: SubPath[] = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const x = x0 + c * pitch, y = y0 + r * pitch;
+    const i = segs.length >> 2;
+    segs.push(x, y, x + 2, y + 2);
+    subpaths.push({ i0: i, i1: i + 1, x0: x, y0: y, x1: x + 2, y1: y + 2, closed: false, flags: 0, fillLum: 0 });
+  }
+  return { segs, subpaths };
+}
+
+test("finish texture: a dense field of sub-wall flecks classifies soft", () => {
+  const { segs, subpaths } = fleckField(100, 100, 8, 8, 6);
+  const soft = classifyFleckSegs(segs, new Uint8Array(segs.length >> 2), subpaths, 1, 18);
+  assert.equal([...soft].every((v) => v === 1), true, "the whole field is texture");
+});
+
+test("finish texture: a LONE tiny mark is a detail, not texture", () => {
+  const segs = [100, 100, 102, 102];
+  const subpaths: SubPath[] = [{ i0: 0, i1: 1, x0: 100, y0: 100, x1: 102, y1: 102, closed: false, flags: 0, fillLum: 0 }];
+  assert.equal(classifyFleckSegs(segs, new Uint8Array(1), subpaths, 1, 18)[0], 0);
+});
+
+test("finish texture: a figure that reaches wall thickness is never texture", () => {
+  // same dense population, but each figure spans a real wall's breadth
+  const { segs, subpaths } = fleckField(100, 100, 8, 8, 30);
+  for (const s of subpaths) { s.x1 = s.x0 + 20; s.y1 = s.y0 + 20; }   // 20 px > MIN_THICK_FT·18
+  const soft = classifyFleckSegs(segs, new Uint8Array(segs.length >> 2), subpaths, 1, 18);
+  assert.equal([...soft].some((v) => v === 1), false, "wall-scale figures stay hard whatever their company");
+});
+
+test("finish texture: filled and clip-only figures are exempt", () => {
+  for (const bit of [SEG_FILLONLY, SEG_CLIP]) {
+    const { segs, subpaths } = fleckField(100, 100, 8, 8, 6);
+    for (const s of subpaths) s.flags = bit;
+    const soft = classifyFleckSegs(segs, new Uint8Array(segs.length >> 2), subpaths, 1, 18);
+    assert.equal([...soft].some((v) => v === 1), false, `flag ${bit} exempt`);
+  }
+});
+
+test("finish texture: no subpaths and no scale are both no-ops (the optional-field contract)", () => {
+  const { segs, subpaths } = fleckField(100, 100, 8, 8, 6);
+  const meta = new Uint8Array(segs.length >> 2);
+  assert.equal([...classifyFleckSegs(segs, meta, null, 1, 18)].some((v) => v === 1), false, "no figures ⇒ nothing");
+  assert.equal([...classifyFleckSegs(segs, meta, subpaths, 1, 0)].some((v) => v === 1), false, "no scale ⇒ nothing");
+  // a regular test field is ALSO periodic, so the hatch classifier already
+  // softens some of it — the contract under test is that passing no figures
+  // changes nothing, and passing them can only ADD to the same plane
+  const noSub = buildMask(segs, 600, 400, 600, meta, 18);
+  const noSubAgain = buildMask(segs, 600, 400, 600, meta, 18, 0, null, null, null);
+  const withSub = buildMask(segs, 600, 400, 600, meta, 18, 0, null, null, { subpaths });
+  assert.equal(noSubAgain.softCount, noSub.softCount, "an explicit null is the same as omitting it");
+  assert.ok(withSub.softCount > noSub.softCount, "figures add to the soft plane, never subtract");
+});
+
 test("classifyHatchSegs: extremal rows hard, wide member hard, curve exempt, clip soft", () => {
   const segs: number[] = [];
   for (let x = 100; x <= 700; x += 4) segs.push(x, 100, x, 500);
@@ -810,7 +942,7 @@ test("a room chopped by a text-anchored dim line floods WHOLE, from either side"
   const meta = new Uint8Array(segs.length >> 2);
   const dimText = [{ x: 283, y: 235, ang: 90, wPx: 60 }];
   const moPlain = buildMask(segs, 1000, 600, 1000, meta, D_FT);
-  const moText = buildMask(segs, 1000, 600, 1000, meta, D_FT, 0, null, null, dimText);
+  const moText = buildMask(segs, 1000, 600, 1000, meta, D_FT, 0, null, null, { dimTexts: dimText });
   const flood = (mo: MaskObj, x: number, y: number) => {
     const r = floodRegionSealed(mo, x, y, 0.5, sealRadiiFor(mo.mppf || D_FT), 0, 0);
     assert.equal(r.status, "ok");
@@ -1245,6 +1377,100 @@ test("extractVectorGeometry: a folded *Repeat op's area still scales with the am
   assert.ok(Math.abs(g.imageArea - 96) < 1e-9, `imageArea ${g.imageArea}`);
 });
 
+// pdf.js ≥ 4.6 constructPath shape: [paintOp, [flatPath], minMax]
+// pdf.js moved path building into the worker: the paint op is folded into
+// constructPath's own args as a NUMBER, and the path arrives as one flat
+// Float32Array interleaving DrawOPS codes (moveTo=0, lineTo=1, curveTo=2,
+// closePath=3) with coordinates. The regression these guard: the extractor
+// iterated args[0] — now a number — and every Magic Fill / snap-grid build
+// under pdfjs-dist 5.x died with "… is not iterable".
+describe("extractVectorGeometry: pdf.js ≥ 4.6 folded constructPath", () => {
+  const OPS: Record<string, number> = {
+    save: 1, restore: 2, transform: 3, constructPath: 4, setLineWidth: 5, setGState: 6,
+    moveTo: 10, lineTo: 11, curveTo: 12, curveTo2: 13, curveTo3: 14, closePath: 15, rectangle: 16,
+    stroke: 20, closeStroke: 21, fill: 22, eoFill: 23, endPath: 28, clip: 29, eoClip: 30,
+    setStrokeRGBColor: 50, setFillRGBColor: 51,
+    paintFormXObjectBegin: 40, paintFormXObjectEnd: 41,
+  };
+  const IDENT = [1, 0, 0, 1, 0, 0];
+  const flat = (...v: number[]) => new Float32Array(v);
+
+  test("a folded stroke path extracts segments (the 5.x crash regression)", () => {
+    const opList = {
+      fnArray: [OPS.constructPath],
+      argsArray: [[OPS.stroke, [flat(0, 0, 0, 1, 10, 0, 1, 10, 10, 3)], [0, 0, 10, 10]]],
+    };
+    const g = extractVectorGeometry(opList as any, IDENT, OPS);
+    assert.equal(g.segs.length >> 2, 3, "two drawn segments + the closePath return");
+    assert.deepEqual(Array.from(g.segs.slice(0, 4)), [0, 0, 10, 0]);
+    assert.equal(g.subpaths!.length, 1);
+    assert.equal(g.subpaths![0].closed, true, "DrawOPS closePath closes the figure");
+  });
+
+  test("the folded paint op supplies the paint flags — fill and endPath verdicts", () => {
+    const opList = {
+      fnArray: [OPS.constructPath, OPS.constructPath, OPS.constructPath],
+      argsArray: [
+        [OPS.fill, [flat(0, 0, 0, 1, 5, 0)], [0, 0, 5, 0]],
+        [OPS.endPath, [flat(0, 0, 10, 1, 5, 10)], [0, 10, 5, 10]],
+        [OPS.closeStroke, [flat(0, 0, 20, 1, 5, 20, 1, 5, 25, 3)], [0, 20, 5, 25]],
+      ],
+    };
+    const { meta } = extractVectorGeometry(opList as any, IDENT, OPS);
+    assert.equal(meta[0] & SEG_FILLONLY, SEG_FILLONLY, "folded fill → filled-not-stroked");
+    assert.equal(meta[1] & SEG_CLIP, SEG_CLIP, "folded endPath → clip-only (invisible ink)");
+    assert.equal(meta[2] & (SEG_FILLONLY | SEG_CLIP), 0, "closeStroke is drawn linework");
+  });
+
+  test("a folded cubic tessellates into SEG_CURVE chords", () => {
+    const opList = {
+      fnArray: [OPS.constructPath],
+      argsArray: [[OPS.stroke, [flat(0, 0, 10, 2, 2, 14, 4, 14, 6, 10)], [0, 10, 6, 14]]],
+    };
+    const { segs, meta } = extractVectorGeometry(opList as any, IDENT, OPS);
+    assert.ok(segs.length >> 2 >= 4, "the bezier sampled as chords");
+    for (let i = 0; i < meta.length; i++) assert.equal(meta[i] & SEG_CURVE, SEG_CURVE);
+  });
+
+  test("an empty ([null]) or render-consumed (Path2D) path is skipped, not a throw", () => {
+    const opList = {
+      fnArray: [OPS.constructPath, OPS.constructPath, OPS.constructPath],
+      argsArray: [
+        [OPS.endPath, [null], null],
+        [OPS.stroke, [{ fake: "Path2D" }], [0, 0, 5, 5]],
+        [OPS.stroke, [flat(0, 0, 0, 1, 5, 0)], [0, 0, 5, 0]],
+      ],
+    };
+    const g = extractVectorGeometry(opList as any, IDENT, OPS);
+    assert.equal(g.segs.length >> 2, 1, "only the intact path contributes");
+  });
+
+  test("5.x hex-string stroke colors feed the luminance channel", () => {
+    const opList = {
+      fnArray: [OPS.setStrokeRGBColor, OPS.constructPath],
+      argsArray: [
+        ["#808080"],
+        [OPS.stroke, [flat(0, 0, 0, 1, 5, 0)], [0, 0, 5, 0]],
+      ],
+    };
+    const g = extractVectorGeometry(opList as any, IDENT, OPS);
+    assert.equal(g.lum![0], 128, "mid-grey pen recorded per segment");
+  });
+
+  test("the legacy [subOps, coords] shape is byte-identical to before", () => {
+    const opList = {
+      fnArray: [OPS.constructPath, OPS.stroke],
+      argsArray: [
+        [[OPS.moveTo, OPS.lineTo], [0, 0, 10, 0]],
+        null,
+      ],
+    };
+    const g = extractVectorGeometry(opList as any, IDENT, OPS);
+    assert.equal(g.segs.length >> 2, 1);
+    assert.deepEqual(Array.from(g.segs), [0, 0, 10, 0]);
+  });
+});
+
 // The O(N²) lattice-query fix (adversarial review, round 8) shipped with NO
 // regression test — reverting the bisect + prefix-max in rowHas to the naive
 // full-row scan left the whole suite AND the bench green (audit finding D7).
@@ -1273,4 +1499,123 @@ test("classifyHatchSegs stays sub-quadratic on a dense same-angle tick swarm", (
   const ms = performance.now() - t0;
   assert.equal(soft.length, segs.length / 4);
   assert.ok(ms < 1500, `classifyHatchSegs took ${Math.round(ms)} ms on 40k same-angle segments in ${ROWS} rows — the row query has gone quadratic again`);
+});
+
+// ── segsIntersect / ringSelfIntersects ──────────────────────────────────────
+// These two pure predicates drive the drawing-styles self-intersection recolor
+// (a theme with invalidColor, e.g. Contemporary #e03131, flips a self-crossing
+// area/deduct/zone draft). Drafting never runs them (invalidColor null short-
+// circuits upstream), so they carry NO parity risk — but they ARE load-bearing
+// the moment that style is picked. These tests pin the boundary behavior AS
+// CODED (endpoint-exclusion and single-point-contact rules included), not an
+// idealized contract: shared endpoints and end-to-end touches return false by
+// design (a ring's adjacent edges always share a legitimate vertex).
+describe("segsIntersect", () => {
+  test("proper straddle (X-cross) is true, and symmetric in argument order", () => {
+    const a: [number, number] = [0, 0], b: [number, number] = [4, 4];
+    const c: [number, number] = [0, 4], d: [number, number] = [4, 0];
+    assert.equal(segsIntersect(a, b, c, d), true);
+    assert.equal(segsIntersect(c, d, a, b), true, "symmetric");
+  });
+
+  test("disjoint segments are false (parallel apart, and non-parallel not reaching)", () => {
+    assert.equal(segsIntersect([0, 0], [1, 0], [0, 5], [1, 5]), false, "parallel, far apart");
+    assert.equal(segsIntersect([0, 0], [2, 0], [3, -1], [3, 1]), false, "vertical bar past the segment's end");
+  });
+
+  test("collinear overlapping is true — horizontal (x-axis) and vertical (dx=0 axis) runs", () => {
+    // horizontal: axis picks x; the two runs overlap on [2,4]
+    assert.equal(segsIntersect([0, 0], [4, 0], [2, 0], [6, 0]), true);
+    // vertical: x can't tell points apart, so the code compares y — the overlap
+    // on [2,4] must still be found (this is the dx=0 axis branch)
+    assert.equal(segsIntersect([3, 0], [3, 4], [3, 2], [3, 6]), true);
+    // diagonal collinear (axis still x, monotonic along the line): overlap [2,4]
+    assert.equal(segsIntersect([0, 0], [4, 4], [2, 2], [6, 6]), true);
+  });
+
+  test("collinear but disjoint is false", () => {
+    assert.equal(segsIntersect([0, 0], [2, 0], [4, 0], [6, 0]), false, "horizontal gap");
+    assert.equal(segsIntersect([3, 0], [3, 2], [3, 4], [3, 6]), false, "vertical gap");
+  });
+
+  test("collinear end-to-end contact at a shared point is false (single-point rule)", () => {
+    // intervals meet at exactly x=2 → the touch point is an endpoint of BOTH,
+    // which the code excludes (a shared vertex is not a crossing)
+    assert.equal(segsIntersect([0, 0], [2, 0], [2, 0], [4, 0]), false);
+  });
+
+  test("T-touch: an endpoint riding the OTHER segment's interior is true", () => {
+    // (2,0) sits strictly inside the segment (0,0)-(4,0)
+    assert.equal(segsIntersect([0, 0], [4, 0], [2, 0], [2, 3]), true);
+    assert.equal(segsIntersect([2, 0], [2, 3], [0, 0], [4, 0]), true, "symmetric");
+  });
+
+  test("shared endpoint, different directions (the ring-edge case) is false", () => {
+    // adjacent ring edges share (0,0); a non-collinear V must NOT read as a cross
+    assert.equal(segsIntersect([0, 0], [4, 0], [0, 0], [0, 4]), false);
+    // an endpoint landing exactly ON the other's endpoint (not interior) is excluded too
+    assert.equal(segsIntersect([0, 0], [4, 0], [4, 0], [4, 4]), false);
+  });
+});
+
+describe("ringSelfIntersects", () => {
+  test("fewer than 4 vertices can never self-cross (no closing edge to test)", () => {
+    assert.equal(ringSelfIntersects([]), false);
+    assert.equal(ringSelfIntersects([[0, 0], [1, 0]]), false);
+    assert.equal(ringSelfIntersects([[0, 0], [1, 0], [0, 1]]), false, "triangle");
+    assert.equal(ringSelfIntersects("nope" as unknown as number[][]), false, "non-array guard");
+  });
+
+  test("a simple convex ring (square) does NOT self-intersect", () => {
+    assert.equal(ringSelfIntersects([[0, 0], [4, 0], [4, 4], [0, 4]]), false);
+  });
+
+  test("a concave-but-simple ring (L-shape) does NOT self-intersect — adjacent shared vertices are legitimate", () => {
+    assert.equal(ringSelfIntersects([[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]]), false);
+  });
+
+  test("a bowtie / figure-8 ring self-intersects", () => {
+    // edges (0,0)-(4,4) and (4,0)-(0,4) cross at (2,2); this pair is i=0,j=2,
+    // tested normally (only the i=0,j=n-1 closing-adjacency pair is skipped)
+    assert.equal(ringSelfIntersects([[0, 0], [4, 4], [4, 0], [0, 4]]), true);
+  });
+
+  test("a degenerate spike where a vertex lands on a non-adjacent edge reads as a self-touch", () => {
+    // vertex (2,0) rides the interior of edge0 (0,0)-(4,0); edge0 vs edge2 is a
+    // non-adjacent pair, so the collinear/T path in segsIntersect flags it
+    assert.equal(ringSelfIntersects([[0, 0], [4, 0], [2, 0], [2, 4]]), true);
+  });
+});
+
+// ── minAreaRect: the L × W an area readout shows ─────────────────────────────
+describe("minAreaRect", () => {
+  test("axis-aligned rectangle reads its own sides, long side first", () => {
+    const r = minAreaRect([[0, 0], [10, 0], [10, 4], [0, 4]]);
+    assert.ok(r);
+    assert.ok(Math.abs(r!.w - 10) < 1e-9 && Math.abs(r!.h - 4) < 1e-9);
+  });
+  test("a rotated rectangle reads its true sides, not the axis bbox", () => {
+    const a = Math.PI / 6, c = Math.cos(a), s = Math.sin(a);
+    const rot = ([x, y]: number[]) => [x * c - y * s, x * s + y * c];
+    const r = minAreaRect([[0, 0], [12, 0], [12, 5], [0, 5]].map(rot));
+    assert.ok(r);
+    assert.ok(Math.abs(r!.w - 12) < 1e-6 && Math.abs(r!.h - 5) < 1e-6);
+  });
+  test("an L-shape reads its enclosing box", () => {
+    const r = minAreaRect([[0, 0], [8, 0], [8, 3], [3, 3], [3, 6], [0, 6]]);
+    assert.ok(r);
+    assert.ok(Math.abs(r!.w - 8) < 1e-9 && Math.abs(r!.h - 6) < 1e-9);
+  });
+  test("a right triangle ties on a leg or the hypotenuse — the axis-aligned box wins", () => {
+    const r = minAreaRect([[0, 0], [8, 0], [8, 6]]);
+    assert.ok(r);
+    assert.ok(Math.abs(r!.w - 8) < 1e-9 && Math.abs(r!.h - 6) < 1e-9);
+  });
+  test("a bare segment is a zero-width rectangle; fewer than 2 points is null", () => {
+    const r = minAreaRect([[0, 0], [3, 4]]);
+    assert.ok(r && Math.abs(r.w - 5) < 1e-9 && r.h < 1e-9);
+    assert.equal(minAreaRect([[1, 1]]), null);
+    assert.equal(minAreaRect([[1, 1], [1, 1]]), null);
+    assert.equal(minAreaRect([]), null);
+  });
 });

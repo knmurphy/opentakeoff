@@ -19,6 +19,7 @@
 // remain stable.
 
 import { round2 } from "./num.js";
+import { REPORT_SCHEMA } from "./takeoffConstants.ts";
 import { csvEsc as esc } from "./csv.js";
 import { GETTERS, CSV_PROFILE, colGetter, floorPerimeterLf, applyUnits, METRIC_CSV_LABELS } from "./reportColumns.js";
 import { M_PER_FT, M2_PER_SF } from "./units";
@@ -485,9 +486,9 @@ export function totalsToCsv(rows, projectName = "", bySheet = null, sheetLabel =
  *   conditionColumns?: Array<{id: string, name: string, values: string[]}>,
  *   attrsByCond?: Map<any, object>|null, shapeLabels?: string[],
  *   byLabel?: Array<{value: string|null, rows: any[]}>, displayUnits?: string,
- *   rollGoods?: any[]}} args
+ *   rollGoods?: any[], proposedConditionEdits?: any[]}} args
  */
-export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null, shapeLabels = [], byLabel = [], displayUnits = "imperial", rollGoods = [] }) {
+export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInfo = [], markups = [], rfis = [], sheetLabel = null, conditionColumns = [], attrsByCond = null, shapeLabels = [], byLabel = [], displayUnits = "imperial", rollGoods = [], proposedConditionEdits = [] }) {
   const label = (id) => (sheetLabel ? sheetLabel(id) : id);
   // destructuring defaults don't apply to an explicit null, and both values can
   // trace back to a corrupted payload — coerce (and drop malformed items) so
@@ -495,7 +496,7 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
   const colDefs = (Array.isArray(conditionColumns) ? conditionColumns : []).filter((cc) => cc && typeof cc === "object" && typeof cc.id === "string");
   const attrs = attrsByCond instanceof Map ? attrsByCond : new Map();
   return {
-    schema: "opentakeoff.report.v1",
+    schema: REPORT_SCHEMA,
     project_name: projectName || null,
     generated_with: "OpenTakeoff",
     // scale_confirmed (scale gate): false = an agent set this sheet's scale and
@@ -582,6 +583,11 @@ export function reportJson({ projectName = "", rows = [], bySheet = [], scaleInf
     // emitted; empty for projects with no roll-goods conditions, so every
     // pre-#136 export round-trips byte-identically except this one key.
     roll_goods: Array.isArray(rollGoods) ? rollGoods : [],
+    // proposed_condition_edits (#365) is the ONE key that is present only when
+    // it has content: the rows above always print the CURRENT knobs, and a
+    // pending diff sits beside them here until the estimator accepts it. A
+    // proposal-free report is byte-identical to a pre-#365 one.
+    ...(Array.isArray(proposedConditionEdits) && proposedConditionEdits.length ? { proposed_condition_edits: proposedConditionEdits } : {}),
   };
 }
 

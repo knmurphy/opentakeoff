@@ -51,7 +51,8 @@ const MATLIB_KEY = "material_library";
 // pattern as templates/materials, its own key in the keyPath-less meta store
 // (no DB version bump). Persists across projects; export/import as JSON.
 const STAMPLIB_KEY = "stamp_library";
-const ANN_SCHEMA = "opentakeoff.takeoff_canvas.v1";
+import { TAKEOFF_SCHEMA } from "./takeoffConstants.ts";
+const ANN_SCHEMA = TAKEOFF_SCHEMA;
 
 // The empty-project annotations shape. One definition so the local store and the
 // Drive-backed cloud store (cloudStore.js) hydrate a fresh project identically —
@@ -462,6 +463,22 @@ export async function metaPut(key, value) {
 /** @param {string} key */
 export async function metaDelete(key) {
   await withDb((db) => tx(db, META_STORE, "readwrite", (os) => os.delete(key)));
+}
+/** Delete every meta key that starts with `prefix` (one transaction). Keys are
+ *  strings, so a bound range [prefix, prefix + U+FFFF) is the prefix scan.
+ *  @param {string} prefix @returns {Promise<number>} keys removed */
+export async function metaDeletePrefix(prefix) {
+  if (!prefix) return 0;
+  return withDb((db) => new Promise((resolve, reject) => {
+    const t = db.transaction(META_STORE, "readwrite");
+    const os = t.objectStore(META_STORE);
+    let n = 0;
+    const req = os.openKeyCursor(IDBKeyRange.bound(prefix, prefix + "\uffff", false, true));
+    req.onsuccess = () => { const c = req.result; if (c) { os.delete(c.primaryKey); n++; c.continue(); } };
+    t.oncomplete = () => resolve(n);
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error);
+  }));
 }
 
 // ── the mode-aware store seam ──────────────────────────────────────────────

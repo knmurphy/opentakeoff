@@ -20,6 +20,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Icon } from "../brand/icons.jsx";
+import SheetPreview from "./SheetPreview.jsx";
 import AuthChip from "./AuthChip.jsx";
 import { useGoogleAuth } from "../lib/google/AuthContext.jsx";
 import { parseSheetKey, extractSheetNumber, detectScale, RENDER_SCALE, MAX_GROUP } from "../lib/sheets";
@@ -30,8 +31,12 @@ import { listConflictCopies } from "../lib/fs/fsProvider.js";
 import { m365Config, M365_ENABLED_KEY } from "../lib/msgraph/config.js";
 import { metaGet, metaPut, metaDelete } from "../lib/store.js";
 import { groupSheetsByLevel, sortGalleryGroups } from "../lib/sheetLevels.js";
+import { renderThumb, loadThumb, saveThumb, thumbPixelWidth } from "../lib/thumbs.js";
 
-const THUMB_W = 380;
+// Thumbnails in flight at once. The canvas rasters in its worker pool now, so
+// the main thread's pdf.js is mostly idle while the gallery is up; two keeps
+// a 3-core laptop responsive while halving the wave on a big set.
+const THUMB_PAR = 2;
 const ROOT = { id: undefined, name: "Project" };   // id undefined → cloudStore's default (project folder)
 
 function fmtSize(s) {
@@ -52,7 +57,7 @@ const ctrlBtn = { display: "inline-flex", alignItems: "center", gap: 6, padding:
 
 export default function PlanNavigator({
   // presentation + exit
-  canClose, onExit, initialMode = "plan", cloudMode,
+  canClose, onExit, onPremium, initialMode = "plan", cloudMode,
   // plan-set (gallery) data
   sheets, getDoc, scales, detectedScales, scaleUnconfirmed = {}, shapes, labels, onLabel, onDetect,
   thumbCacheRef, busyRef, openTabs, onOpen,
@@ -69,6 +74,11 @@ export default function PlanNavigator({
   listFolder, addSheets, onAdded,
 }) {
   const navigate = useNavigate();
+  const [previewSheet, setPreviewSheet] = useState(null);
+  const previewOpenRef = useRef(false);
+  previewOpenRef.current = !!previewSheet;
+  const [previewSize, setPreviewSize] = useState("large");
+  const closePreview = useCallback(() => setPreviewSheet(null), []);
   const { user, signIn } = useGoogleAuth();
   const browseEnabled = cloudMode && typeof listFolder === "function";
   const [mode, setMode] = useState(browseEnabled && initialMode === "browse" ? "browse" : "plan");
@@ -153,6 +163,7 @@ export default function PlanNavigator({
   const escRef = useRef(() => {});
   useEffect(() => {
     const onKey = (e) => {
+      if (previewOpenRef.current || e.target?.closest?.("dialog[open]")) return; // The preview owns Escape and focus.
       if (e.key === "Escape") { e.stopPropagation(); escRef.current(); return; }
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
@@ -229,7 +240,6 @@ export default function PlanNavigator({
   const [, bump] = useState(0);
   const seqRef = useRef(0);
   const queueRef = useRef([]);
-  const pumpingRef = useRef(false);
   const obsRef = useRef(null);
 
   const loadSample = async () => {
@@ -303,38 +313,66 @@ export default function PlanNavigator({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pages, knownPages, mode]);
 
-  const pump = async () => {
-    if (pumpingRef.current) return;
-    pumpingRef.current = true;
-    const seq = seqRef.current;
-    while (queueRef.current.length) {
-      if (seq !== seqRef.current) break;
-      if (busyRef.current === "rendering") { await new Promise((r) => setTimeout(r, 150)); continue; }
-      const key = queueRef.current.shift();
-      if (thumbCacheRef.current.has(key)) continue;
-      try {
-        const { file, page } = parseSheetKey(key);
-        const pdf = await getDoc(file);
-        const pg = await pdf.getPage(page);
-        if (seq !== seqRef.current) break;
-        const vp1 = pg.getViewport({ scale: 1 });
-        const vp = pg.getViewport({ scale: THUMB_W / vp1.width });
-        const c = document.createElement("canvas");
-        c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
-        await pg.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-        thumbCacheRef.current.set(key, c.toDataURL("image/jpeg", 0.72));
-        bump((n) => n + 1);
-        if (!labels[key] || !detectedScales[key]) {
+  // One card's thumbnail: persisted record first (no pdf.js doc, no raster —
+  // the whole reason a known set's gallery opens instantly), else raster at
+  // this screen's density, persist, and read the sheet number + plan-noted
+  // scale off the same page while it's warm. Any failure just skips the card
+  // (destroyed doc on unmount / render-cancel).
+  const thumbOne = async (key, seq) => {
+    if (thumbCacheRef.current.has(key)) return;
+    const want = thumbPixelWidth();
+    let rec = await loadThumb(key, want);
+    if (seq !== seqRef.current) return;
+    if (!rec) {
+      const { file, page } = parseSheetKey(key);
+      const pdf = await getDoc(file);
+      const pg = await pdf.getPage(page);
+      if (seq !== seqRef.current) return;
+      rec = await renderThumb(pg, want);
+      if (seq !== seqRef.current) return;
+      if (!labels[key] || !detectedScales[key]) {
+        try {
           const tc = await pg.getTextContent();
           const vpL = pg.getViewport({ scale: RENDER_SCALE });
-          const lbl = extractSheetNumber(tc, vpL);
-          if (lbl) onLabel(key, lbl);
-          const det = detectScale(tc, vpL);
-          if (det) onDetect(key, det);
-        }
-      } catch { /* destroyed doc on unmount / render-cancel — skip */ }
+          rec.label = extractSheetNumber(tc, vpL) || null;
+          rec.det = detectScale(tc, vpL) || null;
+        } catch { /* text layer is optional */ }
+      }
+      saveThumb(key, rec);
     }
-    pumpingRef.current = false;
+    if (thumbCacheRef.current.has(key)) return;
+    thumbCacheRef.current.set(key, URL.createObjectURL(rec.blob));
+    if (rec.label && !labels[key]) onLabel(key, rec.label);
+    if (rec.det && !detectedScales[key]) onDetect(key, rec.det);
+    scheduleBump();
+  };
+
+  // coalesce card reveals to one React render per frame
+  const bumpRafRef = useRef(0);
+  const scheduleBump = () => {
+    if (bumpRafRef.current) return;
+    bumpRafRef.current = requestAnimationFrame(() => { bumpRafRef.current = 0; bump((n) => n + 1); });
+  };
+
+  const activeRef = useRef(0);
+  const pump = () => {
+    while (activeRef.current < THUMB_PAR && queueRef.current.length) {
+      const seq = seqRef.current;
+      const key = queueRef.current.shift();
+      if (thumbCacheRef.current.has(key)) continue;
+      activeRef.current++;
+      (async () => {
+        // the canvas's own open sequence (doc → page → geometry) owns the main
+        // thread for its moment; yield to it rather than compete
+        while (busyRef.current === "rendering" && seq === seqRef.current) await new Promise((r) => setTimeout(r, 150));
+        if (seq !== seqRef.current) return;
+        await thumbOne(key, seq);
+      })().catch((e) => {
+        // a destroyed doc (unmount / render-cancel) is routine; anything else
+        // used to vanish into a bare catch and read as "thumbnails never load"
+        if (!/destroyed|cancel/i.test(String(e?.message || e))) console.warn(`[thumbs] ${key}:`, e);
+      }).finally(() => { activeRef.current--; pump(); });
+    }
   };
 
   useEffect(() => {
@@ -350,10 +388,37 @@ export default function PlanNavigator({
     return () => obsRef.current?.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Cards commit their ref callbacks BEFORE the mount effect above creates
+  // the observer, so a gallery whose page counts are all known up front
+  // (#302's persisted cache — the common reopen) rendered every card in the
+  // first pass and none of them was ever observed: 19 skeletons, forever.
+  // Sweep the grid after every key-set change and hand the observer whatever
+  // it hasn't seen; observe() on an already-observed element is a no-op.
+  const gridRef = useRef(null);
+  const keySig = allKeys.join("\u0000");
+  useEffect(() => {
+    const obs = obsRef.current, grid = gridRef.current;
+    if (!obs || !grid) return;
+    for (const el of grid.querySelectorAll("[data-sheetkey]")) {
+      if (!thumbCacheRef.current.has(el.dataset.sheetkey)) obs.observe(el);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keySig, mode]);
 
   const toggleSel = (key) => setSel((g) => (g.includes(key) ? g.filter((k) => k !== key) : [...g, key]));
-  const shapeCount = (key) => shapes.reduce((n, s) => n + (s.sheet_id === key ? 1 : 0), 0);
-  const pdfShapeCount = (file) => shapes.reduce((n, s) => n + (parseSheetKey(s.sheet_id).file === file ? 1 : 0), 0);
+  // shape tallies once per shapes change, not once per card per render — a
+  // thumbnail reveal re-renders the grid, and N cards × M shapes added up
+  const shapeTally = useMemo(() => {
+    const bySheet = new Map(), byFile = new Map();
+    for (const s of shapes) {
+      bySheet.set(s.sheet_id, (bySheet.get(s.sheet_id) || 0) + 1);
+      const f = parseSheetKey(s.sheet_id).file;
+      byFile.set(f, (byFile.get(f) || 0) + 1);
+    }
+    return { bySheet, byFile };
+  }, [shapes]);
+  const shapeCount = (key) => shapeTally.bySheet.get(key) || 0;
+  const pdfShapeCount = (file) => shapeTally.byFile.get(file) || 0;
   const labelOf = (key) => {
     if (labels[key]) return labels[key];
     const t = parseSheetKey(key);
@@ -450,6 +515,7 @@ export default function PlanNavigator({
       <div style={{ flex: 1 }} />
 
       {/* RIGHT: source toggle · browse filters · add plans · account */}
+      {onPremium && <button type="button" data-premium-trigger onClick={onPremium} style={{...ctrlBtn, color:"var(--cobalt)", borderColor:"var(--cobalt)"}}>Request Premium</button>}
       {browseEnabled && (
         <div style={{ display: "inline-flex", border: "1px solid var(--ink-faint)", borderRadius: 2, overflow: "hidden" }}>
           <button onClick={() => setMode("plan")} style={{ ...ctrlBtn, border: "none", background: mode === "plan" ? "var(--ink)" : "transparent", color: mode === "plan" ? "var(--paper-bright)" : "var(--ink-muted)" }}>Plan set</button>
@@ -586,7 +652,8 @@ export default function PlanNavigator({
   // ── PLAN body + footer ──────────────────────────────────────────────────
   const planBody = (
     <>
-      <div style={{ flex: 1, overflow: "auto", padding: 18 }}>
+      <div className="sheet-preview-controls"><label>Page previews</label>{["medium", "large"].map(size => <button type="button" key={size} aria-pressed={previewSize === size} onClick={() => setPreviewSize(size)}>{size === "large" ? "Large" : "Medium"}</button>)}<span style={{ color: "var(--ink-muted)", fontSize: "var(--fs-s)" }}>Preview to inspect · View to open · Select cards for tabs or stitching</span></div>
+      <div ref={gridRef} style={{ flex: 1, overflow: "auto", padding: 18 }}>
         {groups.map((grp) => (
         <div key={grp.level ?? "__all"} style={{ marginBottom: grp.level !== null ? 22 : 0 }}>
         {grp.level !== null && (
@@ -594,7 +661,7 @@ export default function PlanNavigator({
             {grp.level || "Unassigned"} · {grp.keys.length}
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 14 }}>
+        <div className="sheet-preview-grid" data-size={previewSize}>
           {grp.keys.map((key) => {
             const idx = sel.indexOf(key);
             const isSel = idx >= 0;
@@ -606,9 +673,11 @@ export default function PlanNavigator({
             return (
               <div key={key} data-sheetkey={key} ref={(el) => { if (el && !thumb) obsRef.current?.observe(el); }}
                 onClick={() => toggleSel(key)}
+                role="group" aria-label={`Sheet ${labelOf(key)}`}
                 style={{ border: isSel ? "1.5px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: "var(--paper-bright)", cursor: "pointer", position: "relative", boxShadow: isSel ? "var(--shadow-2)" : "var(--shadow-1)" }}>
-                <span style={{ position: "absolute", top: 8, left: 8, zIndex: 2, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: isSel ? "none" : "1.5px solid var(--ink-faint)", background: isSel ? "var(--cobalt)" : "var(--paper-bright)", color: "var(--paper-bright)", fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 700 }}>{isSel ? idx + 1 : ""}</span>
+                <button type="button" aria-label={`Select ${labelOf(key)}`} aria-pressed={isSel} onClick={(e) => { e.stopPropagation(); toggleSel(key); }} style={{ position: "absolute", top: 8, left: 8, zIndex: 2, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", border: isSel ? "none" : "1.5px solid var(--ink-faint)", background: isSel ? "var(--cobalt)" : "var(--paper-bright)", color: "var(--paper-bright)", fontFamily: "var(--f-mono)", fontSize: 12, fontWeight: 700 }}>{isSel ? idx + 1 : ""}</button>
                 <div style={{ position: "absolute", top: 8, right: 8, zIndex: 2, display: "flex", gap: 6 }}>
+                  <button type="button" onClick={(e) => { e.stopPropagation(); setPreviewSheet(key); }} style={ctrlBtn}>Preview</button>
                   {isFirstPageOfPdf && onClosePdf && (
                     <button onClick={(e) => { e.stopPropagation(); requestClose(parsed.file); }} title={cloudMode ? "Close this PDF — unload it from the plan set (it stays in Drive)" : "Close this PDF — remove it from the plan set (local plans aren't stored elsewhere)"}
                       style={{ padding: "5px 8px", border: "none", background: "var(--paper-bright)", color: "var(--ink-muted)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 11, boxShadow: "var(--shadow-1)" }}>✕</button>
@@ -616,12 +685,12 @@ export default function PlanNavigator({
                   <button onClick={(e) => { e.stopPropagation(); onOpen([key], false); }} title="Open just this sheet"
                     style={{ padding: "5px 12px", border: "none", background: "var(--ink)", color: "var(--paper-bright)", cursor: "pointer", fontFamily: "var(--f-mono)", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase" }}>View</button>
                 </div>
-                <div style={{ height: 185, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--well)", borderBottom: "1px solid var(--ink-faint)", overflow: "hidden" }}>
+                <div data-preview-well style={{ height: 185, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--well)", borderBottom: "1px solid var(--ink-faint)", overflow: "hidden" }}>
                   {thumb
-                    ? <img src={thumb} alt={labelOf(key)} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                    ? <img src={thumb} alt={labelOf(key)} decoding="async" draggable={false} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
                     : <div className="skeleton" style={{ width: "86%", height: "78%" }} />}
                 </div>
-                <div style={{ padding: "8px 10px", display: "flex", alignItems: "baseline", gap: 8 }}>
+                <div data-preview-caption style={{ padding: "8px 10px", display: "flex", alignItems: "baseline", gap: 8 }}>
                   <strong style={{ fontFamily: "var(--f-mono)", fontSize: 12.5, color: "var(--ink)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }} title={key}>{labelOf(key)}</strong>
                   {levels[key] && <span title="Level" style={{ fontSize: 9.5, fontFamily: "var(--f-mono)", color: "var(--ink-muted)", border: "1px solid var(--ink-faint)", padding: "1px 5px" }}>{levels[key]}</span>}
                   {isOpenTab && <span title="Already open as a tab" style={{ fontSize: 9.5, fontFamily: "var(--f-mono)", color: "var(--cobalt)", textTransform: "uppercase", letterSpacing: "0.08em" }}>open</span>}
@@ -943,6 +1012,7 @@ export default function PlanNavigator({
         : { position: "absolute", inset: 0, display: "flex", flexDirection: "column", background: "var(--paper-cream)" }}>
       {header}
       {mode === "browse" ? browseBody : mode === "manage" ? manageBody : planBody}
+      {previewSheet && <SheetPreview sheet={previewSheet} label={labelOf(previewSheet)} getDoc={getDoc} onClose={closePreview} onOpen={(key) => { setPreviewSheet(null); onOpen([key], false); }} />}
       {confirmDialog}
       {bulkDialog}
       {clearDialog}
