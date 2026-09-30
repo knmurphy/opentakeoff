@@ -320,7 +320,7 @@ owner (VA); results say so.
 | Committed single sheets (Dublin A601, Shreveport C300, sample plan, Porterville, Roseburg) | 6 | **in-sample** — the rules above were designed by looking at them |
 | Shreveport Fisher House, "Combined Drawings" (36C25625R0108) | 24 | **in-sample (tune)** — inspected by reviewers; constants fitted here |
 | Dublin Bldg 9A, Drawings Parts 1 and 4 (36C77626R0031) | 24 | **in-sample** — inspected by reviewers in round 2 |
-| Dublin Bldg 9A, Drawings Parts 7, 10, 13 | page count recorded at fetch | **held out** — not downloaded or opened until the evaluation run |
+| Dublin Bldg 9A, Drawings Parts 2, 5, 7, 10, 11, 13 | 34 (7+10+7+4+5+1) | **held out** — downloaded and hashed 2026-09-30, not opened; parts 2, 5, 11 added before any labeling because 7, 10, 13 hold only 12 pages |
 
 Held-out rules:
 
@@ -333,7 +333,7 @@ Held-out rules:
   reported, labeled in-sample.
 - A second owner's set (not VA) is wanted; until one is added, results
   claim VA sets only.
-- Held-out Dublin parts 7, 10, 13 are the same project, architect and
+- Held-out Dublin parts 2, 5, 7, 10, 11, 13 are the same project, architect and
   title-block design as in-sample parts 1 and 4. If their labels show fewer
   than 2 families or fewer than 15 labeled drawing sheets, the docs call the
   held-out result a same-firm replication; generalization across firms is
