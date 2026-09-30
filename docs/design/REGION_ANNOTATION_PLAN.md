@@ -3,7 +3,12 @@
 Design: [REGION_ANNOTATION.md](REGION_ANNOTATION.md). Piece 1 (the region map
 module, `web/src/lib/regions.ts`) is done.
 
-Status: revision 7, after review round 6 (design PASS; algorithm FAIL; feasibility and measurement passed round 3). Fork only.
+Status: **passed review** (revision 7; 7 rounds, 4 reviewers: algorithm on
+real drawings, codebase feasibility, tests and measurement, design). Fork
+only. A reviewer's re-implementation of rule A alone on the in-sample real
+sheets placed every title block on the correct edge (Shreveport 24/24,
+Dublin parts 1 and 4 24/24, committed sheets 5/5); that is in-sample and not
+a result of this plan's code.
 
 ## Scope
 
@@ -263,7 +268,8 @@ wins; then the **smaller strip area** (chain extent along the edge × d,
 both as fractions of the border box); then higher density. (Dublin part 1
 p5 has a full-height rule at x=0.837 crossing the title block; its right
 strip passes rule A with the same sheet number as the real bottom strip,
-and loses on area: about 0.14 against 0.11 of the border box.) (No fixed edge order, no
+and loses on area: about 0.15 against 0.07, measured by a reviewer's
+re-implementation; the code's `diag` output replaces these figures.) (No fixed edge order, no
 weighted priors.)
 Single sheets and 2-sheet sets have no `repeat`, so they are accepted only
 through rule A; that is expected and measured.
