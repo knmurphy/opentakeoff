@@ -582,7 +582,7 @@ const byKey = <T,>(rec: Record<string, T> | undefined): [string, T][] =>
  *  so stale ids in the document stay stale until the caller saves.
  *  Two templates on one group: the higher score wins, then the smaller
  *  |Δd|; a tie applies neither. Losers are `conflict`. A move whose sheet
- *  is not in the map is skipped: there is nothing to move. */
+ *  is not in the map is reported as `no-match`. */
 export function resolveOverrides(map: ReadonlyMap<string, SheetRegions>, ov: RegionOverrides): ResolvedOverrides {
   const groups = mapGroups(map);
   const out: ResolvedOverrides = { templates: {}, moves: {}, unattached: [] };
@@ -605,7 +605,8 @@ export function resolveOverrides(map: ReadonlyMap<string, SheetRegions>, ov: Reg
   lost.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   out.unattached.push(...lost);
   for (const [key, mv] of byKey(ov.sheet_group)) {
-    if (!map.has(key)) continue;
+    // a move for a sheet no longer in the set moves nothing, and is shown
+    if (!map.has(key)) { out.unattached.push({ kind: "move", key, reason: "no-match" }); continue; }
     const m = matchGroup(mv.sig, groups);
     if (m.group === null) out.unattached.push({ kind: "move", key, reason: m.reason });
     else out.moves[key] = m.group;

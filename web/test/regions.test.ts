@@ -618,3 +618,9 @@ test("applyOverrides: a detached strip's side — distance from the border to it
   const out = apply1(signed(), tplOn([0.85, 0.82, 0.95, 1]));
   assert.deepEqual(daOf(out)!.bbox, [0, 0, 1700, 1000]); // right (0.15) beats bottom (0.18)
 });
+
+test("resolveOverrides: a move whose sheet is gone is reported, not skipped", () => {
+  const r = resolveOverrides(baseMap(), { sheet_group: { "gone.pdf#4": { group: "g:arch", sig: archSig } } });
+  assert.deepEqual(r.moves, {});
+  assert.deepEqual(r.unattached, [{ kind: "move", key: "gone.pdf#4", reason: "no-match" }]);
+});
