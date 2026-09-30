@@ -105,14 +105,28 @@ export const REPEAT_POS_TOL = 0.02;
 /** Step 3: static (same text) or field (a fixed position whose text changes)
  * on at least this share of the sheets considered … */
 export const REPEAT_MIN_SHARE = 0.5;
-/** … and on at least this many sheets. */
-export const REPEAT_MIN_SHEETS = 3;
-/** Step 3: the repetition band holds static and field tokens within this
- * depth of an edge (fraction of the border box across the edge). */
+/** … and a static on at least this many sheets (plan amendment, task 6a: was
+ * 3; a 2-sheet family in a larger set then has statics) … */
+export const STATIC_MIN_SHEETS = 2;
+/** … and a field's position filled on at least this many. */
+export const FIELD_MIN_SHEETS = 3;
+/** Step 3: the repetition band holds static tokens (plan amendment, task 6a:
+ * fields no longer shape it) within this depth of an edge (fraction of the
+ * border box across the edge). */
 export const BAND_DEPTH = 0.32;
 /** Step 3: `repeat` needs the band to cover at least this share of the
  * candidate strip's length along the edge. */
 export const BAND_MIN_COVER = 0.5;
+/** Step 3: a chain at depth d frames the static band when the deepest static
+ * glyph edge inside its strip is ≥ d / this (the static text reaches the
+ * strip's last third; plan amendments 5 and 7, task 6a). Synthetic-derived;
+ * recalibrated in task 6b. */
+export const FRAME_BAND_RATIO = 1.5;
+/** Step 3: the contiguous static band grows outward from its shallowest
+ * static and stops at the first depth gap larger than this fraction of the
+ * dimension across the edge (plan amendments 6 and 7, task 6a); a frameless
+ * strip is as deep as that band. Synthetic-derived; recalibrated in task 6b. */
+export const BAND_GAP = 0.04;
 /** Steps 3 and 5: candidate groups and groups need |Δd| ≤ this (fraction of
  * the border box across the edge; the same 1.5% `matchGroup` uses). */
 export const GROUP_D_TOL = 0.015;
@@ -399,10 +413,14 @@ export type TitleBlockRule = "A" | "B" | "C";
  * without a frame on an edge that has no chain candidate. */
 export interface RepeatStrip { edge: Edge; d: number; extent: [number, number] }
 export interface DetectOptions {
-  /** Step 3's `repeat` for a chain candidate (the repetition band lies inside
-   * its strip and covers ≥ 50% of its length). Default: false. */
+  /** Step 3's `repeat` for a chain candidate (the chain frames the static
+   * band, whose statics in the strip span ≥ 50% of its length). Default: false. */
   repeat?: (c: StripCandidate) => boolean;
-  /** Step 3's strips for edges without any chain. Default: none. */
+  /** Step 3: whether a chain at depth d on an edge frames the static band; a
+   * framing chain drops that edge's repetition-only strips. Default: never. */
+  frames?: (edge: Edge, d: number) => boolean;
+  /** Step 3's repetition-only (frameless) strips; each joins its edge's chain
+   * candidates, smallest d first. Default: none. */
   repeatStrips?: RepeatStrip[];
   /** Step 3's static and field token indices, copied into the diagnostics. */
   classes?: TokenClasses;
@@ -495,13 +513,16 @@ export function detectTitleBlock(sheet: DetectSheet, opts: DetectOptions = {}): 
   for (const r of opts.repeatStrips ?? []) {
     // a strip of zero length or depth has no area to judge (and would divide by zero)
     if (!(r.extent[1] > r.extent[0]) || !(r.d > 0)) continue;
-    if (chains.some((c) => c.edge === r.edge)) continue;
+    // a chain framing the band is the strip's frame: no frameless strip on that edge (amendment 5)
+    if (opts.frames && chains.some((c) => c.edge === r.edge && opts.frames!(c.edge, c.d))) continue;
     all.push({ edge: r.edge, d: r.d, extent: [r.extent[0], r.extent[1]], cover: r.extent[1] - r.extent[0], touch: null, frame: false, freeEndGap: null });
   }
   const judged: Judged[] = [];
   const winners: Judged[] = [];
   for (const edge of EDGES) {
-    const onEdge = all.filter((c) => c.edge === edge).sort((a, b) => a.d - b.d);
+    // chains and any repetition-only strip: smallest d first, the first that passes (a frame
+    // before a frameless strip at the same d)
+    const onEdge = all.filter((c) => c.edge === edge).sort((a, b) => a.d - b.d || Number(b.frame) - Number(a.frame));
     let won: Judged | null = null;
     for (const c of onEdge) {
       const j = judge(sheet, box, centers, inBox, c, c.frame ? opts.repeat?.(c) ?? false : true);
@@ -551,20 +572,21 @@ export interface RepeatInput { tokens: readonly DetectToken[]; box: Bbox }
 export interface TokenClasses { staticIdx: number[]; fieldIdx: number[] }
 
 /** Step 3 over the sheets considered together (an aspect bucket, then a
- * candidate group). With n sheets, "enough" is max(REPEAT_MIN_SHEETS,
- * ⌈REPEAT_MIN_SHARE · n⌉) sheets, the token's own included:
- *  - static: that many sheets hold a token with the same normalized text
- *    within REPEAT_POS_TOL (per axis) of the token's normalized center;
- *  - field (not static): that many sheets hold some token at that position,
- *    and on ≥ ⌈REPEAT_MIN_SHARE · n⌉ other sheets none of the tokens there
- *    has this text.
- * Fewer than REPEAT_MIN_SHEETS sheets: nothing is static or a field. Tokens
- * with empty text are neither. Output in input order, indices ascending. */
+ * candidate group). With n sheets, counting the token's own sheet:
+ *  - static: max(STATIC_MIN_SHEETS, ⌈REPEAT_MIN_SHARE · n⌉) sheets hold a
+ *    token with the same normalized text within REPEAT_POS_TOL (per axis) of
+ *    the token's normalized center;
+ *  - field (not static): max(FIELD_MIN_SHEETS, ⌈REPEAT_MIN_SHARE · n⌉)
+ *    sheets hold some token at that position, and on ≥ ⌈REPEAT_MIN_SHARE · n⌉
+ *    other sheets none of the tokens there has this text.
+ * Tokens with empty text are neither. Output in input order, indices
+ * ascending. */
 export function classifyRepetition(sheets: readonly RepeatInput[]): TokenClasses[] {
   const n = sheets.length;
   const out: TokenClasses[] = sheets.map(() => ({ staticIdx: [], fieldIdx: [] }));
-  const need = Math.max(REPEAT_MIN_SHEETS, Math.ceil(REPEAT_MIN_SHARE * n - 1e-9));
-  if (n < need) return out;
+  const half = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
+  const needStatic = Math.max(STATIC_MIN_SHEETS, half), needField = Math.max(FIELD_MIN_SHEETS, half);
+  if (n < needStatic) return out;
   const changedNeed = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
   const T = REPEAT_POS_TOL, EPS = 1e-9;
   const pts = sheets.map(({ tokens, box }) => {
@@ -607,60 +629,96 @@ export function classifyRepetition(sheets: readonly RepeatInput[]): TokenClasses
         if (hit.some((j) => pts[o][j].text === p.text)) same++;
         else if (o !== s) changed++;
       }
-      if (same >= need) out[s].staticIdx.push(i);
-      else if (occupied >= need && changed >= changedNeed) out[s].fieldIdx.push(i);
+      if (same >= needStatic) out[s].staticIdx.push(i);
+      else if (occupied >= needField && changed >= changedNeed) out[s].fieldIdx.push(i);
     });
   });
   return out;
 }
 
 /** The repetition band on one edge: the box, in that edge's strip
- * coordinates, of the centers of the given (static + field) tokens that lie
- * inside the border box within BAND_DEPTH of the edge. */
-export interface RepeatBand { edge: Edge; u0: number; u1: number; v0: number; v1: number }
+ * coordinates, of the centers of the given (static) tokens that lie inside
+ * the border box within BAND_DEPTH of the edge; `vBox` is the deepest corner
+ * of those tokens' glyph boxes (the depth of a frameless strip). */
+export interface RepeatBand { edge: Edge; u0: number; u1: number; v0: number; v1: number; vBox: number }
+
+/** The four corners of a token's glyph box (DetectToken convention). */
+export function tokenCorners(t: DetectToken): [number, number][] {
+  const w = t.w ?? 0.6 * t.h * t.str.length;
+  const r = ((t.rot ?? 0) * Math.PI) / 180;
+  const c = Math.round(Math.cos(r) * 1e12) / 1e12, s = Math.round(Math.sin(r) * 1e12) / 1e12;
+  // along the run (c, s); the glyphs rise along (s, −c)
+  const ax = c * w, ay = s * w, ux = s * t.h, uy = -c * t.h;
+  return [[t.x, t.y], [t.x + ax, t.y + ay], [t.x + ux, t.y + uy], [t.x + ax + ux, t.y + ay + uy]];
+}
 
 export function repetitionBands(tokens: readonly DetectToken[], box: Bbox, idx: readonly number[]): Partial<Record<Edge, RepeatBand>> {
   const out: Partial<Record<Edge, RepeatBand>> = {};
   if (!(box[2] > box[0] && box[3] > box[1])) return out;
-  const centers = idx.map((i) => tokenCenter(tokens[i]));
   for (const edge of EDGES) {
+    const cands = idx.flatMap((i) => {
+      const [u, v] = stripUV(edge, box, ...tokenCenter(tokens[i]));
+      if (!(u >= 0 && u <= 1 && v >= 0 && v <= BAND_DEPTH)) return [];
+      const [lo, hi] = depthSpan(tokens[i], edge, box);
+      return [{ u, v, lo, hi }];
+    }).sort((a, b) => a.lo - b.lo);
     let b: RepeatBand | null = null;
-    for (const [x, y] of centers) {
-      const [u, v] = stripUV(edge, box, x, y);
-      if (!(u >= 0 && u <= 1 && v >= 0 && v <= BAND_DEPTH)) continue;
-      if (!b) b = { edge, u0: u, u1: u, v0: v, v1: v };
-      else { b.u0 = Math.min(b.u0, u); b.u1 = Math.max(b.u1, u); b.v0 = Math.min(b.v0, v); b.v1 = Math.max(b.v1, v); }
+    let front = cands.length ? cands[0].lo : 0;
+    for (const c of cands) {
+      if (c.lo > front + BAND_GAP) break;
+      front = Math.max(front, c.hi);
+      if (!b) b = { edge, u0: c.u, u1: c.u, v0: c.v, v1: c.v, vBox: c.hi };
+      else {
+        b.u0 = Math.min(b.u0, c.u); b.u1 = Math.max(b.u1, c.u); b.v0 = Math.min(b.v0, c.v); b.v1 = Math.max(b.v1, c.v);
+        b.vBox = Math.max(b.vBox, c.hi);
+      }
     }
     if (b) out[edge] = b;
   }
   return out;
 }
 
-/** Step 3's `repeat` for a candidate strip of depth d over [e0, e1] along its
- * edge (the extent-bounded strip of step 2): the band lies inside the strip
- * (u within [e0, e1], v within [0, d]) and covers ≥ BAND_MIN_COVER of its
- * length e1 − e0. A strip of zero length never repeats. */
-export function bandRepeats(band: RepeatBand | undefined, d: number, extent: readonly [number, number]): boolean {
-  if (!band) return false;
-  const [e0, e1] = extent;
-  const len = e1 - e0;
-  if (!(len > 0) || band.v1 > d || band.u0 < e0 || band.u1 > e1) return false;
-  return (band.u1 - band.u0) / len >= BAND_MIN_COVER;
+/** A token's glyph box as a depth interval [lo, hi] from an edge's border. */
+function depthSpan(t: DetectToken, edge: Edge, box: Bbox): [number, number] {
+  const vs = tokenCorners(t).map(([x, y]) => stripUV(edge, box, x, y)[1]);
+  return [Math.min(...vs), Math.max(...vs)];
 }
 
+/** Whether a chain at depth d frames the static band, given the deepest
+ * static glyph edge inside its strip: deepest ≥ d / FRAME_BAND_RATIO. */
+export const framesBand = (deepest: number, d: number): boolean =>
+  deepest > 0 && deepest >= d / FRAME_BAND_RATIO - 1e-9;
+
 /** Step 3's inputs to detectTitleBlock for one sheet, from its token
- * classes: `repeat` for chain candidates (bandRepeats on the sheet's bands),
- * and, per edge whose band spans ≥ BAND_MIN_COVER of the border length, a
- * frameless strip border to border along the edge, as deep as the band
- * (detectTitleBlock uses it only where the edge has no chain). */
+ * classes (statics only shape the band; plan amendments 2, 5–7):
+ *  - `frames(edge, d)`: the deepest static glyph edge among statics centred in
+ *    the strip (v ≤ d, border to border) is ≥ d / FRAME_BAND_RATIO;
+ *  - `repeat(c)`: the chain frames the band, and those statics span
+ *    ≥ BAND_MIN_COVER of the full strip's length;
+ *  - per edge whose contiguous static band spans ≥ BAND_MIN_COVER of the
+ *    border length, a frameless strip border to border along the edge, as
+ *    deep as the band's deepest glyph edge (detectTitleBlock drops it when a
+ *    chain on the edge frames the band, else tries it with the chains,
+ *    smallest d first). */
 export function repeatOptions(tokens: readonly DetectToken[], box: Bbox, classes: TokenClasses): DetectOptions {
-  const bands = repetitionBands(tokens, box, [...classes.staticIdx, ...classes.fieldIdx]);
+  const bands = repetitionBands(tokens, box, classes.staticIdx);
+  const statics = EDGES.map((edge) => classes.staticIdx.flatMap((i) => {
+    const [u, v] = stripUV(edge, box, ...tokenCenter(tokens[i]));
+    return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? [{ u, v, hi: depthSpan(tokens[i], edge, box)[1] }] : [];
+  }));
+  const inStrip = (edge: Edge, d: number) => statics[EDGES.indexOf(edge)].filter((t) => t.v <= d);
+  const frames = (edge: Edge, d: number) => framesBand(Math.max(0, ...inStrip(edge, d).map((t) => t.hi)), d);
+  const repeat = (c: StripCandidate) => {
+    if (!frames(c.edge, c.d)) return false;
+    const us = inStrip(c.edge, c.d).map((t) => t.u);
+    return Math.max(...us) - Math.min(...us) >= BAND_MIN_COVER;
+  };
   const repeatStrips: RepeatStrip[] = [];
   for (const edge of EDGES) {
     const b = bands[edge];
-    if (b && b.v1 > 0 && bandRepeats(b, b.v1, [0, 1])) repeatStrips.push({ edge, d: b.v1, extent: [0, 1] });
+    if (b && b.vBox > 0 && b.u1 - b.u0 >= BAND_MIN_COVER) repeatStrips.push({ edge, d: b.vBox, extent: [0, 1] });
   }
-  return { repeat: (c) => bandRepeats(bands[c.edge], c.d, c.extent), repeatStrips, classes };
+  return { repeat, frames, repeatStrips, classes };
 }
 
 // ── steps 5 and 6: grouping and output ──────────────────────────────────────
@@ -695,11 +753,18 @@ function components(idx: readonly number[], link: (a: number, b: number) => bool
 const sameGeom = (p: readonly Prepared[], dec: readonly TitleBlockDecision[], a: number, b: number) =>
   p[a].aspect === p[b].aspect && dec[a].edge === dec[b].edge && Math.abs(dec[a].d! - dec[b].d!) <= GROUP_D_TOL + 1e-9;
 
+/** Whether a sheet's accepted strip is a repetition-only (frameless) one. */
+const isFrameless = (r: { decision: TitleBlockDecision }) => !!r.decision.edge && !r.decision.evidence.includes("frame-line");
+
 /** Step 3's candidate groups: sheets with a title block, linked by the same
- * aspect bucket and edge and |Δd| ≤ GROUP_D_TOL (geometry only). */
-function candidateGroups(prep: readonly Prepared[], dec: readonly TitleBlockDecision[]): number[][] {
+ * aspect bucket and edge and |Δd| ≤ GROUP_D_TOL (geometry only); two sheets
+ * with frameless strips need no d test (plan amendment, task 6a: their
+ * pass-1 depths scatter). */
+function candidateGroups(prep: readonly Prepared[], det: readonly { decision: TitleBlockDecision }[]): number[][] {
+  const dec = det.map((r) => r.decision);
   const withTB = dec.flatMap((d, i) => (d.edge ? [i] : []));
-  return components(withTB, (a, b) => sameGeom(prep, dec, a, b));
+  return components(withTB, (a, b) => sameGeom(prep, dec, a, b) ||
+    (isFrameless(det[a]) && isFrameless(det[b]) && prep[a].aspect === prep[b].aspect && dec[a].edge === dec[b].edge));
 }
 
 const samePageIn = (a?: [number, number], b?: [number, number]) =>
@@ -716,9 +781,9 @@ function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
  *
  * Step 3 runs twice (the plan's one iteration): statics and fields per aspect
  * bucket → detect → candidate groups (same aspect bucket and edge, |Δd| ≤
- * GROUP_D_TOL) → statics and fields per candidate group (a group of fewer
- * than REPEAT_MIN_SHEETS sheets has none; sheets without a title block keep
- * their bucket's) → detect again. Step 5 then groups on the second pass.
+ * GROUP_D_TOL; frameless sheets: bucket and edge only) → statics and fields
+ * per candidate group (sheets without a title block, and a sheet alone in its
+ * candidate group, keep their bucket's) → detect again. Step 5 then groups on the second pass.
  *
  * A sheet's statics for grouping are the normalized texts of its static
  * tokens inside its title-block strip. With two or more candidate groups, a
@@ -744,10 +809,11 @@ export function detectSetRegions(sheets: readonly DetectSheet[]): { regions: Map
   const cls1 = classifyWithin(prep, buckets);
   const det1 = detectWith(prep, cls1);
   // pass 2: per candidate group
-  const cls = classifyWithin(prep, candidateGroups(prep, det1.map((r) => r.decision)), cls1);
+  // a sheet alone in its candidate group keeps its bucket's classes (amendment 7)
+  const cls = classifyWithin(prep, candidateGroups(prep, det1).filter((g) => g.length > 1), cls1);
   const det = detectWith(prep, cls);
   const dec = det.map((r) => r.decision);
-  const cgroups = candidateGroups(prep, dec);
+  const cgroups = candidateGroups(prep, det);
 
   // step 5: statics inside each sheet's strip; distinctive ones only with ≥ 2 candidate groups
   const statics: Set<string>[] = prep.map((p, i) => {

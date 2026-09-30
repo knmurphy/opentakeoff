@@ -5,9 +5,9 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   longAxisLines, TB_SHEETNO_RE, findBorder, tokenCenter, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
-  MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, bandRepeats, repeatOptions, normText,
+  MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, repeatOptions, normText, framesBand, FRAME_BAND_RATIO, BAND_GAP,
   REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions,
-  type DetectLine, type RepeatBand, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
+  type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
 import { aspectBucket, cleanRegions, hitRegion, type SheetRegions } from "../src/lib/regions.ts";
 import * as Synth from "./fixtures/regionSynth.ts";
@@ -535,9 +535,31 @@ describe("acceptance (step 4)", () => {
     assert.equal(c.touch, null);
   });
 
-  test("a repetition-only strip is used only on an edge without a chain", () => {
+  test("a repetition-only strip joins its edge's candidates, smallest d first (amended in task 6a)", () => {
+    // chain d 0.1 (rule A) is tried before the frameless strip at d 0.2, which is not tried
     const r = detect(STD_LINES, STD_TOKENS, { repeatStrips: [{ edge: "bottom", d: 0.2, extent: [0, 1] }] });
-    assert.deepEqual(r.diag.candidates.filter((c) => c.edge === "bottom").map((c) => c.frame), [true]);
+    assert.deepEqual(r.diag.candidates.filter((c) => c.edge === "bottom").map((c) => c.frame), [true, false]);
+    assert.equal(r.decision.d, 0.1);
+    assert.equal(cand(r, "bottom", 0.2).reason, "not-tried");
+  });
+
+  test("a frameless strip under a false chain deeper on the same edge is tried first (a 26% rule)", () => {
+    const r = detect([hl(BX0, BX1, yB(0.26))], STD_TOKENS, { frames: () => false, repeatStrips: [{ edge: "bottom", d: 0.1, extent: [0, 1] }] });
+    assertClose(r.decision.d!, 0.1);
+    assert.deepEqual(r.decision.rules, ["C"]);
+    assert.equal(cand(r, "bottom", 0.26).reason, "not-tried");
+  });
+
+  test("a chain framing the band drops the edge's frameless strip", () => {
+    const strips = [{ edge: "bottom" as Edge, d: 0.09, extent: [0, 1] as [number, number] }];
+    const r = detect(STD_LINES, STD_TOKENS, { repeat: () => true, frames: (e, d) => e === "bottom" && d === 0.1, repeatStrips: strips });
+    assert.deepEqual(r.diag.candidates.map((c) => c.frame), [true]);
+    assertClose(r.decision.d!, 0.1);
+    assert.deepEqual(r.decision.rules, ["A", "B", "C"]);
+    // no framing chain: the frameless strip is kept and tried first
+    const far = detect(STD_LINES, STD_TOKENS, { frames: () => false, repeatStrips: strips });
+    assert.deepEqual(far.diag.candidates.map((c) => c.frame), [false, true]);
+    assertClose(far.decision.d!, 0.09);
   });
 
   test("all three signals → rules A, B, C, confidence 0.95", () => {
@@ -745,15 +767,19 @@ describe("step 3: statics and fields (classifyRepetition)", () => {
   });
 
   test(`position tolerance ${REPEAT_POS_TOL * 100}% per axis: 20 px of 1000 matches, 21 px does not`, () => {
-    const at = (x: number, y: number) => classifyRepetition([on(tokC(FIRM, 500, 950)), on(tokC(FIRM, 500, 950)), on(tokC(FIRM, x, y))]);
-    for (const c of at(520, 930)) assert.deepEqual(c.staticIdx, [0]);
-    // 21 px off: the third sheet matches nobody and the first two alone are < 3 sheets
-    for (const c of at(521, 950)) assert.deepEqual(c.staticIdx, []);
-    for (const c of at(500, 971)) assert.deepEqual(c.staticIdx, []);
+    // four sheets (static needs 2): the third holds the text 20 or 21 px off, the fourth
+    // holds it 20 px off the other way — 41/42 px from the third
+    const at = (x: number, y: number) => classifyRepetition([
+      on(tokC(FIRM, 500, 950)), on(tokC("OTHER", 100, 100)), on(tokC(FIRM, x, y)), on(tokC("OTHER 2", 300, 100)),
+    ]);
+    assert.deepEqual(at(520, 930).map((c) => c.staticIdx), [[0], [], [0], []]);
+    assert.deepEqual(at(521, 950).map((c) => c.staticIdx), [[], [], [], []]);
+    assert.deepEqual(at(500, 971).map((c) => c.staticIdx), [[], [], [], []]);
   });
 
-  test("minimum 3 sheets: two identical sheets have no statics or fields", () => {
-    for (const c of classifyRepetition([on(tokC(FIRM, 500, 950)), on(tokC(FIRM, 500, 950))])) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+  test("minimum 2 sheets (amended in task 6a): two identical sheets have statics, one sheet none; fields still need 3", () => {
+    const two = classifyRepetition([1, 2].map((k) => on(tokC(FIRM, 500, 950), tokC(`A-10${k}`, 900, 970))));
+    for (const c of two) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [] });
     assert.deepEqual(classifyRepetition([on(tokC(FIRM, 500, 950))]), [{ staticIdx: [], fieldIdx: [] }]);
   });
 
@@ -785,15 +811,18 @@ describe("step 3: statics and fields (classifyRepetition)", () => {
     for (const c of out) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [1] });
   });
 
-  test("field: text changing on half the sheets (two dates over 4 sheets)", () => {
-    // each token: same text on 2 sheets (< 3, not static), position filled on 4, text differs on 2 ≥ 50% of 4
-    const out = classifyRepetition(["09/01", "09/01", "10/08", "10/08"].map((d) => on(tokC(d, 700, 970))));
+  test("field: text changing on most sheets (three dates over 6 sheets)", () => {
+    // each token: same text on 2 sheets (< 3 = 50% of 6, not static), position filled on 6, text differs on 4 ≥ 3
+    const out = classifyRepetition(["09/01", "09/01", "10/08", "10/08", "11/15", "11/15"].map((d) => on(tokC(d, 700, 970))));
     for (const c of out) assert.deepEqual(c, { staticIdx: [], fieldIdx: [0] });
   });
 
   test("a position filled on fewer than 3 sheets is not a field; empty text is neither", () => {
     const out = classifyRepetition([on(tokC("A-101", 900, 970)), on(tokC("A-102", 900, 970)), on(tokC("OFFICE", 200, 200))]);
     for (const c of out) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+    // 2 of 5 sheets: static needs ⌈50% × 5⌉ = 3
+    const five = classifyRepetition([0, 1, 2, 3, 4].map((i) => on(tokC(i < 2 ? FIRM : `X${i}`, i < 2 ? 500 : 100 * i, i < 2 ? 950 : 100))));
+    for (const c of five) assert.deepEqual(c.staticIdx, []);
     const blank = classifyRepetition([0, 1, 2].map(() => on(tokC("  ", 500, 500))));
     for (const c of blank) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
   });
@@ -806,12 +835,12 @@ describe("step 3: repetition band and repeat", () => {
     tokUV("DEEP", "bottom", 0.5, 0.4),        // deeper than 32% of the height: out of the bottom band
     tokC("7", 30, 1000),                      // in the left margin, outside the border box
   ];
-  const band = (u0: number, u1: number, v1: number): RepeatBand => ({ edge: "bottom", u0, u1, v0: 0.01, v1 });
 
-  test(`the band: the box of static + field token centers inside the border box within ${BAND_DEPTH * 100}% of the edge`, () => {
+  test(`the band: the box of the given (static) token centers inside the border box within ${BAND_DEPTH * 100}% of the edge`, () => {
     const b = repetitionBands(T, BOX, [0, 1, 2, 3, 4]);
     const bot = b.bottom!;
     assertClose(bot.u0, 0.1, "u0"); assertClose(bot.u1, 0.9, "u1"); assertClose(bot.v0, 0.05, "v0"); assertClose(bot.v1, 0.08, "v1");
+    assertClose(bot.vBox, 0.08 + 5 / 1920, "vBox");
     // top: every token is ≥ 60% from the top border
     assert.equal(b.top, undefined);
     // only the listed indices count
@@ -819,34 +848,78 @@ describe("step 3: repetition band and repeat", () => {
     assertClose(repetitionBands(T, BOX, [0, 2]).bottom!.u1, 0.5, "u1 of two");
   });
 
-  test("repeat: the band lies inside the extent-bounded strip and covers ≥ 50% of its length", () => {
-    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.1, [0, 1]), true);
-    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.08, [0, 1]), true);    // v1 = d: inside
-    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.079, [0, 1]), false);  // deeper than the strip
-    assert.equal(bandRepeats(band(0.3, 0.8, 0.08), 0.1, [0, 1]), true);     // covers 0.5
-    assert.equal(bandRepeats(band(0.3, 0.79, 0.08), 0.1, [0, 1]), false);   // covers 0.49
-    // a partial chain over [0.25, 1]: a band starting at u 0.1 is not inside it
-    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.1, [0.25, 1]), false);
-    assert.equal(bandRepeats(band(0.3, 0.9, 0.08), 0.1, [0.25, 1]), true);  // 0.6 / 0.75 = 0.8
-    assert.equal(bandRepeats(undefined, 0.1, [0, 1]), false);
-    assert.equal(bandRepeats(band(0.5, 0.5, 0.08), 0.1, [0.5, 0.5]), false); // zero-length strip
+  test(`contiguous band: statics outward from the border up to the first depth gap > ${BAND_GAP * 100}%`, () => {
+    // glyph boxes (h 10 → ±5 px = ±0.0026): ACME to v 0.0526, A-101 from 0.0774; a chance static
+    // starting 5% past the band's edge (center 0.08 + 0.0026 + 0.05 + 0.0026) is left out; one
+    // starting 3% past it is kept
+    const edge = 0.08 + 5 / 1920;
+    const chance = tokUV("EXAM", "bottom", 0.4, edge + 0.05 + 5 / 1920);
+    const near = tokUV("EXAM", "bottom", 0.4, edge + 0.03 + 5 / 1920);
+    assertClose(repetitionBands([...T, chance], BOX, [0, 1, 2, 5]).bottom!.vBox, edge, "gap 5%");
+    assertClose(repetitionBands([...T, near], BOX, [0, 1, 2, 5]).bottom!.vBox, edge + 0.03 + 10 / 1920, "gap 3%");
+    // the band grows from its shallowest static, wherever that is
+    assertClose(repetitionBands([tokUV("X", "bottom", 0.5, 0.2)], BOX, [0]).bottom!.vBox, 0.2 + 5 / 1920, "lone static");
   });
 
-  test("repeatOptions: a frameless strip as deep as the band where it spans ≥ 50% of the border length", () => {
-    const o = repeatOptions(T, BOX, { staticIdx: [0, 2], fieldIdx: [1] });
+  test(`framesBand: the deepest static glyph edge inside the strip ≥ d / ${FRAME_BAND_RATIO}`, () => {
+    assert.equal(framesBand(0.2, 0.2), true);
+    assert.equal(framesBand(0.2, 0.3), true);
+    assert.equal(framesBand(0.2, 0.301), false);
+    assert.equal(framesBand(0.0926, 0.26), false);  // a 26% rule above text ending at 9%
+    assert.equal(framesBand(0, 0.1), false);
+  });
+
+  test("frames and repeat: statics inside the chain's strip reach its last third and span ≥ 50% of the full strip", () => {
+    const cand0 = (d: number, extent: [number, number] = [0, 1]) => ({ edge: "bottom" as Edge, d, extent, cover: extent[1] - extent[0], touch: "both" as const, frame: true, freeEndGap: null });
+    // a sparse band broken by a gap (statics at v 0.02 and 0.05, then 0.19 after a 13% gap): the
+    // contiguous band ends at 0.0526, but the deepest static inside a gap-broken chain at 0.2216
+    // (extent [0.068, 1]) reaches 0.1926 ≥ 0.2216 / 1.5 → it frames; coverage along the full strip
+    const sparse = [tokUV("S", "bottom", 0.02, 0.02), tokUV("S", "bottom", 0.6, 0.05), tokUV("S", "bottom", 0.9, 0.19)];
+    const o = repeatOptions(sparse, BOX, { staticIdx: [0, 1, 2], fieldIdx: [] });
+    assertClose(o.repeatStrips![0].d, 0.05 + 5 / 1920, "frameless d: the contiguous band");
+    assert.equal(o.frames!("bottom", 0.2216), true);
+    assert.equal(o.repeat!(cand0(0.2216, [0.068, 1])), true);
+    assert.equal(o.frames!("bottom", 0.29), false);                      // 0.1926 < 0.29 / 1.5
+    // statics inside the strip only: a chain at 0.1 holds them to 0.0526 < 0.1 / 1.5 → not framed
+    assert.equal(o.frames!("bottom", 0.1), false);
+    assert.equal(o.frames!("bottom", 0.075), true);                      // 0.0526 ≥ 0.05
+    // the 26% rule over text ending at 9%
+    const low = [tokUV("S", "bottom", 0.1, 0.03), tokUV("S", "bottom", 0.9, 0.09)];
+    assert.equal(repeatOptions(low, BOX, { staticIdx: [0, 1], fieldIdx: [] }).frames!("bottom", 0.26), false);
+    // coverage: statics inside the strip spanning 0.4 → framed, but no repeat
+    const narrow = repeatOptions([tokUV("A", "bottom", 0.3, 0.05), tokUV("B", "bottom", 0.7, 0.05)], BOX, { staticIdx: [0, 1], fieldIdx: [] });
+    assert.equal(narrow.frames!("bottom", 0.06), true);
+    assert.equal(narrow.repeat!(cand0(0.06, [0.2, 0.8])), false);
+  });
+
+  test("repeatOptions: a frameless strip where the band spans ≥ 50% of the border length, as deep as the band's glyph boxes", () => {
+    // fields do not shape the band: statics ACME (u 0.1) and DATE (u 0.5) span 0.4 → no strip
+    assert.deepEqual(repeatOptions(T, BOX, { staticIdx: [0, 2], fieldIdx: [1] }).repeatStrips, []);
+    const o = repeatOptions(T, BOX, { staticIdx: [0, 1, 2], fieldIdx: [] });
     assert.equal(o.repeatStrips!.length, 1);
     const s = o.repeatStrips![0];
-    assert.equal(s.edge, "bottom"); assertClose(s.d, 0.08, "d"); assert.deepEqual(s.extent, [0, 1]);
-    // a band spanning 0.4 of the border length gives no strip
+    // A-101: center v 0.08, glyphs h 10 → box edge 5 px deeper; DEEP (v 0.4) is past a 4% gap
+    assert.equal(s.edge, "bottom"); assertClose(s.d, 0.08 + 5 / 1920, "d"); assert.deepEqual(s.extent, [0, 1]);
+    // other (non-static) tokens do not deepen it (amendment 7)
+    const filler = [tokUV("NOTE", "bottom", 0.3, 0.1), tokUV("NOTE", "bottom", 0.6, 0.12)];
+    assertClose(repeatOptions([...T, ...filler], BOX, { staticIdx: [0, 1, 2], fieldIdx: [] }).repeatStrips![0].d, 0.08 + 5 / 1920, "no extension");
+    // a band spanning 0.4 of the border length gives no strip and no repeat
     const short = repeatOptions([tokUV("A", "bottom", 0.3, 0.05), tokUV("B", "bottom", 0.7, 0.05)], BOX, { staticIdx: [0, 1], fieldIdx: [] });
     assert.deepEqual(short.repeatStrips, []);
-    assert.equal(short.repeat!({ edge: "bottom", d: 0.1, extent: [0.2, 0.8], cover: 0.6, touch: "both", frame: true, freeEndGap: null }), true);
+    // a rotated static: the deepest edge of its rotated box counts (rot 90 in a bottom strip:
+    // "AB" h 10, w 12 runs down the page, so its box reaches 6 px below the center)
+    const rot: DetectToken = { str: "AB", x: 0, y: 0, w: 12, h: 10, rot: 90 };
+    const [cx, cy] = px("bottom", 0.5, 0.05);
+    const placed = { ...rot, x: cx - 5, y: cy - 6 };
+    const r = repeatOptions([tokUV("A", "bottom", 0.1, 0.02), placed, tokUV("B", "bottom", 0.9, 0.02)], BOX, { staticIdx: [0, 1, 2], fieldIdx: [] });
+    assertClose(r.repeatStrips![0].d, 0.05 + 6 / 1920, "rot d");
   });
 
   test("detectTitleBlock with repeatOptions: a borderless strip found by rule C; diag carries the classes", () => {
     const tokens = [...fill("bottom", 0.1, 20), NUMBER, ...DRAWING];
     // statics: fillers at u 0.025 and 0.975 (v 0.075); field: the number
     const classes = { staticIdx: [0, 19], fieldIdx: [20] };
+    // the frameless strip: 0.075 + 5 / 1920 deep
     const r = detectTitleBlock(mk([], tokens), repeatOptions(tokens, [0, 0, PW, PH], classes));
     assert.equal(r.decision.edge, "bottom");
     assert.deepEqual(r.decision.rules, ["C"]);
@@ -856,13 +929,13 @@ describe("step 3: repetition band and repeat", () => {
 
 // ── steps 5 and 6: grouping and output (detectSetRegions) ───────────────────
 /** A sheet of the standard page with a bottom title block at depth d: border
- * rules, the chain, `statics` at u 0.05 + 0.1·k (v 0.4·d), 15 per-sheet
+ * rules, the chain, `statics` at u 0.05 + 0.1·k (v 0.7·d), 15 per-sheet
  * fillers (text unique to the sheet), the sheet number `num` at u 0.9, v 0.3·d
  * (h 40), and the DRAWING tokens. `boiler` adds "VA FORM 08-6231" at u 0.55,
  * v 0.03 (inside any strip deeper than 3%). */
 function tbSheet(key: string, d: number, statics: string[], num: string, o: { boiler?: boolean; pageIn?: [number, number] } = {}): DetectSheet {
   const tokens: DetectToken[] = [
-    ...statics.map((t, k) => tokUV(t, "bottom", 0.05 + 0.1 * k, 0.4 * d)),
+    ...statics.map((t, k) => tokUV(t, "bottom", 0.05 + 0.1 * k, 0.7 * d)),
     ...Array.from({ length: 15 }, (_, k) => tokUV(`${key}/${k}`, "bottom", (k + 0.5) / 15, 0.75 * d)),
     tokUV(num, "bottom", 0.9, 0.3 * d, 40),
     ...(o.boiler ? [tokUV(Synth.BOILERPLATE, "bottom", 0.55, 0.03)] : []),
@@ -1079,48 +1152,21 @@ describe("synthetic sets: single-sheet decisions (step 4, repeat off)", () => {
 });
 
 // ── the frozen synthetic sets with repetition on (detectSetRegions) ──────────
-// Conflicts between the fixture's expectations and the plan's rules, found in
-// task 6 and reported rather than bent (the rules and the fixture stay as they
-// are). Each runs as a `todo` test asserting the fixture's expectation, so it
-// shows up in every run until the plan decides.
-//   frameless-d: a frameless strip's inner edge comes from the repetition band
-//     (no rule line exists); the band's deepest center sits at 0.8–0.93 of the
-//     true d (statics at 10–90% of the depth) or past it (drawing-area tokens
-//     classified as fields), so |d error| exceeds 1%. On borderlessSet the
-//     pass-1 depths then differ by > 1.5%, the candidate groups fall under 3
-//     sheets, pass 2 finds no repetition and the sheets abstain.
-//   top-rule-26: randomSet(19) #3 and #6: a frameless top title block
-//     (d ≈ 0.10) under a full-width top rule at 0.26; the edge has a chain, so
-//     no repetition-only candidate is made there (step 2), and the rule at 0.26
-//     passes rule A (the number lies in its outer 60%).
-const DETECT_CONFLICTS: Record<string, string> = {
-  ...Object.fromEntries(["borderless.pdf", "borderless.pdf#2", "borderless.pdf#3", "borderless.pdf#4",
-    "random3.pdf#4", "random3.pdf#5", "random3.pdf#6",
-    "random11.pdf#5", "random11.pdf#6", "random11.pdf#7", "random11.pdf#8", "random11.pdf#9", "random11.pdf#10",
-    "random19.pdf", "random19.pdf#2", "random19.pdf#4", "random19.pdf#5"].map((k) => [k, "frameless-d"])),
-  "random19.pdf#3": "top-rule-26", "random19.pdf#6": "top-rule-26",
-};
-//   two-sheet-family: a family of 2 sheets in a set of ≥ 3 sheets has no
-//     statics (they need ≥ 3 sheets) and the page-size fallback is only for
-//     sets of < 3 sheets, so each of its sheets is its own group
-//     (mixedSet: 4 groups, not 3).
-//   boilerplate-merge: smallConsultantsSet: both 2-sheet firms share only the
-//     agency boilerplate as statics (firm strings are on 2 of 4 sheets); their
-//     depths are within 1.5%, so there is one candidate group, the boilerplate
-//     stays distinctive and Jaccard = 1 merges them (1 group, not 2).
-//   frameless-d (above) splits borderlessSet into 4.
-const GROUP_CONFLICTS: Record<string, string> = {
-  mixedSet: "two-sheet-family", smallConsultantsSet: "boilerplate-merge", borderlessSet: "frameless-d",
-};
-
+// Branches on meta (expect, frame), never on truth. Framed title blocks: edge
+// correct and |d error| ≤ 1% of the dimension. Frameless ones are a known
+// limitation (plan amendments 3 and 8): found (edge correct, |d error| ≤ 25%
+// of d) or abstained — never a wrong edge or a strip off by more.
 function checkDetection(x: Synth.SynthSheet, dg: { edge: Edge | null; d: number | null }, tbEvidence: string[]) {
   const where = `${x.sheet.key} (${x.meta.expect}${x.meta.why ? " " + x.meta.why : ""})`;
   switch (x.meta.expect) {
     case "find":
     case "tie-break-area": {
       const t = x.truth!;
+      const frameless = x.meta.frame === "none";
+      if (frameless && dg.edge === null) break;   // abstaining is allowed (amendment 8)
+      const tol = frameless ? 0.25 * t.d : 0.01;
       assert.equal(dg.edge, t.edge, `${where}: edge`);
-      assert.ok(Math.abs(dg.d! - t.d) <= 0.01, `${where}: d ${dg.d} vs ${t.d}`);
+      assert.ok(Math.abs(dg.d! - t.d) <= tol, `${where}: d ${dg.d} vs ${t.d} (tolerance ${tol})`);
       break;
     }
     case "abstain":
@@ -1132,11 +1178,13 @@ function checkDetection(x: Synth.SynthSheet, dg: { edge: Edge | null; d: number 
   }
 }
 
-/** The fixture's families against the detected groups: every family in one
- * group, no group holding two families; sheets without a title block (family
- * "none", the sketch) have no group. Returns the group count, a sheet without
- * a group counting as its own. */
-function checkGroups(set: Synth.SynthSet, m: Map<string, SheetRegions>): number {
+/** The fixture's families against the detected groups (amendment 8: only
+ * sheets that were detected): the detected members of a family share one
+ * group, no group holds two families; sheets without a title block (family
+ * "none", the sketch) have no group. Returns [the group count, a sheet without
+ * a group counting as its own; the count expected on that basis: families
+ * with a detected member plus sheets without a group]. */
+function checkGroups(set: Synth.SynthSet, m: Map<string, SheetRegions>): [number, number] {
   const famGroups = new Map<string, Set<string>>(), groupFams = new Map<string, Set<string>>();
   for (const x of set.sheets) {
     const r = m.get(x.sheet.key)!;
@@ -1147,7 +1195,7 @@ function checkGroups(set: Synth.SynthSet, m: Map<string, SheetRegions>): number 
   }
   for (const [g, f] of groupFams) assert.equal(f.size, 1, `group ${g} holds families ${[...f].join(", ")}`);
   for (const [f, g] of famGroups) assert.equal(g.size, 1, `family ${f} split over ${g.size} groups`);
-  return distinct(m);
+  return [distinct(m), famGroups.size + [...m.values()].filter((r) => !r.group).length];
 }
 
 describe("synthetic sets: detectSetRegions (steps 1–6, repetition on)", () => {
@@ -1156,14 +1204,8 @@ describe("synthetic sets: detectSetRegions (steps 1–6, repetition on)", () => 
     const { regions, diag } = detectSetRegions(set.sheets.map((x) => x.sheet));
     const ev = (key: string) => regions.get(key)!.regions.find((r) => r.kind === "title_block")?.evidence ?? [];
     test(`${name}: detection`, () => {
-      for (const x of set.sheets) if (!DETECT_CONFLICTS[x.sheet.key]) checkDetection(x, diag.get(x.sheet.key)!, ev(x.sheet.key));
+      for (const x of set.sheets) checkDetection(x, diag.get(x.sheet.key)!, ev(x.sheet.key));
     });
-    const conflicts = set.sheets.filter((x) => DETECT_CONFLICTS[x.sheet.key]);
-    if (conflicts.length) {
-      test(`${name}: detection, plan conflicts`, { todo: [...new Set(conflicts.map((x) => DETECT_CONFLICTS[x.sheet.key]))].join(", ") }, () => {
-        for (const x of conflicts) checkDetection(x, diag.get(x.sheet.key)!, ev(x.sheet.key));
-      });
-    }
     test(`${name}: outputs are clean, ids unique`, () => {
       const ids = new Map<string, string>();
       for (const r of regions.values()) {
@@ -1180,29 +1222,16 @@ describe("synthetic sets: detectSetRegions (steps 1–6, repetition on)", () => 
 });
 
 describe("synthetic sets: grouping (step 5)", () => {
-  const NAMED = SYNTH_SETS.filter(([n]) => !n.startsWith("randomSet"));
-  for (const [name, build] of NAMED) {
-    const set = build();
-    const run = () => {
-      const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
-      const n = checkGroups(set, regions);
-      if (set.expectGroups !== null) assert.equal(n, set.expectGroups, `${name}: groups`);
-    };
-    if (GROUP_CONFLICTS[name]) test(name, { todo: GROUP_CONFLICTS[name] }, run);
-    else test(name, run);
-  }
-  // random sets: families of < 3 sheets are expected to split (two-sheet-family), so only
-  // "no group holds two families" is checked
-  for (const [name, build] of SYNTH_SETS.filter(([n]) => n.startsWith("randomSet"))) {
-    test(`${name}: no group holds two families`, () => {
+  // every set: the detected members of each family in one group, no group with two families; the
+  // fixture's group count wherever every sheet expected to be found was found
+  for (const [name, build] of SYNTH_SETS) {
+    test(name, () => {
       const set = build();
       const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
-      const fams = new Map<string, Set<string>>();
-      for (const x of set.sheets) {
-        const g = regions.get(x.sheet.key)!.group;
-        if (g) (fams.get(g) ?? fams.set(g, new Set()).get(g)!).add(x.meta.group);
-      }
-      for (const [g, f] of fams) assert.equal(f.size, 1, `group ${g} holds ${[...f].join(", ")}`);
+      const [n, want] = checkGroups(set, regions);
+      assert.equal(n, want, `${name}: groups`);
+      const allFound = set.sheets.every((x) => x.meta.expect !== "find" || regions.get(x.sheet.key)!.group);
+      if (set.expectGroups !== null && allFound) assert.equal(n, set.expectGroups, `${name}: fixture group count`);
     });
   }
 
@@ -1218,12 +1247,13 @@ describe("synthetic sets: grouping (step 5)", () => {
     assert.deepEqual([...b].sort(), [...a].sort());
   });
 
-  test("twoSheetSet: grouped by the page-size rule (fewer than 3 sheets)", () => {
-    const { regions } = detectSetRegions(Synth.twoSheetSet().sheets.map((x) => x.sheet));
+  test("twoSheetSet: one group on its statics (2 sheets suffice since the task 6a amendment)", () => {
+    const set = Synth.twoSheetSet();
+    const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
     const [p, q] = [...regions.values()];
     assert.ok(p.group && p.group === q.group);
-    assert.deepEqual(p.group_sig!.statics, []);
-    assert.deepEqual(p.group_sig!.page_in, Synth.twoSheetSet().sheets[0].sheet.pageIn);
+    assert.ok(p.group_sig!.statics.includes(set.firms[0].statics[0]));
+    assert.deepEqual(p.group_sig!.page_in, set.sheets[0].sheet.pageIn);
   });
 
   test("the same set in any order: identical ids and regions (mixed, consultants, random sets)", () => {
