@@ -92,9 +92,14 @@ Found in review:
    refreshed ids to the takeoff document; the MCP uses them in memory only.
    Tests: one-string reissue (still matches), added sheets changing the
    statics (still matches), two groups sharing boilerplate (tie → not
-   applied), id present but signature changed (not applied), singleton with
-   one vs two geometric candidates, two templates on one group, ids in a
-   map are unique.
+   applied), id present but signature changed (not applied), statics-free
+   template with one vs two same-size statics-free groups, two templates on
+   one group, ids in a map are unique, and each `unattached` reason
+   (`no-match`, `ambiguous`, `no-sig`, `no-anchor`, `conflict`) produced by
+   at least one test.
+   Intentional: a statics-free template whose `source_sheet` now belongs to
+   a group with statics (the cover gained a shared title block) is not
+   applied and is reported. Do not relax this.
 3. **Drawing area after a template.** `applyOverrides` rebuilds
    `drawing_area` as the sheet's `border` box minus the template's strip
    (the strip's edge is the border side it touches), replacing the detected

@@ -311,7 +311,8 @@ For the upstream issue later, following the #466 layout:
      `find_text` region field. Plan: [REGION_ANNOTATION_PLAN.md](REGION_ANNOTATION_PLAN.md).
    - 2b: raster line extraction, raster line-path test, OCR tokens.
 3. Move the 6% inset and lower-right guesses onto the map; search labels and
-   filters; correction UI (group templates).
+   filters; correction UI (group templates). The UI must show corrections
+   that no longer attach (`resolveOverrides` → `unattached`).
 4. Detail viewports: find titles, find extents, apply labels.
 5. Title-block parts, schedule, legend and notes regions; cover sheets and
    sheet indexes.
