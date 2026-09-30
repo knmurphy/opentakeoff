@@ -602,13 +602,41 @@ const toPx = (r: Region, w: number, h: number): Region => ({ ...r, bbox: [r.bbox
 /** px bbox → normalized, for turning a region the user drew into an override. */
 export const toNormBbox = (b: Bbox, w: number, h: number): Bbox => [b[0] / w, b[1] / h, b[2] / w, b[3] / h];
 
+/** The border box minus a title-block strip. The strip's edge is the border
+ *  side it touches: the side it is nearest to (gap) and shallowest from
+ *  (depth), both as fractions of the border box — a bottom strip drawn
+ *  border to border touches the left and right sides too, but at full
+ *  depth. */
+function drawingAreaBesides(border: Bbox, strip: Bbox): Bbox {
+  const [x0, y0, x1, y1] = border;
+  const bw = x1 - x0, bh = y1 - y0;
+  const sides: [Edge, number, Bbox][] = [
+    ["top", (Math.max(0, strip[1] - y0) + strip[3] - y0) / bh, [x0, Math.min(y1, strip[3]), x1, y1]],
+    ["right", (Math.max(0, x1 - strip[2]) + x1 - strip[0]) / bw, [x0, y0, Math.max(x0, strip[0]), y1]],
+    ["bottom", (Math.max(0, y1 - strip[3]) + y1 - strip[1]) / bh, [x0, y0, x1, Math.max(y0, strip[1])]],
+    ["left", (Math.max(0, strip[0] - x0) + strip[2] - x0) / bw, [Math.min(x1, strip[2]), y0, x1, y1]],
+  ];
+  return sides.reduce((a, b) => (b[1] < a[1] ? b : a))[2];
+}
+
+/** Replace the drawing area's box, keeping its id so its children keep their
+ *  parent (cleanRegions clips them to it). None detected: one is added. */
+function withDrawingArea(regions: Region[], bbox: Bbox): Region[] {
+  const da = regions.find((r) => r.kind === "drawing_area");
+  const next: Region = da
+    ? { ...da, bbox, source: "user", confidence: 1 }
+    : { id: "u:da", kind: "drawing_area", bbox, parent: null, evidence: ["template"], confidence: 1, source: "user" };
+  return da ? regions.map((r) => (r === da ? next : r)) : [...regions, next];
+}
+
 /** The map as used: detected regions with corrections applied, in image px.
  *  Corrections are resolved once (resolveOverrides); neither input is
  *  changed and nothing is written back.
  *
  *  Per sheet:
  *  1. The template resolved to the sheet's group (after a resolved move)
- *     replaces the detected title block and all its parts.
+ *     replaces the detected title block and all its parts, and the drawing
+ *     area becomes the border box (the sheet without one) minus its strip.
  *  2. The sheet's `removed` ids drop detected regions, with their children.
  *  3. The sheet's own regions are added.
  *  The result is re-validated, so a correction can't leave a broken tree. */
@@ -629,7 +657,12 @@ function applyToSheet(
   let regions = sheet.regions;
   const g = moved ?? sheet.group;
   const tpl = g ? tplOf.get(g) : undefined;
-  if (tpl) regions = [...regions.filter((r) => !TITLE_BLOCK_KINDS.has(r.kind)), ...tpl.regions.map((r) => toPx(r, w, h))];
+  if (tpl) {
+    const tb = tpl.regions.map((r) => toPx(r, w, h));
+    regions = [...regions.filter((r) => !TITLE_BLOCK_KINDS.has(r.kind)), ...tb];
+    const strip = tb.find((r) => r.kind === "title_block");
+    if (strip) regions = withDrawingArea(regions, drawingAreaBesides(sheet.border ?? [0, 0, w, h], strip.bbox));
+  }
   const mine = ov.sheets?.[sheet.key];
   if (mine?.removed?.length) {
     const drop = new Set(mine.removed);

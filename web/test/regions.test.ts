@@ -508,3 +508,39 @@ test("resolveOverrides: two letter-size sketches — page-size anchor is ambiguo
     { kind: "template", key: "g:sk-2", reason: "no-anchor" },
   ]);
 });
+
+// ── drawing area after a template ───────────────────────────────────────────
+
+const tplOn = (tb: Region["bbox"]): RegionOverrides =>
+  sanitizeRegionOverrides({ groups: { g1: { source_sheet: "set.pdf#3", group_sig: SIG(), regions: [R("u:tb", "title_block", tb)] } } });
+const daOf = (s: SheetRegions) => s.regions.find((r) => r.kind === "drawing_area");
+
+test("applyOverrides: template on a different edge — the old strip's area returns to the drawing area", () => {
+  const out = apply1(signed(), tplOn([0, 0.9, 1, 1]));  // bottom strip; detected was right
+  assert.deepEqual(daOf(out)!.bbox, [0, 0, 2000, 900]); // no border → the full sheet
+  assert.equal(daOf(out)!.id, "da");                    // the detected id stays, so its children keep their parent
+  assert.equal(regionAt(out, 1800, 100)?.id, "da");     // was the detected title block
+  assert.deepEqual(out.regions.find((r) => r.id === "d1")!.bbox, [0, 0, 850, 900]); // clipped to the new drawing area
+});
+
+test("applyOverrides: template on the same edge with a different d — rebuilt from the border box", () => {
+  const s = { ...signed(), border: [40, 30, 1960, 970] as Region["bbox"] };
+  const out = apply1(s, tplOn([0.8, 0, 1, 1]));         // right strip reaching the page edge
+  assert.deepEqual(daOf(out)!.bbox, [40, 30, 1600, 970]);
+  assert.deepEqual(out.regions.find((r) => r.id === "d2")!.bbox, [850, 30, 1600, 500]);
+  assert.equal(out.regions.find((r) => r.id === "kn")!.bbox[2], 1200);
+});
+
+test("applyOverrides: the strip's edge is the border side it touches", () => {
+  const s = { ...signed(), border: [40, 30, 1960, 970] as Region["bbox"] };
+  // drawn from border to border, slightly inside the border on the outer side
+  assert.deepEqual(daOf(apply1(s, tplOn([0.02, 0.02, 0.2, 0.97])))!.bbox, [400, 30, 1960, 970]); // left
+  assert.deepEqual(daOf(apply1(s, tplOn([0.02, 0.03, 0.98, 0.15])))!.bbox, [40, 150, 1960, 970]); // top
+});
+
+test("applyOverrides: a template adds a drawing area when none was detected", () => {
+  const s = { ...signed(), regions: sheet().regions.filter((r) => r.kind === "title_block" || r.parent === "tb") };
+  const out = apply1(s, tplOn([0, 0.9, 1, 1]));
+  assert.deepEqual(daOf(out)!.bbox, [0, 0, 2000, 900]);
+  assert.equal(daOf(out)!.source, "user");
+});
