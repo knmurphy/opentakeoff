@@ -3,7 +3,7 @@
 Design: [REGION_ANNOTATION.md](REGION_ANNOTATION.md). Piece 1 (the region map
 module, `web/src/lib/regions.ts`) is done.
 
-Status: revision 5, after review round 4 (algorithm and design FAIL; feasibility and measurement passed round 3). Fork only.
+Status: revision 6, after review round 5 (design PASS; algorithm FAIL; feasibility and measurement passed round 3). Fork only.
 
 ## Scope
 
@@ -160,7 +160,9 @@ Rules are first de-duplicated: parallel rules within 1% of each other merge
 (Dublin draws a cell line 3 px inside its border). Rules within 1% of the
 page edge are ignored (Dublin and the sample plan have page-edge rules
 outside the real border). The border is then the outermost rule per side
-with span ≥ 90% of that side, within 8% of the page edge. Measured: 1.5–5.6%
+with span ≥ 75% of that side, within 8% of the page edge. (90% missed
+Porterville, whose top and bottom border rules span 83%: they stop at the
+title strip.) Measured: 1.5–5.6%
 (Porterville's left border 5.6%, Dublin 3.5%). A side with no such rule uses
 the page edge. Border rules never count as strip boundaries.
 
@@ -175,11 +177,19 @@ left revision cell.) A chain is a candidate when:
 - its depth d from the border is between 6% and 30% (measured real strips,
   from the border: 9.0–18.5%);
 - it covers ≥ 70% of the border length and touches the border at one end
-  or both;
-- its free end (if any) does not stop on another edge's candidate chain.
-  Shreveport's right legend column (88% of the height) stops on the bottom
-  title-block chain and is rejected; Dublin's chain stops on a short cell
-  divider, which is not a candidate, and is kept.
+  or both. "Touches" means it ends within 1% of a border rule or of the
+  page edge where no border rule was found (Porterville's 0.889 rule ends
+  on the top and bottom border rules, not the page edge);
+- its free end (if any) does not end within 4% of another candidate chain,
+  and does not end at a rule that fails to reach the border. Dublin's
+  chain ends on a cell divider that runs down to the border, and is kept.
+
+The candidate **strip** for acceptance is bounded along the edge by the
+chain's own extent (border end to free end), not by the full border.
+Shreveport's right legend column (depth 10%, 87% of the height) ends at
+y=0.848; the sheet number at y=0.94 lies outside its extent, so it has no
+`sheetno` (see step 4). The accepted title-block region is still output
+border to border along its edge (step 6), matching the label definition.
 
 Per edge, candidates are tried from the **smallest d outward**; the first one
 that passes the acceptance rule wins. (Porterville: 0.889 is the title strip,
@@ -221,7 +231,8 @@ every real strip measured has ≥ 58). Then it is accepted if **any** of:
 - C: `repeat` and `sheetno`.
 
 `sheetno`: the largest (by glyph height) `TB_SHEETNO_RE` token in the strip
-has its center in the strip's **far-end half** along the edge (table below)
+(within the chain's extent) has its center in the strip's **far-end half**
+along the edge (table below)
 **and** in the **outer 60%** of the strip's depth (nearest the border).
 Real sheet numbers sit in the outer corner (Shreveport C-100 at 31% of the
 depth from the outer edge; Dublin and Shreveport at y≈0.94). The S501 detail
@@ -243,7 +254,10 @@ One signal alone never accepts. If no edge has an accepted candidate: no
 title block; the drawing area is the border box, confidence 0.3.
 
 Between edges with accepted candidates: the one satisfying more of A/B/C
-wins; then higher density; then smaller d. (No fixed edge order, no
+wins; then the **smaller strip area**; then higher density. (Dublin part 1
+p5 has a full-height rule at x=0.837 crossing the title block; its right
+strip passes rule A with the same sheet number as the real bottom strip,
+and loses on area: about 0.14 against 0.11 of the border box.) (No fixed edge order, no
 weighted priors.)
 Single sheets and 2-sheet sets have no `repeat`, so they are accepted only
 through rule A; that is expected and measured.
@@ -418,6 +432,9 @@ each with hand-computed expected values:
   map and deterministic from `group_sig` (same set in any order → same ids);
 - acceptance negatives: a detail-grid sheet (frame rules on several edges,
   sheet-number-like detail tags next to the inner rule) → no false strip;
+  a side legend column that stops short of the bottom title block → no
+  `sheetno`; a full-height rule crossing the title block → the real strip
+  wins on area;
   each rule A/B/C accepts; each single signal alone rejects; density alone
   never accepts; the real
   bottom title block wins over a false right strip on a single sheet;
@@ -430,6 +447,10 @@ Adapter tests:
   hand-built text items incl. 90° text.
 - web: `longAxisLines(segs, w, h)` in `regionDetect.ts`: axis tolerance,
   collinear merge, 1-px duplicate dedupe.
+- End-to-end on the committed sheets (MCP tests, which load PDFs):
+  Porterville (border 75%, chain touching border rules, vertical sheet
+  number) → right strip; Shreveport C300 → bottom strip, not the right
+  legend column; Dublin A601 (/Rotate 90) → bottom strip.
 - MCP (`mcp/test/`, which already loads PDFs): builds `DetectSheet`s from
   `textSpans` + `extractVectorGeometry` (as `ensureGeometry` does,
   `mcp/src/session.ts:1120`); checks displayed orientation on a /Rotate page
