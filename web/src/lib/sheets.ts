@@ -245,6 +245,29 @@ export function extractTextMarks(textContent: TextContentLike, viewport: Viewpor
   return out;
 }
 
+// ── page text as region-detector tokens (regionDetect.ts DetectToken) ───────
+// Every visible text item on the page, in image px, with the same composed
+// transform as the helpers above: (x, y) is the baseline start, w the run
+// length (item.width scaled by the viewport scale alone, as in
+// extractTextMarks), h the glyph height (the composed up-vector's norm, else
+// item.height scaled). rot is the run direction in degrees, clockwise in
+// device space (y down), rounded — the same measure as mcp/src/pdf.ts
+// textSpans — so a /Rotate page and vertical text both come out in displayed
+// orientation. The string is kept raw; callers normalize.
+export interface PageToken { str: string; x: number; y: number; w: number; h: number; rot: number }
+export function extractPageTokens(textContent: TextContentLike, viewport: Viewport): PageToken[] {
+  const out: PageToken[] = [];
+  const vs = Math.hypot(viewport.transform[0], viewport.transform[1]) || 1;
+  for (const it of textContent.items || []) {
+    const str = it.str || "";
+    if (!str.trim()) continue;
+    const t = pdfjsLib.Util.transform(viewport.transform, it.transform);
+    const rot = ((Math.round((Math.atan2(t[1], t[0]) * 180) / Math.PI) % 360) + 360) % 360;
+    out.push({ str, x: t[4], y: t[5], w: (it.width || 0) * vs, h: Math.hypot(t[2], t[3]) || (it.height || 0) * vs, rot });
+  }
+  return out;
+}
+
 // ── dimension-pattern text (#320) ────────────────────────────────────────────
 // The positioned `12'-4"`-pattern text items the dim-string classifier anchors
 // interior strings on (oneclick.sweepDimensionStrings path B). The pattern is
