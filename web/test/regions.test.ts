@@ -604,3 +604,17 @@ test("matchGroup: page anchor — one known + one unknown-size statics-free grou
   const lone = mapGroups(setMap(on("sk.pdf#2", "g:b", { ...coverSig, page_in: undefined })));
   assert.deepEqual(matchGroup(coverSig, lone, "gone.pdf#1"), { group: null, reason: "no-anchor" });
 });
+
+test("applyOverrides: the drawing area never leaves the border box", () => {
+  const s = { ...signed(), border: [40, 30, 1960, 970] as Region["bbox"] };
+  // a right strip drawn wholly in the margin, outside the border
+  assert.deepEqual(daOf(apply1(s, tplOn([0.985, 0, 1, 1])))!.bbox, [40, 30, 1960, 970]);
+  // a top strip wholly in the margin above the border
+  assert.deepEqual(daOf(apply1(s, tplOn([0, 0, 1, 0.02])))!.bbox, [40, 30, 1960, 970]);
+});
+
+test("applyOverrides: a detached strip's side — distance from the border to its far edge, gap counted once", () => {
+  // 5% gap from the right, 10% wide (far edge 15% in); touches the bottom 18% deep
+  const out = apply1(signed(), tplOn([0.85, 0.82, 0.95, 1]));
+  assert.deepEqual(daOf(out)!.bbox, [0, 0, 1700, 1000]); // right (0.15) beats bottom (0.18)
+});

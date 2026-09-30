@@ -623,18 +623,21 @@ const toPx = (r: Region, w: number, h: number): Region => ({ ...r, bbox: [r.bbox
 export const toNormBbox = (b: Bbox, w: number, h: number): Bbox => [b[0] / w, b[1] / h, b[2] / w, b[3] / h];
 
 /** The border box minus a title-block strip. The strip's edge is the border
- *  side it touches: the side it is nearest to (gap) and shallowest from
- *  (depth), both as fractions of the border box — a bottom strip drawn
- *  border to border touches the left and right sides too, but at full
- *  depth. */
+ *  side it touches: the side from which its far (inner) edge is nearest, as
+ *  a fraction of the border box — a gap between border and strip is counted
+ *  once, inside that distance. A bottom strip drawn border to border touches
+ *  the left and right sides too, but its far edge there is the whole width
+ *  away. The cut is clipped to the border box, so a strip drawn partly or
+ *  wholly in the margin never pushes the drawing area past the border. */
 function drawingAreaBesides(border: Bbox, strip: Bbox): Bbox {
   const [x0, y0, x1, y1] = border;
   const bw = x1 - x0, bh = y1 - y0;
+  const cx = (x: number) => Math.min(x1, Math.max(x0, x)), cy = (y: number) => Math.min(y1, Math.max(y0, y));
   const sides: [Edge, number, Bbox][] = [
-    ["top", (Math.max(0, strip[1] - y0) + strip[3] - y0) / bh, [x0, Math.min(y1, strip[3]), x1, y1]],
-    ["right", (Math.max(0, x1 - strip[2]) + x1 - strip[0]) / bw, [x0, y0, Math.max(x0, strip[0]), y1]],
-    ["bottom", (Math.max(0, y1 - strip[3]) + y1 - strip[1]) / bh, [x0, y0, x1, Math.max(y0, strip[1])]],
-    ["left", (Math.max(0, strip[0] - x0) + strip[2] - x0) / bw, [Math.min(x1, strip[2]), y0, x1, y1]],
+    ["top", (strip[3] - y0) / bh, [x0, cy(strip[3]), x1, y1]],
+    ["right", (x1 - strip[0]) / bw, [x0, y0, cx(strip[0]), y1]],
+    ["bottom", (y1 - strip[1]) / bh, [x0, y0, x1, cy(strip[1])]],
+    ["left", (strip[2] - x0) / bw, [cx(strip[2]), y0, x1, y1]],
   ];
   return sides.reduce((a, b) => (b[1] < a[1] ? b : a))[2];
 }
