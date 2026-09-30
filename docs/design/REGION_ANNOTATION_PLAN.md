@@ -3,7 +3,7 @@
 Design: [REGION_ANNOTATION.md](REGION_ANNOTATION.md). Piece 1 (the region map
 module, `web/src/lib/regions.ts`) is done.
 
-Status: revision 4, after review round 3 (feasibility and measurement PASS; algorithm and design FAIL). Fork only.
+Status: revision 5, after review round 4 (algorithm and design FAIL; feasibility and measurement passed round 3). Fork only.
 
 ## Scope
 
@@ -29,9 +29,16 @@ Found in review:
 1. **Group signature; ids derived from it.** `SheetRegions` gets `border`
    (the border box) and `group_sig`: edge, d (from the border), aspect
    bucket, page size in inches when known, and the group's static strings.
-   The group id is `g:` + a short hash of the signature. Ids are handles
-   only: they may change whenever the signature does, and nothing relies on
-   them staying the same. (No "sticky" ids: the previous map is dropped in
+   The group id is `g:` + a short hash of the signature + a disambiguator:
+   clusters with equal signatures (e.g. two statics-free singletons with the
+   same geometry) are ordered by their smallest member sheet key and get
+   `-1`, `-2`, …. Ids are unique within a map (tested). Ids are handles
+   only: they may change whenever the signature or membership does, and
+   nothing relies on them staying the same. Clusters with equal signatures
+   are exactly the ambiguous case `matchGroup` refuses, so a template never
+   picks between them.
+   Stored static strings are capped: at most 20 distinctive strings (the
+   longest first), each at most 80 characters; the sanitizers enforce it. (No "sticky" ids: the previous map is dropped in
    exactly the cases where ids change, so stickiness can't be built.)
 2. **Templates are matched by signature on every apply.** A template in
    `RegionOverrides.groups[g]` gains `group_sig` (the signature it was made
@@ -42,17 +49,35 @@ Found in review:
      know it;
    - when both have static strings: the best static-string Jaccard ≥ 0.5,
      and it beats the second-best group by ≥ 0.2;
-   - when either has no static strings (a cover or sketch, a singleton): it
-     matches only if exactly one group passes the geometric test;
+   - a template **with** static strings never matches a statics-free
+     group; a template **without** static strings (made on a cover or
+     sketch) matches only a statics-free group, and only with a second
+     anchor: its `source_sheet` is a member, or the page size in inches is
+     known on both and equal. Page size unknown on either side → not
+     applied. (Otherwise removing a cover could send its correction to the
+     main architect group, which shares its geometry.) Tests: cover
+     removed; cover replaced by an architect group;
    - otherwise: not applied, reported as unattached.
    The id `g` is only a hint: a template whose id exists but whose
    signature no longer matches that group is **not** applied to it.
-   Two templates resolving to the same group: the one with the higher score
-   wins; a tie applies neither and reports both.
-   `sheet_group` (manual moves) holds a signature too and resolves the same
-   way.
-   Resolution is pure: `resolveOverrides(map, overrides)` returns the
-   resolved mapping (template → group id, plus unattached list).
+   The match score is the static-string Jaccard; ties on it break on the
+   smaller |Δd|; a remaining tie is ambiguous. Two templates resolving to
+   the same group: the higher score wins; an ambiguous tie applies neither
+   and reports both.
+   `sheet_group` changes shape from `Record<key, string>` to
+   `Record<key, { group: string; sig: GroupSig }>` and resolves the same
+   way; `groupOf` calls the resolver instead of reading the string. The old
+   string form is dropped by the sanitizer (no documents use it yet).
+   Resolution is pure. Its output type is fixed in task 0, since the web app
+   and the MCP both consume it:
+   ```ts
+   interface ResolvedOverrides {
+     templates: Record<string /*template key*/, { group: string; score: number }>;
+     moves: Record<string /*sheet key*/, string /*group id*/>;
+     unattached: { kind: "template" | "move"; key: string; reason: "no-match" | "ambiguous" | "no-sig" | "no-anchor" }[];
+   }
+   resolveOverrides(map: Map<string, SheetRegions>, ov: RegionOverrides): ResolvedOverrides
+   ```
    `applyOverrides` uses it and never writes. The web app may save the
    refreshed ids to the takeoff document; the MCP uses them in memory only.
    Tests: one-string reissue (still matches), added sheets changing the
@@ -93,7 +118,7 @@ interface DetectSheet {
 }
 interface DetectDiag {         // per sheet; recomputed, not persisted
   border: Bbox | null; edge: Edge | null; d: number | null;
-  candidates: { edge: Edge; d: number; frame: boolean; chainCover: number; tokens: number; density: number; sheetno: boolean; repeat: boolean; accepted: boolean; reason: string }[];
+  candidates: { edge: Edge; d: number; frame: boolean; chainCover: number; tokens: number; density: number; sheetno: boolean; sheetnoPos: [number, number] | null; repeat: boolean; accepted: boolean; reason: string }[];
   staticIdx: number[]; fieldIdx: number[];   // token indices, for piece 4 (title-block parts)
 }
 
@@ -167,28 +192,37 @@ candidate strip and covers ≥ 50% of its length.
 
 ### Step 4 — acceptance rule (decides title block vs abstain)
 
-Every candidate strip must first hold at least 15 tokens (`MIN_STRIP_TOKENS`;
-title blocks are text-dense, detail-grid cells are not). Then it is accepted
-if **any** of:
+Text density does **not** decide acceptance. Measured on real strips it
+ranges 0.34–8.5 (strip ÷ rest of sheet), and a false strip on a detail-grid
+sheet (Dublin part 4 p10, S501: 0.82) sits above real sample-plan strips
+(0.34–0.49), so no threshold separates them. Density is kept as evidence
+and as a tie-break only.
 
-- A: `frame`, `sheetno` and `density ≥ 1.5`. `sheetno`: the largest (by
-  glyph height) `TB_SHEETNO_RE` token in the strip lies in its far end
-  (table below). Detail tags on a detail-grid sheet (Dublin part 4 p10,
-  S501: "B10" in a top strip, frame rules at 26%) are small, sparse and
-  fail the density and token floors;
+Every candidate strip must hold at least 15 tokens (`MIN_STRIP_TOKENS`;
+every real strip measured has ≥ 58). Then it is accepted if **any** of:
+
+- A: `frame` and `sheetno`;
 - B: `frame` and `repeat`;
-- C: `repeat` and `density ≥ 2.0`.
+- C: `repeat` and `sheetno`.
 
-`density` = tokens per unit area in the strip ÷ in the rest of the border box.
+`sheetno`: the largest (by glyph height) `TB_SHEETNO_RE` token in the strip
+has its center in the strip's **far-end half** along the edge (table below)
+**and** in the **outer 60%** of the strip's depth (nearest the border).
+Real sheet numbers sit in the outer corner (Shreveport C-100 at 31% of the
+depth from the outer edge; Dublin and Shreveport at y≈0.94). The S501 detail
+tag "B10" sits at 92% of the depth, next to the inner rule, and fails.
+Per-page unit tests assert which token is picked on Shreveport, the sample
+plan, Porterville (vertical "A1-101", via `rot`) and the rotated Dublin
+pages in displayed orientation.
 
 Far end (`farEnd()`, defined once in code, tested per edge):
 
-| Strip | Far end |
-|---|---|
-| right | lower half of the strip |
-| bottom | right half of the strip |
-| left | lower half of the strip |
-| top | right half of the strip |
+| Strip | Far end along the edge | Outer part of the depth |
+|---|---|---|
+| right | lower half | right 60% |
+| bottom | right half | lower 60% |
+| left | lower half | left 60% |
+| top | right half | upper 60% |
 
 One signal alone never accepts. If no edge has an accepted candidate: no
 title block; the drawing area is the border box, confidence 0.3.
@@ -196,12 +230,15 @@ title block; the drawing area is the border box, confidence 0.3.
 Between edges with accepted candidates: the one satisfying more of A/B/C
 wins; then higher density; then smaller d. (No fixed edge order, no
 weighted priors.)
+Single sheets and 2-sheet sets have no `repeat`, so they are accepted only
+through rule A; that is expected and measured.
 
 Confidence is by rule, not a weighted score: A+B+C 0.95, two rules 0.85,
 one rule 0.7. These are rule labels, not calibrated probabilities.
 `evidence` lists the rules and signals that fired (`rule:A`, `frame-line`,
 `sheet-number`, `repetition`, `text-density`). `diag` logs each
-candidate's chain coverage and token count, so margins (Dublin's chain is
+candidate's chain coverage, token count, density and the sheet-number
+token's position (along and across the strip), so margins (Dublin's chain is
 77% against a 70% floor) show up on held-out sets.
 
 ### Step 5 — grouping
@@ -365,7 +402,9 @@ each with hand-computed expected values:
 - grouping: all synthetic sets above, 2+2 not merged, ids unique within a
   map and deterministic from `group_sig` (same set in any order → same ids);
 - acceptance negatives: a detail-grid sheet (frame rules on several edges,
-  sheet-number-like detail tags, sparse strips) → no false strip; the real
+  sheet-number-like detail tags next to the inner rule) → no false strip;
+  each rule A/B/C accepts; each single signal alone rejects; density alone
+  never accepts; the real
   bottom title block wins over a false right strip on a single sheet;
 - output passes `cleanRegions` unchanged; margin text → no region.
 
