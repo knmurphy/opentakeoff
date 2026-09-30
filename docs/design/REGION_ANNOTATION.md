@@ -2,6 +2,11 @@
 
 Status: draft on the fork. Not proposed upstream yet.
 
+Built so far: the region map module (`web/src/lib/regions.ts`, tests in
+`web/test/regions.test.ts`): types, lookup, storage rules and corrections.
+Not yet wired into search, the MCP or the takeoff document, and no detector
+yet.
+
 ## Problem
 
 Search and the MCP text tools return a sheet and a position. They don't say
