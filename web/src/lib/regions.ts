@@ -88,13 +88,34 @@ export interface Region {
   source: RegionSource;
 }
 
+/** A strip's edge of the sheet. */
+export type Edge = "top" | "right" | "bottom" | "left";
+
+/** What a title-block group looks like: the key corrections are matched by.
+ *  Ids are derived from it (assignGroupIds) and are handles only — they
+ *  change whenever the signature or the membership does. */
+export interface GroupSig {
+  edge: Edge;
+  /** Strip depth from the border, as a fraction of the dimension across the edge. */
+  d: number;
+  /** w/h bucketed to 0.02 (aspectBucket). */
+  aspect: number;
+  /** Page size in inches, displayed orientation, when known. */
+  page_in?: [number, number];
+  /** The group's distinctive static strings, capped (capStatics). */
+  statics: string[];
+}
+
 /** One sheet's detected regions. `w`/`h` are the image size the bboxes are in. */
 export interface SheetRegions {
   key: string;
   w: number;
   h: number;
+  /** The border box, image px. Absent: the full sheet. */
+  border?: Bbox;
   /** Detected title-block group; corrections to a group apply to every member. */
   group?: string;
+  group_sig?: GroupSig;
   regions: Region[];
 }
 
@@ -265,6 +286,50 @@ export function cleanRegions(raw: unknown): Region[] {
   }
   // anything still pending waits on a parent that is itself stuck: a cycle
   return [...kept.values()];
+}
+
+// ── title-block groups ─────────────────────────────────────────────────────
+
+export const aspectBucket = (w: number, h: number): number => Number((Math.round(w / h / 0.02) * 0.02).toFixed(2));
+
+const MAX_STATICS = 20;
+const MAX_STATIC_LEN = 80;
+
+/** The static strings a signature keeps: at most 20, each at most 80
+ *  characters, longest first and then lexicographic (by code unit, not
+ *  locale), so the choice doesn't depend on input order. */
+export function capStatics(list: readonly string[]): string[] {
+  const set = new Set<string>();
+  for (const s of list) { const t = s.trim().slice(0, MAX_STATIC_LEN); if (t) set.add(t); }
+  return [...set].sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_STATICS);
+}
+
+/** FNV-1a, 32 bit, as 8 hex digits. Not cryptographic; ids only need to be
+ *  short and deterministic, and assignGroupIds disambiguates collisions. */
+function fnv1a(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+const sigText = (s: GroupSig): string => JSON.stringify([s.edge, s.d, s.aspect, s.page_in ?? null, capStatics(s.statics)]);
+
+/** Ids for a set's clusters, in input order: "g:" + a hash of the signature.
+ *  Clusters that share a hash (equal signatures, e.g. two statics-free
+ *  singletons with the same geometry, or a collision) are ordered by their
+ *  smallest member key and get "-1", "-2", …, so ids are unique in a map. */
+export function assignGroupIds(clusters: readonly { sig: GroupSig; keys: readonly string[] }[]): string[] {
+  const base = clusters.map((c) => `g:${fnv1a(sigText(c.sig))}`);
+  const minKey = clusters.map((c) => [...c.keys].sort()[0] ?? "");
+  const byBase = new Map<string, number[]>();
+  base.forEach((b, i) => byBase.set(b, [...(byBase.get(b) ?? []), i]));
+  const ids = [...base];
+  for (const [b, idx] of byBase) {
+    if (idx.length < 2) continue;
+    idx.sort((i, j) => (minKey[i] < minKey[j] ? -1 : minKey[i] > minKey[j] ? 1 : i - j));
+    idx.forEach((i, n) => { ids[i] = `${b}-${n + 1}`; });
+  }
+  return ids;
 }
 
 // ── detected map: persistence ──────────────────────────────────────────────

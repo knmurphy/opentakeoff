@@ -6,7 +6,8 @@ import {
   regionAt, regionPath, regionLabel, hitRegion, formatHitRegion, cleanRegions,
   setSignature, serializeRegionMap, sanitizeRegionMap, sanitizeRegionOverrides,
   applyOverrides, groupOf, toNormBbox, REGION_MAP_SCHEMA, REGION_DETECTOR_VERSION, REGION_KINDS, REGION_PARENT,
-  type Region, type SheetRegions,
+  aspectBucket, capStatics, assignGroupIds,
+  type Region, type SheetRegions, type GroupSig,
 } from "../src/lib/regions.ts";
 
 const R = (id: string, kind: Region["kind"], bbox: Region["bbox"], parent: string | null = null, extra: Partial<Region> = {}): Region =>
@@ -266,4 +267,65 @@ test("applyOverrides: an added region with a detected id replaces it", () => {
   assert.equal(d2.detail?.title, "FIXED");
   assert.equal(d2.source, "user");
   assert.deepEqual(d2.bbox, [850, 0, 1700, 600]);
+});
+
+// ── group signature and ids ─────────────────────────────────────────────────
+
+const SIG = (extra: Partial<GroupSig> = {}): GroupSig =>
+  ({ edge: "bottom", d: 0.12, aspect: aspectBucket(3600, 2400), statics: ["ACME ARCHITECTS", "VA MEDICAL CENTER"], ...extra });
+
+test("aspectBucket: w/h to 0.02", () => {
+  assert.equal(aspectBucket(3600, 2400), 1.5);
+  assert.equal(aspectBucket(3601, 2400), 1.5);
+  assert.equal(aspectBucket(1100, 850), 1.3);   // letter landscape, 1.294…
+  assert.equal(aspectBucket(1224, 792), 1.54);  // ANSI B, 1.545…
+});
+
+test("capStatics: longest first, then lexicographic; at most 20 × 80 chars", () => {
+  assert.deepEqual(capStatics(["B", "AA", "A", "  ", "C", "B", "AAA"]), ["AAA", "AA", "A", "B", "C"]);
+  const long = "X".repeat(200);
+  assert.equal(capStatics([long])[0].length, 80);
+  const many = Array.from({ length: 30 }, (_, i) => `S${String(i).padStart(2, "0")}${"y".repeat(i % 3)}`);
+  const out = capStatics(many);
+  assert.equal(out.length, 20);
+  assert.deepEqual(out, capStatics([...many].reverse())); // any input order → same choice
+  // the 20 kept are the longest ones
+  assert.ok(out.every((s) => s.length >= out[out.length - 1].length));
+});
+
+test("assignGroupIds: g: + a short hash of the signature, deterministic", () => {
+  const [a] = assignGroupIds([{ sig: SIG(), keys: ["s.pdf#1"] }]);
+  assert.match(a, /^g:[0-9a-f]{8}$/);
+  // same signature → same id, whatever the statics' order or the members
+  const [b] = assignGroupIds([{ sig: SIG({ statics: ["VA MEDICAL CENTER", "ACME ARCHITECTS"] }), keys: ["other.pdf#9"] }]);
+  assert.equal(a, b);
+  // anything in the signature changes it
+  for (const change of [{ edge: "right" as const }, { d: 0.13 }, { aspect: 1.3 }, { page_in: [36, 24] as [number, number] }, { statics: ["ACME ARCHITECTS"] }]) {
+    assert.notEqual(assignGroupIds([{ sig: SIG(change), keys: ["s.pdf#1"] }])[0], a, JSON.stringify(change));
+  }
+});
+
+test("assignGroupIds: equal signatures get -1, -2 … by smallest member key; ids unique", () => {
+  const free = SIG({ statics: [], page_in: [11, 8.5] });  // two letter-size sketches
+  const clusters = [
+    { sig: SIG(), keys: ["s.pdf#3", "s.pdf#2"] },
+    { sig: free, keys: ["sk.pdf#2"] },
+    { sig: SIG({ edge: "right" }), keys: ["s.pdf#1"] },
+    { sig: free, keys: ["sk.pdf#1", "sk.pdf#5"] },
+  ];
+  const ids = assignGroupIds(clusters);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.match(ids[0], /^g:[0-9a-f]{8}$/); // a unique signature has no suffix
+  assert.equal(ids[3], ids[1].replace(/-2$/, "-1"));
+  assert.match(ids[3], /-1$/);   // sk.pdf#1 < sk.pdf#2
+  assert.match(ids[1], /-2$/);
+  // input order doesn't matter
+  const again = assignGroupIds([...clusters].reverse()).reverse();
+  assert.deepEqual(again, ids);
+});
+
+test("SheetRegions carries its border and group signature", () => {
+  const s: SheetRegions = { ...sheet(), border: [40, 30, 1960, 970], group_sig: SIG() };
+  assert.deepEqual(s.border, [40, 30, 1960, 970]);
+  assert.equal(s.group_sig?.edge, "bottom");
 });
