@@ -409,7 +409,7 @@ Adapter tests:
 
 ## Tasks (each: failing test → code → pass → commit)
 
-0. Piece 1 changes (border, group_sig, sticky ids, re-attach, drawing-area
+0. Piece 1 changes (border, group_sig, signature ids, resolveOverrides, drawing-area
    rebuild, clamp).
 1. `evals/regions/fetch.mjs` + SOURCE.md + sha test; synthetic generator
    frozen.
@@ -419,7 +419,7 @@ Adapter tests:
 3. `extractPageTokens`, `longAxisLines` (incl. dedupe and chain joining).
 4. Border + candidates.
 5. Signals + acceptance rule + confidence.
-6. Statics/fields + grouping + sticky ids; calibration sweep on the tune
+6. Statics/fields + grouping + signature ids; calibration sweep on the tune
    set only; constants frozen.
 7. Output + `bench:regions`; the one held-out run.
 8. MCP adapter + key round-trip test.
