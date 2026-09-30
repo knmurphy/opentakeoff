@@ -70,6 +70,7 @@ export function longAxisLines(segs: ArrayLike<number>, w: number, h: number): De
   const hor: Piece[] = [], ver: Piece[] = [];
   for (let i = 0; i + 3 < segs.length; i += 4) {
     const x0 = segs[i], y0 = segs[i + 1], x1 = segs[i + 2], y1 = segs[i + 3];
+    if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) continue;
     const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
     if (dx === 0 && dy === 0) continue;
     if (dy <= dx * tan) hor.push({ pos: (y0 + y1) / 2, a: Math.min(x0, x1), b: Math.max(x0, x1) });

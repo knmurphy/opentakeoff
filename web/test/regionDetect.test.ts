@@ -17,6 +17,13 @@ describe("longAxisLines", () => {
     assert.deepEqual(longAxisLines([], W, H), []);
   });
 
+  test("non-finite coordinates are dropped; the rest survive", () => {
+    const good = [0, 100, W * 0.5, 100];
+    const out = longAxisLines([0, 1, Infinity, 1, NaN, 5, 10, 5, 0, -Infinity, 0, 500, ...good], W, H);
+    assert.equal(out.length, 1);
+    for (const l of out) for (const v of [l.x0, l.y0, l.x1, l.y1]) assert.ok(Number.isFinite(v));
+  });
+
   test("axis tolerance: 0.23° kept (snapped to the mean), 0.57° dropped", () => {
     const out = longAxisLines(seg(
       [0, 100, 1000, 104],   // atan(4/1000)  = 0.229° → horizontal at y = 102
