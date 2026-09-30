@@ -37,8 +37,10 @@ Found in review:
    nothing relies on them staying the same. Clusters with equal signatures
    are exactly the ambiguous case `matchGroup` refuses, so a template never
    picks between them.
-   Stored static strings are capped: at most 20 distinctive strings (the
-   longest first), each at most 80 characters; the sanitizers enforce it. (No "sticky" ids: the previous map is dropped in
+   Stored static strings are capped: at most 20 distinctive strings (longest
+   first, then lexicographic, so the choice is deterministic), each at most
+   80 characters; the sanitizers enforce it. The bench records how the cap
+   changes Jaccard on the tune set. (No "sticky" ids: the previous map is dropped in
    exactly the cases where ids change, so stickiness can't be built.)
 2. **Templates are matched by signature on every apply.** A template in
    `RegionOverrides.groups[g]` gains `group_sig` (the signature it was made
@@ -52,21 +54,29 @@ Found in review:
    - a template **with** static strings never matches a statics-free
      group; a template **without** static strings (made on a cover or
      sketch) matches only a statics-free group, and only with a second
-     anchor: its `source_sheet` is a member, or the page size in inches is
-     known on both and equal. Page size unknown on either side → not
-     applied. (Otherwise removing a cover could send its correction to the
+     anchor: its `source_sheet` is a member (at most one group can
+     contain it), or the page size in inches is known on both and equal
+     **and exactly one** statics-free group passes the geometric and
+     page-size test; more than one → `ambiguous`, not applied. Page size
+     unknown on either side → not applied. (Otherwise removing a cover could send its correction to the
      main architect group, which shares its geometry.) Tests: cover
-     removed; cover replaced by an architect group;
+     removed; cover replaced by an architect group; two statics-free
+     same-size singletons (e.g. two letter-size sketches) with a
+     page-size-anchored template → `ambiguous`;
    - otherwise: not applied, reported as unattached.
    The id `g` is only a hint: a template whose id exists but whose
    signature no longer matches that group is **not** applied to it.
-   The match score is the static-string Jaccard; ties on it break on the
-   smaller |Δd|; a remaining tie is ambiguous. Two templates resolving to
+   The match score is the static-string Jaccard. Within `matchGroup` the
+   0.2 margin already refuses near-ties. The |Δd| tie-break applies only
+   when two **templates** compete for one group. Two templates resolving to
    the same group: the higher score wins; an ambiguous tie applies neither
    and reports both.
    `sheet_group` changes shape from `Record<key, string>` to
-   `Record<key, { group: string; sig: GroupSig }>` and resolves the same
-   way; `groupOf` calls the resolver instead of reading the string. The old
+   `Record<key, { group: string; sig: GroupSig }>`, where `sig` is the
+   **target** group's signature at the time of the move, resolved with
+   `matchGroup` unchanged; a move that fails to resolve leaves the sheet in
+   its detected group and is listed in `unattached` (piece 3's UI must show
+   it); `groupOf` calls the resolver instead of reading the string. The old
    string form is dropped by the sanitizer (no documents use it yet).
    Resolution is pure. Its output type is fixed in task 0, since the web app
    and the MCP both consume it:
@@ -74,7 +84,7 @@ Found in review:
    interface ResolvedOverrides {
      templates: Record<string /*template key*/, { group: string; score: number }>;
      moves: Record<string /*sheet key*/, string /*group id*/>;
-     unattached: { kind: "template" | "move"; key: string; reason: "no-match" | "ambiguous" | "no-sig" | "no-anchor" }[];
+     unattached: { kind: "template" | "move"; key: string; reason: "no-match" | "ambiguous" | "no-sig" | "no-anchor" | "conflict" }[];
    }
    resolveOverrides(map: Map<string, SheetRegions>, ov: RegionOverrides): ResolvedOverrides
    ```
@@ -448,8 +458,9 @@ Adapter tests:
 
 ## Tasks (each: failing test → code → pass → commit)
 
-0. Piece 1 changes (border, group_sig, signature ids, resolveOverrides, drawing-area
-   rebuild, clamp).
+0. Piece 1 changes, one commit per numbered item in "Changes to piece 1":
+   signature and ids; resolveOverrides and the sheet_group shape;
+   drawing-area rebuild; clamp and sanitizers.
 1. `evals/regions/fetch.mjs` + SOURCE.md + sha test; synthetic generator
    frozen.
 2. Labels: two blind agent labelers, maintainer subset, reconciliation,
