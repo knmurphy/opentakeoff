@@ -52,3 +52,6 @@ web/public/models/
 
 # Coverage output (npm run test:coverage)
 **/coverage/
+
+# Region-annotation evaluation PDFs (fetched by evals/regions/fetch.mjs, never committed)
+evals/regions/pdfs/
