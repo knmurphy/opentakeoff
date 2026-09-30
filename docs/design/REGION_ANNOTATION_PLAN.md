@@ -263,6 +263,24 @@ expectations in four places. Resolved as follows (no real data used):
    tokens contiguous with the band (static or not, same 4% gap), so filler
    text below the statics is inside the strip.
 
+7. **Round 3 revisions** (replace parts of 5 and 6):
+   - *Framing:* a chain frames the band when the deepest static glyph edge
+     **inside the chain's strip** is ≥ d / `FRAME_BAND_RATIO` (the static
+     text reaches the last third of the strip). A sparse band broken by a
+     gap no longer stops a real frame from framing it.
+   - *Frameless depth is conservative:* d = the deepest glyph edge of the
+     contiguous static band; it is **not** extended over other tokens (that
+     extension ran into drawing text on sheets whose drawing starts 2% below
+     the title block). A frameless strip with < 15 tokens abstains.
+   - *Singletons in pass 2* keep their pass-1 static/field classes.
+8. **Frameless title blocks are a known limitation.** None of the 88
+   labeled real pages is frameless. On synthetic frameless sheets the
+   detector must either find the strip (edge correct, |d error| ≤ 25% of d)
+   or abstain — never a wrong edge or a deeper strip. The bench reports the
+   frameless find/abstain rate separately. Remaining synthetic failures that
+   involve only frameless sheets are listed in the design doc as known
+   limitations rather than tuned away.
+
 `FRAME_BAND_RATIO` and `BAND_GAP` come from the synthetic sets and are
 recalibrated on the tune set in task 6b.
 
