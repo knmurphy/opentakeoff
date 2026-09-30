@@ -468,12 +468,16 @@ function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox
   };
 }
 
-/** Between edges: more rules, then the smaller strip area, then the higher
- * density; an exact tie on all three falls back to EDGES order. Returns the
- * first criterion on which `a` beats `b` (null if it does not). */
+/** Strip areas closer than this are equal in `beats` (floating-point noise). */
+const AREA_EPS = 1e-9;
+
+/** Between edges: more rules, then the smaller strip area (areas within
+ * AREA_EPS are equal), then the higher density; a tie on all three falls
+ * back to EDGES order. Returns the first criterion on which `a` beats `b`
+ * (null if it does not). */
 function beats(a: Judged, b: Judged): "rules" | "area" | "density" | "order" | null {
   if (a.rules.length !== b.rules.length) return a.rules.length > b.rules.length ? "rules" : null;
-  if (a.diag.area !== b.diag.area) return a.diag.area < b.diag.area ? "area" : null;
+  if (Math.abs(a.diag.area - b.diag.area) > AREA_EPS) return a.diag.area < b.diag.area ? "area" : null;
   if (a.diag.density !== b.diag.density) return a.diag.density > b.diag.density ? "density" : null;
   return EDGES.indexOf(a.c.edge) < EDGES.indexOf(b.c.edge) ? "order" : null;
 }
@@ -489,6 +493,8 @@ export function detectTitleBlock(sheet: DetectSheet, opts: DetectOptions = {}): 
   const chains = findCandidates(sheet, border);
   const all: StripCandidate[] = [...chains];
   for (const r of opts.repeatStrips ?? []) {
+    // a strip of zero length or depth has no area to judge (and would divide by zero)
+    if (!(r.extent[1] > r.extent[0]) || !(r.d > 0)) continue;
     if (chains.some((c) => c.edge === r.edge)) continue;
     all.push({ edge: r.edge, d: r.d, extent: [r.extent[0], r.extent[1]], cover: r.extent[1] - r.extent[0], touch: null, frame: false, freeEndGap: null });
   }

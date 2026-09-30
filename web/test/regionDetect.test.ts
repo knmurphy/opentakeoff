@@ -4,7 +4,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
-  longAxisLines, TB_SHEETNO_RE, findBorder, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
+  longAxisLines, TB_SHEETNO_RE, findBorder, tokenCenter, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
   MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, bandRepeats, repeatOptions, normText,
   REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions,
   type DetectLine, type RepeatBand, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
@@ -667,6 +667,68 @@ describe("acceptance (step 4)", () => {
   test("diag logs the free end's distance to the nearest other chain", () => {
     const r = detect([hl(xU(0.25), BX1, 1768), vl(xU(0.275), BY0 + 0.3 * BH, BY1 - 0.05 * BH)], STD_TOKENS);
     assertClose(cand(r, "bottom").freeEndGap!, 0.025, "gap", 1e-9);
+  });
+});
+
+describe("steps 2 and 4: edge cases", () => {
+  test("tokenCenter: a missing w is estimated as 0.6 × h per character", () => {
+    // "ABCD", h 10 → w 24: rot 0 center (100 + 12, 200 − 5); rot 90 center (100 + 5, 200 + 12)
+    assert.deepEqual(tokenCenter({ str: "ABCD", x: 100, y: 200, h: 10 }), [112, 195]);
+    assert.deepEqual(tokenCenter({ str: "ABCD", x: 100, y: 200, h: 10, rot: 90 }), [105, 212]);
+    assert.deepEqual(tokenCenter({ str: "ABCD", x: 100, y: 200, w: 50, h: 10 }), [125, 195]);
+  });
+
+  test("free end: a rule on the border side of the chain is a junction only when it ends within 1% of the chain", () => {
+    // bottom chain at d 0.1 with its free end at u 0.25 (x 780); a stub from v 0.03 (y 1902.4)
+    // toward the chain, not reaching the border: ending at v 0.091 (y 1785.28, 0.9% short) it
+    // meets the free end → T-junction, rejected; ending at v 0.089 (y 1789.12, 1.1% short) it
+    // does not → a plain free end, kept
+    const chain = hl(xU(0.25), BX1, 1768);
+    assert.deepEqual(cands([chain, vl(780, 1785.28, 1902.4)]), []);
+    assert.equal(cands([chain, vl(780, 1789.12, 1902.4)]).length, 1);
+  });
+
+  test("a vertical rot 90 sheet number (left strip) is judged by its rotated box's center", () => {
+    // left strip d 0.1; center at u 0.52 (y 1038.4), v 0.03 (x 146.4); "A1-101", h 40, w 144.
+    // rot 90 runs down the page: baseline start (cx − h/2, cy − w/2). Read as rot 0, its center
+    // would be (198.4, 946.4): u 0.472, in the near half.
+    const t: DetectToken = { str: "A1-101", x: 126.4, y: 966.4, w: 144, h: 40, rot: 90 };
+    const r = detect([chainAt("left", 0.1)], [...fill("left", 0.1, 20), t, ...DRAWING]);
+    const c = cand(r, "left");
+    assertClose(c.sheetnoPos![0], 0.52, "along", 1e-9); assertClose(c.sheetnoPos![1], 0.3, "across", 1e-9);
+    assert.equal(c.sheetno, true);
+    assert.equal(r.decision.edge, "left");
+  });
+
+  // top and bottom chains both at d 0.1 with mirrored contents: equal rules, area and density
+  const MIRROR = [...STD_TOKENS, ...fill("top", 0.1, 20), tokUV("A-101", "top", 0.9, 0.03, 40)];
+
+  test("between edges: equal rules, area and density → the EDGES order decides (top before bottom)", () => {
+    const r = detect([...STD_LINES, chainAt("top", 0.1)], MIRROR);
+    assert.equal(cand(r, "top").area, cand(r, "bottom").area);
+    assert.equal(cand(r, "top").density, cand(r, "bottom").density);
+    assert.equal(r.decision.edge, "top");
+    assert.equal(cand(r, "bottom").reason, "lost:order");
+  });
+
+  test("between edges: areas within 1e-9 are equal (floating-point noise does not decide)", () => {
+    // the top chain 1e-10 px deeper: its area is larger by ~5e-14, which does not decide; the
+    // comparison goes on to density (lower on top by the same noise — density has no epsilon)
+    const r = detect([...STD_LINES, hl(BX0, BX1, 232 + 1e-10)], MIRROR);
+    assert.ok(cand(r, "top").area > cand(r, "bottom").area);
+    assert.equal(cand(r, "top").reason, "lost:density");
+  });
+
+  test("a repetition-only strip of zero length is ignored (no NaN)", () => {
+    for (const extent of [[0.5, 0.5], [0.6, 0.4]] as [number, number][]) {
+      const r = detect([], STD_TOKENS, { repeatStrips: [{ edge: "bottom", d: 0.1, extent }] });
+      assert.deepEqual(r.diag.candidates, []);
+      assert.equal(r.decision.edge, null);
+    }
+    for (const d of [0, NaN]) {
+      const r = detect([], STD_TOKENS, { repeatStrips: [{ edge: "bottom", d, extent: [0, 1] }] });
+      assert.deepEqual(r.diag.candidates, []);
+    }
   });
 });
 
