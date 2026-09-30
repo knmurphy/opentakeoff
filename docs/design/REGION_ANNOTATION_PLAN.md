@@ -3,16 +3,16 @@
 Design: [REGION_ANNOTATION.md](REGION_ANNOTATION.md). Piece 1 (the region map
 module, `web/src/lib/regions.ts`) is done.
 
-Status: revision 3, after review round 2 (feasibility PASS; algorithm, measurement, design FAIL). Fork only.
+Status: revision 4, after review round 3 (feasibility and measurement PASS; algorithm and design FAIL). Fork only.
 
 ## Scope
 
 Piece 2 is split:
 
 - **2a (this plan):** detect the title block and drawing area on vector sheets
-  (text layer + vector lines), group sheets by title block, stable group ids,
-  a real-set evaluation, and one end-to-end use: MCP `find_text` hits carry a
-  `region`.
+  (text layer + vector lines), group sheets by title block, corrections tied
+  to a title-block signature, a real-set evaluation, and one end-to-end use:
+  MCP `find_text` hits carry a `sheet_region`.
 - **2b (next plan):** raster long-line extraction, the raster line-path test,
   and OCR tokens once the OCR branch is merged. Until 2b, nothing claims
   vector/raster parity.
@@ -26,39 +26,55 @@ The design doc's piece list is updated to match.
 
 Found in review:
 
-1. **Group signature and sticky ids.** `SheetRegions` gets `border` (the
-   border box) and `group_sig`: edge, d (from the border), aspect bucket, and
-   the group's static strings. Group ids are **sticky**: when the map is
-   rebuilt and the previous map is available, each new cluster takes the id
-   of the previous group it matches (rule below); a new id
-   (`g:` + short hash of the signature) is minted only when nothing matches.
-   The id is a handle, not the identity: corrections are tied to the
-   signature.
-2. **Re-attaching templates.** A stored template keeps the `group_sig` it
-   was made for. When its id is not in the current map (cache dropped,
-   detector bumped, set changed), it re-attaches only to a group with the
-   same edge and aspect bucket, |Δd| ≤ 1.5%, and a **unique** best static-
-   string Jaccard ≥ 0.5 that beats the second best by ≥ 0.2. Otherwise it
-   stays stored, is not applied, and is reported as unattached. On
-   re-attach the template's id is updated, so the correction persists.
-   Tests: one-string reissue (still attaches), added sheets that change the
-   statics (still attaches), two groups sharing boilerplate (tie → not
-   attached), d straddling a rounding boundary (no effect: d is compared
-   with a tolerance, never hashed alone).
+1. **Group signature; ids derived from it.** `SheetRegions` gets `border`
+   (the border box) and `group_sig`: edge, d (from the border), aspect
+   bucket, page size in inches when known, and the group's static strings.
+   The group id is `g:` + a short hash of the signature. Ids are handles
+   only: they may change whenever the signature does, and nothing relies on
+   them staying the same. (No "sticky" ids: the previous map is dropped in
+   exactly the cases where ids change, so stickiness can't be built.)
+2. **Templates are matched by signature on every apply.** A template in
+   `RegionOverrides.groups[g]` gains `group_sig` (the signature it was made
+   for). `sanitizeRegionOverrides` sanitizes it; a template without one
+   (none exist yet) is kept but never applied. On every apply, a template
+   is resolved to a group by `matchGroup(template.group_sig, groups)`:
+   - same edge and aspect bucket, |Δd| ≤ 1.5%, same page size when both
+     know it;
+   - when both have static strings: the best static-string Jaccard ≥ 0.5,
+     and it beats the second-best group by ≥ 0.2;
+   - when either has no static strings (a cover or sketch, a singleton): it
+     matches only if exactly one group passes the geometric test;
+   - otherwise: not applied, reported as unattached.
+   The id `g` is only a hint: a template whose id exists but whose
+   signature no longer matches that group is **not** applied to it.
+   Two templates resolving to the same group: the one with the higher score
+   wins; a tie applies neither and reports both.
+   `sheet_group` (manual moves) holds a signature too and resolves the same
+   way.
+   Resolution is pure: `resolveOverrides(map, overrides)` returns the
+   resolved mapping (template → group id, plus unattached list).
+   `applyOverrides` uses it and never writes. The web app may save the
+   refreshed ids to the takeoff document; the MCP uses them in memory only.
+   Tests: one-string reissue (still matches), added sheets changing the
+   statics (still matches), two groups sharing boilerplate (tie → not
+   applied), id present but signature changed (not applied), singleton with
+   one vs two geometric candidates, two templates on one group, ids in a
+   map are unique.
 3. **Drawing area after a template.** `applyOverrides` rebuilds
    `drawing_area` as the sheet's `border` box minus the template's strip
    (the strip's edge is the border side it touches), replacing the detected
-   one; children are then clipped by `cleanRegions`. Tests: template on the
-   same edge with a different d; template on a different edge (the old
-   strip's area returns to the drawing area).
+   one; children are then clipped by `cleanRegions`. A map without `border`
+   (none exist yet) uses the full sheet. Tests: template on the same edge
+   with a different d; template on a different edge (the old strip's area
+   returns to the drawing area).
 4. **Clamping.** `cleanRegions(raw, dims?)` gains an optional `{w, h}`;
    top-level regions are clamped to `[0,w]×[0,h]`. Every caller that has a
    `SheetRegions` passes it; a test covers the no-dims case.
    `group_sig` and `border` get their own sanitizers in `sanitizeRegionMap`.
 
-Detector-version policy: a bump drops the cached map. Ids may then change,
-but corrections re-attach by signature (rule 2), so no user correction is
-lost silently.
+Detector-version policy: a bump drops the cached map and may change ids.
+Corrections still resolve by signature (rule 2), and any that no longer
+resolve are reported, never silently applied elsewhere.
 
 ## Inputs (source-neutral)
 
@@ -77,11 +93,11 @@ interface DetectSheet {
 }
 interface DetectDiag {         // per sheet; recomputed, not persisted
   border: Bbox | null; edge: Edge | null; d: number | null;
-  candidates: { edge: Edge; d: number; frame: boolean; density: number; sheetno: boolean; repeat: boolean; accepted: boolean; reason: string }[];
+  candidates: { edge: Edge; d: number; frame: boolean; chainCover: number; tokens: number; density: number; sheetno: boolean; repeat: boolean; accepted: boolean; reason: string }[];
   staticIdx: number[]; fieldIdx: number[];   // token indices, for piece 4 (title-block parts)
 }
-// `previous` (optional): the last map, for sticky group ids.
-detectSetRegions(sheets: DetectSheet[], previous?: Map<string, SheetRegions>): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> }
+
+detectSetRegions(sheets: DetectSheet[]): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> }
 ```
 
 `diag` is returned so later pieces (title-block parts need static vs field
@@ -137,7 +153,9 @@ from repetition (step 3) only.
 Token **centers** normalized to the border box. A token is static if the same
 normalized text is within 2% (per axis) of the same position on ≥ 50% of the
 sheets considered (minimum 3). A fixed position whose text changes on ≥ 50%
-of sheets is a field. When there are **two or more** candidate groups,
+of sheets is a field. A **candidate group** is a cluster of sheets with the
+same aspect bucket and edge and d within 1.5% (geometry only, computed
+before static strings). When there are **two or more** candidate groups,
 strings static in every one of them (e.g. an agency form number such as
 "VA FORM 08-6231") are not distinctive and are left out of grouping. With
 one candidate group (a uniform set, like Shreveport's 24 sheets), all static
@@ -149,31 +167,48 @@ candidate strip and covers ≥ 50% of its length.
 
 ### Step 4 — acceptance rule (decides title block vs abstain)
 
-A candidate strip is accepted if **any** of:
+Every candidate strip must first hold at least 15 tokens (`MIN_STRIP_TOKENS`;
+title blocks are text-dense, detail-grid cells are not). Then it is accepted
+if **any** of:
 
-- A: `frame` and `sheetno`: a `TB_SHEETNO_RE` token inside the strip, in
-  the half of the strip farther from the page origin along the edge (right
-  and bottom strips: the lower half and the right half respectively; left
-  and top strips: the same halves). Defined once in code (`farEnd()`) and
-  tested per edge;
+- A: `frame`, `sheetno` and `density ≥ 1.5`. `sheetno`: the largest (by
+  glyph height) `TB_SHEETNO_RE` token in the strip lies in its far end
+  (table below). Detail tags on a detail-grid sheet (Dublin part 4 p10,
+  S501: "B10" in a top strip, frame rules at 26%) are small, sparse and
+  fail the density and token floors;
 - B: `frame` and `repeat`;
-- C: `repeat` and `density ≥ 2.0` (tokens per area in the strip ÷ in the rest).
+- C: `repeat` and `density ≥ 2.0`.
+
+`density` = tokens per unit area in the strip ÷ in the rest of the border box.
+
+Far end (`farEnd()`, defined once in code, tested per edge):
+
+| Strip | Far end |
+|---|---|
+| right | lower half of the strip |
+| bottom | right half of the strip |
+| left | lower half of the strip |
+| top | right half of the strip |
 
 One signal alone never accepts. If no edge has an accepted candidate: no
 title block; the drawing area is the border box, confidence 0.3.
 
 Between edges with accepted candidates: the one satisfying more of A/B/C
-wins; ties go right, bottom, left, top. (No weighted priors.)
+wins; then higher density; then smaller d. (No fixed edge order, no
+weighted priors.)
 
 Confidence is by rule, not a weighted score: A+B+C 0.95, two rules 0.85,
-one rule 0.7. `evidence` lists the rules and signals that fired
-(`rule:A`, `frame-line`, `sheet-number`, `repetition`, `text-density`).
+one rule 0.7. These are rule labels, not calibrated probabilities.
+`evidence` lists the rules and signals that fired (`rule:A`, `frame-line`,
+`sheet-number`, `repetition`, `text-density`). `diag` logs each
+candidate's chain coverage and token count, so margins (Dublin's chain is
+77% against a 70% floor) show up on held-out sets.
 
 ### Step 5 — grouping
 
 Sheets with static strings: same aspect bucket (w/h to 0.02) and edge,
 |Δd| ≤ 1.5%, Jaccard(statics, distinctive-only when ≥ 2 candidate groups)
-≥ 0.5 → same group. Group ids are assigned by step 0's sticky rule.
+≥ 0.5 → same group. Group ids come from the signature (task 0, rule 1).
 A sheet **without** distinctive statics does not join a group by geometry
 alone; it is its own group, unless the whole set has fewer than 3 sheets,
 in which case sheets with the same page size in inches, edge and |Δd| ≤ 1.5%
@@ -219,6 +254,15 @@ Held-out rules:
   reported, labeled in-sample.
 - A second owner's set (not VA) is wanted; until one is added, results
   claim VA sets only.
+- Held-out Dublin parts 7, 10, 13 are the same project, architect and
+  title-block design as in-sample parts 1 and 4. If their labels show fewer
+  than 2 families or fewer than 15 labeled drawing sheets, the docs call the
+  held-out result a same-firm replication; generalization across firms is
+  untested either way until a second firm's set is added. Pages without a
+  text layer, or that are not drawings, are counted and excluded, and the
+  counts are reported.
+- `evals/regions/SOURCE.md` logs who opened which held-out pages and when
+  (labelers only, before the run).
 
 `evals/regions/fetch.mjs` downloads the sets by SAM.gov resource id and
 checks sha256; a mismatch fails loudly (tested). `evals/regions/SOURCE.md`
@@ -248,7 +292,10 @@ CI-verified; the docs say so.
   detector output.
 - **Labels are committed before any detector code** (task 2 before task 4).
   The evaluation checks that the label commit is an ancestor of the detector
-  commit and flags the run otherwise (tested).
+  commit (`git merge-base --is-ancestor`). If not, or if it can't tell
+  (shallow clone), the headline table prints "UNVERIFIED ORDER" instead of
+  a pass rate (tested). `fetch.mjs` exports `verify(buffer, sha256)`, so the
+  hash test needs no network.
 
 ### Synthetic sets (unit tests)
 
@@ -295,8 +342,12 @@ commit, fixture hashes, run log:
 - calibration (tune set only): for each constant, the swept range, the
   chosen value, and the range over which the tune result is unchanged; the
   held-out result is reported at the chosen value and at both ends of that
-  range, in the one held-out run; any constant whose held-out result flips
-  inside the range is flagged.
+  range, in the one held-out run. The chosen values are committed before
+  that run; range-end numbers are sensitivity only and never used to pick
+  new values. A constant whose held-out result flips inside the range is
+  documented in the design doc; it does not block the piece.
+- the pass-bar tolerance is printed as a percentage and in pixels at the
+  render scale used; bench header prints the sha256 of every PDF used.
 
 ## Tests (TDD)
 
@@ -311,8 +362,11 @@ each with hand-computed expected values:
 - confidence tiers and evidence strings;
 - statics/fields: centers, 2% tolerance, min 3 sheets, shared boilerplate
   excluded;
-- grouping: all synthetic sets above, 2+2 not merged, content-hash ids
-  stable under reorder/add/remove;
+- grouping: all synthetic sets above, 2+2 not merged, ids unique within a
+  map and deterministic from `group_sig` (same set in any order → same ids);
+- acceptance negatives: a detail-grid sheet (frame rules on several edges,
+  sheet-number-like detail tags, sparse strips) → no false strip; the real
+  bottom title block wins over a false right strip on a single sheet;
 - output passes `cleanRegions` unchanged; margin text → no region.
 
 Adapter tests:
@@ -335,15 +389,21 @@ Adapter tests:
   (`mcp/src/outputs.ts:657`), the tool description, `mcp/README.md`;
   `check:tool-count` and `check:wiki` run with `--write` if needed.
 - Cache: a Session field holding one in-flight promise for the loaded set,
-  keyed by `setSignature`; cleared on `load_plan`. Concurrent first calls
+  keyed by the loaded files' paths, sizes and modification times (the MCP
+  has no `builtAt`, so `setSignature` gets `builtAt` = mtime); cleared on
+  `load_plan`. Concurrent first calls
   share the promise.
 - Cost: measured on the 24-sheet sets (time and peak memory) and recorded.
-  A cap (sheet count and time) is set from that; past it, hits carry no
+  Default cap until measured: 60 sheets or 20 s; the measured values
+  replace it. Past the cap, hits carry no
   `sheet_region` and the result says regions are unavailable. Sheets with
   no text layer yield no tokens and abstain.
 - Corrections: when the loaded takeoff document carries region overrides,
   they are applied; in 2a nothing writes them yet.
-- Check against ground truth: in the MCP test, a `find_text` for a sheet's
+- Check against ground truth (not only the sheet number, which rule A
+  itself uses): on Dublin A601, a room-name hit returns
+  `sheet_region.kind === "drawing_area"`; on a synthetic no-title-block
+  sheet, hits carry `drawing_area` only. And: a `find_text` for a sheet's
   own number returns a hit with `sheet_region.kind === "title_block"`, on
   the committed Dublin A601 and Porterville sheets.
 
