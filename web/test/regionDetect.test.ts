@@ -4,8 +4,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
-  longAxisLines, TB_SHEETNO_RE, findBorder, findCandidates,
-  type DetectLine, type DetectSheet, type DetectToken,
+  longAxisLines, TB_SHEETNO_RE, findBorder, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
+  MIN_STRIP_TOKENS,
+  type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
 import * as Synth from "./fixtures/regionSynth.ts";
 
@@ -365,6 +366,308 @@ describe("findCandidates (step 2)", () => {
   });
 });
 
+// ── step 4: signals and acceptance ──────────────────────────────────────────
+/** Strip coordinates (u along the edge toward the far end, v depth from the
+ * border, fractions of the border box) → image px, for the page above. */
+function px(edge: Edge, u: number, v: number): [number, number] {
+  switch (edge) {
+    case "right": return [BX1 - v * BW, BY0 + u * BH];
+    case "left": return [BX0 + v * BW, BY0 + u * BH];
+    case "bottom": return [BX0 + u * BW, BY1 - v * BH];
+    case "top": return [BX0 + u * BW, BY0 + v * BH];
+  }
+}
+/** A rot-0 token centred on (cx, cy): baseline start (cx − w/2, cy + h/2). */
+const tokC = (str: string, cx: number, cy: number, h = 10): DetectToken => {
+  const w = 0.6 * h * str.length;
+  return { str, x: cx - w / 2, y: cy + h / 2, w, h, rot: 0 };
+};
+const tokUV = (str: string, edge: Edge, u: number, v: number, h = 10) => tokC(str, ...px(edge, u, v), h);
+/** n filler tokens in a strip, spread along u in [u0, u1] at 75% of the depth. */
+const fill = (edge: Edge, d: number, n: number, u0 = 0, u1 = 1) =>
+  Array.from({ length: n }, (_, k) => tokUV("NOTE", edge, u0 + ((k + 0.5) / n) * (u1 - u0), 0.75 * d));
+/** A chain parallel to `edge` at depth d over [u0, u1]. */
+function chainAt(edge: Edge, d: number, u0 = 0, u1 = 1): DetectLine {
+  const [xa, ya] = px(edge, u0, d), [xb, yb] = px(edge, u1, d);
+  return edge === "top" || edge === "bottom" ? hl(xa, xb, ya) : vl(xa, ya, yb);
+}
+/** 18 drawing tokens in the middle of the sheet (x 900–2100, y 700–1300). */
+const DRAWING = Array.from({ length: 18 }, (_, k) => tokC("OFFICE", 900 + (k % 6) * 240, 700 + Math.floor(k / 6) * 300));
+const detect = (lines: DetectLine[], tokens: DetectToken[], opts?: DetectOptions) =>
+  detectTitleBlock(mk([...BORDER_RULES, ...lines], tokens), opts);
+/** The standard sheet: bottom chain at d 0.1 (y 1768), 20 fillers, sheet number
+ * A-101 (h 40) at u 0.9, v 0.03 (30% of the depth): (2652, 1902.4). */
+const STD_LINES = [hl(BX0, BX1, 1768)];
+const NUMBER = tokC("A-101", 2652, 1902.4, 40);
+const STD_TOKENS = [...fill("bottom", 0.1, 20), NUMBER, ...DRAWING];
+const cand = (r: ReturnType<typeof detectTitleBlock>, edge: Edge, d?: number) =>
+  r.diag.candidates.find((c) => c.edge === edge && (d === undefined || close(c.d, d, 1e-6)))!;
+
+describe("farEnd (step 4 table)", () => {
+  test("far end along the edge and outer part of the depth, per edge", () => {
+    assert.deepEqual(farEnd("right"), { along: "y", far: "bottom", outer: "right" });
+    assert.deepEqual(farEnd("bottom"), { along: "x", far: "right", outer: "bottom" });
+    assert.deepEqual(farEnd("left"), { along: "y", far: "bottom", outer: "left" });
+    assert.deepEqual(farEnd("top"), { along: "x", far: "right", outer: "top" });
+  });
+  test("stripUV agrees: the far, outer corner of each strip is u = 1, v = 0", () => {
+    const corner: Record<Edge, [number, number]> = { right: [BX1, BY1], bottom: [BX1, BY1], left: [BX0, BY1], top: [BX1, BY0] };
+    for (const e of ["top", "right", "bottom", "left"] as const) {
+      const [u, v] = stripUV(e, BOX, ...corner[e]);
+      assertClose(u, 1, `${e} u`); assertClose(v, 0, `${e} v`);
+    }
+  });
+});
+
+describe("sheetno signal", () => {
+  // the output strip is border to border along its edge at depth d = 0.1
+  const STRIP: Record<Edge, number[]> = {
+    right: [2652, 40, 2940, 1960], left: [60, 40, 348, 1960], bottom: [60, 1768, 2940, 1960], top: [60, 40, 2940, 232],
+  };
+  for (const e of ["top", "right", "bottom", "left"] as const) {
+    test(`${e}: number in the far-end half and outer 60% → rule A; in the near half → no sheetno`, () => {
+      const r = detect([chainAt(e, 0.1)], [...fill(e, 0.1, 20), tokUV("A-101", e, 0.9, 0.03, 40), ...DRAWING]);
+      assert.equal(r.decision.edge, e);
+      assertClose(r.decision.d!, 0.1, "d", 1e-9);
+      assertBox(r.decision.strip!, STRIP[e]);
+      const c = cand(r, e);
+      assert.equal(c.sheetno, true);
+      assertClose(c.sheetnoPos![0], 0.9, "along", 1e-9); assertClose(c.sheetnoPos![1], 0.3, "across", 1e-9);
+      const near = detect([chainAt(e, 0.1)], [...fill(e, 0.1, 20), tokUV("A-101", e, 0.1, 0.03, 40), ...DRAWING]);
+      assert.equal(near.decision.edge, null);
+      assert.equal(cand(near, e).sheetno, false);
+      assertClose(cand(near, e).sheetnoPos![0], 0.1, "along", 1e-9);
+    });
+  }
+
+  test("outer 60% of the depth: 55% passes, 65% fails, an S501-style tag at 92% fails", () => {
+    for (const [f, ok] of [[0.55, true], [0.65, false], [0.92, false]] as const) {
+      // bottom d 0.1: v = f × 0.1 → y = 1960 − f × 192
+      const r = detect(STD_LINES, [...fill("bottom", 0.1, 20), tokC("B10", 2652, 1960 - f * 192, 40), ...DRAWING]);
+      assert.equal(cand(r, "bottom").sheetno, ok, `depth ${f}`);
+      assertClose(cand(r, "bottom").sheetnoPos![1], f, "across", 1e-9);
+    }
+  });
+
+  test("the largest pattern token is the one judged", () => {
+    const big = tokC("B10", 636, 1902.4, 60);   // u 0.2: near half
+    const tokens = [...fill("bottom", 0.1, 20), big, NUMBER, tokC("SHEET", 2400, 1902.4, 90), ...DRAWING];
+    const r = detect(STD_LINES, tokens);
+    const c = cand(r, "bottom");
+    assert.equal(c.sheetnoIdx, tokens.indexOf(big));
+    assert.equal(c.sheetno, false);
+    const small = tokC("B10", 636, 1902.4, 30);
+    const tokens2 = [...fill("bottom", 0.1, 20), small, NUMBER, ...DRAWING];
+    const c2 = cand(detect(STD_LINES, tokens2), "bottom");
+    assert.equal(c2.sheetnoIdx, tokens2.indexOf(NUMBER));
+    assert.equal(c2.sheetno, true);
+  });
+
+  test("a vertical (rot 270) number is judged by its rotated box's center", () => {
+    // right strip d 0.1; center at u 0.49 (y 980.8), v 0.05 (x 2796); h 40, w = 0.6 × 40 × 6 = 144.
+    // rot 270 runs up the page: baseline start (cx + h/2, cy + w/2). Read as rot 0, its
+    // center would be (2888, 1032.8): u 0.517, in the far half.
+    const t: DetectToken = { str: "A1-101", x: 2816, y: 1052.8, w: 144, h: 40, rot: 270 };
+    const c = cand(detect([chainAt("right", 0.1)], [...fill("right", 0.1, 20), t, ...DRAWING]), "right");
+    assertClose(c.sheetnoPos![0], 0.49, "along", 1e-9); assertClose(c.sheetnoPos![1], 0.5, "across", 1e-9);
+    assert.equal(c.sheetno, false);
+  });
+
+  test("extent-bounded strip: a right legend column stopping short of the bottom title block has no sheetno", () => {
+    // right column at d 0.1 (x 2652) from the top border to u 0.848 (y 1668.16), closed back to the
+    // right border; the sheet number at (2652, 1902.4) is at u 0.97 on the right edge: outside the extent
+    const yEnd = BY0 + 0.848 * BH;
+    const legend = Array.from({ length: 20 }, (_, k) => tokC("GENERAL NOTE", 2796, 100 + k * 70));
+    const r = detect([...STD_LINES, vl(2652, BY0, yEnd), hl(2652, BX1, yEnd)], [...STD_TOKENS, ...legend]);
+    const right = cand(r, "right");
+    assertClose(right.extent[1], 0.848, "extent", 1e-9);
+    assert.equal(right.sheetno, false);
+    assert.equal(right.sheetnoIdx, null);
+    assert.equal(right.reason, "one-signal:frame");
+    assert.equal(r.decision.edge, "bottom");
+  });
+
+  test("density: strip tokens per strip area ÷ rest-of-border-box tokens per rest area", () => {
+    // 21 tokens in area 0.1, 18 in 0.9 → (21 / 0.1) / (18 / 0.9) = 10.5
+    const c = cand(detect(STD_LINES, STD_TOKENS), "bottom");
+    assert.equal(c.tokens, 21);
+    assertClose(c.density, 10.5, "density", 1e-9);
+    assertClose(c.area, 0.1, "area", 1e-9);
+    assertClose(c.chainCover, 1);
+  });
+});
+
+describe("acceptance (step 4)", () => {
+  const repeatAll = { repeat: () => true };
+
+  test("rule A: frame + sheetno", () => {
+    const r = detect(STD_LINES, STD_TOKENS);
+    assert.deepEqual(r.decision, {
+      edge: "bottom", d: 0.1, strip: [60, 1768, 2940, 1960], border: BOX, rules: ["A"], confidence: 0.7,
+      evidence: ["rule:A", "frame-line", "sheet-number", "text-density"],
+    });
+    assert.equal(r.diag.edge, "bottom");
+    assert.equal(r.diag.d, 0.1);
+    assert.deepEqual(r.diag.border, BOX);
+    const c = cand(r, "bottom");
+    assert.equal(c.accepted, true);
+    assert.equal(c.reason, "chosen");
+    assert.deepEqual([r.diag.staticIdx, r.diag.fieldIdx], [[], []]);
+  });
+
+  test("rule B: frame + repeat (no sheet number)", () => {
+    const r = detect(STD_LINES, [...fill("bottom", 0.1, 20), ...DRAWING], repeatAll);
+    assert.deepEqual(r.decision.rules, ["B"]);
+    assert.equal(r.decision.confidence, 0.7);
+    assert.deepEqual(r.decision.evidence, ["rule:B", "frame-line", "repetition", "text-density"]);
+  });
+
+  test("rule C: repeat + sheetno, no frame (a repetition-only strip)", () => {
+    const r = detect([], STD_TOKENS, { repeatStrips: [{ edge: "bottom", d: 0.1, extent: [0, 1] }] });
+    assert.equal(r.decision.edge, "bottom");
+    assert.deepEqual(r.decision.strip, [60, 1768, 2940, 1960]);
+    assert.deepEqual(r.decision.rules, ["C"]);
+    assert.deepEqual(r.decision.evidence, ["rule:C", "sheet-number", "repetition", "text-density"]);
+    const c = cand(r, "bottom");
+    assert.equal(c.frame, false);
+    assert.equal(c.touch, null);
+  });
+
+  test("a repetition-only strip is used only on an edge without a chain", () => {
+    const r = detect(STD_LINES, STD_TOKENS, { repeatStrips: [{ edge: "bottom", d: 0.2, extent: [0, 1] }] });
+    assert.deepEqual(r.diag.candidates.filter((c) => c.edge === "bottom").map((c) => c.frame), [true]);
+  });
+
+  test("all three signals → rules A, B, C, confidence 0.95", () => {
+    const r = detect(STD_LINES, STD_TOKENS, repeatAll);
+    assert.deepEqual(r.decision.rules, ["A", "B", "C"]);
+    assert.equal(r.decision.confidence, 0.95);
+    assert.deepEqual(r.decision.evidence, ["rule:A", "rule:B", "rule:C", "frame-line", "sheet-number", "repetition", "text-density"]);
+  });
+
+  test("confidence tiers are rule labels: 3 → 0.95, 2 → 0.85, 1 → 0.7, none → 0.3", () => {
+    assert.deepEqual([3, 2, 1, 0].map(confidenceFor), [0.95, 0.85, 0.7, 0.3]);
+  });
+
+  test("each single signal alone rejects", () => {
+    const frameOnly = detect(STD_LINES, [...fill("bottom", 0.1, 20), ...DRAWING]);
+    assert.equal(frameOnly.decision.edge, null);
+    assert.equal(cand(frameOnly, "bottom").reason, "one-signal:frame");
+    const numberOnly = detect([], STD_TOKENS);
+    assert.equal(numberOnly.decision.edge, null);
+    assert.equal(numberOnly.diag.candidates.length, 0);
+    const repeatOnly = detect([], [...fill("bottom", 0.1, 20), ...DRAWING], { repeatStrips: [{ edge: "bottom", d: 0.1, extent: [0, 1] }] });
+    assert.equal(repeatOnly.decision.edge, null);
+    assert.equal(cand(repeatOnly, "bottom").reason, "one-signal:repeat");
+  });
+
+  test("density alone never accepts: a framed strip holding every token on the sheet", () => {
+    const r = detect(STD_LINES, fill("bottom", 0.1, 120));
+    const c = cand(r, "bottom");
+    assert.equal(c.density, Infinity);
+    assert.equal(r.decision.edge, null);
+  });
+
+  test("abstain: no title block, confidence 0.3, the border box kept", () => {
+    const r = detect([], DRAWING);
+    assert.deepEqual(r.decision, { edge: null, d: null, strip: null, border: BOX, rules: [], confidence: 0.3, evidence: [] });
+    assert.equal(r.diag.edge, null);
+  });
+
+  test(`fewer than ${MIN_STRIP_TOKENS} strip tokens rejects`, () => {
+    const r14 = detect(STD_LINES, [...fill("bottom", 0.1, 13), NUMBER, ...DRAWING]);
+    assert.equal(r14.decision.edge, null);
+    assert.equal(cand(r14, "bottom").tokens, 14);
+    assert.equal(cand(r14, "bottom").reason, "few-tokens");
+    assert.equal(detect(STD_LINES, [...fill("bottom", 0.1, 14), NUMBER, ...DRAWING]).decision.edge, "bottom");
+  });
+
+  test("the token floor counts the full strip; sheetno and density stay extent-bounded", () => {
+    // partial chain x 924 … 2940 (extent [0.3, 1], cover 0.7) with a divider down to the border:
+    // 9 fillers + the number inside the extent (10 < 15), 6 fillers at u 0.02–0.28 outside
+    // it → 16 across the full strip
+    const inside = fill("bottom", 0.1, 9, 0.3, 1), outside = fill("bottom", 0.1, 6, 0.02, 0.28);
+    const r = detect([hl(924, BX1, 1768), vl(924, 1768, BY1)], [...inside, ...outside, NUMBER, ...DRAWING]);
+    const c = cand(r, "bottom");
+    assert.equal(c.tokens, 10);
+    assert.equal(c.stripTokens, 16);
+    assert.equal(c.sheetno, true);
+    // density over the extent-bounded strip: 10 / 0.07 ÷ (6 + 18) / 0.93
+    assertClose(c.density, (10 / 0.07) / (24 / 0.93), "density", 1e-9);
+    assert.equal(r.decision.edge, "bottom");
+    assert.deepEqual(r.decision.rules, ["A"]);
+    // the sparse strip: 8 fillers + the number = 9 across the whole strip → rejected
+    const sparse = detect(STD_LINES, [...fill("bottom", 0.1, 8), NUMBER, ...DRAWING]);
+    assert.equal(cand(sparse, "bottom").stripTokens, 9);
+    assert.equal(cand(sparse, "bottom").reason, "few-tokens");
+    assert.equal(sparse.decision.edge, null);
+  });
+
+  test("per edge the smallest d is tried first; a deeper passing candidate is not tried", () => {
+    // number at v 0.03: across 0.3 of d 0.1, 0.15 of d 0.2
+    const r = detect([...STD_LINES, hl(BX0, BX1, yB(0.2))], STD_TOKENS);
+    assertClose(r.decision.d!, 0.1);
+    const deep = cand(r, "bottom", 0.2);
+    assert.equal(deep.accepted, false);
+    assert.equal(deep.reason, "not-tried");
+  });
+
+  test("per edge, a narrower candidate that fails gives way to the next one out", () => {
+    // chains at d 0.08 and 0.15; the number at v 0.085 lies outside the 0.08 strip, at 57% of 0.15
+    const tokens = [...fill("bottom", 0.08, 20), tokC("A-101", 2652, BY1 - 0.085 * BH, 40), ...DRAWING];
+    const r = detect([hl(BX0, BX1, yB(0.08)), hl(BX0, BX1, yB(0.15))], tokens);
+    assertClose(r.decision.d!, 0.15);
+    assert.equal(cand(r, "bottom", 0.08).reason, "one-signal:frame");
+  });
+
+  // a full-height rule at u 0.84 of the width (x 2479.2) crossing a bottom title block:
+  // right strip d 0.16, area 0.16; bottom strip area 0.1. The number at (2800, 1902.4) is
+  // at u 0.951 / across 0.3 of the bottom strip and u 0.97 / across 0.304 of the right one.
+  const CROSS = [...STD_LINES, vl(2479.2, BY0, BY1)];
+  const CROSS_TOKENS = [
+    ...fill("bottom", 0.1, 20), tokC("A-101", 2800, 1902.4, 40), ...DRAWING,
+    ...Array.from({ length: 20 }, (_, k) => tokC("NOTE", 2700, 100 + k * 80)),
+  ];
+
+  test("between edges: equal rules → the smaller strip area wins", () => {
+    const r = detect(CROSS, CROSS_TOKENS);
+    assert.equal(r.decision.edge, "bottom");
+    const right = cand(r, "right");
+    assert.equal(right.accepted, true);
+    assert.equal(right.sheetno, true);
+    assertClose(right.area, 0.16, "area", 1e-9);
+    assert.equal(right.reason, "lost:area");
+  });
+
+  test("between edges: more rules win before area", () => {
+    const r = detect(CROSS, CROSS_TOKENS, { repeat: (c) => c.edge === "right" });
+    assert.equal(r.decision.edge, "right");
+    assert.deepEqual(r.decision.rules, ["A", "B", "C"]);
+    assert.equal(cand(r, "bottom").reason, "lost:rules");
+  });
+
+  test("between edges: equal rules and area → the higher density wins", () => {
+    // top and bottom chains both at d 0.1 (y 232 / 1768), both with a number in their zone
+    const top = [...fill("top", 0.1, 30), tokUV("A-101", "top", 0.9, 0.03, 40)];
+    const r = detect([...STD_LINES, chainAt("top", 0.1)], [...STD_TOKENS, ...top]);
+    assert.equal(r.decision.edge, "top");
+    assert.equal(cand(r, "bottom").reason, "lost:density");
+    assert.ok(cand(r, "top").density > cand(r, "bottom").density);
+  });
+
+  test("a partial chain's strip is output border to border along its edge", () => {
+    const r = detect([hl(xU(0.25), BX1, 1768)], STD_TOKENS);
+    assert.deepEqual(r.decision.strip, [60, 1768, 2940, 1960]);
+    const c = cand(r, "bottom");
+    assertClose(c.extent[0], 0.25); assertClose(c.chainCover, 0.75); assertClose(c.area, 0.075, "area", 1e-9);
+  });
+
+  test("diag logs the free end's distance to the nearest other chain", () => {
+    const r = detect([hl(xU(0.25), BX1, 1768), vl(xU(0.275), BY0 + 0.3 * BH, BY1 - 0.05 * BH)], STD_TOKENS);
+    assertClose(cand(r, "bottom").freeEndGap!, 0.025, "gap", 1e-9);
+  });
+});
+
 // ── the frozen synthetic sets (fixtures/regionSynth.ts): self-consistency ────
 const SYNTH_SETS: [string, () => Synth.SynthSet][] = [
   ["uniformSet24", Synth.uniformSet24], ["bottomStripSet5", Synth.bottomStripSet5], ["mixedSet", Synth.mixedSet],
@@ -401,6 +704,37 @@ describe("synthetic sets: border and candidates (steps 1–2)", () => {
           let want = 0;
           for (let k = 0; k + 1 < cuts.length; k += 2) want = Math.max(want, cuts[k + 1] - cuts[k]);
           assert.ok(Math.abs(hit.cover - want) <= 0.01, `${where}: cover ${hit.cover} vs ${want}`);
+        }
+      }
+    });
+  }
+});
+
+// Single-sheet signals only (no repetition: Step 3 is task 6). Branches on
+// meta.expect, never on truth (truth is non-null on some abstain sheets).
+describe("synthetic sets: single-sheet decisions (step 4, repeat off)", () => {
+  for (const [name, build] of SYNTH_SETS) {
+    test(name, () => {
+      for (const x of build().sheets) {
+        const where = `${name} ${x.sheet.key} (${x.meta.expect}${x.meta.why ? " " + x.meta.why : ""})`;
+        const { decision } = detectTitleBlock(x.sheet);
+        switch (x.meta.expect) {
+          case "find":
+          case "tie-break-area": {
+            // TODO(task 6, step 3): frameless title blocks are found by repetition only
+            if (x.meta.frame === "none") continue;
+            const t = x.truth!;
+            assert.equal(decision.edge, t.edge, `${where}: edge`);
+            assert.ok(Math.abs(decision.d! - t.d) <= 0.01, `${where}: d ${decision.d} vs ${t.d}`);
+            break;
+          }
+          case "abstain":
+            assert.equal(decision.edge, null, `${where}: expected no title block, got ${decision.edge} ${decision.d}`);
+            assert.equal(decision.confidence, 0.3);
+            break;
+          case "no-rule-A":
+            assert.ok(!decision.evidence.includes("rule:A"), `${where}: rule A fired`);
+            break;
         }
       }
     });
