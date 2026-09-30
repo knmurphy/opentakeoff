@@ -234,7 +234,13 @@ sheet (Dublin part 4 p10, S501: 0.82) sits above real sample-plan strips
 and as a tie-break only.
 
 Every candidate strip must hold at least 15 tokens (`MIN_STRIP_TOKENS`;
-every real strip measured has ≥ 58). Then it is accepted if **any** of:
+every real strip measured has ≥ 58). The count is taken over the **full
+strip, border to border** along its edge (the region that is output and that
+the labels measure), not the extent-bounded strip; the sheet-number test and
+density stay extent-bounded. *(Amended during task 5: counting only inside
+the extent rejected true title blocks on partial or gap-broken chains — 32
+synthetic sheets with 11–14 tokens inside the extent and 15–17 across the
+strip.)* Then it is accepted if **any** of:
 
 - A: `frame` and `sheetno`;
 - B: `frame` and `repeat`;
@@ -275,7 +281,9 @@ Single sheets and 2-sheet sets have no `repeat`, so they are accepted only
 through rule A; that is expected and measured.
 
 Confidence is by rule, not a weighted score: A+B+C 0.95, two rules 0.85,
-one rule 0.7. These are rule labels, not calibrated probabilities.
+one rule 0.7. *(Found during task 5: with three yes/no signals the rules fire
+0, 1 or 3 at a time, so 0.85 never occurs; the mapping is kept and tested
+directly.)* These are rule labels, not calibrated probabilities.
 `evidence` lists the rules and signals that fired (`rule:A`, `frame-line`,
 `sheet-number`, `repetition`, `text-density`). `diag` logs each
 candidate's chain coverage, token count, density, strip area, the
