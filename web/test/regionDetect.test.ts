@@ -6,9 +6,10 @@ import assert from "node:assert/strict";
 import {
   longAxisLines, TB_SHEETNO_RE, findBorder, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
   MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, bandRepeats, repeatOptions, normText,
-  REPEAT_POS_TOL, BAND_DEPTH,
+  REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions,
   type DetectLine, type RepeatBand, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
+import { aspectBucket, cleanRegions, hitRegion, type SheetRegions } from "../src/lib/regions.ts";
 import * as Synth from "./fixtures/regionSynth.ts";
 
 // Sheet 2000 × 1000 px: shorter side 1000 →
@@ -791,6 +792,157 @@ describe("step 3: repetition band and repeat", () => {
   });
 });
 
+// ── steps 5 and 6: grouping and output (detectSetRegions) ───────────────────
+/** A sheet of the standard page with a bottom title block at depth d: border
+ * rules, the chain, `statics` at u 0.05 + 0.1·k (v 0.4·d), 15 per-sheet
+ * fillers (text unique to the sheet), the sheet number `num` at u 0.9, v 0.3·d
+ * (h 40), and the DRAWING tokens. `boiler` adds "VA FORM 08-6231" at u 0.55,
+ * v 0.03 (inside any strip deeper than 3%). */
+function tbSheet(key: string, d: number, statics: string[], num: string, o: { boiler?: boolean; pageIn?: [number, number] } = {}): DetectSheet {
+  const tokens: DetectToken[] = [
+    ...statics.map((t, k) => tokUV(t, "bottom", 0.05 + 0.1 * k, 0.4 * d)),
+    ...Array.from({ length: 15 }, (_, k) => tokUV(`${key}/${k}`, "bottom", (k + 0.5) / 15, 0.75 * d)),
+    tokUV(num, "bottom", 0.9, 0.3 * d, 40),
+    ...(o.boiler ? [tokUV(Synth.BOILERPLATE, "bottom", 0.55, 0.03)] : []),
+    ...DRAWING,
+  ];
+  return { key, w: PW, h: PH, ...(o.pageIn ? { pageIn: o.pageIn } : {}), tokens, lines: [...BORDER_RULES, chainAt("bottom", d)], source: "vector" };
+}
+const firmX = (n: number, o: { boiler?: boolean; d?: number; key?: string } = {}) =>
+  Array.from({ length: n }, (_, i) => tbSheet(`${o.key ?? "x"}.pdf#${i + 1}`, o.d ?? 0.1, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], `A-10${i + 1}`, o));
+const firmY = (n: number, o: { boiler?: boolean; d?: number } = {}) =>
+  Array.from({ length: n }, (_, i) => tbSheet(`y.pdf#${i + 1}`, o.d ?? 0.1, ["YANKEE ENGINEERS", "40 OAK AVE", "CHECKED"], `M-20${i + 1}`, o));
+/** Group ids of a map, by sheet key. */
+const groupsOf = (m: Map<string, SheetRegions>) => Object.fromEntries([...m].map(([k, r]) => [k, r.group ?? null]));
+const distinct = (m: Map<string, SheetRegions>) => new Set([...m.values()].map((r) => r.group ?? `alone:${r.key}`)).size;
+
+describe("detectSetRegions: output (step 6)", () => {
+  const set = firmX(3, { boiler: true });
+  const { regions, diag } = detectSetRegions(set);
+  const r = regions.get("x.pdf#1")!;
+
+  test("title_block (the strip, border to border) and drawing_area (the border box minus the strip)", () => {
+    assert.deepEqual(r.border, BOX);
+    assert.equal(r.w, PW); assert.equal(r.h, PH); assert.equal(r.key, "x.pdf#1");
+    const tb = r.regions.find((x) => x.kind === "title_block")!, da = r.regions.find((x) => x.kind === "drawing_area")!;
+    assertBox(tb.bbox, [60, 1768, 2940, 1960]);
+    assertBox(da.bbox, [60, 40, 2940, 1768]);
+    assert.equal(tb.parent, null); assert.equal(da.parent, null);
+    assert.equal(tb.source, "vector"); assert.equal(da.source, "vector");
+    const dg = diag.get("x.pdf#1")!;
+    assert.equal(dg.edge, "bottom");
+    assert.ok(tb.evidence.includes("rule:A"));
+    assert.ok(tb.evidence.includes("repetition"), "fillers are fields, statics static: the band repeats");
+    assert.equal(tb.confidence, 0.95);
+    assert.equal(da.confidence, tb.confidence);
+  });
+
+  test("the regions pass cleanRegions (with dims) unchanged", () => {
+    for (const s of regions.values()) assert.deepEqual(cleanRegions(s.regions, { w: s.w, h: s.h }), s.regions);
+  });
+
+  test("margin text falls in no region; strip and drawing text do", () => {
+    assert.equal(hitRegion(r, 30, 1000), null);          // left margin (border at x 60)
+    assert.equal(hitRegion(r, 1500, 1990), null);        // bottom margin (border at y 1960)
+    assert.equal(hitRegion(r, 2652, 1902.4)!.kind, "title_block");
+    assert.equal(hitRegion(r, 1500, 1000)!.kind, "drawing_area");
+  });
+
+  test("group_sig: edge, d, aspect bucket, page size when known, the group's statics", () => {
+    const withPage = detectSetRegions(firmX(3, { boiler: true }).map((s) => ({ ...s, pageIn: [36, 24] as [number, number] })));
+    for (const m of [regions, withPage.regions]) {
+      const sig = m.get("x.pdf#1")!.group_sig!;
+      assert.equal(sig.edge, "bottom");
+      assertClose(sig.d, 0.1, "d");
+      assert.equal(sig.aspect, aspectBucket(PW, PH));
+      // one candidate group: the boilerplate is kept
+      assert.deepEqual(sig.statics, ["VA FORM 08-6231", "XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"]);
+    }
+    assert.equal(regions.get("x.pdf#1")!.group_sig!.page_in, undefined);
+    assert.deepEqual(withPage.regions.get("x.pdf#1")!.group_sig!.page_in, [36, 24]);
+  });
+
+  test("diag carries the static and field token indices", () => {
+    const dg = diag.get("x.pdf#2")!;
+    // tbSheet order: 3 statics (0–2), 15 fillers (3–17), the number (18), the boilerplate (19), DRAWING
+    assert.deepEqual(dg.staticIdx.filter((i) => i < 20), [0, 1, 2, 19]);
+    assert.ok(dg.fieldIdx.includes(18), "the sheet number is a field");
+    // DRAWING: the same "OFFICE" at the same 18 spots on every sheet — static too
+    assert.deepEqual(dg.staticIdx.filter((i) => i >= 20), Array.from({ length: 18 }, (_, k) => 20 + k));
+  });
+
+  test("a sheet without a title block: drawing area = border box, confidence 0.3, no group", () => {
+    const cover: DetectSheet = { key: "cover.pdf", w: PW, h: PH, tokens: DRAWING, lines: BORDER_RULES, source: "ocr" };
+    const m = detectSetRegions([...set, cover]).regions.get("cover.pdf")!;
+    assert.deepEqual(m.regions, [{ id: "drawing_area", kind: "drawing_area", bbox: BOX, parent: null, evidence: ["border", "no-title-block"], confidence: 0.3, source: "ocr" }]);
+    assert.equal(m.group, undefined); assert.equal(m.group_sig, undefined);
+    assert.deepEqual(m.border, BOX);
+  });
+});
+
+describe("detectSetRegions: grouping (step 5)", () => {
+  test("one firm → one group; ids from the signature", () => {
+    const m = detectSetRegions(firmX(4)).regions;
+    assert.equal(new Set(Object.values(groupsOf(m))).size, 1);
+    assert.match(m.get("x.pdf#1")!.group!, /^g:[0-9a-f]{8}$/);
+  });
+
+  test("two firms with the same geometry but different statics → two groups", () => {
+    const m = detectSetRegions([...firmX(3, { boiler: true }), ...firmY(3, { boiler: true })]).regions;
+    const g = groupsOf(m);
+    assert.equal(distinct(m), 2);
+    assert.equal(g["x.pdf#1"], g["x.pdf#3"]); assert.equal(g["y.pdf#1"], g["y.pdf#3"]);
+    assert.notEqual(g["x.pdf#1"], g["y.pdf#1"]);
+    // one candidate group (same geometry): the shared boilerplate stays in both signatures
+    assert.ok(m.get("y.pdf#1")!.group_sig!.statics.includes(Synth.BOILERPLATE));
+  });
+
+  test("shared boilerplate is left out of the signatures when there are ≥ 2 candidate groups", () => {
+    // X at d 0.1, Y at d 0.15: two candidate groups; VA FORM is static in both
+    const m = detectSetRegions([...firmX(3, { boiler: true }), ...firmY(3, { boiler: true, d: 0.15 })]).regions;
+    assert.equal(distinct(m), 2);
+    assert.deepEqual(m.get("x.pdf#1")!.group_sig!.statics, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"]);
+    assert.ok(!m.get("y.pdf#1")!.group_sig!.statics.includes(Synth.BOILERPLATE));
+  });
+
+  test("|Δd| > 1.5% splits the same statics; ≤ 1.5% does not", () => {
+    // 1.6% apart: two candidate groups whose statics are all the same strings, so none is
+    // distinctive and every sheet is its own group
+    const apart = detectSetRegions([...firmX(3, { d: 0.1 }), ...firmX(3, { d: 0.116, key: "x2" })]).regions;
+    assert.equal(distinct(apart), 6);
+    assert.deepEqual(apart.get("x.pdf#1")!.group_sig!.statics, []);
+    const near = detectSetRegions([...firmX(3, { d: 0.1 }), ...firmX(3, { d: 0.114, key: "x2" })]).regions;
+    assert.equal(distinct(near), 1);
+  });
+
+  test("a sheet without distinctive statics is its own group, even with the same geometry", () => {
+    // three sheets with no static text in the strip (every token unique to its sheet)
+    const lone = [1, 2, 3].map((i) => tbSheet(`z.pdf#${i}`, 0.1, [], `A-10${i}`, { pageIn: [36, 24] }));
+    const m = detectSetRegions(lone).regions;
+    assert.equal(distinct(m), 3);
+    for (const r of m.values()) assert.deepEqual(r.group_sig!.statics, []);
+    // equal signatures: disambiguated by the smallest member key
+    assert.deepEqual([...m.values()].map((r) => r.group!.slice(-2)), ["-1", "-2", "-3"]);
+  });
+
+  test("fewer than 3 sheets: same page size, edge and |Δd| ≤ 1.5% share a group", () => {
+    const two = (a?: [number, number], b?: [number, number], d2 = 0.1) =>
+      distinct(detectSetRegions([tbSheet("p.pdf", 0.1, [], "A-101", { pageIn: a }), tbSheet("q.pdf", d2, [], "A-102", { pageIn: b })]).regions);
+    assert.equal(two([36, 24], [36, 24]), 1);
+    assert.equal(two([36, 24], [42, 30]), 2);
+    assert.equal(two(undefined, undefined), 2);        // page size unknown: no anchor
+    assert.equal(two([36, 24], [36, 24], 0.12), 2);    // |Δd| 2%
+  });
+
+  test("ids are unique within a map and do not depend on the input order", () => {
+    const set = [...firmX(3, { boiler: true }), ...firmY(3, { boiler: true, d: 0.15 }), ...[1, 2].map((i) => tbSheet(`z.pdf#${i}`, 0.1, [], `A-10${i}`))];
+    const a = detectSetRegions(set).regions, b = detectSetRegions([...set].reverse()).regions;
+    const ids = new Set([...a.values()].map((r) => r.group));
+    assert.equal(ids.size, 4);
+    assert.deepEqual([...b].sort(), [...a].sort());
+  });
+});
+
 // ── the frozen synthetic sets (fixtures/regionSynth.ts): self-consistency ────
 const SYNTH_SETS: [string, () => Synth.SynthSet][] = [
   ["uniformSet24", Synth.uniformSet24], ["bottomStripSet5", Synth.bottomStripSet5], ["mixedSet", Synth.mixedSet],
@@ -844,7 +996,7 @@ describe("synthetic sets: single-sheet decisions (step 4, repeat off)", () => {
         switch (x.meta.expect) {
           case "find":
           case "tie-break-area": {
-            // TODO(task 6, step 3): frameless title blocks are found by repetition only
+            // a frameless title block is found by repetition only: see the set tests below
             if (x.meta.frame === "none") continue;
             const t = x.truth!;
             assert.equal(decision.edge, t.edge, `${where}: edge`);
@@ -862,4 +1014,161 @@ describe("synthetic sets: single-sheet decisions (step 4, repeat off)", () => {
       }
     });
   }
+});
+
+// ── the frozen synthetic sets with repetition on (detectSetRegions) ──────────
+// Conflicts between the fixture's expectations and the plan's rules, found in
+// task 6 and reported rather than bent (the rules and the fixture stay as they
+// are). Each runs as a `todo` test asserting the fixture's expectation, so it
+// shows up in every run until the plan decides.
+//   frameless-d: a frameless strip's inner edge comes from the repetition band
+//     (no rule line exists); the band's deepest center sits at 0.8–0.93 of the
+//     true d (statics at 10–90% of the depth) or past it (drawing-area tokens
+//     classified as fields), so |d error| exceeds 1%. On borderlessSet the
+//     pass-1 depths then differ by > 1.5%, the candidate groups fall under 3
+//     sheets, pass 2 finds no repetition and the sheets abstain.
+//   top-rule-26: randomSet(19) #3 and #6: a frameless top title block
+//     (d ≈ 0.10) under a full-width top rule at 0.26; the edge has a chain, so
+//     no repetition-only candidate is made there (step 2), and the rule at 0.26
+//     passes rule A (the number lies in its outer 60%).
+const DETECT_CONFLICTS: Record<string, string> = {
+  ...Object.fromEntries(["borderless.pdf", "borderless.pdf#2", "borderless.pdf#3", "borderless.pdf#4",
+    "random3.pdf#4", "random3.pdf#5", "random3.pdf#6",
+    "random11.pdf#5", "random11.pdf#6", "random11.pdf#7", "random11.pdf#8", "random11.pdf#9", "random11.pdf#10",
+    "random19.pdf", "random19.pdf#2", "random19.pdf#4", "random19.pdf#5"].map((k) => [k, "frameless-d"])),
+  "random19.pdf#3": "top-rule-26", "random19.pdf#6": "top-rule-26",
+};
+//   two-sheet-family: a family of 2 sheets in a set of ≥ 3 sheets has no
+//     statics (they need ≥ 3 sheets) and the page-size fallback is only for
+//     sets of < 3 sheets, so each of its sheets is its own group
+//     (mixedSet: 4 groups, not 3).
+//   boilerplate-merge: smallConsultantsSet: both 2-sheet firms share only the
+//     agency boilerplate as statics (firm strings are on 2 of 4 sheets); their
+//     depths are within 1.5%, so there is one candidate group, the boilerplate
+//     stays distinctive and Jaccard = 1 merges them (1 group, not 2).
+//   frameless-d (above) splits borderlessSet into 4.
+const GROUP_CONFLICTS: Record<string, string> = {
+  mixedSet: "two-sheet-family", smallConsultantsSet: "boilerplate-merge", borderlessSet: "frameless-d",
+};
+
+function checkDetection(x: Synth.SynthSheet, dg: { edge: Edge | null; d: number | null }, tbEvidence: string[]) {
+  const where = `${x.sheet.key} (${x.meta.expect}${x.meta.why ? " " + x.meta.why : ""})`;
+  switch (x.meta.expect) {
+    case "find":
+    case "tie-break-area": {
+      const t = x.truth!;
+      assert.equal(dg.edge, t.edge, `${where}: edge`);
+      assert.ok(Math.abs(dg.d! - t.d) <= 0.01, `${where}: d ${dg.d} vs ${t.d}`);
+      break;
+    }
+    case "abstain":
+      assert.equal(dg.edge, null, `${where}: expected no title block, got ${dg.edge} ${dg.d}`);
+      break;
+    case "no-rule-A":
+      assert.ok(!tbEvidence.includes("rule:A"), `${where}: rule A fired`);
+      break;
+  }
+}
+
+/** The fixture's families against the detected groups: every family in one
+ * group, no group holding two families; sheets without a title block (family
+ * "none", the sketch) have no group. Returns the group count, a sheet without
+ * a group counting as its own. */
+function checkGroups(set: Synth.SynthSet, m: Map<string, SheetRegions>): number {
+  const famGroups = new Map<string, Set<string>>(), groupFams = new Map<string, Set<string>>();
+  for (const x of set.sheets) {
+    const r = m.get(x.sheet.key)!;
+    if (x.meta.expect === "abstain" && x.truth === null) { assert.equal(r.group, undefined, `${x.sheet.key}: no title block, no group`); continue; }
+    if (!r.group) continue;
+    (famGroups.get(x.meta.group) ?? famGroups.set(x.meta.group, new Set()).get(x.meta.group)!).add(r.group);
+    (groupFams.get(r.group) ?? groupFams.set(r.group, new Set()).get(r.group)!).add(x.meta.group);
+  }
+  for (const [g, f] of groupFams) assert.equal(f.size, 1, `group ${g} holds families ${[...f].join(", ")}`);
+  for (const [f, g] of famGroups) assert.equal(g.size, 1, `family ${f} split over ${g.size} groups`);
+  return distinct(m);
+}
+
+describe("synthetic sets: detectSetRegions (steps 1–6, repetition on)", () => {
+  for (const [name, build] of SYNTH_SETS) {
+    const set = build();
+    const { regions, diag } = detectSetRegions(set.sheets.map((x) => x.sheet));
+    const ev = (key: string) => regions.get(key)!.regions.find((r) => r.kind === "title_block")?.evidence ?? [];
+    test(`${name}: detection`, () => {
+      for (const x of set.sheets) if (!DETECT_CONFLICTS[x.sheet.key]) checkDetection(x, diag.get(x.sheet.key)!, ev(x.sheet.key));
+    });
+    const conflicts = set.sheets.filter((x) => DETECT_CONFLICTS[x.sheet.key]);
+    if (conflicts.length) {
+      test(`${name}: detection, plan conflicts`, { todo: [...new Set(conflicts.map((x) => DETECT_CONFLICTS[x.sheet.key]))].join(", ") }, () => {
+        for (const x of conflicts) checkDetection(x, diag.get(x.sheet.key)!, ev(x.sheet.key));
+      });
+    }
+    test(`${name}: outputs are clean, ids unique`, () => {
+      const ids = new Map<string, string>();
+      for (const r of regions.values()) {
+        assert.deepEqual(cleanRegions(r.regions, { w: r.w, h: r.h }), r.regions);
+        assert.ok(r.regions.some((x) => x.kind === "drawing_area"));
+        if (r.group) {
+          const sig = JSON.stringify(r.group_sig);
+          assert.ok(!ids.has(r.group) || ids.get(r.group) === sig, `${r.group}: one id, two signatures`);
+          ids.set(r.group, sig);
+        }
+      }
+    });
+  }
+});
+
+describe("synthetic sets: grouping (step 5)", () => {
+  const NAMED = SYNTH_SETS.filter(([n]) => !n.startsWith("randomSet"));
+  for (const [name, build] of NAMED) {
+    const set = build();
+    const run = () => {
+      const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
+      const n = checkGroups(set, regions);
+      if (set.expectGroups !== null) assert.equal(n, set.expectGroups, `${name}: groups`);
+    };
+    if (GROUP_CONFLICTS[name]) test(name, { todo: GROUP_CONFLICTS[name] }, run);
+    else test(name, run);
+  }
+  // random sets: families of < 3 sheets are expected to split (two-sheet-family), so only
+  // "no group holds two families" is checked
+  for (const [name, build] of SYNTH_SETS.filter(([n]) => n.startsWith("randomSet"))) {
+    test(`${name}: no group holds two families`, () => {
+      const set = build();
+      const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
+      const fams = new Map<string, Set<string>>();
+      for (const x of set.sheets) {
+        const g = regions.get(x.sheet.key)!.group;
+        if (g) (fams.get(g) ?? fams.set(g, new Set()).get(g)!).add(x.meta.group);
+      }
+      for (const [g, f] of fams) assert.equal(f.size, 1, `group ${g} holds ${[...f].join(", ")}`);
+    });
+  }
+
+  test("uniformSet24: one group; the same set shuffled gives identical ids and regions", () => {
+    const set = Synth.uniformSet24();
+    const sheets = set.sheets.map((x) => x.sheet);
+    const a = detectSetRegions(sheets).regions;
+    assert.equal(new Set([...a.values()].map((r) => r.group)).size, 1);
+    const rng = Synth.mulberry32(99);
+    const shuffled = [...sheets];
+    for (let i = shuffled.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]; }
+    const b = detectSetRegions(shuffled).regions;
+    assert.deepEqual([...b].sort(), [...a].sort());
+  });
+
+  test("twoSheetSet: grouped by the page-size rule (fewer than 3 sheets)", () => {
+    const { regions } = detectSetRegions(Synth.twoSheetSet().sheets.map((x) => x.sheet));
+    const [p, q] = [...regions.values()];
+    assert.ok(p.group && p.group === q.group);
+    assert.deepEqual(p.group_sig!.statics, []);
+    assert.deepEqual(p.group_sig!.page_in, Synth.twoSheetSet().sheets[0].sheet.pageIn);
+  });
+
+  test("the same set in any order: identical ids and regions (mixed, consultants, random sets)", () => {
+    for (const set of [Synth.mixedSet(), Synth.smallConsultantsSet(), Synth.randomSet(5), Synth.randomSet(18)]) {
+      const sheets = set.sheets.map((x) => x.sheet);
+      const a = detectSetRegions(sheets).regions, b = detectSetRegions([...sheets].reverse()).regions;
+      assert.deepEqual([...b].sort(), [...a].sort(), set.name);
+    }
+  });
 });

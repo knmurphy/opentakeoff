@@ -5,9 +5,11 @@
 // Implemented so far: the input types, the line adapter, step 1 (border),
 // step 2 (strip candidates), step 3 (statics, fields and repetition bands
 // over a set of sheets) and step 4 (signals, acceptance, confidence) per
-// sheet; step 3 reaches step 4 through `DetectOptions`. Grouping and
-// `detectSetRegions` land in the next commit.
+// sheet; step 3 reaches step 4 through `DetectOptions`; `detectSetRegions`
+// runs the set: steps 3–4 twice (the plan's one iteration), step 5
+// (grouping, signature ids) and step 6 (regions).
 import type { Bbox } from "./sheetgraph.ts";
+import { aspectBucket, assignGroupIds, capStatics, cleanRegions, type GroupSig, type Region, type SheetRegions } from "./regions.ts";
 
 /** A positioned text run in image px (RENDER_SCALE, displayed orientation).
  * Same convention as `sheets.ts` `extractPageTokens`: (x, y) is the run's
@@ -52,9 +54,10 @@ export interface DetectDiag {  // per sheet; recomputed, not persisted
 export const TB_SHEETNO_RE = /^[A-Z]{1,3}\d?[-. ]?\d{1,3}(\.\d{1,2})?[A-Z]?$/;
 
 // ── detection constants ─────────────────────────────────────────────────────
-// Values as stated in docs/design/REGION_ANNOTATION_PLAN.md ("Algorithm"); the
-// calibration sweep on the tune set (task 6) may revise them. Fractions are of
-// the page (step 1) or of the border box (steps 2 and 4), as noted.
+// Values as stated in docs/design/REGION_ANNOTATION_PLAN.md ("Algorithm"); none
+// is calibrated yet. The calibration sweep on the tune set (task 6, part b)
+// may revise them and will name its data here. Fractions are of
+// the page (step 1) or of the border box (steps 2–5), as noted.
 
 /** Step 1: rules within this fraction of the page edge are ignored (Dublin and
  * the sample plan draw page-edge rules outside the real border). */
@@ -95,6 +98,29 @@ export const SHEETNO_OUTER = 0.6;
  * labels, not calibrated probabilities. With no accepted strip: ABSTAIN. */
 export const CONFIDENCE_BY_RULES: Readonly<Record<number, number>> = { 3: 0.95, 2: 0.85, 1: 0.7 };
 export const ABSTAIN_CONFIDENCE = 0.3;
+
+/** Step 3: two tokens are "at the same position" when their centers,
+ * normalized to their sheets' border boxes, lie within this fraction per axis. */
+export const REPEAT_POS_TOL = 0.02;
+/** Step 3: static (same text) or field (a fixed position whose text changes)
+ * on at least this share of the sheets considered … */
+export const REPEAT_MIN_SHARE = 0.5;
+/** … and on at least this many sheets. */
+export const REPEAT_MIN_SHEETS = 3;
+/** Step 3: the repetition band holds static and field tokens within this
+ * depth of an edge (fraction of the border box across the edge). */
+export const BAND_DEPTH = 0.32;
+/** Step 3: `repeat` needs the band to cover at least this share of the
+ * candidate strip's length along the edge. */
+export const BAND_MIN_COVER = 0.5;
+/** Steps 3 and 5: candidate groups and groups need |Δd| ≤ this (fraction of
+ * the border box across the edge; the same 1.5% `matchGroup` uses). */
+export const GROUP_D_TOL = 0.015;
+
+/** Step 5: two sheets share a group at Jaccard(distinctive statics) ≥ this. */
+export const GROUP_MIN_JACCARD = 0.5;
+/** Step 5: page sizes in inches are equal to this, per axis (rounding only). */
+const PAGE_TOL_IN = 0.01;
 
 // ── line adapter ────────────────────────────────────────────────────────────
 /** A segment counts as axis-aligned within this many degrees of an axis. */
@@ -508,23 +534,6 @@ export function detectTitleBlock(sheet: DetectSheet, opts: DetectOptions = {}): 
 }
 
 // ── step 3: repetition across the set ───────────────────────────────────────
-/** Step 3: two tokens are "at the same position" when their centers,
- * normalized to their sheets' border boxes, lie within this fraction per axis. */
-export const REPEAT_POS_TOL = 0.02;
-/** Step 3: static (same text) or field (a fixed position whose text changes)
- * on at least this share of the sheets considered … */
-export const REPEAT_MIN_SHARE = 0.5;
-/** … and on at least this many sheets. */
-export const REPEAT_MIN_SHEETS = 3;
-/** Step 3: the repetition band holds static and field tokens within this
- * depth of an edge (fraction of the border box across the edge). */
-export const BAND_DEPTH = 0.32;
-/** Step 3: `repeat` needs the band to cover at least this share of the
- * candidate strip's length along the edge. */
-export const BAND_MIN_COVER = 0.5;
-/** Steps 3 and 5: candidate groups and groups need |Δd| ≤ this. */
-export const GROUP_D_TOL = 0.015;
-
 /** The text two tokens are compared by: trimmed, inner whitespace collapsed,
  * upper case. */
 export const normText = (s: string): string => s.trim().replace(/\s+/g, " ").toUpperCase();
@@ -646,4 +655,161 @@ export function repeatOptions(tokens: readonly DetectToken[], box: Bbox, classes
     if (b && b.v1 > 0 && bandRepeats(b, b.v1, [0, 1])) repeatStrips.push({ edge, d: b.v1, extent: [0, 1] });
   }
   return { repeat: (c) => bandRepeats(bands[c.edge], c.d, c.extent), repeatStrips, classes };
+}
+
+// ── steps 5 and 6: grouping and output ──────────────────────────────────────
+interface Prepared { sheet: DetectSheet; box: Bbox; aspect: number }
+
+/** Step 3 over each list of sheet indices; indices in no list keep `prev`. */
+function classifyWithin(prep: readonly Prepared[], lists: readonly number[][], prev?: readonly TokenClasses[]): TokenClasses[] {
+  const out: TokenClasses[] = prep.map((_, i) => prev?.[i] ?? { staticIdx: [], fieldIdx: [] });
+  for (const list of lists) {
+    const cls = classifyRepetition(list.map((i) => ({ tokens: prep[i].sheet.tokens, box: prep[i].box })));
+    list.forEach((i, k) => { out[i] = cls[k]; });
+  }
+  return out;
+}
+
+function detectWith(prep: readonly Prepared[], cls: readonly TokenClasses[]) {
+  return prep.map((p, i) => detectTitleBlock(p.sheet, repeatOptions(p.sheet.tokens, p.box, cls[i])));
+}
+
+/** Connected components of `link` over `idx` (sorted lists, sorted by first member). */
+function components(idx: readonly number[], link: (a: number, b: number) => boolean): number[][] {
+  const parent = new Map(idx.map((i) => [i, i]));
+  const find = (i: number): number => { let r = i; while (parent.get(r)! !== r) r = parent.get(r)!; parent.set(i, r); return r; };
+  for (let a = 0; a < idx.length; a++) for (let b = a + 1; b < idx.length; b++) {
+    if (link(idx[a], idx[b])) { const ra = find(idx[a]), rb = find(idx[b]); if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb)); }
+  }
+  const by = new Map<number, number[]>();
+  for (const i of idx) { const r = find(i); by.set(r, [...(by.get(r) ?? []), i]); }
+  return [...by.values()].map((l) => l.sort((a, b) => a - b)).sort((a, b) => a[0] - b[0]);
+}
+
+const sameGeom = (p: readonly Prepared[], dec: readonly TitleBlockDecision[], a: number, b: number) =>
+  p[a].aspect === p[b].aspect && dec[a].edge === dec[b].edge && Math.abs(dec[a].d! - dec[b].d!) <= GROUP_D_TOL + 1e-9;
+
+/** Step 3's candidate groups: sheets with a title block, linked by the same
+ * aspect bucket and edge and |Δd| ≤ GROUP_D_TOL (geometry only). */
+function candidateGroups(prep: readonly Prepared[], dec: readonly TitleBlockDecision[]): number[][] {
+  const withTB = dec.flatMap((d, i) => (d.edge ? [i] : []));
+  return components(withTB, (a, b) => sameGeom(prep, dec, a, b));
+}
+
+const samePageIn = (a?: [number, number], b?: [number, number]) =>
+  !!a && !!b && Math.abs(a[0] - b[0]) <= PAGE_TOL_IN + 1e-9 && Math.abs(a[1] - b[1]) <= PAGE_TOL_IN + 1e-9;
+
+function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+  let both = 0;
+  for (const x of a) if (b.has(x)) both++;
+  const union = a.size + b.size - both;
+  return union ? both / union : 1;
+}
+
+/** Steps 1–6 over a plan set.
+ *
+ * Step 3 runs twice (the plan's one iteration): statics and fields per aspect
+ * bucket → detect → candidate groups (same aspect bucket and edge, |Δd| ≤
+ * GROUP_D_TOL) → statics and fields per candidate group (a group of fewer
+ * than REPEAT_MIN_SHEETS sheets has none; sheets without a title block keep
+ * their bucket's) → detect again. Step 5 then groups on the second pass.
+ *
+ * A sheet's statics for grouping are the normalized texts of its static
+ * tokens inside its title-block strip. With two or more candidate groups, a
+ * string static in every candidate group is not distinctive and is dropped.
+ * Two sheets with distinctive statics share a group when they have the same
+ * aspect bucket and edge, |Δd| ≤ GROUP_D_TOL and Jaccard ≥ GROUP_MIN_JACCARD
+ * (transitively). A sheet without distinctive statics is its own group; in a
+ * set of fewer than 3 sheets, such sheets with the same page size in inches,
+ * edge and |Δd| ≤ GROUP_D_TOL share one. A sheet without a title block has
+ * no group and no signature (a signature needs an edge).
+ *
+ * Output (step 6): per sheet `border`, and for a sheet with a title block a
+ * `title_block` region (the strip, border to border) and `group` / `group_sig`;
+ * always a `drawing_area` (the border box minus the strip). Regions pass
+ * through `cleanRegions` with the sheet's dims. The result does not depend on
+ * the input order. */
+export function detectSetRegions(sheets: readonly DetectSheet[]): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> } {
+  const order = [...sheets].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const prep: Prepared[] = order.map((sheet) => ({ sheet, box: findBorder(sheet).box, aspect: aspectBucket(sheet.w, sheet.h) }));
+  const all = prep.map((_, i) => i);
+  // pass 1: per aspect bucket
+  const buckets = components(all, (a, b) => prep[a].aspect === prep[b].aspect);
+  const cls1 = classifyWithin(prep, buckets);
+  const det1 = detectWith(prep, cls1);
+  // pass 2: per candidate group
+  const cls = classifyWithin(prep, candidateGroups(prep, det1.map((r) => r.decision)), cls1);
+  const det = detectWith(prep, cls);
+  const dec = det.map((r) => r.decision);
+  const cgroups = candidateGroups(prep, dec);
+
+  // step 5: statics inside each sheet's strip; distinctive ones only with ≥ 2 candidate groups
+  const statics: Set<string>[] = prep.map((p, i) => {
+    const out = new Set<string>();
+    const d = dec[i];
+    if (!d.edge || d.d === null) return out;
+    for (const k of cls[i].staticIdx) {
+      const t = p.sheet.tokens[k];
+      const [u, v] = stripUV(d.edge, p.box, ...tokenCenter(t));
+      if (u >= 0 && u <= 1 && v >= 0 && v <= d.d) out.add(normText(t.str));
+    }
+    return out;
+  });
+  if (cgroups.length >= 2) {
+    const per = cgroups.map((g) => new Set(g.flatMap((i) => [...statics[i]])));
+    const common = [...per[0]].filter((s) => per.every((p) => p.has(s)));
+    for (const s of statics) for (const c of common) s.delete(c);
+  }
+  const small = prep.length < 3;
+  const groups = components(dec.flatMap((d, i) => (d.edge ? [i] : [])), (a, b) => {
+    if (!sameGeom(prep, dec, a, b)) return false;
+    const sa = statics[a], sb = statics[b];
+    if (sa.size && sb.size) return jaccardOf(sa, sb) >= GROUP_MIN_JACCARD;
+    return small && !sa.size && !sb.size && samePageIn(prep[a].sheet.pageIn, prep[b].sheet.pageIn);
+  });
+  const sigs: GroupSig[] = groups.map((g) => {
+    const ds = g.map((i) => dec[i].d!).sort((a, b) => a - b);
+    const pages = g.map((i) => prep[i].sheet.pageIn);
+    const page = pages.every((p) => samePageIn(p, pages[0])) ? pages[0] : undefined;
+    const count = new Map<string, number>();
+    for (const i of g) for (const s of statics[i]) count.set(s, (count.get(s) ?? 0) + 1);
+    return {
+      edge: dec[g[0]].edge!, d: ds[(ds.length - 1) >> 1], aspect: prep[g[0]].aspect,
+      ...(page ? { page_in: [page[0], page[1]] as [number, number] } : {}),
+      statics: capStatics([...count].filter(([, n]) => n * 2 >= g.length).map(([s]) => s)),
+    };
+  });
+  const ids = assignGroupIds(groups.map((g, k) => ({ sig: sigs[k], keys: g.map((i) => prep[i].sheet.key) })));
+  const groupOfSheet = new Map<number, number>();
+  groups.forEach((g, k) => g.forEach((i) => groupOfSheet.set(i, k)));
+
+  // step 6
+  const regions = new Map<string, SheetRegions>();
+  const diag = new Map<string, DetectDiag>();
+  prep.forEach((p, i) => {
+    const { sheet, box } = p;
+    const d = dec[i];
+    const raw: Region[] = [];
+    let area: Bbox = [...box];
+    if (d.strip && d.edge) {
+      raw.push({ id: "title_block", kind: "title_block", bbox: [...d.strip], parent: null, evidence: [...d.evidence], confidence: d.confidence, source: sheet.source });
+      const [sx0, sy0, sx1, sy1] = d.strip;
+      if (d.edge === "right") area = [box[0], box[1], sx0, box[3]];
+      else if (d.edge === "left") area = [sx1, box[1], box[2], box[3]];
+      else if (d.edge === "bottom") area = [box[0], box[1], box[2], sy0];
+      else area = [box[0], sy1, box[2], box[3]];
+    }
+    raw.push({
+      id: "drawing_area", kind: "drawing_area", bbox: area, parent: null,
+      evidence: d.strip ? ["border", "title-block"] : ["border", "no-title-block"], confidence: d.confidence, source: sheet.source,
+    });
+    const k = groupOfSheet.get(i);
+    regions.set(sheet.key, {
+      key: sheet.key, w: sheet.w, h: sheet.h, border: [...box],
+      ...(k !== undefined ? { group: ids[k], group_sig: sigs[k] } : {}),
+      regions: cleanRegions(raw, { w: sheet.w, h: sheet.h }),
+    });
+    diag.set(sheet.key, det[i].diag);
+  });
+  return { regions, diag };
 }
