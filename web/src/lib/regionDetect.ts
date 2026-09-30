@@ -3,9 +3,10 @@
 // so the web app and the MCP server feed it the same source-neutral inputs.
 //
 // Implemented so far: the input types, the line adapter, step 1 (border),
-// step 2 (strip candidates) and step 4 (signals, acceptance, confidence) per
-// sheet. Repetition (step 3) is an input to step 4 until task 6 adds it;
-// grouping and `detectSetRegions` land in later tasks.
+// step 2 (strip candidates), step 3 (statics, fields and repetition bands
+// over a set of sheets) and step 4 (signals, acceptance, confidence) per
+// sheet; step 3 reaches step 4 through `DetectOptions`. Grouping and
+// `detectSetRegions` land in the next commit.
 import type { Bbox } from "./sheetgraph.ts";
 
 /** A positioned text run in image px (RENDER_SCALE, displayed orientation).
@@ -377,6 +378,8 @@ export interface DetectOptions {
   repeat?: (c: StripCandidate) => boolean;
   /** Step 3's strips for edges without any chain. Default: none. */
   repeatStrips?: RepeatStrip[];
+  /** Step 3's static and field token indices, copied into the diagnostics. */
+  classes?: TokenClasses;
 }
 /** The per-sheet title-block decision. `strip` is the accepted strip, border
  * to border along its edge (image px); null when abstaining. */
@@ -498,7 +501,149 @@ export function detectTitleBlock(sheet: DetectSheet, opts: DetectOptions = {}): 
   return {
     decision,
     diag: {
-      border: box, edge: decision.edge, d: decision.d, candidates: judged.map((j) => j.diag), staticIdx: [], fieldIdx: [],
+      border: box, edge: decision.edge, d: decision.d, candidates: judged.map((j) => j.diag),
+      staticIdx: [...(opts.classes?.staticIdx ?? [])], fieldIdx: [...(opts.classes?.fieldIdx ?? [])],
     },
   };
+}
+
+// ── step 3: repetition across the set ───────────────────────────────────────
+/** Step 3: two tokens are "at the same position" when their centers,
+ * normalized to their sheets' border boxes, lie within this fraction per axis. */
+export const REPEAT_POS_TOL = 0.02;
+/** Step 3: static (same text) or field (a fixed position whose text changes)
+ * on at least this share of the sheets considered … */
+export const REPEAT_MIN_SHARE = 0.5;
+/** … and on at least this many sheets. */
+export const REPEAT_MIN_SHEETS = 3;
+/** Step 3: the repetition band holds static and field tokens within this
+ * depth of an edge (fraction of the border box across the edge). */
+export const BAND_DEPTH = 0.32;
+/** Step 3: `repeat` needs the band to cover at least this share of the
+ * candidate strip's length along the edge. */
+export const BAND_MIN_COVER = 0.5;
+/** Steps 3 and 5: candidate groups and groups need |Δd| ≤ this. */
+export const GROUP_D_TOL = 0.015;
+
+/** The text two tokens are compared by: trimmed, inner whitespace collapsed,
+ * upper case. */
+export const normText = (s: string): string => s.trim().replace(/\s+/g, " ").toUpperCase();
+
+/** One sheet as step 3 sees it: its tokens and its border box. */
+export interface RepeatInput { tokens: readonly DetectToken[]; box: Bbox }
+/** Token indices per sheet: static (same text at the same position on enough
+ * sheets) and field (a fixed position whose text changes). */
+export interface TokenClasses { staticIdx: number[]; fieldIdx: number[] }
+
+/** Step 3 over the sheets considered together (an aspect bucket, then a
+ * candidate group). With n sheets, "enough" is max(REPEAT_MIN_SHEETS,
+ * ⌈REPEAT_MIN_SHARE · n⌉) sheets, the token's own included:
+ *  - static: that many sheets hold a token with the same normalized text
+ *    within REPEAT_POS_TOL (per axis) of the token's normalized center;
+ *  - field (not static): that many sheets hold some token at that position,
+ *    and on ≥ ⌈REPEAT_MIN_SHARE · n⌉ other sheets none of the tokens there
+ *    has this text.
+ * Fewer than REPEAT_MIN_SHEETS sheets: nothing is static or a field. Tokens
+ * with empty text are neither. Output in input order, indices ascending. */
+export function classifyRepetition(sheets: readonly RepeatInput[]): TokenClasses[] {
+  const n = sheets.length;
+  const out: TokenClasses[] = sheets.map(() => ({ staticIdx: [], fieldIdx: [] }));
+  const need = Math.max(REPEAT_MIN_SHEETS, Math.ceil(REPEAT_MIN_SHARE * n - 1e-9));
+  if (n < need) return out;
+  const changedNeed = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
+  const T = REPEAT_POS_TOL, EPS = 1e-9;
+  const pts = sheets.map(({ tokens, box }) => {
+    const [bx0, by0, bx1, by1] = box;
+    const bw = bx1 - bx0, bh = by1 - by0;
+    return tokens.map((t) => {
+      const [x, y] = tokenCenter(t);
+      return { x: (x - bx0) / bw, y: (y - by0) / bh, text: normText(t.str) };
+    });
+  });
+  // a grid of REPEAT_POS_TOL cells per sheet: a query looks at the 3 × 3 cells around it
+  const grids = pts.map((ps) => {
+    const g = new Map<string, number[]>();
+    ps.forEach((p, i) => {
+      if (!p.text || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+      const k = `${Math.floor(p.x / T)},${Math.floor(p.y / T)}`;
+      const cell = g.get(k);
+      if (cell) cell.push(i); else g.set(k, [i]);
+    });
+    return g;
+  });
+  const near = (s: number, x: number, y: number): number[] => {
+    const cx = Math.floor(x / T), cy = Math.floor(y / T), hit: number[] = [];
+    for (let a = cx - 1; a <= cx + 1; a++) for (let b = cy - 1; b <= cy + 1; b++) {
+      for (const i of grids[s].get(`${a},${b}`) ?? []) {
+        const p = pts[s][i];
+        if (Math.abs(p.x - x) <= T + EPS && Math.abs(p.y - y) <= T + EPS) hit.push(i);
+      }
+    }
+    return hit;
+  };
+  pts.forEach((ps, s) => {
+    ps.forEach((p, i) => {
+      if (!p.text || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+      let same = 0, occupied = 0, changed = 0;
+      for (let o = 0; o < n; o++) {
+        const hit = near(o, p.x, p.y);
+        if (!hit.length) continue;
+        occupied++;
+        if (hit.some((j) => pts[o][j].text === p.text)) same++;
+        else if (o !== s) changed++;
+      }
+      if (same >= need) out[s].staticIdx.push(i);
+      else if (occupied >= need && changed >= changedNeed) out[s].fieldIdx.push(i);
+    });
+  });
+  return out;
+}
+
+/** The repetition band on one edge: the box, in that edge's strip
+ * coordinates, of the centers of the given (static + field) tokens that lie
+ * inside the border box within BAND_DEPTH of the edge. */
+export interface RepeatBand { edge: Edge; u0: number; u1: number; v0: number; v1: number }
+
+export function repetitionBands(tokens: readonly DetectToken[], box: Bbox, idx: readonly number[]): Partial<Record<Edge, RepeatBand>> {
+  const out: Partial<Record<Edge, RepeatBand>> = {};
+  if (!(box[2] > box[0] && box[3] > box[1])) return out;
+  const centers = idx.map((i) => tokenCenter(tokens[i]));
+  for (const edge of EDGES) {
+    let b: RepeatBand | null = null;
+    for (const [x, y] of centers) {
+      const [u, v] = stripUV(edge, box, x, y);
+      if (!(u >= 0 && u <= 1 && v >= 0 && v <= BAND_DEPTH)) continue;
+      if (!b) b = { edge, u0: u, u1: u, v0: v, v1: v };
+      else { b.u0 = Math.min(b.u0, u); b.u1 = Math.max(b.u1, u); b.v0 = Math.min(b.v0, v); b.v1 = Math.max(b.v1, v); }
+    }
+    if (b) out[edge] = b;
+  }
+  return out;
+}
+
+/** Step 3's `repeat` for a candidate strip of depth d over [e0, e1] along its
+ * edge (the extent-bounded strip of step 2): the band lies inside the strip
+ * (u within [e0, e1], v within [0, d]) and covers ≥ BAND_MIN_COVER of its
+ * length e1 − e0. A strip of zero length never repeats. */
+export function bandRepeats(band: RepeatBand | undefined, d: number, extent: readonly [number, number]): boolean {
+  if (!band) return false;
+  const [e0, e1] = extent;
+  const len = e1 - e0;
+  if (!(len > 0) || band.v1 > d || band.u0 < e0 || band.u1 > e1) return false;
+  return (band.u1 - band.u0) / len >= BAND_MIN_COVER;
+}
+
+/** Step 3's inputs to detectTitleBlock for one sheet, from its token
+ * classes: `repeat` for chain candidates (bandRepeats on the sheet's bands),
+ * and, per edge whose band spans ≥ BAND_MIN_COVER of the border length, a
+ * frameless strip border to border along the edge, as deep as the band
+ * (detectTitleBlock uses it only where the edge has no chain). */
+export function repeatOptions(tokens: readonly DetectToken[], box: Bbox, classes: TokenClasses): DetectOptions {
+  const bands = repetitionBands(tokens, box, [...classes.staticIdx, ...classes.fieldIdx]);
+  const repeatStrips: RepeatStrip[] = [];
+  for (const edge of EDGES) {
+    const b = bands[edge];
+    if (b && b.v1 > 0 && bandRepeats(b, b.v1, [0, 1])) repeatStrips.push({ edge, d: b.v1, extent: [0, 1] });
+  }
+  return { repeat: (c) => bandRepeats(bands[c.edge], c.d, c.extent), repeatStrips, classes };
 }

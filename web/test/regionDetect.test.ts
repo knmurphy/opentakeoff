@@ -5,8 +5,9 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   longAxisLines, TB_SHEETNO_RE, findBorder, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
-  MIN_STRIP_TOKENS,
-  type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
+  MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, bandRepeats, repeatOptions, normText,
+  REPEAT_POS_TOL, BAND_DEPTH,
+  type DetectLine, type RepeatBand, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
 import * as Synth from "./fixtures/regionSynth.ts";
 
@@ -665,6 +666,128 @@ describe("acceptance (step 4)", () => {
   test("diag logs the free end's distance to the nearest other chain", () => {
     const r = detect([hl(xU(0.25), BX1, 1768), vl(xU(0.275), BY0 + 0.3 * BH, BY1 - 0.05 * BH)], STD_TOKENS);
     assertClose(cand(r, "bottom").freeEndGap!, 0.025, "gap", 1e-9);
+  });
+});
+
+// ── step 3: repetition across the set ───────────────────────────────────────
+describe("step 3: statics and fields (classifyRepetition)", () => {
+  // page 1000 × 1000 with the border box at the page edge: normalized = px / 1000
+  const B1: [number, number, number, number] = [0, 0, 1000, 1000];
+  const on = (...toks: DetectToken[]) => ({ tokens: toks, box: B1 });
+  const FIRM = "ACME ARCHITECTS";
+
+  test("static: the same text at the same normalized center on every one of 3 sheets", () => {
+    const out = classifyRepetition([0, 1, 2].map((i) => on(tokC(FIRM, 500, 950), tokC("OFFICE", 100 + 300 * i, 300))));
+    for (const c of out) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [] });
+  });
+
+  test(`position tolerance ${REPEAT_POS_TOL * 100}% per axis: 20 px of 1000 matches, 21 px does not`, () => {
+    const at = (x: number, y: number) => classifyRepetition([on(tokC(FIRM, 500, 950)), on(tokC(FIRM, 500, 950)), on(tokC(FIRM, x, y))]);
+    for (const c of at(520, 930)) assert.deepEqual(c.staticIdx, [0]);
+    // 21 px off: the third sheet matches nobody and the first two alone are < 3 sheets
+    for (const c of at(521, 950)) assert.deepEqual(c.staticIdx, []);
+    for (const c of at(500, 971)) assert.deepEqual(c.staticIdx, []);
+  });
+
+  test("minimum 3 sheets: two identical sheets have no statics or fields", () => {
+    for (const c of classifyRepetition([on(tokC(FIRM, 500, 950)), on(tokC(FIRM, 500, 950))])) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+    assert.deepEqual(classifyRepetition([on(tokC(FIRM, 500, 950))]), [{ staticIdx: [], fieldIdx: [] }]);
+  });
+
+  test("≥ 50% of the sheets considered: 4 of 8 is static, 3 of 8 is not", () => {
+    const set = (k: number) => Array.from({ length: 8 }, (_, i) => on(...(i < k ? [tokC(FIRM, 500, 950)] : []), tokC("OFFICE", 100 + 90 * i, 300)));
+    const four = classifyRepetition(set(4));
+    four.forEach((c, i) => assert.deepEqual(c.staticIdx, i < 4 ? [0] : [], `sheet ${i}`));
+    for (const c of classifyRepetition(set(3))) assert.deepEqual(c.staticIdx, []);
+  });
+
+  test("centers are normalized to each sheet's border box", () => {
+    // (0.5, 0.95) of three different border boxes
+    const out = classifyRepetition([
+      { tokens: [tokC(FIRM, 500, 950)], box: [0, 0, 1000, 1000] },
+      { tokens: [tokC(FIRM, 600, 1000)], box: [100, 50, 1100, 1050] },
+      { tokens: [tokC(FIRM, 1000, 1900)], box: [0, 0, 2000, 2000] },
+    ]);
+    for (const c of out) assert.deepEqual(c.staticIdx, [0]);
+  });
+
+  test("text is compared trimmed, whitespace-collapsed and upper-cased", () => {
+    assert.equal(normText("  Acme   architects "), FIRM);
+    const out = classifyRepetition([on(tokC(FIRM, 500, 950)), on(tokC("acme architects", 500, 950)), on(tokC(" Acme  Architects", 500, 950))]);
+    for (const c of out) assert.deepEqual(c.staticIdx, [0]);
+  });
+
+  test("field: a fixed position whose text changes (sheet numbers A-101 … A-103)", () => {
+    const out = classifyRepetition([1, 2, 3].map((k) => on(tokC(FIRM, 500, 950), tokC(`A-10${k}`, 900, 970))));
+    for (const c of out) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [1] });
+  });
+
+  test("field: text changing on half the sheets (two dates over 4 sheets)", () => {
+    // each token: same text on 2 sheets (< 3, not static), position filled on 4, text differs on 2 ≥ 50% of 4
+    const out = classifyRepetition(["09/01", "09/01", "10/08", "10/08"].map((d) => on(tokC(d, 700, 970))));
+    for (const c of out) assert.deepEqual(c, { staticIdx: [], fieldIdx: [0] });
+  });
+
+  test("a position filled on fewer than 3 sheets is not a field; empty text is neither", () => {
+    const out = classifyRepetition([on(tokC("A-101", 900, 970)), on(tokC("A-102", 900, 970)), on(tokC("OFFICE", 200, 200))]);
+    for (const c of out) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+    const blank = classifyRepetition([0, 1, 2].map(() => on(tokC("  ", 500, 500))));
+    for (const c of blank) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+  });
+});
+
+describe("step 3: repetition band and repeat", () => {
+  // standard page (border BOX): bottom-strip tokens at u 0.1 … 0.9, v 0.05 … 0.08
+  const T = [
+    tokUV("ACME", "bottom", 0.1, 0.05), tokUV("A-101", "bottom", 0.9, 0.08), tokUV("DATE", "bottom", 0.5, 0.06),
+    tokUV("DEEP", "bottom", 0.5, 0.4),        // deeper than 32% of the height: out of the bottom band
+    tokC("7", 30, 1000),                      // in the left margin, outside the border box
+  ];
+  const band = (u0: number, u1: number, v1: number): RepeatBand => ({ edge: "bottom", u0, u1, v0: 0.01, v1 });
+
+  test(`the band: the box of static + field token centers inside the border box within ${BAND_DEPTH * 100}% of the edge`, () => {
+    const b = repetitionBands(T, BOX, [0, 1, 2, 3, 4]);
+    const bot = b.bottom!;
+    assertClose(bot.u0, 0.1, "u0"); assertClose(bot.u1, 0.9, "u1"); assertClose(bot.v0, 0.05, "v0"); assertClose(bot.v1, 0.08, "v1");
+    // top: every token is ≥ 60% from the top border
+    assert.equal(b.top, undefined);
+    // only the listed indices count
+    assert.deepEqual(repetitionBands(T, BOX, []), {});
+    assertClose(repetitionBands(T, BOX, [0, 2]).bottom!.u1, 0.5, "u1 of two");
+  });
+
+  test("repeat: the band lies inside the extent-bounded strip and covers ≥ 50% of its length", () => {
+    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.1, [0, 1]), true);
+    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.08, [0, 1]), true);    // v1 = d: inside
+    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.079, [0, 1]), false);  // deeper than the strip
+    assert.equal(bandRepeats(band(0.3, 0.8, 0.08), 0.1, [0, 1]), true);     // covers 0.5
+    assert.equal(bandRepeats(band(0.3, 0.79, 0.08), 0.1, [0, 1]), false);   // covers 0.49
+    // a partial chain over [0.25, 1]: a band starting at u 0.1 is not inside it
+    assert.equal(bandRepeats(band(0.1, 0.9, 0.08), 0.1, [0.25, 1]), false);
+    assert.equal(bandRepeats(band(0.3, 0.9, 0.08), 0.1, [0.25, 1]), true);  // 0.6 / 0.75 = 0.8
+    assert.equal(bandRepeats(undefined, 0.1, [0, 1]), false);
+    assert.equal(bandRepeats(band(0.5, 0.5, 0.08), 0.1, [0.5, 0.5]), false); // zero-length strip
+  });
+
+  test("repeatOptions: a frameless strip as deep as the band where it spans ≥ 50% of the border length", () => {
+    const o = repeatOptions(T, BOX, { staticIdx: [0, 2], fieldIdx: [1] });
+    assert.equal(o.repeatStrips!.length, 1);
+    const s = o.repeatStrips![0];
+    assert.equal(s.edge, "bottom"); assertClose(s.d, 0.08, "d"); assert.deepEqual(s.extent, [0, 1]);
+    // a band spanning 0.4 of the border length gives no strip
+    const short = repeatOptions([tokUV("A", "bottom", 0.3, 0.05), tokUV("B", "bottom", 0.7, 0.05)], BOX, { staticIdx: [0, 1], fieldIdx: [] });
+    assert.deepEqual(short.repeatStrips, []);
+    assert.equal(short.repeat!({ edge: "bottom", d: 0.1, extent: [0.2, 0.8], cover: 0.6, touch: "both", frame: true, freeEndGap: null }), true);
+  });
+
+  test("detectTitleBlock with repeatOptions: a borderless strip found by rule C; diag carries the classes", () => {
+    const tokens = [...fill("bottom", 0.1, 20), NUMBER, ...DRAWING];
+    // statics: fillers at u 0.025 and 0.975 (v 0.075); field: the number
+    const classes = { staticIdx: [0, 19], fieldIdx: [20] };
+    const r = detectTitleBlock(mk([], tokens), repeatOptions(tokens, [0, 0, PW, PH], classes));
+    assert.equal(r.decision.edge, "bottom");
+    assert.deepEqual(r.decision.rules, ["C"]);
+    assert.deepEqual([r.diag.staticIdx, r.diag.fieldIdx], [[0, 19], [20]]);
   });
 });
 
