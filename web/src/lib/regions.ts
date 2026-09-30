@@ -557,13 +557,14 @@ export function matchGroup(sig: GroupSig, groups: ReadonlyMap<string, GroupInfo>
     if (home && home[1].sig.statics.length) return { group: null, reason: "no-match" };
     if (home && fits.some(([id]) => id === home[0])) return { group: home[0], score: 1 };
   }
+  // a group of unknown page size passes the geometric test too, so it
+  // counts toward "exactly one" even though it can't anchor on its own
   const free = fits.filter(([, g]) => !g.sig.statics.length);
   if (!free.length) return { group: null, reason: "no-match" };
   if (!sig.page_in) return { group: null, reason: "no-anchor" };
-  const sized = free.filter(([, g]) => g.sig.page_in);
-  if (!sized.length) return { group: null, reason: "no-anchor" };
-  if (sized.length > 1) return { group: null, reason: "ambiguous" };
-  return { group: sized[0][0], score: 1 };
+  if (free.length > 1) return { group: null, reason: "ambiguous" };
+  const [id, only] = free[0];
+  return only.sig.page_in ? { group: id, score: 1 } : { group: null, reason: "no-anchor" };
 }
 
 /** Corrections resolved against a detected map. The web app and the MCP both

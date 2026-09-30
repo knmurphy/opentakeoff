@@ -594,3 +594,13 @@ test("sanitizeRegionMap: a bad border or group_sig is dropped; statics are cappe
   assert.equal(back.get("c")!.border, undefined);                      // off the sheet
   assert.equal(back.get("c")!.group_sig, undefined);
 });
+
+// ── review fixes ────────────────────────────────────────────────────────────
+
+test("matchGroup: page anchor — one known + one unknown-size statics-free group → ambiguous", () => {
+  const known = mapGroups(setMap(on("sk.pdf#1", "g:a", coverSig), on("sk.pdf#2", "g:b", { ...coverSig, page_in: undefined })));
+  assert.deepEqual(matchGroup(coverSig, known, "gone.pdf#1"), { group: null, reason: "ambiguous" });
+  // exactly one passing group, but its page size is unknown → no anchor
+  const lone = mapGroups(setMap(on("sk.pdf#2", "g:b", { ...coverSig, page_in: undefined })));
+  assert.deepEqual(matchGroup(coverSig, lone, "gone.pdf#1"), { group: null, reason: "no-anchor" });
+});
