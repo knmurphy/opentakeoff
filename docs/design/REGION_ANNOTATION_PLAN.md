@@ -247,6 +247,24 @@ expectations in four places. Resolved as follows (no real data used):
    bench).
 4. **Candidate groups for frameless sheets** use aspect bucket and edge only
    (no d test), since their pass-1 depths scatter.
+5. **When a chain frames the band** (second round of task 6a). A chain on
+   the edge *frames* the static band when the band's depth ≤ the chain's d
+   ≤ 1.5 × the band's depth (`FRAME_BAND_RATIO`). A framing chain gets
+   `repeat: true`, with coverage measured along the full strip, and that
+   edge's frameless candidate is dropped. A chain that does not frame the
+   band gets no `repeat` from it; the frameless candidate then joins that
+   edge's candidates in the usual smallest-d-first order. (A gap-broken
+   real frame just beyond the text frames it; a full-width rule at 26% above
+   text ending at 9% does not.)
+6. **Contiguous bands.** The band is built from statics taken outward from
+   the border, stopping at the first depth gap > 4% of the dimension
+   (`BAND_GAP`): chance statics deeper in the drawing (words that line up on
+   2 of 4 sheets) are left out. A frameless strip's d extends over **all**
+   tokens contiguous with the band (static or not, same 4% gap), so filler
+   text below the statics is inside the strip.
+
+`FRAME_BAND_RATIO` and `BAND_GAP` come from the synthetic sets and are
+recalibrated on the tune set in task 6b.
 
 ### Step 4 — acceptance rule (decides title block vs abstain)
 
