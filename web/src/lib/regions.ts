@@ -614,9 +614,14 @@ export function resolveOverrides(map: ReadonlyMap<string, SheetRegions>, ov: Reg
   return out;
 }
 
-/** The group a sheet belongs to: a resolved manual move wins over detection. */
+/** The group a sheet belongs to: a resolved manual move wins over detection.
+ *  Takes a resolution already made, for loops over many sheets. */
+export const groupOfResolved = (map: ReadonlyMap<string, SheetRegions>, res: ResolvedOverrides, key: string): string | undefined =>
+  res.moves[key] ?? map.get(key)?.group;
+
+/** groupOf for one sheet: resolves the corrections first. */
 export const groupOf = (map: ReadonlyMap<string, SheetRegions>, ov: RegionOverrides, key: string): string | undefined =>
-  resolveOverrides(map, ov).moves[key] ?? map.get(key)?.group;
+  groupOfResolved(map, resolveOverrides(map, ov), key);
 
 const toPx = (r: Region, w: number, h: number): Region => ({ ...r, bbox: [r.bbox[0] * w, r.bbox[1] * h, r.bbox[2] * w, r.bbox[3] * h] });
 

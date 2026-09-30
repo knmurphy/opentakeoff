@@ -6,7 +6,7 @@ import {
   regionAt, regionPath, regionLabel, hitRegion, formatHitRegion, cleanRegions,
   setSignature, serializeRegionMap, sanitizeRegionMap, sanitizeRegionOverrides,
   applyOverrides, groupOf, toNormBbox, REGION_MAP_SCHEMA, REGION_DETECTOR_VERSION, REGION_KINDS, REGION_PARENT,
-  aspectBucket, capStatics, assignGroupIds, mapGroups, matchGroup, resolveOverrides,
+  aspectBucket, capStatics, assignGroupIds, mapGroups, matchGroup, resolveOverrides, groupOfResolved,
   type Region, type SheetRegions, type GroupSig, type RegionOverrides,
 } from "../src/lib/regions.ts";
 
@@ -623,4 +623,14 @@ test("resolveOverrides: a move whose sheet is gone is reported, not skipped", ()
   const r = resolveOverrides(baseMap(), { sheet_group: { "gone.pdf#4": { group: "g:arch", sig: archSig } } });
   assert.deepEqual(r.moves, {});
   assert.deepEqual(r.unattached, [{ kind: "move", key: "gone.pdf#4", reason: "no-match" }]);
+});
+
+test("groupOfResolved: reads a precomputed resolution; groupOf agrees", () => {
+  const map = baseMap();
+  const ov = { sheet_group: { "s.pdf#1": { group: "g:x", sig: archSig } } };
+  const res = resolveOverrides(map, ov);
+  for (const key of map.keys()) assert.equal(groupOfResolved(map, res, key), groupOf(map, ov, key));
+  assert.equal(groupOfResolved(map, res, "s.pdf#1"), "g:arch");
+  assert.equal(groupOfResolved(map, res, "s.pdf#2"), "g:arch");
+  assert.equal(groupOfResolved(map, res, "missing"), undefined);
 });
