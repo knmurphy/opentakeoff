@@ -1,214 +1,288 @@
-# Region annotation — implementation plan, piece 2: title block vs drawing area
+# Region annotation — implementation plan, piece 2a: title block vs drawing area (vector)
 
 Design: [REGION_ANNOTATION.md](REGION_ANNOTATION.md). Piece 1 (the region map
-module, `web/src/lib/regions.ts`) is done. This plan covers piece 2 only.
+module, `web/src/lib/regions.ts`) is done.
 
-Status: draft, under review. Fork only.
+Status: revision 2, after review round 1 (4 reviewers, all FAIL). Fork only.
 
-## Goal
+## Scope
 
-For every sheet in a plan set, produce a `SheetRegions` with:
+Piece 2 is split:
 
-- one `title_block` region (the strip along one edge), or none when the
-  sheet has none we can find;
-- one `drawing_area` region (the rest of the sheet, inside the border);
-- a `group` id: sheets whose title blocks match share a group.
+- **2a (this plan):** detect the title block and drawing area on vector sheets
+  (text layer + vector lines), group sheets by title block, stable group ids,
+  a real-set evaluation, and one end-to-end use: MCP `find_text` hits carry a
+  `region`.
+- **2b (next plan):** raster long-line extraction, the raster line-path test,
+  and OCR tokens once the OCR branch is merged. Until 2b, nothing claims
+  vector/raster parity.
 
-It must work the same on vector sheets and on raster sheets after OCR, and on
-any of the four edges, in the displayed orientation.
+Also moved out of 2a, to the pieces that need them: moving the existing
+lower-right and 6% guesses onto the map (after 2a is measured on real sets),
+the correction UI, title-block parts, detail viewports, cover-sheet handling.
+The design doc's piece list is updated to match.
 
-Out of scope for this piece: parts of the title block (firm, sheet ID…),
-detail viewports, schedules/notes, cover-sheet handling, wiring into search
-/ MCP / the canvas, the correction UI. Those are later pieces.
+## Changes to piece 1 first (task 0)
+
+Found in review:
+
+1. **Stable group ids.** A group id is a content hash, not "first sheet key":
+   `g:` + short hash of (edge, d rounded to 1%, aspect bucket, the group's
+   sorted distinctive static strings). Adding, removing or reordering sheets,
+   or bumping the detector version, does not change it unless the title
+   block itself changes.
+2. **Re-attaching templates.** `SheetRegions` gets `group_sig`
+   (edge, d, aspect bucket, distinctive static strings). A stored template
+   keeps the `group_sig` it was made for. If its group id no longer exists,
+   it re-attaches to the group with the same edge and the best string overlap
+   (Jaccard ≥ 0.5). No match → the template stays stored and is reported as
+   unattached, never applied to a guess.
+3. **`applyOverrides` recomputes the drawing area** when a template replaces
+   the title block: the detected drawing area is trimmed so it does not
+   overlap the template's strip (trimmed on the side the strip touches). A
+   test covers a template on a different edge than the detected one.
+4. **Top-level regions are clamped to the sheet** `[0,w]×[0,h]` in
+   `cleanRegions` when `w`/`h` are known.
+
+Detector-version policy: a bump drops the cached map; group ids and stored
+corrections survive because ids are content-derived.
 
 ## Inputs (source-neutral)
 
-A new pure module `web/src/lib/regionDetect.ts`. It never checks where its
-inputs came from.
+New pure module `web/src/lib/regionDetect.ts`:
 
 ```ts
 interface DetectToken { str: string; x: number; y: number; w?: number; h: number; rot?: number }
-interface DetectLine  { x0: number; y0: number; x1: number; y1: number } // axis-aligned, long
+interface DetectLine  { x0: number; y0: number; x1: number; y1: number } // axis-aligned
 interface DetectSheet {
-  key: string;
-  w: number; h: number;            // image px at RENDER_SCALE, displayed orientation
+  key: string;                 // sheetKey.ts convention
+  w: number; h: number;        // image px at RENDER_SCALE, displayed orientation
+  pageIn?: [number, number];   // page size in inches, when known
   tokens: DetectToken[];
-  lines: DetectLine[];             // may be empty (raster sheet without line extraction)
-  source: "vector" | "ocr";        // copied onto regions, never used for decisions
+  lines: DetectLine[];
+  source: "vector" | "ocr";    // copied onto regions, never used for decisions
 }
-detectSetRegions(sheets: DetectSheet[]): Map<string, SheetRegions>
+interface DetectDiag {         // per sheet; recomputed, not persisted
+  border: Bbox | null; edge: Edge | null; d: number | null;
+  candidates: { edge: Edge; d: number; frame: boolean; density: number; sheetno: boolean; repeat: boolean; accepted: boolean; reason: string }[];
+  staticIdx: number[]; fieldIdx: number[];   // token indices, for piece 4 (title-block parts)
+}
+detectSetRegions(sheets: DetectSheet[]): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> }
 ```
 
-Token convention: the existing `{str,x,y,h}` (x left, y baseline/bottom, y
-down), plus optional `w` and `rot` (degrees clockwise, device space, as
-`mcp/src/pdf.ts` `TextSpan.rot`).
+`diag` is returned so later pieces (title-block parts need static vs field
+tokens; detail viewports need lines) don't redo the work. It is not
+persisted; recomputing needs the set's tokens and lines again, which the MCP
+already loads per sheet.
 
-### Adapters (thin, tested separately)
-
-1. **Vector lines:** from `extractVectorGeometry` (`web/src/lib/oneclick.ts:403`)
-   segments → keep axis-aligned segments (within 0.5°) longer than 15% of the
-   sheet's shorter side; merge collinear pieces with gaps ≤ 0.5% of the side.
-   New pure function `longAxisLines(segs, w, h)` in `regionDetect.ts`.
-2. **Raster lines:** `rasterLongLines(gray: Uint8Array, w, h, opts)`: threshold,
-   then horizontal and vertical run-length scan; a run ≥ 15% of the shorter
-   side (with gaps ≤ 0.3% bridged) is a line; merge adjacent rows/columns
-   into one line. Pure, no canvas.
-3. **Vector tokens:** MCP already has `textSpans` with `rot`
-   (`mcp/src/pdf.ts:261`). Web: add `rot` to `extractRegionText` tokens
-   (`web/src/lib/sheets.ts:276`) as an optional field; existing callers
-   ignore it.
-4. **OCR tokens:** `OcrWord` → `DetectToken` (no `rot`; the OCR box is
-   axis-aligned). Only on top of the OCR branch; see "Dependencies".
+The detector has its own sheet-number pattern, `TB_SHEETNO_RE` (accepts
+`A1-101`). `sheets.ts` `SHEET_NO_RE` and `extractSheetNumber` are not
+touched in 2a.
 
 ## Algorithm
 
-### Step 1 — per-sheet edge scores
+All distances are fractions of the sheet dimension perpendicular to the edge
+in question, measured **from the border**, not the page edge.
 
-For each edge E in {right, bottom, left, top}, look for the strip boundary:
-a line parallel to E at offset d from E, with d between 4% and 30% of the
-sheet dimension perpendicular to E, spanning ≥ 70% of E's length.
+### Step 1 — border
 
-Score each candidate strip [edge … d] from:
+The border is the outermost pair of long rules per axis (span ≥ 90% of the
+other axis) within 8% of each page edge. Measured on the real sheets: 1.5–5.6%
+(Porterville's left border is 5.6%). A side with no such rule uses the page
+edge. Border rules never count as strip boundaries.
 
-- `frame`: a qualifying line exists (1) or not (0);
-- `density`: text tokens per unit area inside the strip ÷ in the rest of the
-  sheet (title blocks are text-dense);
-- `sheetno`: a token matching the sheet-number pattern (`SHEET_NO_RE`,
-  widened to accept `A1-101`) lies in the strip, at the far end along the
-  edge (bottom-right corner area for right/bottom strips);
-- `prior`: right 1.0, bottom 0.9, left 0.3, top 0.2.
+### Step 2 — strip candidates per edge
 
-Without a frame line (raster sheet with no line extraction, or a borderless
-title block), candidate offsets come from the token distribution instead: the
-largest empty gutter parallel to E between the strip-shaped dense band and
-the rest.
+For each edge, a candidate boundary is a rule parallel to the edge at depth d
+from the border, where:
 
-Per-sheet result: best edge, offset d, per-edge scores kept for step 3.
+- d is between 6% and 30% (measured real strips: 11.1–18.5%);
+- the rule runs **border to border**: both ends within 1% of the border (or
+  ≥ 95% of the border-to-border length);
+- the rule does not end on another candidate rule (a T-junction means it lies
+  inside the drawing area — Shreveport's right legend column, x=0.886, and
+  Roseburg's, x=0.763, end on the bottom title-block rule and are rejected).
 
-### Step 2 — repetition across the set
+Per edge, candidates are tried from the **smallest d outward**; the first one
+that passes the acceptance rule wins. A wider strip that swallows notes
+columns (Porterville: 0.889 real, 0.722 notes column) is only considered if
+the narrower one fails.
 
-Normalize token positions to [0..1]. A token is **static** if the same
-normalized text (upper-case, whitespace-collapsed) appears within 1% (of the
-sheet's diagonal) of the same normalized position on ≥ 50% of sheets in its
-group candidate (minimum 3 sheets). A token at a fixed position whose text
-**changes** across sheets, on ≥ 50% of sheets, is a **field** (sheet number,
-title, date).
+Without any rule on an edge (borderless title block), a candidate comes from
+repetition (step 3) only.
 
-The repetition band for an edge is the bounding box of static + field
-tokens that lie within 35% of that edge. It adds a `repeat` score to that
-edge's candidate and can supply d when no frame line exists.
+### Step 3 — repetition across the set
 
-Sets with fewer than 3 sheets skip step 2; per-sheet signals decide.
+Token **centers** normalized to the border box. A token is static if the same
+normalized text is within 2% (per axis) of the same position on ≥ 50% of the
+sheets considered (minimum 3). A fixed position whose text changes on ≥ 50%
+of sheets is a field. Strings that are static in **every** group (e.g. an
+agency form number such as "VA FORM 08-6231") are not distinctive and are
+left out of grouping.
 
-### Step 3 — grouping
+The repetition band for an edge: the box of static + field tokens within 32%
+of that edge. A candidate is `repeat: true` when the band lies inside the
+candidate strip and covers ≥ 50% of its length.
 
-Signature per sheet: aspect ratio (w/h, rounded to 0.02), chosen edge, d
-(normalized), and the set of static-token strings from step 2.
+### Step 4 — acceptance rule (decides title block vs abstain)
 
-Greedy clustering in sheet order: a sheet joins the first group with the same
-aspect bucket and edge, |Δd| ≤ 1.5%, and Jaccard(static strings) ≥ 0.5 (when
-both have static strings). Otherwise it starts a new group. Group id =
-`g:<first sheet key>`.
+A candidate strip is accepted if **any** of:
 
-Steps 2 and 3 iterate once: compute static tokens over all sheets with the
-same aspect bucket, cluster, then recompute static tokens per group and
-re-score.
+- A: `frame` and `sheetno` (a `TB_SHEETNO_RE` token inside the strip, in its
+  far-end third along the edge);
+- B: `frame` and `repeat`;
+- C: `repeat` and `density ≥ 2.0` (tokens per area in the strip ÷ in the rest).
 
-### Step 4 — regions
+One signal alone never accepts. If no edge has an accepted candidate: no
+title block; the drawing area is the border box, confidence 0.3.
 
-- `title_block`: the strip [edge … d], confidence from combined score,
-  evidence names each signal that fired (`frame-line`, `text-density`,
-  `sheet-number`, `repetition`), `source` = the sheet's source.
-- `drawing_area`: the sheet minus the strip, inset by the border when an
-  outer border frame is found (a line within 4% of each edge), otherwise
-  the whole remainder.
-- No title block when the best combined score is below a threshold: emit only
-  `drawing_area` covering the sheet (confidence low). Never guess.
+Between edges with accepted candidates: the one satisfying more of A/B/C
+wins; ties go right, bottom, left, top. (No weighted priors.)
 
-Thresholds are named constants at the top of the module, each with a comment
-saying where the value came from.
+Confidence is by rule, not a weighted score: A+B+C 0.95, two rules 0.85,
+one rule 0.7. `evidence` lists the rules and signals that fired
+(`rule:A`, `frame-line`, `sheet-number`, `repetition`, `text-density`).
 
-## Fixtures and tests (TDD)
+### Step 5 — grouping
 
-Every step is written test-first.
+Sheets with distinctive static strings: same aspect bucket (w/h to 0.02) and
+edge, |Δd| ≤ 1.5%, Jaccard(distinctive statics) ≥ 0.5 → same group.
+A sheet **without** distinctive statics does not join a group by geometry
+alone; it is its own group, unless the whole set has fewer than 3 sheets,
+in which case sheets with the same page size in inches, edge and |Δd| ≤ 1.5%
+share a group. Steps 3 and 5 iterate once (statics per aspect bucket →
+cluster → statics per group).
 
-### Synthetic sets (generated, deterministic)
+### Step 6 — output
 
-A generator script `web/scripts/make-region-fixtures.mjs` (same pattern as
-`mcp/scripts/make-sheetgraph-fixture.mjs`) writes small vector PDFs plus a
-`.regions.json` answer key per page:
+Regions via `regions.ts` types, validated by `cleanRegions`:
 
-1. **right-strip set**, 5 sheets, ARCH D aspect, frame line, static firm and
-   project text, changing sheet number/title.
-2. **bottom-strip set**, 4 sheets, same idea along the bottom.
-3. **mixed set**: 3 architect sheets (right strip) + 2 consultant sheets with
-   a different title block (bottom strip) + 1 letter-size sketch sheet. Must
-   produce 3 groups.
-4. **rotated set**: the right-strip set with `/Rotate 90` on two pages (the
-   displayed orientation must still yield a right strip).
-5. **borderless**: title block with no frame line (text only).
-6. **no title block**: a sheet with only drawing content.
+- `title_block`: the accepted strip, border to border along its edge.
+- `drawing_area`: the border box minus the strip.
+- Tokens in the border margin fall in no region (`hitRegion` → null). That
+  is correct: margin text is border numerals and grid labels.
 
-Unit tests can also build `DetectSheet` objects directly in code (no PDF)
-for the step-level tests; the PDFs are for the adapter and end-to-end tests.
+Named constants at the top of the module; each comment names the data it was
+calibrated on (task 6).
 
-### Real sheets (single sheets, hand-labeled answer keys)
+## Evaluation data
 
-- `evals/four-asks-2026-09-02/sheets/va-dublin-bldg9a-finish-plan-A601.pdf` (bottom, /Rotate 90)
-- `evals/four-asks-2026-09-02/sheets/va-shreveport-fisher-house-site-utility-C300.pdf` (bottom)
-- `web/public/demo/sample-finish-plan.pdf` (bottom; 2 pages — the only real multi-sheet case)
-- `evals/mcp-workflow-bench/plan-set/porterville/porterville-adu-a1-101.pdf` (right, vertical text)
+### Real sets (not committed; fetched)
 
-Answer keys: `web/test/fixtures/regions/<name>.regions.json` with the
-title-block bbox labeled by hand from a render, normalized [0..1].
+Public VA solicitations on SAM.gov (same source class as the committed
+sheets, `evals/four-asks-2026-09-02/sheets/SOURCE.md`):
 
-Roseburg (`va-roseburg-a03a.pdf`, no text layer) needs OCR tokens. It is
-tested with lines only (raster line extraction) in this piece; its OCR
-token fixture is recorded later, once the OCR branch is merged in.
+| Set | Sheets | Role |
+|---|---|---|
+| Shreveport Fisher House, "Combined Drawings" (36C25625R0108) | 24 | **tune** |
+| Dublin Bldg 9A, Drawings Parts 1 and 4 (36C77626R0031) | 24 | **held out** |
 
-### Scores
+`evals/regions/fetch.mjs` downloads them by SAM.gov resource id and checks
+sha256; `evals/regions/SOURCE.md` records ids, hashes and dates. The PDFs are
+not committed; the evaluation skips (with a message) when they are absent.
+The single committed sheets (Dublin A601, Shreveport C300, sample finish
+plan, Porterville, Roseburg) are also held out.
 
-- Title-block IoU vs the answer key: pass ≥ 0.90 per sheet.
-- Edge correct: 100% on fixtures.
-- Groups: exact match on synthetic sets.
-- Vector/raster parity: for each fixture, render the page to gray pixels
-  (MCP `renderPng`, `@napi-rs/canvas`), run `rasterLongLines` + text-layer
-  tokens, and require title-block IoU ≥ 0.95 against the vector run. This
-  tests the line path; OCR-token parity comes with the OCR branch.
+### Labels (answer keys)
 
-Results are written to `web/bench/regions.mts` output (same style as the
-existing bench scripts) so numbers are reproducible.
+- Definition: the title block is the strip between the border and the
+  inner rule that separates it from the drawing, including everything in
+  that strip (vertical text included); the border margin is excluded.
+  Stored as edge + d (normalized) per sheet, plus "none" when a sheet has no
+  title block.
+- **Two independent labelers** (separate agent sessions, each given only
+  renders and the definition, never detector output), measuring the rule
+  from pixel rows/columns. Disagreements > 1% are resolved by the maintainer
+  from the render. Inter-labeler agreement is reported.
+- **Labels are committed before any detector code** (task 2 before task 4).
+  The evaluation prints the label files' commit, so the order is checkable.
+- No tuning on held-out sets. Constants are fitted on Shreveport only.
 
-### Known gap
+### Synthetic sets (unit tests)
 
-There is no real multi-sheet set in the repo. The public VA sets these
-sheets come from (SAM.gov, see `evals/four-asks-2026-09-02/sheets/SOURCE.md`)
-are the obvious source for one; fetching and committing more sheets is a
-decision for the maintainer, so this piece relies on synthetic sets for
-repetition and grouping and says so.
+Built as `DetectSheet` objects in code by a seeded generator
+(`web/test/fixtures/regionSynth.ts`), frozen in a commit before detector code:
 
-## Dependencies
+- varied layout independent of the detector's features: random d in 8–25%,
+  border 1–7%, random edge, random token counts, text noise;
+- decoys: legend/notes columns ending in T-junctions, wide schedule tables,
+  viewport frames, sheet-number-like text inside the drawing, agency-form
+  boilerplate shared across firms;
+- sets: one firm right strip (6 sheets); one firm bottom strip (5); mixed
+  (3 + 2 different firms + 1 letter sketch → 3 groups); 2+2 small consultants
+  with different bottom blocks (must not merge); single sheet; 2-sheet set;
+  no title block; borderless.
 
-- Piece 1 (`regions.ts`) — done.
-- The OCR engine branch (`feat/ocr-engine-469`) is based on current
-  `main` and merges cleanly; it is needed only for OCR-token adapters and
-  is not merged in this piece.
-- The search branch (`claude/client-side-ocr-search-index-n699t0`) shares no
-  history with current `main`; not needed for this piece.
+Results on synthetic sets are reported as **self-consistency**, never as
+accuracy. Left/top edges are covered only here; the docs say so.
+
+### Negatives
+
+Real sheets without a standard title block, if the tune/held-out sets have
+any (cover or index sheets), are labeled "none". If there are fewer than 2,
+the evaluation reports "real negatives: n" honestly, and synthetic negatives
+cover the rest.
+
+## Metrics (`web/bench/regions.mts`, script `bench:regions`, not in `check`)
+
+Per set and overall, with `n` on every row, commit, fixture hashes:
+
+- edge correct (incl. "none" correct);
+- |d error| median and max, in % of dimension;
+- pass = edge correct and |d error| ≤ max(2 × inter-labeler spread, 0.5%);
+- abstain rate; false-positive rate (title block reported where the label
+  says none);
+- group check on real sets: sheets the labelers put in one title-block
+  family (same firm block) share a group id; different families don't;
+- reliability: share correct per confidence tier.
+
+Headline numbers are the held-out rows.
+
+## Tests (TDD)
+
+Unit tests in `web/test/regionDetect.test.ts` over in-code `DetectSheet`s,
+each with hand-computed expected values:
+
+- border: outermost pair, 5.6% case, missing side;
+- candidates: border-to-border rule, T-junction rejection, smallest-d-first,
+  6–30% bounds;
+- signals: density, sheetno position, repeat band, each independently;
+- acceptance: each of A/B/C accepts; each single signal alone rejects;
+- confidence tiers and evidence strings;
+- statics/fields: centers, 2% tolerance, min 3 sheets, shared boilerplate
+  excluded;
+- grouping: all synthetic sets above, 2+2 not merged, content-hash ids
+  stable under reorder/add/remove;
+- output passes `cleanRegions` unchanged; margin text → no region.
+
+Adapter tests:
+
+- web: new `extractPageTokens(textContent, viewport)` in `sheets.ts`
+  returning `{str,x,y,w,h,rot}` (existing functions unchanged); tested on
+  hand-built text items incl. 90° text.
+- web: `longAxisLines(segs, w, h)` in `regionDetect.ts`: axis tolerance,
+  collinear merge, 1-px duplicate dedupe.
+- MCP (`mcp/test/`, which already loads PDFs): builds `DetectSheet`s from
+  `textSpans` + `extractVectorGeometry`; checks displayed orientation on a
+  /Rotate page (w/h swapped, Dublin A601) and that MCP sheet keys equal
+  `sheetKey.ts` keys.
 
 ## Tasks (each: failing test → code → pass → commit)
 
-1. Token/line types; `longAxisLines` (vector segments → long lines).
-2. `rasterLongLines` (gray pixels → long lines).
-3. Step 1: edge candidates and per-sheet scores.
-4. Step 2: static / field tokens across a set.
-5. Step 3: grouping.
-6. Step 4: region output via `regions.ts` types (validated by `cleanRegions`).
-7. Fixture generator + synthetic answer keys; end-to-end tests.
-8. Real-sheet answer keys; end-to-end tests on real sheets (node, pdf.js
-   text + `extractVectorGeometry`).
-9. Parity test (render → raster lines).
-10. Bench script with the score table; update the design doc status.
+0. Piece 1 changes (group_sig, re-attach, drawing-area recompute, clamp).
+1. `evals/regions/fetch.mjs` + SOURCE.md; synthetic generator frozen.
+2. Labels: two blind labelers, reconciliation, committed.
+3. `extractPageTokens`, `longAxisLines`.
+4. Border + candidates.
+5. Signals + acceptance rule + confidence.
+6. Statics/fields + grouping + content-hash ids; calibration sweep on the
+   tune set only, chosen values and sensitivity recorded in the bench output.
+7. Output + `bench:regions` with held-out numbers.
+8. MCP adapter + key-parity test.
+9. MCP `find_text`: optional `region` on each hit (computed for the loaded
+   set on first use, cached per session). Tool description, generated tool
+   index and wiki updated (`check:tool-count`, `check:wiki`).
+10. Design doc status + measured numbers.
 
-`npm run typecheck`, `npm run lint` and `npm test` in `web/` pass after every
-task.
+`npm run typecheck`, `npm run lint`, `npm test` (web) and the MCP test suite
+pass after every task.

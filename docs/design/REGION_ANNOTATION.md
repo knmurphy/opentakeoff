@@ -305,12 +305,16 @@ so repetition may miss it; it can be a one-sheet group.
 
 For the upstream issue later, following the #466 layout:
 
-1. Region map schema and storage; labels on search hits and MCP tools.
-2. Title block vs drawing area: repetition across sheets, user template,
-   corrections. Move the 6% inset and lower-right guesses onto the map.
-3. Detail viewports: find titles, find extents, apply labels.
-4. Title-block parts, schedule, legend and notes regions.
-5. Raster line segments, labeled fixtures, and the vector/raster parity test.
+1. Region map schema and storage (done: `web/src/lib/regions.ts`).
+2. Title block vs drawing area.
+   - 2a: vector detector, grouping with stable ids, real-set evaluation, MCP
+     `find_text` region field. Plan: [REGION_ANNOTATION_PLAN.md](REGION_ANNOTATION_PLAN.md).
+   - 2b: raster line extraction, raster line-path test, OCR tokens.
+3. Move the 6% inset and lower-right guesses onto the map; search labels and
+   filters; correction UI (group templates).
+4. Detail viewports: find titles, find extents, apply labels.
+5. Title-block parts, schedule, legend and notes regions; cover sheets and
+   sheet indexes.
 
 ## Depends on
 
