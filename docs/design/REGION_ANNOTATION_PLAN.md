@@ -225,6 +225,29 @@ The repetition band for an edge: the box of static + field tokens within 32%
 of that edge. A candidate is `repeat: true` when the band lies inside the
 candidate strip and covers ≥ 50% of its length.
 
+### Amendments found during task 6a (synthetic sets only)
+
+The plan's rules as first written could not meet the frozen synthetic sets'
+expectations in four places. Resolved as follows (no real data used):
+
+1. **Statics minimum.** A token is static if it repeats on ≥ 50% of the
+   sheets considered **and on at least 2 sheets** (was: minimum 3). A
+   2-sheet family inside a larger set now has statics, and two consultants
+   who share only agency boilerplate are told apart by their firm strings.
+2. **Repetition band from statics only.** The band is the box of **static**
+   tokens (fields are still classified, for piece 4, but don't shape the
+   band): drawing text misread as a field pushed the band past the strip.
+3. **Frameless strips.** A repetition-only candidate is made on **every**
+   edge where a band qualifies, not only edges without chains, so it can
+   compete with a false chain (a full-width rule at 26% above a frameless
+   top block); the usual tie-breaks decide. Its depth d is the deepest
+   glyph-box edge of the band's statics, measured from the border. With no
+   inner rule to measure against, the accuracy target for frameless strips
+   is edge correct and |d error| ≤ 25% of d (reported separately in the
+   bench).
+4. **Candidate groups for frameless sheets** use aspect bucket and edge only
+   (no d test), since their pass-1 depths scatter.
+
 ### Step 4 — acceptance rule (decides title block vs abstain)
 
 Text density does **not** decide acceptance. Measured on real strips it
