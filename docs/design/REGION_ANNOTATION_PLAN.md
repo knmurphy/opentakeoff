@@ -3,7 +3,7 @@
 Design: [REGION_ANNOTATION.md](REGION_ANNOTATION.md). Piece 1 (the region map
 module, `web/src/lib/regions.ts`) is done.
 
-Status: revision 6, after review round 5 (design PASS; algorithm FAIL; feasibility and measurement passed round 3). Fork only.
+Status: revision 7, after review round 6 (design PASS; algorithm FAIL; feasibility and measurement passed round 3). Fork only.
 
 ## Scope
 
@@ -145,8 +145,9 @@ tokens; detail viewports need lines) don't redo the work. It is not
 persisted; recomputing needs the set's tokens and lines again, which the MCP
 already loads per sheet.
 
-The detector has its own sheet-number pattern, `TB_SHEETNO_RE` (accepts
-`A1-101`). `sheets.ts` `SHEET_NO_RE` and `extractSheetNumber` are not
+The detector has its own sheet-number pattern,
+`TB_SHEETNO_RE = /^[A-Z]{1,3}\d?[-. ]?\d{1,3}(\.\d{1,2})?[A-Z]?$/`
+(a digit may follow the letters: `A1-101`). `sheets.ts` `SHEET_NO_RE` and `extractSheetNumber` are not
 touched in 2a.
 
 ## Algorithm
@@ -175,14 +176,18 @@ chain from x=0.25 to the border, 77% of the width, with no rule over the
 left revision cell.) A chain is a candidate when:
 
 - its depth d from the border is between 6% and 30% (measured real strips,
-  from the border: 9.0–18.5%);
+  from the border: 9.0–18.5%; Porterville has a notes-column rule at 29.4%,
+  so candidates near the cap are logged);
 - it covers ≥ 70% of the border length and touches the border at one end
   or both. "Touches" means it ends within 1% of a border rule or of the
   page edge where no border rule was found (Porterville's 0.889 rule ends
   on the top and bottom border rules, not the page edge);
-- its free end (if any) does not end within 4% of another candidate chain,
-  and does not end at a rule that fails to reach the border. Dublin's
-  chain ends on a cell divider that runs down to the border, and is kept.
+- its free end (if any) does not end at a rule that fails to reach the
+  border. Dublin's chain ends on a cell divider that runs down to the
+  border, and is kept. (An earlier "within 4% of another candidate chain"
+  rule was dropped: on Dublin part 4 p9/p10 it threw out the real bottom
+  title block, whose free end sits 2.5% from a grid column rule. The
+  extent-bounded strip below already rejects side legend columns.)
 
 The candidate **strip** for acceptance is bounded along the edge by the
 chain's own extent (border end to free end), not by the full border.
@@ -254,7 +259,8 @@ One signal alone never accepts. If no edge has an accepted candidate: no
 title block; the drawing area is the border box, confidence 0.3.
 
 Between edges with accepted candidates: the one satisfying more of A/B/C
-wins; then the **smaller strip area**; then higher density. (Dublin part 1
+wins; then the **smaller strip area** (chain extent along the edge × d,
+both as fractions of the border box); then higher density. (Dublin part 1
 p5 has a full-height rule at x=0.837 crossing the title block; its right
 strip passes rule A with the same sheet number as the real bottom strip,
 and loses on area: about 0.14 against 0.11 of the border box.) (No fixed edge order, no
@@ -266,8 +272,9 @@ Confidence is by rule, not a weighted score: A+B+C 0.95, two rules 0.85,
 one rule 0.7. These are rule labels, not calibrated probabilities.
 `evidence` lists the rules and signals that fired (`rule:A`, `frame-line`,
 `sheet-number`, `repetition`, `text-density`). `diag` logs each
-candidate's chain coverage, token count, density and the sheet-number
-token's position (along and across the strip), so margins (Dublin's chain is
+candidate's chain coverage, token count, density, strip area, the
+sheet-number token's position (along and across the strip, as fractions),
+and the free end's distance to the nearest other chain, so margins (Dublin's chain is
 77% against a 70% floor) show up on held-out sets.
 
 ### Step 5 — grouping
