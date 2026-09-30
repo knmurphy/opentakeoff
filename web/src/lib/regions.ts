@@ -214,6 +214,15 @@ function cleanBbox(b: unknown): Bbox | null {
   return area(out) > 0 ? out : null;
 }
 
+const clampBbox = (b: Bbox, { w, h }: { w: number; h: number }): Bbox | null => {
+  const out: Bbox = [Math.max(0, b[0]), Math.max(0, b[1]), Math.min(w, b[2]), Math.min(h, b[3])];
+  return out[2] > out[0] && out[3] > out[1] ? out : null;
+};
+const clampTo = (r: Region, dims: { w: number; h: number }): Region | null => {
+  const b = clampBbox(r.bbox, dims);
+  return b ? { ...r, bbox: b } : null;
+};
+
 function cleanDetail(d: unknown): DetailTitle | undefined {
   if (!d || typeof d !== "object") return undefined;
   const o = d as Record<string, unknown>;
@@ -264,8 +273,10 @@ function cleanRegion(raw: unknown): Region | null {
  *  (REGION_PARENT), and holds them — a child is clipped to its parent and
  *  dropped when nothing is left. Top-level kinds must have no parent.
  *  Parents are resolved before children, so the check runs in tree order and
- *  a cycle can't survive (a region in a cycle never finds a kept parent). */
-export function cleanRegions(raw: unknown): Region[] {
+ *  a cycle can't survive (a region in a cycle never finds a kept parent).
+ *  With `dims`, top-level regions are clamped to [0,w]×[0,h] (and dropped
+ *  when nothing is left); every caller holding a SheetRegions passes them. */
+export function cleanRegions(raw: unknown, dims?: { w: number; h: number }): Region[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const pending: Region[] = [];
@@ -283,7 +294,7 @@ export function cleanRegions(raw: unknown): Region[] {
       const r = pending[i];
       const want = REGION_PARENT[r.kind];
       let ok: Region | null | undefined;
-      if (want === null) ok = r.parent === null ? r : null;
+      if (want === null) ok = r.parent !== null ? null : dims ? clampTo(r, dims) : r;
       else if (r.parent === null) ok = null;
       else if (!kept.has(r.parent)) {
         // parent not placed yet: wait, unless it can never be placed
@@ -385,8 +396,16 @@ export function sanitizeRegionMap(raw: unknown, signature: string): Map<string, 
     if (!s || typeof s !== "object") continue;
     const key = str(s.key, 512);
     if (!key || out.has(key) || !finite(s.w) || !finite(s.h) || s.w <= 0 || s.h <= 0) continue;
+    const dims = { w: s.w, h: s.h };
     const group = str(s.group, 64);
-    out.set(key, { key, w: s.w, h: s.h, ...(group ? { group } : {}), regions: cleanRegions(s.regions) });
+    const bb = cleanBbox(s.border);
+    const border = bb ? clampBbox(bb, dims) : null;
+    const sig = cleanGroupSig(s.group_sig);
+    out.set(key, {
+      key, w: s.w, h: s.h,
+      ...(border ? { border } : {}), ...(group ? { group } : {}), ...(sig ? { group_sig: sig } : {}),
+      regions: cleanRegions(s.regions, dims),
+    });
   }
   return out;
 }
@@ -679,5 +698,5 @@ function applyToSheet(
     regions = [...regions.filter((r) => !added.has(r.id)), ...added.values()];
   }
   const sig = moved ? groups.get(moved)?.sig : undefined;
-  return { ...sheet, ...(moved ? { group: moved } : {}), ...(sig ? { group_sig: sig } : {}), regions: cleanRegions(regions) };
+  return { ...sheet, ...(moved ? { group: moved } : {}), ...(sig ? { group_sig: sig } : {}), regions: cleanRegions(regions, { w, h }) };
 }

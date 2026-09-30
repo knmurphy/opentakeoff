@@ -544,3 +544,53 @@ test("applyOverrides: a template adds a drawing area when none was detected", ()
   assert.deepEqual(daOf(out)!.bbox, [0, 0, 2000, 900]);
   assert.equal(daOf(out)!.source, "user");
 });
+
+// ── clamping and map sanitizers ─────────────────────────────────────────────
+
+test("cleanRegions: with dims, top-level regions are clamped to the sheet; children follow", () => {
+  const out = cleanRegions([
+    R("tb", "title_block", [1700, -20, 2100, 1000]),
+    R("firm", "firm", [1700, -20, 2100, 200], "tb"),
+    R("da", "drawing_area", [-10, 0, 1700, 1000]),
+    R("off", "drawing_area", [2100, 0, 2300, 100]),    // entirely off the sheet
+  ], { w: 2000, h: 1000 });
+  assert.deepEqual(out.map((r) => [r.id, r.bbox]), [
+    ["tb", [1700, 0, 2000, 1000]], ["firm", [1700, 0, 2000, 200]], ["da", [0, 0, 1700, 1000]],
+  ]);
+});
+
+test("cleanRegions: without dims nothing is clamped", () => {
+  assert.deepEqual(cleanRegions([R("da", "drawing_area", [-10, 0, 2100, 1000])])[0].bbox, [-10, 0, 2100, 1000]);
+});
+
+test("applyOverrides: the sheet's dims clamp the result", () => {
+  const s = sheet();
+  s.regions = s.regions.map((r) => (r.id === "da" ? { ...r, bbox: [-50, 0, 1700, 1100] as Region["bbox"] } : r));
+  assert.deepEqual(apply1(s, {}).regions.find((r) => r.id === "da")!.bbox, [0, 0, 1700, 1000]);
+});
+
+test("sanitizeRegionMap: border and group_sig round-trip; regions are clamped to the sheet", () => {
+  const s: SheetRegions = { ...sheet(), border: [40, 30, 1960, 970], group_sig: { ...SIG(), page_in: [36, 24] } };
+  s.regions = s.regions.map((r) => (r.id === "tb" ? { ...r, bbox: [1700, 0, 2050, 1000] as Region["bbox"] } : r));
+  const back = sanitizeRegionMap(JSON.parse(JSON.stringify(serializeRegionMap(new Map([[s.key, s]]), "sig"))), "sig").get(s.key)!;
+  assert.deepEqual(back.border, [40, 30, 1960, 970]);
+  assert.deepEqual(back.group_sig, s.group_sig);
+  assert.deepEqual(back.regions.find((r) => r.id === "tb")!.bbox, [1700, 0, 2000, 1000]);
+});
+
+test("sanitizeRegionMap: a bad border or group_sig is dropped; statics are capped", () => {
+  const base = { ...sheet(), key: "a" };
+  const sheets = [
+    { ...base, key: "a", border: [0, 0, "x", 1], group_sig: { ...SIG(), edge: "middle" } },
+    { ...base, key: "b", border: [-100, -100, 3000, 900], group_sig: { ...SIG(), statics: Array.from({ length: 25 }, (_, i) => `S${i}`), page_in: [0, 24] } },
+    { ...base, key: "c", border: [2500, 0, 2600, 100], group_sig: { ...SIG(), d: 2 } },
+  ];
+  const back = sanitizeRegionMap({ ...serializeRegionMap(new Map(), "sig"), sheets }, "sig");
+  assert.equal(back.get("a")!.border, undefined);
+  assert.equal(back.get("a")!.group_sig, undefined);
+  assert.deepEqual(back.get("b")!.border, [0, 0, 2000, 900]);         // clamped to the sheet
+  assert.equal(back.get("b")!.group_sig!.statics.length, 20);
+  assert.equal(back.get("b")!.group_sig!.page_in, undefined);          // a zero page size isn't a size
+  assert.equal(back.get("c")!.border, undefined);                      // off the sheet
+  assert.equal(back.get("c")!.group_sig, undefined);
+});
