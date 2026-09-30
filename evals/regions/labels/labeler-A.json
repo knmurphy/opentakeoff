@@ -1,0 +1,1503 @@
+{
+ "labeler": "A",
+ "definition": "v1",
+ "dpi_used": 100,
+ "sheets": [
+  {
+   "key": "dublin-part1.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "Cover sheet but carries the standard bottom title block. VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#4",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "Drawing-area box bottoms at y=0.878 sit just above the title-block cell row; inner taken at cell-row top 0.880. VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#5",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#6",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#7",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#8",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#9",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#10",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part1.pdf#11",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part10.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part10.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part10.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part10.pdf#4",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part11.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part11.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part11.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part11.pdf#4",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part11.pdf#5",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part13.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf#4",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf#5",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf#6",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part2.pdf#7",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#4",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#5",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#6",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#7",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#8",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#9",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#10",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#11",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#12",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part4.pdf#13",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#4",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#5",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#6",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#7",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#8",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#9",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part5.pdf#10",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf#3",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf#4",
+   "border": [
+    0.04,
+    0.035,
+    0.981,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "Page drawn ~0.0015 left of other sheets; right frame at x=0.9805 (page-edge line at 0.9986 ignored). VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf#5",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf#6",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "dublin-part7.pdf#7",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "porterville-adu-a1-101.pdf",
+   "border": [
+    0.056,
+    0.021,
+    1.0,
+    0.979
+   ],
+   "title_block": {
+    "edge": "right",
+    "inner": 0.889,
+    "d": 0.118
+   },
+   "family": "Porterville-right",
+   "confidence": "medium",
+   "notes": "Frame top/bottom lines stop at the vertical rule x=0.889; there is no frame line on the right side of the title strip (only a partial box 0.903-0.986 around the lower half), so x1 = page edge 1.0 per definition. Strip holds City of Porterville logo, disclaimer, project name box, PUBLIC SET vertical text, date, sheet no."
+  },
+  {
+   "key": "sample-finish-plan.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.092
+   },
+   "family": "VA-StCloud-Anderson-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block (Dunham/AST consultant, Anderson A/E, VA seal at right); inner = top of cell row."
+  },
+  {
+   "key": "sample-finish-plan.pdf#2",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.092
+   },
+   "family": "VA-StCloud-Anderson-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block (Dunham/AST consultant, Anderson A/E, VA seal at right); inner = top of cell row."
+  },
+  {
+   "key": "shreveport-combined.pdf",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Cover sheet but carries the standard bottom title block. Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#2",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#3",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#4",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#5",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#6",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#7",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#8",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#9",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#10",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#11",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#12",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#13",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#14",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#15",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#16",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#17",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#18",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#19",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#20",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#21",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#22",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#23",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "shreveport-combined.pdf#24",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-elec-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  },
+  {
+   "key": "va-dublin-bldg9a-finish-plan-A601.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "VA form 08-6231 bottom block of separate cells (revisions, consultant, A/E, stamp, OCFM/VA, title, phase, project, number); no single continuous rule, inner = top of cell row."
+  },
+  {
+   "key": "va-roseburg-a03a.pdf",
+   "border": [
+    0.041,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.86,
+    "d": 0.113
+   },
+   "family": "VA-Roseburg-bottom",
+   "confidence": "high",
+   "notes": "/Rotate 270. Continuous rule at y=0.860; right-side general notes column is drawing-area content, not title block. Vertical \"Office of Facilities\" cell included in strip."
+  },
+  {
+   "key": "va-shreveport-fisher-house-site-utility-C300.pdf",
+   "border": [
+    0.029,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.881,
+    "d": 0.092
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Continuous rule at y=0.881 closes the drawing area; title cells start at 0.883. \"100% CONSTRUCTION DOCUMENTS\"/\"FULLY SPRINKLERED\" text sits above the rule, in drawing area."
+  }
+ ]
+}

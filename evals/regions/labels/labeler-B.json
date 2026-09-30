@@ -1,0 +1,1503 @@
+{
+ "labeler": "B",
+ "definition": "v1",
+ "dpi_used": 100,
+ "sheets": [
+  {
+   "key": "dublin-part1.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "Cover sheet G-001 but carries the standard bottom strip"
+  },
+  {
+   "key": "dublin-part1.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#4",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#5",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#6",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#7",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#8",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#9",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#10",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part1.pdf#11",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part10.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part10.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part10.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part10.pdf#4",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part11.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part11.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part11.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part11.pdf#4",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part11.pdf#5",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part13.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf#4",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf#5",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf#6",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part2.pdf#7",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#4",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#5",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#6",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "ReidMiddleton structural consultant logo; same strip layout"
+  },
+  {
+   "key": "dublin-part4.pdf#7",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "ReidMiddleton structural consultant logo; same strip layout"
+  },
+  {
+   "key": "dublin-part4.pdf#8",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "ReidMiddleton structural consultant logo; same strip layout"
+  },
+  {
+   "key": "dublin-part4.pdf#9",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "ReidMiddleton structural consultant logo; same strip layout"
+  },
+  {
+   "key": "dublin-part4.pdf#10",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": "ReidMiddleton structural consultant logo; same strip layout"
+  },
+  {
+   "key": "dublin-part4.pdf#11",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#12",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part4.pdf#13",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#4",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#5",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#6",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#7",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#8",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#9",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part5.pdf#10",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf#3",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf#4",
+   "border": [
+    0.04,
+    0.035,
+    0.981,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf#5",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf#6",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "dublin-part7.pdf#7",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "porterville-adu-a1-101.pdf",
+   "border": [
+    0.056,
+    0.021,
+    0.986,
+    0.979
+   ],
+   "title_block": {
+    "edge": "right",
+    "inner": 0.889,
+    "d": 0.104
+   },
+   "family": "Porterville-right",
+   "confidence": "medium",
+   "notes": "Sidebar right of drawing frame (x .889) holds city logo/text and a title box (x .902-.986, lower part). No frame line at right of sidebar; border right taken as sidebar box edge .986. Alternative reading: border=[.056,.021,.889,.979] with title block outside."
+  },
+  {
+   "key": "sample-finish-plan.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Anderson-Dunham-ASI-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "sample-finish-plan.pdf#2",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Anderson-Dunham-ASI-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": "Cover sheet G-001 with standard strip"
+  },
+  {
+   "key": "shreveport-combined.pdf#2",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#3",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#4",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#5",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#6",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#7",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#8",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#9",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#10",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#11",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#12",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#13",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#14",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#15",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#16",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#17",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#18",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#19",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#20",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#21",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#22",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#23",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "shreveport-combined.pdf#24",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-electrical-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "va-dublin-bldg9a-finish-plan-A601.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.88,
+    "d": 0.091
+   },
+   "family": "VA-Dublin-SpeesDesignBuild-bottom",
+   "confidence": "high",
+   "notes": ""
+  },
+  {
+   "key": "va-roseburg-a03a.pdf",
+   "border": [
+    0.042,
+    0.035,
+    0.982,
+    0.965
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.86,
+    "d": 0.113
+   },
+   "family": "VA-Roseburg-bottom",
+   "confidence": "high",
+   "notes": "Drawing is a zoomed crop; strip top rule at .860"
+  },
+  {
+   "key": "va-shreveport-fisher-house-site-utility-C300.pdf",
+   "border": [
+    0.03,
+    0.033,
+    0.982,
+    0.967
+   ],
+   "title_block": {
+    "edge": "bottom",
+    "inner": 0.882,
+    "d": 0.091
+   },
+   "family": "VA-Shreveport-Apogee-civil-bottom",
+   "confidence": "high",
+   "notes": ""
+  }
+ ]
+}
