@@ -222,6 +222,24 @@ function cleanDetail(d: unknown): DetailTitle | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+const EDGES: readonly Edge[] = ["top", "right", "bottom", "left"];
+
+/** A stored signature, or undefined when any required part is malformed.
+ *  Static strings are re-capped, so a stored one can't outgrow the limits. */
+export function cleanGroupSig(raw: unknown): GroupSig | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  if (!EDGES.includes(o.edge as Edge) || !finite(o.d) || o.d < 0 || o.d > 1 || !finite(o.aspect) || o.aspect <= 0) return undefined;
+  if (!Array.isArray(o.statics)) return undefined;
+  const p = o.page_in;
+  const page = Array.isArray(p) && p.length === 2 && p.every((n) => finite(n) && n > 0) ? ([p[0], p[1]] as [number, number]) : undefined;
+  return {
+    edge: o.edge as Edge, d: o.d, aspect: o.aspect,
+    ...(page ? { page_in: page } : {}),
+    statics: capStatics(o.statics.filter((x): x is string => typeof x === "string")),
+  };
+}
+
 function cleanRegion(raw: unknown): Region | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
@@ -378,14 +396,17 @@ export function sanitizeRegionMap(raw: unknown, signature: string): Map<string, 
 /** Corrections, stored in the takeoff document. Bboxes are normalized [0..1].
  *
  *  - `groups[g]` is a title-block template: the title block and its parts,
- *    drawn or fixed once, applied to every sheet in group g.
+ *    drawn or fixed once, applied to every sheet of the group its
+ *    `group_sig` resolves to (resolveOverrides). The key g is only a hint:
+ *    group ids change with the signature and the membership.
  *  - `sheet_group[key]` moves a sheet to a group by hand; it outranks the
- *    detected group.
+ *    detected group. `sig` is the target group's signature at the time of
+ *    the move, and is what the move resolves by.
  *  - `sheets[key]` is per sheet: regions to drop (by detected id, children
  *    go with them) and regions to add (details, notes, …). */
 export interface RegionOverrides {
-  groups?: Record<string, { source_sheet: string; regions: Region[] }>;
-  sheet_group?: Record<string, string>;
+  groups?: Record<string, { source_sheet: string; group_sig?: GroupSig; regions: Region[] }>;
+  sheet_group?: Record<string, { group: string; sig: GroupSig }>;
   sheets?: Record<string, { removed?: string[]; regions?: Region[] }>;
 }
 
@@ -408,13 +429,21 @@ export function sanitizeRegionOverrides(raw: unknown): RegionOverrides {
       const t = v as Record<string, unknown>;
       const src = str(t.source_sheet, 512);
       const regions = norm(t.regions).filter((r) => TITLE_BLOCK_KINDS.has(r.kind));
-      if (src && regions.length) groups[g] = { source_sheet: src, regions };
+      // a template without a (valid) signature is kept, but never applied
+      const sig = cleanGroupSig(t.group_sig);
+      if (src && regions.length) groups[g] = { source_sheet: src, ...(sig ? { group_sig: sig } : {}), regions };
     }
     if (Object.keys(groups).length) out.groups = groups;
   }
   if (o.sheet_group && typeof o.sheet_group === "object" && !Array.isArray(o.sheet_group)) {
-    const sg: Record<string, string> = {};
-    for (const [k, g] of Object.entries(o.sheet_group as Record<string, unknown>)) if (typeof g === "string" && g) sg[k] = g;
+    // the old string form (a bare group id) is dropped: no documents use it
+    const sg: NonNullable<RegionOverrides["sheet_group"]> = {};
+    for (const [k, v] of Object.entries(o.sheet_group as Record<string, unknown>)) {
+      if (!v || typeof v !== "object") continue;
+      const t = v as Record<string, unknown>;
+      const group = str(t.group, 64), sig = cleanGroupSig(t.sig);
+      if (group && sig) sg[k] = { group, sig };
+    }
     if (Object.keys(sg).length) out.sheet_group = sg;
   }
   if (o.sheets && typeof o.sheets === "object" && !Array.isArray(o.sheets)) {
@@ -435,9 +464,138 @@ export function sanitizeRegionOverrides(raw: unknown): RegionOverrides {
   return out;
 }
 
-/** The group a sheet belongs to: a manual move wins over detection. */
-export const groupOf = (sheet: SheetRegions, ov: RegionOverrides): string | undefined =>
-  ov.sheet_group?.[sheet.key] ?? sheet.group;
+// ── resolving corrections ──────────────────────────────────────────────────
+
+/** A detected group: its signature and member sheet keys. */
+export interface GroupInfo { sig: GroupSig; members: string[] }
+
+/** The groups of a detected map. Sheets without a group or a signature are
+ *  in no group a correction can resolve to. */
+export function mapGroups(map: ReadonlyMap<string, SheetRegions>): Map<string, GroupInfo> {
+  const out = new Map<string, GroupInfo>();
+  for (const s of map.values()) {
+    if (!s.group || !s.group_sig) continue;
+    const g = out.get(s.group);
+    if (g) g.members.push(s.key);
+    else out.set(s.group, { sig: s.group_sig, members: [s.key] });
+  }
+  return out;
+}
+
+export type UnattachedReason = "no-match" | "ambiguous" | "no-sig" | "no-anchor" | "conflict";
+export type GroupMatch = { group: string; score: number } | { group: null; reason: UnattachedReason };
+
+const D_TOL = 0.015;          // |Δd|, fraction of the dimension across the edge
+const PAGE_TOL_IN = 0.01;     // page sizes are "equal" to this, per axis (rounding only)
+const MIN_JACCARD = 0.5;
+const MIN_LEAD = 0.2;         // best Jaccard over the second-best group
+const EPS = 1e-9;
+
+const samePage = (a: [number, number], b: [number, number]) =>
+  Math.abs(a[0] - b[0]) <= PAGE_TOL_IN + EPS && Math.abs(a[1] - b[1]) <= PAGE_TOL_IN + EPS;
+
+const sameGeometry = (a: GroupSig, b: GroupSig) =>
+  a.edge === b.edge && Math.abs(a.aspect - b.aspect) < EPS && Math.abs(a.d - b.d) <= D_TOL + EPS &&
+  (!a.page_in || !b.page_in || samePage(a.page_in, b.page_in));
+
+function jaccard(a: readonly string[], b: readonly string[]): number {
+  const A = new Set(a), B = new Set(b);
+  let both = 0;
+  for (const x of A) if (B.has(x)) both++;
+  const union = A.size + B.size - both;
+  return union ? both / union : 1;
+}
+
+/** The group a signature (a template's, or a move's target) resolves to.
+ *
+ *  - Geometry first: same edge and aspect bucket, |Δd| ≤ 1.5%, and the same
+ *    page size when both know it.
+ *  - With static strings: only groups with statics; the best Jaccard must be
+ *    ≥ 0.5 and beat the second best by ≥ 0.2 (else `ambiguous`). The score
+ *    is that Jaccard.
+ *  - Without static strings (a template made on a cover or a sketch): only
+ *    statics-free groups, and only with a second anchor — the source sheet
+ *    is a member, or the page size is known on both sides and exactly one
+ *    statics-free group passes. A source sheet that now sits in a group
+ *    with statics resolves to nothing, on purpose: otherwise removing a
+ *    cover could send its correction to the architect group that shares
+ *    its geometry. The score is 1 (two empty sets are identical).
+ *  Groups with equal signatures (assignGroupIds' -1, -2) always tie here, so
+ *  a correction never picks between them. */
+export function matchGroup(sig: GroupSig, groups: ReadonlyMap<string, GroupInfo>, sourceSheet?: string): GroupMatch {
+  const fits = [...groups].filter(([, g]) => sameGeometry(sig, g.sig));
+  if (sig.statics.length) {
+    const scored = fits.filter(([, g]) => g.sig.statics.length)
+      .map(([id, g]) => ({ id, j: jaccard(sig.statics, g.sig.statics) }))
+      .sort((a, b) => b.j - a.j);
+    const [best, second] = scored;
+    if (!best || best.j < MIN_JACCARD - EPS) return { group: null, reason: "no-match" };
+    if (second && best.j - second.j < MIN_LEAD - EPS) return { group: null, reason: "ambiguous" };
+    return { group: best.id, score: best.j };
+  }
+  if (sourceSheet) {
+    const home = [...groups].find(([, g]) => g.members.includes(sourceSheet));
+    if (home && home[1].sig.statics.length) return { group: null, reason: "no-match" };
+    if (home && fits.some(([id]) => id === home[0])) return { group: home[0], score: 1 };
+  }
+  const free = fits.filter(([, g]) => !g.sig.statics.length);
+  if (!free.length) return { group: null, reason: "no-match" };
+  if (!sig.page_in) return { group: null, reason: "no-anchor" };
+  const sized = free.filter(([, g]) => g.sig.page_in);
+  if (!sized.length) return { group: null, reason: "no-anchor" };
+  if (sized.length > 1) return { group: null, reason: "ambiguous" };
+  return { group: sized[0][0], score: 1 };
+}
+
+/** Corrections resolved against a detected map. The web app and the MCP both
+ *  consume this; `unattached` is what matched nothing and must be shown. */
+export interface ResolvedOverrides {
+  templates: Record<string /*template key*/, { group: string; score: number }>;
+  moves: Record<string /*sheet key*/, string /*group id*/>;
+  unattached: { kind: "template" | "move"; key: string; reason: UnattachedReason }[];
+}
+
+const byKey = <T,>(rec: Record<string, T> | undefined): [string, T][] =>
+  Object.entries(rec ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+/** Resolve every template and move by signature. Pure: nothing is written,
+ *  so stale ids in the document stay stale until the caller saves.
+ *  Two templates on one group: the higher score wins, then the smaller
+ *  |Δd|; a tie applies neither. Losers are `conflict`. A move whose sheet
+ *  is not in the map is skipped: there is nothing to move. */
+export function resolveOverrides(map: ReadonlyMap<string, SheetRegions>, ov: RegionOverrides): ResolvedOverrides {
+  const groups = mapGroups(map);
+  const out: ResolvedOverrides = { templates: {}, moves: {}, unattached: [] };
+  const claims = new Map<string, { key: string; score: number; dd: number }[]>();
+  const lost: ResolvedOverrides["unattached"] = [];
+  for (const [key, t] of byKey(ov.groups)) {
+    if (!t.group_sig) { lost.push({ kind: "template", key, reason: "no-sig" }); continue; }
+    const m = matchGroup(t.group_sig, groups, t.source_sheet);
+    if (m.group === null) { lost.push({ kind: "template", key, reason: m.reason }); continue; }
+    const dd = Math.abs(t.group_sig.d - groups.get(m.group)!.sig.d);
+    claims.set(m.group, [...(claims.get(m.group) ?? []), { key, score: m.score, dd }]);
+  }
+  for (const [group, list] of claims) {
+    list.sort((a, b) => (Math.abs(b.score - a.score) > EPS ? b.score - a.score : a.dd - b.dd));
+    const [win, next] = list;
+    const tie = next && Math.abs(win.score - next.score) <= EPS && Math.abs(win.dd - next.dd) <= EPS;
+    if (!tie) out.templates[win.key] = { group, score: win.score };
+    for (const c of tie ? list : list.slice(1)) lost.push({ kind: "template", key: c.key, reason: "conflict" });
+  }
+  lost.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  out.unattached.push(...lost);
+  for (const [key, mv] of byKey(ov.sheet_group)) {
+    if (!map.has(key)) continue;
+    const m = matchGroup(mv.sig, groups);
+    if (m.group === null) out.unattached.push({ kind: "move", key, reason: m.reason });
+    else out.moves[key] = m.group;
+  }
+  return out;
+}
+
+/** The group a sheet belongs to: a resolved manual move wins over detection. */
+export const groupOf = (map: ReadonlyMap<string, SheetRegions>, ov: RegionOverrides, key: string): string | undefined =>
+  resolveOverrides(map, ov).moves[key] ?? map.get(key)?.group;
 
 const toPx = (r: Region, w: number, h: number): Region => ({ ...r, bbox: [r.bbox[0] * w, r.bbox[1] * h, r.bbox[2] * w, r.bbox[3] * h] });
 
@@ -445,16 +603,32 @@ const toPx = (r: Region, w: number, h: number): Region => ({ ...r, bbox: [r.bbox
 export const toNormBbox = (b: Bbox, w: number, h: number): Bbox => [b[0] / w, b[1] / h, b[2] / w, b[3] / h];
 
 /** The map as used: detected regions with corrections applied, in image px.
+ *  Corrections are resolved once (resolveOverrides); neither input is
+ *  changed and nothing is written back.
  *
- *  1. A group template replaces the detected title block and all its parts.
+ *  Per sheet:
+ *  1. The template resolved to the sheet's group (after a resolved move)
+ *     replaces the detected title block and all its parts.
  *  2. The sheet's `removed` ids drop detected regions, with their children.
  *  3. The sheet's own regions are added.
  *  The result is re-validated, so a correction can't leave a broken tree. */
-export function applyOverrides(sheet: SheetRegions, ov: RegionOverrides): SheetRegions {
+export function applyOverrides(map: ReadonlyMap<string, SheetRegions>, ov: RegionOverrides): Map<string, SheetRegions> {
+  const res = resolveOverrides(map, ov);
+  const groups = mapGroups(map);
+  const tplOf = new Map(Object.entries(res.templates).map(([k, t]) => [t.group, ov.groups![k]]));
+  const out = new Map<string, SheetRegions>();
+  for (const [key, sheet] of map) out.set(key, applyToSheet(sheet, ov, res.moves[key], groups, tplOf));
+  return out;
+}
+
+function applyToSheet(
+  sheet: SheetRegions, ov: RegionOverrides, moved: string | undefined,
+  groups: Map<string, GroupInfo>, tplOf: Map<string, NonNullable<RegionOverrides["groups"]>[string]>,
+): SheetRegions {
   const { w, h } = sheet;
   let regions = sheet.regions;
-  const g = groupOf(sheet, ov);
-  const tpl = g ? ov.groups?.[g] : undefined;
+  const g = moved ?? sheet.group;
+  const tpl = g ? tplOf.get(g) : undefined;
   if (tpl) regions = [...regions.filter((r) => !TITLE_BLOCK_KINDS.has(r.kind)), ...tpl.regions.map((r) => toPx(r, w, h))];
   const mine = ov.sheets?.[sheet.key];
   if (mine?.removed?.length) {
@@ -471,5 +645,6 @@ export function applyOverrides(sheet: SheetRegions, ov: RegionOverrides): SheetR
     const added = new Map(mine.regions.map((r) => [r.id, toPx(r, w, h)]));
     regions = [...regions.filter((r) => !added.has(r.id)), ...added.values()];
   }
-  return { ...sheet, ...(g ? { group: g } : {}), regions: cleanRegions(regions) };
+  const sig = moved ? groups.get(moved)?.sig : undefined;
+  return { ...sheet, ...(moved ? { group: moved } : {}), ...(sig ? { group_sig: sig } : {}), regions: cleanRegions(regions) };
 }
