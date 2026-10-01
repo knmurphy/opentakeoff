@@ -106,8 +106,11 @@ export const SHEETNO_FAR_FROM = 0.5;
 export const SHEETNO_OUTER = 0.6;
 /** Step 4: a sheet number may arrive split into several text runs ("E" "-"
  * "001" on the Shreveport electrical sheets, found on the tune set in task
- * 6b). Runs of the same direction join when their baselines lie within
- * this × h of each other … */
+ * 6b). The SHEETNO_RUN_* values are geometric tolerances for reassembling
+ * one printed string, not calibrated detector constants (they are not swept;
+ * the frozen hash covers them through the detector source). Runs of the
+ * same direction join when their baselines lie within this × h of each
+ * other … */
 export const SHEETNO_RUN_BASELINE = 0.25;
 /** … and the gap along the text direction is at most this × h (h: the larger
  * glyph height of the two) … */
@@ -629,7 +632,9 @@ function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox
     n++;
   });
   // the largest (by glyph height) sheet-number candidate centred in the extent-bounded strip;
-  // on equal height the one with more parts (a joined run beats its own first part)
+  // on equal height the first in candidate order (single tokens first), except that a joined run
+  // beats a pick that is one of its own parts ("A1" alone vs "A1" "-101"); a label run such as
+  // "REV" "1" never displaces a real sheet number of the same height
   let pick: SheetnoCandidate | null = null;
   const [bx0, by0, bx1, by1] = box;
   for (const k of sheetnoCandidates(sheet.tokens)) {
@@ -637,7 +642,8 @@ function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox
     if (!(x >= bx0 && x <= bx1 && y >= by0 && y <= by1)) continue;
     const [u, v] = stripUV(c.edge, box, x, y);
     if (!(u >= e0 && u <= e1 && v >= 0 && v <= c.d)) continue;
-    if (!pick || k.h > pick.h || (k.h === pick.h && k.idx.length > pick.idx.length)) { pick = k; bestUV = [u, v]; }
+    const ownPart = !!pick && k.h === pick.h && k.idx.length > pick.idx.length && pick.idx.every((i) => k.idx.includes(i));
+    if (!pick || k.h > pick.h || ownPart) { pick = k; bestUV = [u, v]; }
   }
   const best = pick ? pick.idx[0] : -1;
   const restArea = 1 - area;

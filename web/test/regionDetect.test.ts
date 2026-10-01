@@ -519,6 +519,37 @@ describe("sheetno signal", () => {
     assert.equal(c.sheetnoIdx, tokens.indexOf(a));
     assert.equal(c.sheetno, true);
   });
+  for (const [w, n] of [["REV", "1"], ["NO", "1"], ["SHT", "2"]] as const) {
+    test(`a joined label "${w}" "${n}" does not beat a real sheet number of the same height`, () => {
+      // label run in the far-end corner, gap 8 px (h 40: spaced join "${w} ${n}" fits the pattern),
+      // listed BEFORE the real number; the real A-101 (h 40) must still be judged
+      const lw = 0.6 * 40 * w.length;
+      const label = [{ str: w, x: 2500, y: 1950, w: lw, h: 40, rot: 0 }, { str: n, x: 2500 + lw + 8, y: 1950, w: 24, h: 40, rot: 0 }];
+      const tokens = [...fill("bottom", 0.1, 20), ...label, NUMBER, ...DRAWING];
+      const c = cand(detect(STD_LINES, tokens), "bottom");
+      assert.equal(c.sheetnoText, "A-101");
+      assert.equal(c.sheetnoIdx, tokens.indexOf(NUMBER));
+      // and a smaller label run never wins either
+      const small = [{ str: w, x: 2500, y: 1950, w: lw / 2, h: 20, rot: 0 }, { str: n, x: 2500 + lw / 2 + 4, y: 1950, w: 12, h: 20, rot: 0 }];
+      const c2 = cand(detect(STD_LINES, [...fill("bottom", 0.1, 20), ...small, NUMBER, ...DRAWING]), "bottom");
+      assert.equal(c2.sheetnoText, "A-101");
+    });
+  }
+
+  test("a split detail tag \"B\" \"10\" in the drawing creates no sheetno", () => {
+    // no sheet number in the strip; the tag sits in the drawing (y 1000), outside every strip
+    const tag = [{ str: "B", x: 1500, y: 1000, w: 24, h: 40, rot: 0 }, { str: "10", x: 1526, y: 1000, w: 48, h: 40, rot: 0 }];
+    const c = cand(detect(STD_LINES, [...fill("bottom", 0.1, 20), ...tag, ...DRAWING]), "bottom");
+    assert.equal(c.sheetno, false);
+    assert.equal(c.sheetnoIdx, null);
+    assert.equal(c.sheetnoText, null);
+    // next to the inner rule (92% of the depth), the joined tag is judged but fails the outer-60% test
+    const deep = [{ str: "B", x: 2600, y: 1803.4, w: 24, h: 40, rot: 0 }, { str: "10", x: 2626, y: 1803.4, w: 48, h: 40, rot: 0 }];
+    const d = cand(detect(STD_LINES, [...fill("bottom", 0.1, 20), ...deep, ...DRAWING]), "bottom");
+    assert.equal(d.sheetnoText, "B10");
+    assert.equal(d.sheetno, false);
+  });
+
   test("density: strip tokens per strip area ÷ rest-of-border-box tokens per rest area", () => {
     // 21 tokens in area 0.1, 18 in 0.9 → (21 / 0.1) / (18 / 0.9) = 10.5
     const c = cand(detect(STD_LINES, STD_TOKENS), "bottom");
