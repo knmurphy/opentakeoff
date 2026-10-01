@@ -4,10 +4,12 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
-  longAxisLines, TB_SHEETNO_RE, findBorder, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
-  MIN_STRIP_TOKENS,
+  longAxisLines, TB_SHEETNO_RE, findBorder, tokenCenter, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
+  MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, repeatOptions, normText, framesBand, FRAME_BAND_RATIO, BAND_GAP,
+  REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions, STATIC_MIN_SHEETS, FIELD_MIN_SHEETS, REPEAT_MIN_SHARE, type RepeatInput, type TokenClasses,
   type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
+import { aspectBucket, cleanRegions, hitRegion, type SheetRegions } from "../src/lib/regions.ts";
 import * as Synth from "./fixtures/regionSynth.ts";
 
 // Sheet 2000 × 1000 px: shorter side 1000 →
@@ -533,9 +535,31 @@ describe("acceptance (step 4)", () => {
     assert.equal(c.touch, null);
   });
 
-  test("a repetition-only strip is used only on an edge without a chain", () => {
+  test("a repetition-only strip joins its edge's candidates, smallest d first (amended in task 6a)", () => {
+    // chain d 0.1 (rule A) is tried before the frameless strip at d 0.2, which is not tried
     const r = detect(STD_LINES, STD_TOKENS, { repeatStrips: [{ edge: "bottom", d: 0.2, extent: [0, 1] }] });
-    assert.deepEqual(r.diag.candidates.filter((c) => c.edge === "bottom").map((c) => c.frame), [true]);
+    assert.deepEqual(r.diag.candidates.filter((c) => c.edge === "bottom").map((c) => c.frame), [true, false]);
+    assert.equal(r.decision.d, 0.1);
+    assert.equal(cand(r, "bottom", 0.2).reason, "not-tried");
+  });
+
+  test("a frameless strip under a false chain deeper on the same edge is tried first (a 26% rule)", () => {
+    const r = detect([hl(BX0, BX1, yB(0.26))], STD_TOKENS, { frames: () => false, repeatStrips: [{ edge: "bottom", d: 0.1, extent: [0, 1] }] });
+    assertClose(r.decision.d!, 0.1);
+    assert.deepEqual(r.decision.rules, ["C"]);
+    assert.equal(cand(r, "bottom", 0.26).reason, "not-tried");
+  });
+
+  test("a chain framing the band drops the edge's frameless strip", () => {
+    const strips = [{ edge: "bottom" as Edge, d: 0.09, extent: [0, 1] as [number, number] }];
+    const r = detect(STD_LINES, STD_TOKENS, { repeat: () => true, frames: (e, d) => e === "bottom" && d === 0.1, repeatStrips: strips });
+    assert.deepEqual(r.diag.candidates.map((c) => c.frame), [true]);
+    assertClose(r.decision.d!, 0.1);
+    assert.deepEqual(r.decision.rules, ["A", "B", "C"]);
+    // no framing chain: the frameless strip is kept and tried first
+    const far = detect(STD_LINES, STD_TOKENS, { frames: () => false, repeatStrips: strips });
+    assert.deepEqual(far.diag.candidates.map((c) => c.frame), [false, true]);
+    assertClose(far.decision.d!, 0.09);
   });
 
   test("all three signals → rules A, B, C, confidence 0.95", () => {
@@ -668,6 +692,571 @@ describe("acceptance (step 4)", () => {
   });
 });
 
+describe("steps 2 and 4: edge cases", () => {
+  test("tokenCenter: a missing w is estimated as 0.6 × h per character", () => {
+    // "ABCD", h 10 → w 24: rot 0 center (100 + 12, 200 − 5); rot 90 center (100 + 5, 200 + 12)
+    assert.deepEqual(tokenCenter({ str: "ABCD", x: 100, y: 200, h: 10 }), [112, 195]);
+    assert.deepEqual(tokenCenter({ str: "ABCD", x: 100, y: 200, h: 10, rot: 90 }), [105, 212]);
+    assert.deepEqual(tokenCenter({ str: "ABCD", x: 100, y: 200, w: 50, h: 10 }), [125, 195]);
+  });
+
+  test("free end: a rule on the border side of the chain is a junction only when it ends within 1% of the chain", () => {
+    // bottom chain at d 0.1 with its free end at u 0.25 (x 780); a stub from v 0.03 (y 1902.4)
+    // toward the chain, not reaching the border: ending at v 0.091 (y 1785.28, 0.9% short) it
+    // meets the free end → T-junction, rejected; ending at v 0.089 (y 1789.12, 1.1% short) it
+    // does not → a plain free end, kept
+    const chain = hl(xU(0.25), BX1, 1768);
+    assert.deepEqual(cands([chain, vl(780, 1785.28, 1902.4)]), []);
+    assert.equal(cands([chain, vl(780, 1789.12, 1902.4)]).length, 1);
+  });
+
+  test("a vertical rot 90 sheet number (left strip) is judged by its rotated box's center", () => {
+    // left strip d 0.1; center at u 0.52 (y 1038.4), v 0.03 (x 146.4); "A1-101", h 40, w 144.
+    // rot 90 runs down the page: baseline start (cx − h/2, cy − w/2). Read as rot 0, its center
+    // would be (198.4, 946.4): u 0.472, in the near half.
+    const t: DetectToken = { str: "A1-101", x: 126.4, y: 966.4, w: 144, h: 40, rot: 90 };
+    const r = detect([chainAt("left", 0.1)], [...fill("left", 0.1, 20), t, ...DRAWING]);
+    const c = cand(r, "left");
+    assertClose(c.sheetnoPos![0], 0.52, "along", 1e-9); assertClose(c.sheetnoPos![1], 0.3, "across", 1e-9);
+    assert.equal(c.sheetno, true);
+    assert.equal(r.decision.edge, "left");
+  });
+
+  // top and bottom chains both at d 0.1 with mirrored contents: equal rules, area and density
+  const MIRROR = [...STD_TOKENS, ...fill("top", 0.1, 20), tokUV("A-101", "top", 0.9, 0.03, 40)];
+
+  test("between edges: equal rules, area and density → the EDGES order decides (top before bottom)", () => {
+    const r = detect([...STD_LINES, chainAt("top", 0.1)], MIRROR);
+    assert.equal(cand(r, "top").area, cand(r, "bottom").area);
+    assert.equal(cand(r, "top").density, cand(r, "bottom").density);
+    assert.equal(r.decision.edge, "top");
+    assert.equal(cand(r, "bottom").reason, "lost:order");
+  });
+
+  test("between edges: areas within 1e-9 are equal (floating-point noise does not decide)", () => {
+    // the top chain 1e-10 px deeper: its area is larger by ~5e-14, which does not decide; the
+    // comparison goes on to density (lower on top by the same noise — density has no epsilon)
+    const r = detect([...STD_LINES, hl(BX0, BX1, 232 + 1e-10)], MIRROR);
+    assert.ok(cand(r, "top").area > cand(r, "bottom").area);
+    assert.equal(cand(r, "top").reason, "lost:density");
+  });
+
+  test("a repetition-only strip of zero length is ignored (no NaN)", () => {
+    for (const extent of [[0.5, 0.5], [0.6, 0.4]] as [number, number][]) {
+      const r = detect([], STD_TOKENS, { repeatStrips: [{ edge: "bottom", d: 0.1, extent }] });
+      assert.deepEqual(r.diag.candidates, []);
+      assert.equal(r.decision.edge, null);
+    }
+    for (const d of [0, NaN]) {
+      const r = detect([], STD_TOKENS, { repeatStrips: [{ edge: "bottom", d, extent: [0, 1] }] });
+      assert.deepEqual(r.diag.candidates, []);
+    }
+  });
+});
+
+// ── step 3: repetition across the set ───────────────────────────────────────
+/** Reference for classifyRepetition: the plain O(n² · T) definition (every
+ * token against every sheet), kept to check the indexed implementation. */
+function classifyRepetitionRef(sheets: readonly RepeatInput[]): TokenClasses[] {
+  const n = sheets.length;
+  const out: TokenClasses[] = sheets.map(() => ({ staticIdx: [], fieldIdx: [] }));
+  const half = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
+  const needStatic = Math.max(STATIC_MIN_SHEETS, half), needField = Math.max(FIELD_MIN_SHEETS, half);
+  if (n < needStatic) return out;
+  const T = REPEAT_POS_TOL + 1e-9;
+  const pts = sheets.map(({ tokens, box }) => tokens.map((t) => {
+    const [x, y] = tokenCenter(t);
+    return { x: (x - box[0]) / (box[2] - box[0]), y: (y - box[1]) / (box[3] - box[1]), text: normText(t.str) };
+  }));
+  const ok = (p: { x: number; y: number; text: string }) => !!p.text && Number.isFinite(p.x) && Number.isFinite(p.y);
+  pts.forEach((ps, s) => ps.forEach((p, i) => {
+    if (!ok(p)) return;
+    let same = 0, occupied = 0, changed = 0;
+    for (let o = 0; o < n; o++) {
+      const hit = pts[o].filter((q) => ok(q) && Math.abs(q.x - p.x) <= T && Math.abs(q.y - p.y) <= T);
+      if (!hit.length) continue;
+      occupied++;
+      if (hit.some((q) => q.text === p.text)) same++;
+      else if (o !== s) changed++;
+    }
+    if (same >= needStatic) out[s].staticIdx.push(i);
+    else if (occupied >= needField && changed >= half) out[s].fieldIdx.push(i);
+  }));
+  return out;
+}
+
+describe("classifyRepetition: the indexed implementation equals the reference", () => {
+  const inputs = (set: Synth.SynthSet) => set.sheets.map((x) => ({ tokens: x.sheet.tokens, box: findBorder(x.sheet).box }));
+  const sets = [Synth.uniformSet24(), Synth.mixedSet(), Synth.smallConsultantsSet(), Synth.borderlessSet(), Synth.repeatOnlySet(),
+    ...[1, 3, 5, 11, 18, 19, 4242].map((k) => Synth.randomSet(k))];
+  for (const set of sets) {
+    test(set.name, () => {
+      const all = inputs(set);
+      for (const sub of [all, all.slice(0, 2), all.slice(0, 3), all.slice(1, 6)]) {
+        assert.deepEqual(classifyRepetition(sub), classifyRepetitionRef(sub));
+      }
+    });
+  }
+});
+
+describe("classifyRepetition: scaling", () => {
+  // uniformSet24's sheets cloned under new keys (exact copies: every title-block token repeats on
+  // every sheet), and jittered copies (every token moved by up to ±1 px, so no two queries match)
+  const base = Synth.uniformSet24().sheets.map((x) => x.sheet);
+  const clones = (n: number, jitter = 0) => {
+    const rng = Synth.mulberry32(7);
+    return Array.from({ length: n }, (_, i) => {
+      const b = base[i % base.length];
+      const tokens = jitter ? b.tokens.map((t) => ({ ...t, x: t.x + (rng() - 0.5) * 2 * jitter, y: t.y + (rng() - 0.5) * 2 * jitter })) : b.tokens;
+      return { ...b, key: `c${String(i).padStart(4, "0")}.pdf`, tokens };
+    });
+  };
+  const inputsOf = (sh: DetectSheet[]) => sh.map((x) => ({ tokens: x.tokens, box: findBorder(x).box }));
+  const best = (f: () => void) => Math.min(...[0, 1, 2].map(() => { const t = performance.now(); f(); return performance.now() - t; }));
+
+  test("100 → 200 cloned sheets costs < 3× (or under 200 ms)", () => {
+    const i100 = inputsOf(clones(100)), i200 = inputsOf(clones(200));
+    classifyRepetition(i100);   // warm-up
+    const t100 = best(() => classifyRepetition(i100)), t200 = best(() => classifyRepetition(i200));
+    assert.ok(t200 < 3 * t100 || t200 < 200, `100 sheets ${t100.toFixed(0)} ms, 200 sheets ${t200.toFixed(0)} ms`);
+  });
+
+  test("detectSetRegions: 200 cloned sheets < 3 s, 200 jittered sheets < 6 s (was 27 s)", () => {
+    for (const [sheets, limit] of [[clones(200), 3000], [clones(200, 1), 6000]] as const) {
+      const t = performance.now();
+      const { regions } = detectSetRegions(sheets);
+      const ms = performance.now() - t;
+      assert.equal(regions.size, 200);
+      assert.ok(ms < limit, `${ms.toFixed(0)} ms (limit ${limit})`);
+    }
+  });
+
+  test("jittered clones classify like the reference", () => {
+    const sub = inputsOf(clones(30, 1));
+    assert.deepEqual(classifyRepetition(sub), classifyRepetitionRef(sub));
+  });
+});
+
+describe("step 3: statics and fields (classifyRepetition)", () => {
+  // page 1000 × 1000 with the border box at the page edge: normalized = px / 1000
+  const B1: [number, number, number, number] = [0, 0, 1000, 1000];
+  const on = (...toks: DetectToken[]) => ({ tokens: toks, box: B1 });
+  const FIRM = "ACME ARCHITECTS";
+
+  test("static: the same text at the same normalized center on every one of 3 sheets", () => {
+    const out = classifyRepetition([0, 1, 2].map((i) => on(tokC(FIRM, 500, 950), tokC("OFFICE", 100 + 300 * i, 300))));
+    for (const c of out) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [] });
+  });
+
+  test(`position tolerance ${REPEAT_POS_TOL * 100}% per axis: 20 px of 1000 matches, 21 px does not`, () => {
+    // four sheets (static needs 2): the third holds the text 20 or 21 px off, the fourth
+    // holds it 20 px off the other way — 41/42 px from the third
+    const at = (x: number, y: number) => classifyRepetition([
+      on(tokC(FIRM, 500, 950)), on(tokC("OTHER", 100, 100)), on(tokC(FIRM, x, y)), on(tokC("OTHER 2", 300, 100)),
+    ]);
+    assert.deepEqual(at(520, 930).map((c) => c.staticIdx), [[0], [], [0], []]);
+    assert.deepEqual(at(521, 950).map((c) => c.staticIdx), [[], [], [], []]);
+    assert.deepEqual(at(500, 971).map((c) => c.staticIdx), [[], [], [], []]);
+  });
+
+  test("minimum 2 sheets (amended in task 6a): two identical sheets have statics, one sheet none; fields still need 3", () => {
+    const two = classifyRepetition([1, 2].map((k) => on(tokC(FIRM, 500, 950), tokC(`A-10${k}`, 900, 970))));
+    for (const c of two) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [] });
+    assert.deepEqual(classifyRepetition([on(tokC(FIRM, 500, 950))]), [{ staticIdx: [], fieldIdx: [] }]);
+  });
+
+  test("≥ 50% of the sheets considered: 4 of 8 is static, 3 of 8 is not", () => {
+    const set = (k: number) => Array.from({ length: 8 }, (_, i) => on(...(i < k ? [tokC(FIRM, 500, 950)] : []), tokC("OFFICE", 100 + 90 * i, 300)));
+    const four = classifyRepetition(set(4));
+    four.forEach((c, i) => assert.deepEqual(c.staticIdx, i < 4 ? [0] : [], `sheet ${i}`));
+    for (const c of classifyRepetition(set(3))) assert.deepEqual(c.staticIdx, []);
+  });
+
+  test("centers are normalized to each sheet's border box", () => {
+    // (0.5, 0.95) of three different border boxes
+    const out = classifyRepetition([
+      { tokens: [tokC(FIRM, 500, 950)], box: [0, 0, 1000, 1000] },
+      { tokens: [tokC(FIRM, 600, 1000)], box: [100, 50, 1100, 1050] },
+      { tokens: [tokC(FIRM, 1000, 1900)], box: [0, 0, 2000, 2000] },
+    ]);
+    for (const c of out) assert.deepEqual(c.staticIdx, [0]);
+  });
+
+  test("text is compared trimmed, whitespace-collapsed and upper-cased", () => {
+    assert.equal(normText("  Acme   architects "), FIRM);
+    const out = classifyRepetition([on(tokC(FIRM, 500, 950)), on(tokC("acme architects", 500, 950)), on(tokC(" Acme  Architects", 500, 950))]);
+    for (const c of out) assert.deepEqual(c.staticIdx, [0]);
+  });
+
+  test("field: a fixed position whose text changes (sheet numbers A-101 … A-103)", () => {
+    const out = classifyRepetition([1, 2, 3].map((k) => on(tokC(FIRM, 500, 950), tokC(`A-10${k}`, 900, 970))));
+    for (const c of out) assert.deepEqual(c, { staticIdx: [0], fieldIdx: [1] });
+  });
+
+  test("field: text changing on most sheets (three dates over 6 sheets)", () => {
+    // each token: same text on 2 sheets (< 3 = 50% of 6, not static), position filled on 6, text differs on 4 ≥ 3
+    const out = classifyRepetition(["09/01", "09/01", "10/08", "10/08", "11/15", "11/15"].map((d) => on(tokC(d, 700, 970))));
+    for (const c of out) assert.deepEqual(c, { staticIdx: [], fieldIdx: [0] });
+  });
+
+  test("a position filled on fewer than 3 sheets is not a field; empty text is neither", () => {
+    const out = classifyRepetition([on(tokC("A-101", 900, 970)), on(tokC("A-102", 900, 970)), on(tokC("OFFICE", 200, 200))]);
+    for (const c of out) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+    // 2 of 5 sheets: static needs ⌈50% × 5⌉ = 3
+    const five = classifyRepetition([0, 1, 2, 3, 4].map((i) => on(tokC(i < 2 ? FIRM : `X${i}`, i < 2 ? 500 : 100 * i, i < 2 ? 950 : 100))));
+    for (const c of five) assert.deepEqual(c.staticIdx, []);
+    const blank = classifyRepetition([0, 1, 2].map(() => on(tokC("  ", 500, 500))));
+    for (const c of blank) assert.deepEqual(c, { staticIdx: [], fieldIdx: [] });
+  });
+});
+
+describe("step 3: repetition band and repeat", () => {
+  // standard page (border BOX): bottom-strip tokens at u 0.1 … 0.9, v 0.05 … 0.08
+  const T = [
+    tokUV("ACME", "bottom", 0.1, 0.05), tokUV("A-101", "bottom", 0.9, 0.08), tokUV("DATE", "bottom", 0.5, 0.06),
+    tokUV("DEEP", "bottom", 0.5, 0.4),        // deeper than 32% of the height: out of the bottom band
+    tokC("7", 30, 1000),                      // in the left margin, outside the border box
+  ];
+
+  test(`the band: the box of the given (static) token centers inside the border box within ${BAND_DEPTH * 100}% of the edge`, () => {
+    const b = repetitionBands(T, BOX, [0, 1, 2, 3, 4]);
+    const bot = b.bottom!;
+    assertClose(bot.u0, 0.1, "u0"); assertClose(bot.u1, 0.9, "u1"); assertClose(bot.v0, 0.05, "v0"); assertClose(bot.v1, 0.08, "v1");
+    assertClose(bot.vBox, 0.08 + 5 / 1920, "vBox");
+    // top: every token is ≥ 60% from the top border
+    assert.equal(b.top, undefined);
+    // only the listed indices count
+    assert.deepEqual(repetitionBands(T, BOX, []), {});
+    assertClose(repetitionBands(T, BOX, [0, 2]).bottom!.u1, 0.5, "u1 of two");
+  });
+
+  test(`contiguous band: statics outward from the border up to the first depth gap > ${BAND_GAP * 100}%`, () => {
+    // glyph boxes (h 10 → ±5 px = ±0.0026): ACME to v 0.0526, A-101 from 0.0774; a chance static
+    // starting 5% past the band's edge (center 0.08 + 0.0026 + 0.05 + 0.0026) is left out; one
+    // starting 3% past it is kept
+    const edge = 0.08 + 5 / 1920;
+    const chance = tokUV("EXAM", "bottom", 0.4, edge + 0.05 + 5 / 1920);
+    const near = tokUV("EXAM", "bottom", 0.4, edge + 0.03 + 5 / 1920);
+    assertClose(repetitionBands([...T, chance], BOX, [0, 1, 2, 5]).bottom!.vBox, edge, "gap 5%");
+    assertClose(repetitionBands([...T, near], BOX, [0, 1, 2, 5]).bottom!.vBox, edge + 0.03 + 10 / 1920, "gap 3%");
+    // the band grows from its shallowest static, wherever that is
+    assertClose(repetitionBands([tokUV("X", "bottom", 0.5, 0.2)], BOX, [0]).bottom!.vBox, 0.2 + 5 / 1920, "lone static");
+  });
+
+  test(`framesBand: the deepest static glyph edge inside the strip ≥ d / ${FRAME_BAND_RATIO}`, () => {
+    assert.equal(framesBand(0.2, 0.2), true);
+    assert.equal(framesBand(0.2, 0.3), true);
+    assert.equal(framesBand(0.2, 0.301), false);
+    assert.equal(framesBand(0.0926, 0.26), false);  // a 26% rule above text ending at 9%
+    assert.equal(framesBand(0, 0.1), false);
+  });
+
+  test("frames and repeat: statics inside the chain's strip reach its last third and span ≥ 50% of the full strip", () => {
+    const cand0 = (d: number, extent: [number, number] = [0, 1]) => ({ edge: "bottom" as Edge, d, extent, cover: extent[1] - extent[0], touch: "both" as const, frame: true, freeEndGap: null });
+    // a sparse band broken by a gap (statics at v 0.02 and 0.05, then 0.19 after a 13% gap): the
+    // contiguous band ends at 0.0526, but the deepest static inside a gap-broken chain at 0.2216
+    // (extent [0.068, 1]) reaches 0.1926 ≥ 0.2216 / 1.5 → it frames; coverage along the full strip
+    const sparse = [tokUV("S", "bottom", 0.02, 0.02), tokUV("S", "bottom", 0.6, 0.05), tokUV("S", "bottom", 0.9, 0.19)];
+    const o = repeatOptions(sparse, BOX, { staticIdx: [0, 1, 2], fieldIdx: [] });
+    assertClose(o.repeatStrips![0].d, 0.05 + 5 / 1920, "frameless d: the contiguous band");
+    assert.equal(o.frames!("bottom", 0.2216), true);
+    assert.equal(o.repeat!(cand0(0.2216, [0.068, 1])), true);
+    assert.equal(o.frames!("bottom", 0.29), false);                      // 0.1926 < 0.29 / 1.5
+    // statics inside the strip only: a chain at 0.1 holds them to 0.0526 < 0.1 / 1.5 → not framed
+    assert.equal(o.frames!("bottom", 0.1), false);
+    assert.equal(o.frames!("bottom", 0.075), true);                      // 0.0526 ≥ 0.05
+    // the 26% rule over text ending at 9%
+    const low = [tokUV("S", "bottom", 0.1, 0.03), tokUV("S", "bottom", 0.9, 0.09)];
+    assert.equal(repeatOptions(low, BOX, { staticIdx: [0, 1], fieldIdx: [] }).frames!("bottom", 0.26), false);
+    // coverage: statics inside the strip spanning 0.4 → framed, but no repeat
+    const narrow = repeatOptions([tokUV("A", "bottom", 0.3, 0.05), tokUV("B", "bottom", 0.7, 0.05)], BOX, { staticIdx: [0, 1], fieldIdx: [] });
+    assert.equal(narrow.frames!("bottom", 0.06), true);
+    assert.equal(narrow.repeat!(cand0(0.06, [0.2, 0.8])), false);
+  });
+
+  test("repeatOptions: a frameless strip where the band spans ≥ 50% of the border length, as deep as the band's glyph boxes", () => {
+    // fields do not shape the band: statics ACME (u 0.1) and DATE (u 0.5) span 0.4 → no strip
+    assert.deepEqual(repeatOptions(T, BOX, { staticIdx: [0, 2], fieldIdx: [1] }).repeatStrips, []);
+    const o = repeatOptions(T, BOX, { staticIdx: [0, 1, 2], fieldIdx: [] });
+    assert.equal(o.repeatStrips!.length, 1);
+    const s = o.repeatStrips![0];
+    // A-101: center v 0.08, glyphs h 10 → box edge 5 px deeper; DEEP (v 0.4) is past a 4% gap
+    assert.equal(s.edge, "bottom"); assertClose(s.d, 0.08 + 5 / 1920, "d"); assert.deepEqual(s.extent, [0, 1]);
+    // other (non-static) tokens do not deepen it (amendment 7)
+    const filler = [tokUV("NOTE", "bottom", 0.3, 0.1), tokUV("NOTE", "bottom", 0.6, 0.12)];
+    assertClose(repeatOptions([...T, ...filler], BOX, { staticIdx: [0, 1, 2], fieldIdx: [] }).repeatStrips![0].d, 0.08 + 5 / 1920, "no extension");
+    // a band spanning 0.4 of the border length gives no strip and no repeat
+    const short = repeatOptions([tokUV("A", "bottom", 0.3, 0.05), tokUV("B", "bottom", 0.7, 0.05)], BOX, { staticIdx: [0, 1], fieldIdx: [] });
+    assert.deepEqual(short.repeatStrips, []);
+    // a rotated static: the deepest edge of its rotated box counts (rot 90 in a bottom strip:
+    // "AB" h 10, w 12 runs down the page, so its box reaches 6 px below the center)
+    const rot: DetectToken = { str: "AB", x: 0, y: 0, w: 12, h: 10, rot: 90 };
+    const [cx, cy] = px("bottom", 0.5, 0.05);
+    const placed = { ...rot, x: cx - 5, y: cy - 6 };
+    const r = repeatOptions([tokUV("A", "bottom", 0.1, 0.02), placed, tokUV("B", "bottom", 0.9, 0.02)], BOX, { staticIdx: [0, 1, 2], fieldIdx: [] });
+    assertClose(r.repeatStrips![0].d, 0.05 + 6 / 1920, "rot d");
+  });
+
+  test("detectTitleBlock with repeatOptions: a borderless strip found by rule C; diag carries the classes", () => {
+    const tokens = [...fill("bottom", 0.1, 20), NUMBER, ...DRAWING];
+    // statics: fillers at u 0.025 and 0.975 (v 0.075); field: the number
+    const classes = { staticIdx: [0, 19], fieldIdx: [20] };
+    // the frameless strip: 0.075 + 5 / 1920 deep
+    const r = detectTitleBlock(mk([], tokens), repeatOptions(tokens, [0, 0, PW, PH], classes));
+    assert.equal(r.decision.edge, "bottom");
+    assert.deepEqual(r.decision.rules, ["C"]);
+    assert.deepEqual([r.diag.staticIdx, r.diag.fieldIdx], [[0, 19], [20]]);
+  });
+});
+
+// ── steps 5 and 6: grouping and output (detectSetRegions) ───────────────────
+/** A sheet of the standard page with a bottom title block at depth d: border
+ * rules, the chain, `statics` at u 0.05 + 0.1·k (v 0.7·d), 15 per-sheet
+ * fillers (text unique to the sheet), the sheet number `num` at u 0.9, v 0.3·d
+ * (h 40), and the DRAWING tokens. `boiler` adds "VA FORM 08-6231" at u 0.55,
+ * v 0.03 (inside any strip deeper than 3%); `sv` puts the statics at that
+ * depth instead; `extra` adds tokens. */
+function tbSheet(key: string, d: number, statics: string[], num: string, o: { boiler?: boolean; pageIn?: [number, number]; sv?: number; extra?: DetectToken[] } = {}): DetectSheet {
+  const tokens: DetectToken[] = [
+    ...statics.map((t, k) => tokUV(t, "bottom", 0.05 + 0.1 * k, o.sv ?? 0.7 * d)),
+    ...Array.from({ length: 15 }, (_, k) => tokUV(`${key}/${k}`, "bottom", (k + 0.5) / 15, 0.75 * d)),
+    tokUV(num, "bottom", 0.9, 0.3 * d, 40),
+    ...(o.boiler ? [tokUV(Synth.BOILERPLATE, "bottom", 0.55, 0.03)] : []),
+    ...DRAWING,
+    ...(o.extra ?? []),
+  ];
+  return { key, w: PW, h: PH, ...(o.pageIn ? { pageIn: o.pageIn } : {}), tokens, lines: [...BORDER_RULES, chainAt("bottom", d)], source: "vector" };
+}
+const firmX = (n: number, o: { boiler?: boolean; d?: number; key?: string } = {}) =>
+  Array.from({ length: n }, (_, i) => tbSheet(`${o.key ?? "x"}.pdf#${i + 1}`, o.d ?? 0.1, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], `A-10${i + 1}`, o));
+const firmY = (n: number, o: { boiler?: boolean; d?: number } = {}) =>
+  Array.from({ length: n }, (_, i) => tbSheet(`y.pdf#${i + 1}`, o.d ?? 0.1, ["YANKEE ENGINEERS", "40 OAK AVE", "CHECKED"], `M-20${i + 1}`, o));
+/** Group ids of a map, by sheet key. */
+const groupsOf = (m: Map<string, SheetRegions>) => Object.fromEntries([...m].map(([k, r]) => [k, r.group ?? null]));
+const distinct = (m: Map<string, SheetRegions>) => new Set([...m.values()].map((r) => r.group ?? `alone:${r.key}`)).size;
+
+describe("detectSetRegions: output (step 6)", () => {
+  const set = firmX(3, { boiler: true });
+  const { regions, diag } = detectSetRegions(set);
+  const r = regions.get("x.pdf#1")!;
+
+  test("title_block (the strip, border to border) and drawing_area (the border box minus the strip)", () => {
+    assert.deepEqual(r.border, BOX);
+    assert.equal(r.w, PW); assert.equal(r.h, PH); assert.equal(r.key, "x.pdf#1");
+    const tb = r.regions.find((x) => x.kind === "title_block")!, da = r.regions.find((x) => x.kind === "drawing_area")!;
+    assertBox(tb.bbox, [60, 1768, 2940, 1960]);
+    assertBox(da.bbox, [60, 40, 2940, 1768]);
+    assert.equal(tb.parent, null); assert.equal(da.parent, null);
+    assert.equal(tb.source, "vector"); assert.equal(da.source, "vector");
+    const dg = diag.get("x.pdf#1")!;
+    assert.equal(dg.edge, "bottom");
+    assert.ok(tb.evidence.includes("rule:A"));
+    assert.ok(tb.evidence.includes("repetition"), "fillers are fields, statics static: the band repeats");
+    assert.equal(tb.confidence, 0.95);
+    assert.equal(da.confidence, tb.confidence);
+  });
+
+  test("cleanRegions really runs: a degenerate sheet (w 0) keeps no zero-area region", () => {
+    const m = detectSetRegions([{ key: "flat.pdf", w: 0, h: PH, tokens: [], lines: [], source: "vector" }]).regions.get("flat.pdf")!;
+    assert.deepEqual(m.regions, []);
+    assert.deepEqual(m.border, [0, 0, 0, PH]);
+  });
+
+  test("the regions pass cleanRegions (with dims) unchanged", () => {
+    for (const s of regions.values()) assert.deepEqual(cleanRegions(s.regions, { w: s.w, h: s.h }), s.regions);
+  });
+
+  test("margin text falls in no region; strip and drawing text do", () => {
+    assert.equal(hitRegion(r, 30, 1000), null);          // left margin (border at x 60)
+    assert.equal(hitRegion(r, 1500, 1990), null);        // bottom margin (border at y 1960)
+    assert.equal(hitRegion(r, 2652, 1902.4)!.kind, "title_block");
+    assert.equal(hitRegion(r, 1500, 1000)!.kind, "drawing_area");
+  });
+
+  test("group_sig: edge, d, aspect bucket, page size when known, the group's statics", () => {
+    const withPage = detectSetRegions(firmX(3, { boiler: true }).map((s) => ({ ...s, pageIn: [36, 24] as [number, number] })));
+    for (const m of [regions, withPage.regions]) {
+      const sig = m.get("x.pdf#1")!.group_sig!;
+      assert.equal(sig.edge, "bottom");
+      assertClose(sig.d, 0.1, "d");
+      assert.equal(sig.aspect, aspectBucket(PW, PH));
+      // one candidate group: the boilerplate is kept
+      assert.deepEqual(sig.statics, ["VA FORM 08-6231", "XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"]);
+    }
+    assert.equal(regions.get("x.pdf#1")!.group_sig!.page_in, undefined);
+    assert.deepEqual(withPage.regions.get("x.pdf#1")!.group_sig!.page_in, [36, 24]);
+  });
+
+  test("diag carries the static and field token indices", () => {
+    const dg = diag.get("x.pdf#2")!;
+    // tbSheet order: 3 statics (0–2), 15 fillers (3–17), the number (18), the boilerplate (19), DRAWING
+    assert.deepEqual(dg.staticIdx.filter((i) => i < 20), [0, 1, 2, 19]);
+    assert.ok(dg.fieldIdx.includes(18), "the sheet number is a field");
+    // DRAWING: the same "OFFICE" at the same 18 spots on every sheet — static too
+    assert.deepEqual(dg.staticIdx.filter((i) => i >= 20), Array.from({ length: 18 }, (_, k) => 20 + k));
+  });
+
+  test("a sheet without a title block: drawing area = border box, confidence 0.3, no group", () => {
+    const cover: DetectSheet = { key: "cover.pdf", w: PW, h: PH, tokens: DRAWING, lines: BORDER_RULES, source: "ocr" };
+    const m = detectSetRegions([...set, cover]).regions.get("cover.pdf")!;
+    assert.deepEqual(m.regions, [{ id: "drawing_area", kind: "drawing_area", bbox: BOX, parent: null, evidence: ["border", "no-title-block"], confidence: 0.3, source: "ocr" }]);
+    assert.equal(m.group, undefined); assert.equal(m.group_sig, undefined);
+    assert.deepEqual(m.border, BOX);
+  });
+});
+
+describe("detectSetRegions: grouping (step 5)", () => {
+  test("one firm → one group; ids from the signature", () => {
+    const m = detectSetRegions(firmX(4)).regions;
+    assert.equal(new Set(Object.values(groupsOf(m))).size, 1);
+    assert.match(m.get("x.pdf#1")!.group!, /^g:[0-9a-f]{8}$/);
+  });
+
+  test("two firms with the same geometry but different statics → two groups", () => {
+    const m = detectSetRegions([...firmX(3, { boiler: true }), ...firmY(3, { boiler: true })]).regions;
+    const g = groupsOf(m);
+    assert.equal(distinct(m), 2);
+    assert.equal(g["x.pdf#1"], g["x.pdf#3"]); assert.equal(g["y.pdf#1"], g["y.pdf#3"]);
+    assert.notEqual(g["x.pdf#1"], g["y.pdf#1"]);
+    // one candidate group (same geometry): the shared boilerplate stays in both signatures
+    assert.ok(m.get("y.pdf#1")!.group_sig!.statics.includes(Synth.BOILERPLATE));
+  });
+
+  test("shared boilerplate is left out of the signatures when there are ≥ 2 candidate groups", () => {
+    // X at d 0.1, Y at d 0.15: two candidate groups; VA FORM is static in both
+    const m = detectSetRegions([...firmX(3, { boiler: true }), ...firmY(3, { boiler: true, d: 0.15 })]).regions;
+    assert.equal(distinct(m), 2);
+    assert.deepEqual(m.get("x.pdf#1")!.group_sig!.statics, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"]);
+    assert.ok(!m.get("y.pdf#1")!.group_sig!.statics.includes(Synth.BOILERPLATE));
+  });
+
+  test("|Δd| > 1.5% splits the same statics; ≤ 1.5% does not", () => {
+    // 1.6% apart: two candidate groups whose statics are all the same strings, so none is
+    // distinctive and every sheet is its own group
+    const apart = detectSetRegions([...firmX(3, { d: 0.1 }), ...firmX(3, { d: 0.116, key: "x2" })]).regions;
+    assert.equal(distinct(apart), 6);
+    assert.deepEqual(apart.get("x.pdf#1")!.group_sig!.statics, []);
+    const near = detectSetRegions([...firmX(3, { d: 0.1 }), ...firmX(3, { d: 0.114, key: "x2" })]).regions;
+    assert.equal(distinct(near), 1);
+  });
+
+  test("a sheet without distinctive statics is its own group, even with the same geometry", () => {
+    // three sheets with no static text in the strip (every token unique to its sheet)
+    const lone = [1, 2, 3].map((i) => tbSheet(`z.pdf#${i}`, 0.1, [], `A-10${i}`, { pageIn: [36, 24] }));
+    const m = detectSetRegions(lone).regions;
+    assert.equal(distinct(m), 3);
+    for (const r of m.values()) assert.deepEqual(r.group_sig!.statics, []);
+    // equal signatures: disambiguated by the smallest member key
+    assert.deepEqual([...m.values()].map((r) => r.group!.slice(-2)), ["-1", "-2", "-3"]);
+  });
+
+  test("fewer than 3 sheets: same page size, edge and |Δd| ≤ 1.5% share a group", () => {
+    const two = (a?: [number, number], b?: [number, number], d2 = 0.1) =>
+      distinct(detectSetRegions([tbSheet("p.pdf", 0.1, [], "A-101", { pageIn: a }), tbSheet("q.pdf", d2, [], "A-102", { pageIn: b })]).regions);
+    assert.equal(two([36, 24], [36, 24]), 1);
+    assert.equal(two([36, 24], [42, 30]), 2);
+    assert.equal(two(undefined, undefined), 2);        // page size unknown: no anchor
+    assert.equal(two([36, 24], [36, 24], 0.12), 2);    // |Δd| 2%
+  });
+
+  test("ids are unique within a map and do not depend on the input order", () => {
+    const set = [...firmX(3, { boiler: true }), ...firmY(3, { boiler: true, d: 0.15 }), ...[1, 2].map((i) => tbSheet(`z.pdf#${i}`, 0.1, [], `A-10${i}`))];
+    const a = detectSetRegions(set).regions, b = detectSetRegions([...set].reverse()).regions;
+    const ids = new Set([...a.values()].map((r) => r.group));
+    assert.equal(ids.size, 4);
+    assert.deepEqual([...b].sort(), [...a].sort());
+  });
+
+  test("the maps iterate in sheet-key order, whatever the input order", () => {
+    const set = [...firmY(2), ...firmX(3), tbSheet("a.pdf", 0.1, [], "A-101")];
+    const want = set.map((x) => x.key).sort();
+    for (const input of [set, [...set].reverse()]) {
+      const { regions, diag } = detectSetRegions(input);
+      assert.deepEqual([...regions.keys()], want);
+      assert.deepEqual([...diag.keys()], want);
+    }
+  });
+
+  test("duplicate sheet keys are an error", () => {
+    assert.throws(() => detectSetRegions([...firmX(2), firmX(1)[0]]), /duplicate sheet key "x\.pdf#1"/);
+  });
+
+  test("a sheet alone in its candidate group keeps its pass-1 statics (amendment 7)", () => {
+    // statics at v 0.09 on four sheets: three with the chain at 0.1, one at 0.13 (|Δd| 3%: its own
+    // candidate group). Classified alone it would have no statics; it keeps the bucket's.
+    const lone = tbSheet("x.pdf#4", 0.13, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], "A-104", { sv: 0.09 });
+    const set = [...[1, 2, 3].map((i) => tbSheet(`x.pdf#${i}`, 0.1, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], `A-10${i}`, { sv: 0.09 })), lone];
+    const { diag } = detectSetRegions(set);
+    const dg = diag.get("x.pdf#4")!;
+    assertClose(dg.d!, 0.13, "d", 1e-6);
+    assert.deepEqual(dg.staticIdx.filter((i) => i < 3), [0, 1, 2]);
+  });
+
+  test("group_sig d is the lower median of the members' depths", () => {
+    // two sheets of one firm (statics on both) at d 0.10 and 0.11
+    const two = [tbSheet("m.pdf#1", 0.1, ["XRAY ARCHITECTS", "12 MAIN ST"], "A-101", { sv: 0.09 }), tbSheet("m.pdf#2", 0.11, ["XRAY ARCHITECTS", "12 MAIN ST"], "A-102", { sv: 0.09 })];
+    const m = detectSetRegions(two).regions;
+    assert.equal(m.get("m.pdf#1")!.group, m.get("m.pdf#2")!.group);
+    assertClose(m.get("m.pdf#1")!.group_sig!.d, 0.1, "d", 1e-6);
+  });
+
+  test("group_sig statics: strings held by at least half the members", () => {
+    // one candidate group of 6: firm X (4 sheets), firm Y (2). "HALF" sits on X1, X2 and Y1 (3 of 6:
+    // static), "QUARTER" on X1, Y1 and Y2 (static). In X's signature HALF (2 of 4) is kept and
+    // QUARTER (1 of 4) is not; in Y's both (1 of 2 and 2 of 2) are kept.
+    const at = (str: string, u: number) => tokUV(str, "bottom", u, 0.09);
+    const H = at("HALF", 0.6), Q = at("QUARTER", 0.75);
+    const xs = [[H, Q], [H], [], []].map((extra, i) => tbSheet(`x.pdf#${i + 1}`, 0.1, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], `A-10${i + 1}`, { sv: 0.09, extra }));
+    const ys = [[H, Q], [Q]].map((extra, i) => tbSheet(`y.pdf#${i + 1}`, 0.1, ["YANKEE ENGINEERS", "40 OAK AVE", "CHECKED"], `M-20${i + 1}`, { sv: 0.09, extra }));
+    const m = detectSetRegions([...xs, ...ys]).regions;
+    assert.equal(distinct(m), 2);
+    const sx = m.get("x.pdf#1")!.group_sig!.statics, sy = m.get("y.pdf#1")!.group_sig!.statics;
+    assert.ok(sx.includes("HALF") && !sx.includes("QUARTER"), `X: ${sx}`);
+    assert.ok(sy.includes("HALF") && sy.includes("QUARTER"), `Y: ${sy}`);
+  });
+
+  test("frameless sheets share a candidate group on aspect bucket and edge alone (amendment 4)", () => {
+    // three borderless sheets (border = page 3000 × 2000), bottom, no rules. Common statics at v
+    // 0.02–0.06; "DEEP NOTE" at v 0.10 on A and B only (static: 2 of 3), so A and B are 0.1026
+    // deep and C 0.0626. One candidate group keeps the common statics in every signature; split
+    // by d, the common statics would be static in every candidate group and dropped.
+    const P = (u: number, v: number): [number, number] => [u * PW, PH - v * PH];
+    const common = ["ALPHA ARCHITECTS", "1 PARK ROW", "DRAWN BY", "CHECKED BY", "PROJECT NO", "SHEET TITLE"];
+    const fl = (key: string, deep: boolean, num: string): DetectSheet => ({
+      key, w: PW, h: PH, lines: [], source: "vector",
+      tokens: [
+        ...common.map((t, k) => tokC(t, ...P(0.05 + 0.18 * k, 0.02 + 0.02 * (k % 3)))),
+        ...(deep ? [tokC("DEEP NOTE", ...P(0.5, 0.1))] : []),
+        ...Array.from({ length: 16 }, (_, k) => tokC(`${key}/${k}`, ...P((k + 0.5) / 16, 0.03))),
+        tokC(num, ...P(0.9, 0.015), 20),
+        ...Array.from({ length: 12 }, (_, k) => tokC(`${key}:${k}`, ...P(0.1 + 0.07 * k, 0.6))),
+      ],
+    });
+    const { regions, diag } = detectSetRegions([fl("a.pdf", true, "A-101"), fl("b.pdf", true, "A-102"), fl("c.pdf", false, "A-103")]);
+    assertClose(diag.get("a.pdf")!.d!, 0.1 + 5 / 2000, "a d", 1e-6);
+    assertClose(diag.get("c.pdf")!.d!, 0.06 + 5 / 2000, "c d", 1e-6);
+    assert.ok(regions.get("c.pdf")!.group_sig!.statics.includes("ALPHA ARCHITECTS"));
+    assert.notEqual(regions.get("a.pdf")!.group, regions.get("c.pdf")!.group);   // step 5 still tests |Δd|
+  });
+
+  test("small sets count only sheets with a title block: two title blocks and a cover are small", () => {
+    // two statics-free title-block sheets with the same page size share a group (the < 3 rule)
+    const cover: DetectSheet = { key: "cover.pdf", w: PW, h: PH, pageIn: [36, 24], tokens: DRAWING, lines: BORDER_RULES, source: "vector" };
+    const two = [tbSheet("p.pdf", 0.1, [], "A-101", { pageIn: [36, 24] }), tbSheet("q.pdf", 0.1, [], "A-102", { pageIn: [36, 24] })];
+    const m = detectSetRegions([...two, cover]).regions;
+    assert.equal(m.get("cover.pdf")!.group, undefined);
+    assert.ok(m.get("p.pdf")!.group && m.get("p.pdf")!.group === m.get("q.pdf")!.group);
+  });
+
+  test("known limitation: 2-sheet sets can't tell firms apart when they share only boilerplate", () => {
+    // two firms, one sheet each, both with the VA boilerplate: with 2 sheets only the boilerplate
+    // is static (each firm's strings are on 1 sheet), one candidate group keeps it, Jaccard 1
+    const m = detectSetRegions([...firmX(1, { boiler: true }), ...firmY(1, { boiler: true })]).regions;
+    assert.equal(m.get("x.pdf#1")!.group, m.get("y.pdf#1")!.group);
+    assert.deepEqual(m.get("x.pdf#1")!.group_sig!.statics, [Synth.BOILERPLATE]);
+  });
+});
+
 // ── the frozen synthetic sets (fixtures/regionSynth.ts): self-consistency ────
 const SYNTH_SETS: [string, () => Synth.SynthSet][] = [
   ["uniformSet24", Synth.uniformSet24], ["bottomStripSet5", Synth.bottomStripSet5], ["mixedSet", Synth.mixedSet],
@@ -721,7 +1310,7 @@ describe("synthetic sets: single-sheet decisions (step 4, repeat off)", () => {
         switch (x.meta.expect) {
           case "find":
           case "tie-break-area": {
-            // TODO(task 6, step 3): frameless title blocks are found by repetition only
+            // a frameless title block is found by repetition only: see the set tests below
             if (x.meta.frame === "none") continue;
             const t = x.truth!;
             assert.equal(decision.edge, t.edge, `${where}: edge`);
@@ -739,4 +1328,118 @@ describe("synthetic sets: single-sheet decisions (step 4, repeat off)", () => {
       }
     });
   }
+});
+
+// ── the frozen synthetic sets with repetition on (detectSetRegions) ──────────
+// Branches on meta (expect, frame), never on truth. Framed title blocks: edge
+// correct and |d error| ≤ 1% of the dimension. Frameless ones are a known
+// limitation (plan amendments 3 and 8): found (edge correct, |d error| ≤ 25%
+// of d) or abstained — never a wrong edge or a strip off by more.
+function checkDetection(x: Synth.SynthSheet, dg: { edge: Edge | null; d: number | null }, tbEvidence: string[]) {
+  const where = `${x.sheet.key} (${x.meta.expect}${x.meta.why ? " " + x.meta.why : ""})`;
+  switch (x.meta.expect) {
+    case "find":
+    case "tie-break-area": {
+      const t = x.truth!;
+      const frameless = x.meta.frame === "none";
+      if (frameless && dg.edge === null) break;   // abstaining is allowed (amendment 8)
+      const tol = frameless ? 0.25 * t.d : 0.01;
+      assert.equal(dg.edge, t.edge, `${where}: edge`);
+      assert.ok(Math.abs(dg.d! - t.d) <= tol, `${where}: d ${dg.d} vs ${t.d} (tolerance ${tol})`);
+      break;
+    }
+    case "abstain":
+      assert.equal(dg.edge, null, `${where}: expected no title block, got ${dg.edge} ${dg.d}`);
+      break;
+    case "no-rule-A":
+      assert.ok(!tbEvidence.includes("rule:A"), `${where}: rule A fired`);
+      break;
+  }
+}
+
+/** The fixture's families against the detected groups (amendment 8: only
+ * sheets that were detected): the detected members of a family share one
+ * group, no group holds two families; sheets without a title block (family
+ * "none", the sketch) have no group. Returns [the group count, a sheet without
+ * a group counting as its own; the count expected on that basis: families
+ * with a detected member plus sheets without a group]. */
+function checkGroups(set: Synth.SynthSet, m: Map<string, SheetRegions>): [number, number] {
+  const famGroups = new Map<string, Set<string>>(), groupFams = new Map<string, Set<string>>();
+  for (const x of set.sheets) {
+    const r = m.get(x.sheet.key)!;
+    if (x.meta.expect === "abstain" && x.truth === null) { assert.equal(r.group, undefined, `${x.sheet.key}: no title block, no group`); continue; }
+    if (!r.group) continue;
+    (famGroups.get(x.meta.group) ?? famGroups.set(x.meta.group, new Set()).get(x.meta.group)!).add(r.group);
+    (groupFams.get(r.group) ?? groupFams.set(r.group, new Set()).get(r.group)!).add(x.meta.group);
+  }
+  for (const [g, f] of groupFams) assert.equal(f.size, 1, `group ${g} holds families ${[...f].join(", ")}`);
+  for (const [f, g] of famGroups) assert.equal(g.size, 1, `family ${f} split over ${g.size} groups`);
+  return [distinct(m), famGroups.size + [...m.values()].filter((r) => !r.group).length];
+}
+
+describe("synthetic sets: detectSetRegions (steps 1–6, repetition on)", () => {
+  for (const [name, build] of SYNTH_SETS) {
+    const set = build();
+    const { regions, diag } = detectSetRegions(set.sheets.map((x) => x.sheet));
+    const ev = (key: string) => regions.get(key)!.regions.find((r) => r.kind === "title_block")?.evidence ?? [];
+    test(`${name}: detection`, () => {
+      for (const x of set.sheets) checkDetection(x, diag.get(x.sheet.key)!, ev(x.sheet.key));
+    });
+    test(`${name}: outputs are clean, ids unique`, () => {
+      const ids = new Map<string, string>();
+      for (const r of regions.values()) {
+        assert.deepEqual(cleanRegions(r.regions, { w: r.w, h: r.h }), r.regions);
+        assert.ok(r.regions.some((x) => x.kind === "drawing_area"));
+        if (r.group) {
+          const sig = JSON.stringify(r.group_sig);
+          assert.ok(!ids.has(r.group) || ids.get(r.group) === sig, `${r.group}: one id, two signatures`);
+          ids.set(r.group, sig);
+        }
+      }
+    });
+  }
+});
+
+describe("synthetic sets: grouping (step 5)", () => {
+  // every set: the detected members of each family in one group, no group with two families; the
+  // fixture's group count wherever every sheet expected to be found was found
+  for (const [name, build] of SYNTH_SETS) {
+    test(name, () => {
+      const set = build();
+      const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
+      const [n, want] = checkGroups(set, regions);
+      assert.equal(n, want, `${name}: groups`);
+      const allFound = set.sheets.every((x) => x.meta.expect !== "find" || regions.get(x.sheet.key)!.group);
+      if (set.expectGroups !== null && allFound) assert.equal(n, set.expectGroups, `${name}: fixture group count`);
+    });
+  }
+
+  test("uniformSet24: one group; the same set shuffled gives identical ids and regions", () => {
+    const set = Synth.uniformSet24();
+    const sheets = set.sheets.map((x) => x.sheet);
+    const a = detectSetRegions(sheets).regions;
+    assert.equal(new Set([...a.values()].map((r) => r.group)).size, 1);
+    const rng = Synth.mulberry32(99);
+    const shuffled = [...sheets];
+    for (let i = shuffled.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]; }
+    const b = detectSetRegions(shuffled).regions;
+    assert.deepEqual([...b].sort(), [...a].sort());
+  });
+
+  test("twoSheetSet: one group on its statics (2 sheets suffice since the task 6a amendment)", () => {
+    const set = Synth.twoSheetSet();
+    const { regions } = detectSetRegions(set.sheets.map((x) => x.sheet));
+    const [p, q] = [...regions.values()];
+    assert.ok(p.group && p.group === q.group);
+    assert.ok(p.group_sig!.statics.includes(set.firms[0].statics[0]));
+    assert.deepEqual(p.group_sig!.page_in, set.sheets[0].sheet.pageIn);
+  });
+
+  test("the same set in any order: identical ids and regions (mixed, consultants, random sets)", () => {
+    for (const set of [Synth.mixedSet(), Synth.smallConsultantsSet(), Synth.randomSet(5), Synth.randomSet(18)]) {
+      const sheets = set.sheets.map((x) => x.sheet);
+      const a = detectSetRegions(sheets).regions, b = detectSetRegions([...sheets].reverse()).regions;
+      assert.deepEqual([...b].sort(), [...a].sort(), set.name);
+    }
+  });
 });
