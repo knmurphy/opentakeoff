@@ -7,7 +7,7 @@ import path from "node:path";
 import * as pdfjs from "pdfjs-dist";
 import type { OpList, OpsTable } from "../../web/src/lib/oneclick.ts";
 import { RENDER_SCALE } from "../../web/src/lib/sheets.ts";
-import { joinAbuttingSpans } from "../../web/src/lib/textjoin.ts";
+import { abuttingGroups, joinAbuttingSpans } from "../../web/src/lib/textjoin.ts";
 
 const requireHere = createRequire(import.meta.url);
 const PDFJS_ROOT = path.dirname(requireHere.resolve("pdfjs-dist/package.json"));
@@ -228,7 +228,7 @@ export interface TextSpan { str: string; x0: number; y0: number; x1: number; y1:
  * unrotated sets stay byte-identical on the wire. For unrotated text this
  * reduces exactly to the old math: glyphs rise from the baseline, y is down,
  * so the box spans [y − h, y]. */
-type RawSpan = TextSpan & { ox: number; oy: number };
+type RawSpan = TextSpan & { ox: number; oy: number; aw: number; gh: number };
 /** One span per pdf.js text item, unjoined, carrying the item's baseline origin. */
 function rawSpans(ph: PageHandle): RawSpan[] {
   const out: RawSpan[] = [];
@@ -250,6 +250,9 @@ function rawSpans(ph: PageHandle): RawSpan[] {
     const rot = ((Math.round((Math.atan2(dy, dx) * 180) / Math.PI) % 360) + 360) % 360;
     out.push({
       str, ox: +x.toFixed(1), oy: +y.toFixed(1),
+      // advance width and glyph height as the web's extractPageTokens states
+      // them (the column norm first): what baselineRuns hands the detector
+      aw: w, gh: Math.hypot(t[2], t[3]) || h,
       x0: +Math.min(...xs).toFixed(1), y0: +Math.min(...ys).toFixed(1),
       x1: +Math.max(...xs).toFixed(1), y1: +Math.max(...ys).toFixed(1),
       ...(rot ? { rot } : {}),
@@ -260,5 +263,35 @@ function rawSpans(ph: PageHandle): RawSpan[] {
 
 export function textSpans(ph: PageHandle): TextSpan[] {
   // abutting runs joined (textjoin.ts); the origin fields stay internal
-  return joinAbuttingSpans(rawSpans(ph)).map(({ ox: _ox, oy: _oy, ...span }) => span);
+  return joinAbuttingSpans(rawSpans(ph)).map(({ ox: _ox, oy: _oy, aw: _aw, gh: _gh, ...span }) => span);
+}
+
+/** A text run in the convention of the web's `extractPageTokens`
+ * (web/src/lib/sheets.ts) and the region detector's `DetectToken`: (x, y) is
+ * the baseline start in image px, the run advances `w` along `rot` (degrees,
+ * clockwise, y down) and its glyphs rise `h` (the composed transform's column
+ * norm) across it. */
+export interface BaselineRun { str: string; x: number; y: number; w: number; h: number; rot: number }
+
+/** The page's text as baseline runs, joined exactly as textSpans joins them
+ * (so a token's string is a find_text hit's string). A joined run starts at
+ * its first piece's origin and advances to the far end of the union box. */
+export function baselineRuns(ph: PageHandle): BaselineRun[] {
+  const raw = rawSpans(ph);
+  return abuttingGroups(raw).map((g) => {
+    const first = raw[g[0]];
+    const rot = first.rot ?? 0;
+    if (g.length === 1) return { str: first.str, x: first.ox, y: first.oy, w: first.aw, h: first.gh, rot };
+    // joined runs share an axis direction (abuttingGroups joins only those);
+    // the run advances from the first piece's origin to the union's far end
+    let str = "", x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const i of g) {
+      const r = raw[i];
+      str += r.str;
+      x0 = Math.min(x0, r.x0); y0 = Math.min(y0, r.y0); x1 = Math.max(x1, r.x1); y1 = Math.max(y1, r.y1);
+    }
+    const { ox, oy } = first;
+    const w = rot === 0 ? x1 - ox : rot === 90 ? y1 - oy : rot === 180 ? ox - x0 : oy - y0;
+    return { str, x: ox, y: oy, w: Math.max(w, 0), h: first.gh, rot };
+  });
 }
