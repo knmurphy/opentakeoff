@@ -51,13 +51,18 @@ describe("DEFAULT_REGION_PARAMS", () => {
 });
 
 describe("frozen constants", () => {
-  test("REGION_CONSTANTS_HASH is the sha256 of the defaults' canonical JSON", () => {
-    assert.match(RD.REGION_CONSTANTS_FROZEN, /^\d{4}-\d{2}-\d{2}$/);
+  test("REGION_CONSTANTS_HASH is the sha256 of the defaults' canonical JSON (with the logic revision)", () => {
+    assert.match(RD.REGION_CONSTANTS_FROZEN, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/);
     const hex = createHash("sha256").update(RD.regionParamsCanonical(P)).digest("hex");
     assert.equal(RD.REGION_CONSTANTS_HASH, hex);
   });
   test("canonical JSON sorts keys", () => {
     assert.equal(RD.regionParamsCanonical({ ...P }), RD.regionParamsCanonical(Object.fromEntries(Object.entries(P).reverse()) as unknown as RD.RegionParams));
     assert.ok(RD.regionParamsCanonical(P).startsWith('{"bandGap":'));
+  });
+  test("the canonical JSON carries the detection-logic revision, so a logic bump changes the hash", () => {
+    assert.equal(RD.REGION_LOGIC_REV, 2);   // 2: split sheet numbers joined (task 6b)
+    assert.match(RD.regionParamsCanonical(P), /"logicRev":2[,}]/);
+    assert.notEqual(RD.regionParamsCanonical(P, 1), RD.regionParamsCanonical(P, 2));
   });
 });

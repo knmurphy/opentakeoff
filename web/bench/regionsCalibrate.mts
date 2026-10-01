@@ -10,10 +10,11 @@
 // the midpoint of the best plateau. Writes bench/regions-calibration.json,
 // which bench:regions copies into its output.
 import { createHash } from "crypto";
+import { spawnSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
-import { detectSetRegions, DEFAULT_REGION_PARAMS, type DetectSheet, type RegionParams } from "../src/lib/regionDetect.ts";
+import { detectSetRegions, DEFAULT_REGION_PARAMS, REGION_LOGIC_REV, type DetectSheet, type RegionParams } from "../src/lib/regionDetect.ts";
 import { loadPdfSheets } from "./regionSheets.mts";
 import { sheetKeyFor } from "./regionSheets.ts";
 import { labelSpread, passTolerance, meanLabel, scoreSheet, summarize, groupingCounts } from "./regionScore.ts";
@@ -104,7 +105,10 @@ const chosen = Object.fromEntries(out.map((o) => [o.key, o.chosen]));
 console.log(`\nswept ${out.reduce((n, o) => n + o.sweep.length, 0)} runs in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
 console.log(`changed: ${out.filter((o) => o.changed).map((o) => `${o.constant} ${o.plan} → ${o.chosen}`).join(", ") || "none"}`);
 writeFileSync(join(here, "regions-calibration.json"), JSON.stringify({
-  tuneSet: T.file, sha256: sha, sheets: sheets.length, at: new Date().toISOString().slice(0, 10),
+  tuneSet: T.file, sha256: sha, sheets: sheets.length, at: new Date().toISOString().slice(0, 16) + "Z",
+  commit: spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim(),
+  dirty: spawnSync("git", ["status", "--porcelain", "--", "web/src", "web/bench", "evals/regions/labels", ":!web/bench/regions-calibration.json", ":!web/bench/regions-results.json"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "",
+  logicRev: REGION_LOGIC_REV,
   metric: "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the mean of labelers A and B; lexicographic",
   rule: "keep the plan's value unless the tune result there is worse than elsewhere in the swept range; then the midpoint of the best plateau (widest in value span, then nearest the plan value; integers round toward the plan value)",
   tolerance: tol, defaults: base, constants: out, chosen,
