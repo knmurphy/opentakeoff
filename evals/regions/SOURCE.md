@@ -43,8 +43,11 @@ opening is logged below.
 
 `npm run bench:regions -- --held-out --reason "<why>"` (from `web/`) is the
 one held-out evaluation. It is refused unless the tree is clean, HEAD descends
-from the freeze commit in `freeze.json`, the detector sources and constants
-still hash to the frozen value, and no run has started at that hash. Every
+from the freeze commit in `freeze.json`, `freeze.json` was written by a
+freeze-only commit on top of that commit, the frozen files (detector, adapter,
+scorer, bench, guard, answer keys) hash to the frozen value both at the freeze
+commit and at HEAD, the log has only ever grown, and no run has started at
+that hash. Every
 refusal, start (before any held-out page is opened) and finish is appended to
 `heldout-runs.jsonl` (committed, append-only); results go only to
 `web/bench/regions-heldout-results.json`.

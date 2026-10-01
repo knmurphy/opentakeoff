@@ -32,10 +32,11 @@ const put = (dir: string, p: string, text: string) => { mkdirSync(dirname(join(d
 
 let dir: string;
 let env: Env;
-/** A repo with the two detector sources, an empty log, and a freeze at the source commit. */
+/** A repo with every frozen source, an empty log, and a freeze commit (freeze.json only) on top of the source commit. */
 function setup() {
   dir = mkdtempSync(join(tmpdir(), "heldout-guard-"));
   sh(dir, "init", "-q", "-b", "main");
+  FREEZE_SOURCES.forEach((p, i) => put(dir, p, `source ${i} v1\n`));
   put(dir, FREEZE_SOURCES[0], "detector v1\n");
   put(dir, FREEZE_SOURCES[1], "regions v1\n");
   put(dir, HELDOUT_LOG, "");
@@ -163,6 +164,107 @@ describe("held-out guard", () => {
     assert.equal(re.rerunOf.length, 1);
   });
 
+  const refused = (p: ReturnType<typeof preflight>, re: RegExp) => {
+    assert.ok(p.mode === "held-out" && !p.ok, JSON.stringify(p));
+    assert.match((p as { why: string }).why, re);
+  };
+  /** A committed run start, so the log has content to protect. */
+  const commitLogLine = () => {
+    put(dir, HELDOUT_LOG, JSON.stringify({ type: "refused", at: "t", commit: "c", hash: null, reason: "", argv: [], why: "x" }) + "\n");
+    sh(dir, "commit", "-q", "-am", "log");
+  };
+
+  test("log deleted (uncommitted) → refused, and the refusal goes to a fresh log", () => {
+    commitLogLine();
+    rmSync(join(dir, HELDOUT_LOG));
+    const p = preflight(HELD, env, PARAMS);
+    refused(p, /log/);
+    assert.match((p as { why: string }).why, /fresh log/);
+    assert.equal(readLog(env).length, 1);
+    assert.equal(readLog(env)[0].type, "refused");
+  });
+
+  test("log deleted and the deletion committed → refused", () => {
+    commitLogLine();
+    sh(dir, "rm", "-q", HELDOUT_LOG); sh(dir, "commit", "-q", "-m", "drop log");
+    refused(preflight(HELD, env, PARAMS), /log/);
+  });
+
+  test("log truncated (committed or not) → refused", () => {
+    commitLogLine();
+    put(dir, HELDOUT_LOG, "");
+    refused(preflight(HELD, env, PARAMS), /log/);
+    put(dir, HELDOUT_LOG, "");
+    sh(dir, "commit", "-q", "-am", "truncate");
+    refused(preflight(HELD, env, PARAMS), /log/);
+  });
+
+  test("a rewritten log entry → refused", () => {
+    commitLogLine();
+    const t = readFileSync(join(dir, HELDOUT_LOG), "utf8");
+    put(dir, HELDOUT_LOG, t.replace('"why":"x"', '"why":"y"'));
+    sh(dir, "commit", "-q", "-am", "rewrite");
+    refused(preflight(HELD, env, PARAMS), /log/);
+  });
+
+  test("a log that only grew is accepted", () => {
+    commitLogLine();
+    preflight(["--held-out"], env, PARAMS);   // refusal appended (uncommitted growth)
+    sh(dir, "commit", "-q", "-am", "log grows");
+    preflight(["--held-out"], env, PARAMS);
+    const p = preflight(HELD, env, PARAMS);
+    assert.ok(p.mode === "held-out" && p.ok, JSON.stringify(p));
+  });
+
+  test("forged freeze: source edited and freeze.hash rewritten to match → refused", () => {
+    put(dir, FREEZE_SOURCES[0], "detector v2\n");
+    const f = JSON.parse(readFileSync(join(dir, FREEZE_FILE), "utf8"));
+    f.hash = currentFreeze(env, PARAMS).hash;
+    put(dir, FREEZE_FILE, JSON.stringify(f));
+    sh(dir, "commit", "-q", "-am", "sneak");
+    refused(preflight(HELD, env, PARAMS), /freeze/);
+  });
+
+  test("forged freeze: the commit field edited to another commit → refused", () => {
+    commitLogLine();
+    const a = sh(dir, "rev-parse", "HEAD");
+    put(dir, HELDOUT_LOG, readFileSync(join(dir, HELDOUT_LOG), "utf8") + "{}\n");
+    sh(dir, "commit", "-q", "-am", "more log");
+    const f = JSON.parse(readFileSync(join(dir, FREEZE_FILE), "utf8"));
+    f.commit = a;   // same sources, so the hash still matches; but this freeze.json was not written on top of `a`
+    put(dir, FREEZE_FILE, JSON.stringify(f));
+    sh(dir, "commit", "-q", "-am", "edit freeze commit field");
+    refused(preflight(HELD, env, PARAMS), /freeze/);
+  });
+
+  test("forged freeze: freeze.json changed in a commit that also changes other files → refused", () => {
+    const f = JSON.parse(readFileSync(join(dir, FREEZE_FILE), "utf8"));
+    f.commit = sh(dir, "rev-parse", "HEAD");
+    put(dir, FREEZE_FILE, JSON.stringify(f));
+    put(dir, "other.txt", "x");
+    sh(dir, "add", "-A"); sh(dir, "commit", "-q", "-m", "forge with company");
+    refused(preflight(HELD, env, PARAMS), /freeze/);
+  });
+
+  test("freeze.json edited in the working tree (uncommitted) → refused", () => {
+    const f = JSON.parse(readFileSync(join(dir, FREEZE_FILE), "utf8"));
+    f.frozenAt = "1999";
+    put(dir, FREEZE_FILE, JSON.stringify(f));
+    refused(preflight(HELD, env, PARAMS), /dirty|freeze/);
+  });
+
+  test("a scorer edit after the freeze is refused", () => {
+    put(dir, "web/bench/regionScore.ts", "export const TOL_FLOOR = 0.05;\n");
+    sh(dir, "commit", "-q", "-am", "loosen the scorer");
+    refused(preflight(HELD, env, PARAMS), /hash/);
+  });
+
+  test("the answer key edited after the freeze is refused", () => {
+    put(dir, "evals/regions/labels/reconciled.json", "{}\n");
+    sh(dir, "commit", "-q", "-am", "relabel");
+    refused(preflight(HELD, env, PARAMS), /hash/);
+  });
+
   test("held-out results go to their own file", () => {
     assert.equal(resultsPath("held-out"), HELDOUT_RESULTS_FILE);
     assert.notEqual(RESULTS_FILE, HELDOUT_RESULTS_FILE);
@@ -177,8 +279,14 @@ describe("freezeHash", () => {
     assert.notEqual(freezeHash({ "x.ts": "1", "y.ts": "2" }, '{"a":2}').hash, a);
     assert.match(a, /^[0-9a-f]{64}$/);
   });
-  test("the frozen sources are the detector and the region map module", () => {
-    assert.deepEqual(FREEZE_SOURCES, ["web/src/lib/regionDetect.ts", "web/src/lib/regions.ts"]);
+  test("the frozen set: detector, region map, adapter, scorer, bench, guard and answer keys", () => {
+    assert.deepEqual(FREEZE_SOURCES.slice(0, 2), ["web/src/lib/regionDetect.ts", "web/src/lib/regions.ts"]);
+    for (const p of [
+      "web/src/lib/sheets.ts", "web/src/lib/oneclick.ts", "web/src/lib/takeoffConstants.ts",
+      "web/bench/regionSheets.ts", "web/bench/regionSheets.mts", "web/bench/regionScore.ts", "web/bench/regionRun.mts",
+      "web/bench/regions.mts", "web/bench/regionHeldOut.ts", "web/bench/regionsReconcile.mts",
+      "evals/regions/labels/reconciled.json", "evals/regions/labels/labeler-A.json", "evals/regions/labels/labeler-B.json",
+    ]) assert.ok(FREEZE_SOURCES.includes(p), p);
   });
 });
 
