@@ -4,7 +4,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
-  longAxisLines, TB_SHEETNO_RE, findBorder, tokenCenter, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
+  longAxisLines, TB_SHEETNO_RE, sheetnoCandidates, findBorder, tokenCenter, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
   MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, repeatOptions, normText, framesBand, FRAME_BAND_RATIO, BAND_GAP,
   REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions, STATIC_MIN_SHEETS, FIELD_MIN_SHEETS, REPEAT_MIN_SHARE, type RepeatInput, type TokenClasses,
   type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
@@ -489,6 +489,36 @@ describe("sheetno signal", () => {
     assert.equal(r.decision.edge, "bottom");
   });
 
+  test("a split sheet number (\"E\" \"-\" \"001\") is joined and judged as one run", () => {
+    // h 40 → join when baselines within 10 px and gaps ≤ 20 px; no space at gap ≤ 6 px.
+    // "E" w 24 at x 2600, "-" w 24 at 2626 (gap 2), "001" w 72 at 2652 (gap 2): run x 2600–2724,
+    // y 1882.4–1922.4 → center (2662, 1902.4): u (2662 − 60)/2880 = 0.9035, v 0.03 / 0.1 = 0.3
+    const parts = [
+      { str: "E", x: 2600, y: 1922.4, w: 24, h: 40, rot: 0 },
+      { str: "-", x: 2626, y: 1922.4, w: 24, h: 40, rot: 0 },
+      { str: "001", x: 2652, y: 1922.4, w: 72, h: 40, rot: 0 },
+    ];
+    const tokens = [...fill("bottom", 0.1, 20), ...parts, ...DRAWING];
+    const c = cand(detect(STD_LINES, tokens), "bottom");
+    assert.equal(c.sheetno, true);
+    assert.equal(c.sheetnoText, "E-001");
+    assert.equal(c.sheetnoIdx, tokens.indexOf(parts[0]));
+    assertClose(c.sheetnoPos![0], (2662 - 60) / 2880, "along", 1e-9);
+    assertClose(c.sheetnoPos![1], 0.3, "across", 1e-9);
+  });
+
+  test("a joined run larger than a single pattern token wins the largest-token rule", () => {
+    // single "B10" h 30 in the near half; split "A1" "-101" h 50 in the far half ("A1" alone also
+    // fits the pattern at the same h: a run beats its own parts on a tie)
+    const small = tokC("B10", 636, 1902.4, 30);
+    const a = { str: "A1", x: 2600, y: 1927.4, w: 60, h: 50, rot: 0 };
+    const b = { str: "-101", x: 2663, y: 1927.4, w: 120, h: 50, rot: 0 };   // gap 3 ≤ 7.5: no space
+    const tokens = [...fill("bottom", 0.1, 20), small, a, b, ...DRAWING];
+    const c = cand(detect(STD_LINES, tokens), "bottom");
+    assert.equal(c.sheetnoText, "A1-101");
+    assert.equal(c.sheetnoIdx, tokens.indexOf(a));
+    assert.equal(c.sheetno, true);
+  });
   test("density: strip tokens per strip area ÷ rest-of-border-box tokens per rest area", () => {
     // 21 tokens in area 0.1, 18 in 0.9 → (21 / 0.1) / (18 / 0.9) = 10.5
     const c = cand(detect(STD_LINES, STD_TOKENS), "bottom");
@@ -1441,5 +1471,54 @@ describe("synthetic sets: grouping (step 5)", () => {
       const a = detectSetRegions(sheets).regions, b = detectSetRegions([...sheets].reverse()).regions;
       assert.deepEqual([...b].sort(), [...a].sort(), set.name);
     }
+  });
+});
+
+describe("sheetnoCandidates (split sheet numbers)", () => {
+  const T = (str: string, x: number, y: number, w: number, h = 20, rot = 0): DetectToken => ({ str, x, y, w, h, rot });
+  // h 20: baselines within 5 px, gap ≤ 10 px; no space at gap ≤ 3 px
+  test("single pattern tokens are kept, in token order", () => {
+    const c = sheetnoCandidates([T("A-101", 0, 100, 60), T("NOTES", 200, 100, 60), T("S501", 400, 300, 50)]);
+    assert.deepEqual(c.map((x) => [x.str, x.idx]), [["A-101", [0]], ["S501", [2]]]);
+  });
+  test("\"E\" \"-\" \"001\" → E-001; h is the parts' max; center is the union box's center", () => {
+    const c = sheetnoCandidates([T("E", 100, 200, 12, 20), T("-", 113, 200, 12, 18), T("001", 126, 201, 36, 20)]);
+    const run = c.find((x) => x.str === "E-001")!;
+    assert.deepEqual(run.idx, [0, 1, 2]);
+    assert.equal(run.h, 20);
+    // union: x 100–162, y 180–201
+    assertClose(run.center[0], 131, "cx", 1e-9);
+    assertClose(run.center[1], 190.5, "cy", 1e-9);
+  });
+  test("\"A1\" \"-101\" → A1-101", () => {
+    const c = sheetnoCandidates([T("A1", 0, 50, 24), T("-101", 26, 50, 48)]);
+    // "A1" alone also fits the pattern and stays a single-token candidate
+    assert.deepEqual(c.map((x) => [x.str, x.idx]), [["A1", [0]], ["A1-101", [0, 1]]]);
+  });
+  test("a gap over 0.15·h joins with a space; the space-free string is also tried", () => {
+    // gap 6 px > 3: joined "E 001", which the pattern accepts as is ([-. ]?)
+    const spaced = sheetnoCandidates([T("E", 0, 50, 12), T("001", 18, 50, 36)]);
+    assert.deepEqual(spaced.map((x) => x.str), ["E 001"]);
+    // "A1" + "-101" at gap 6: "A1 -101" fails, "A1-101" (spaces removed) matches
+    const removed = sheetnoCandidates([T("A1", 0, 50, 24), T("-101", 30, 50, 48)]);
+    assert.deepEqual(removed.filter((x) => x.idx.length > 1).map((x) => x.str), ["A1-101"]);
+  });
+  test("different baselines or a gap over 0.5·h do not join", () => {
+    assert.deepEqual(sheetnoCandidates([T("E", 0, 50, 12), T("-001", 13, 56, 48)]), []);   // baselines 6 px apart
+    assert.deepEqual(sheetnoCandidates([T("E", 0, 50, 12), T("-001", 23, 50, 48)]), []);   // gap 11 px
+    assert.deepEqual(sheetnoCandidates([T("E", 0, 50, 12, 20, 0), T("-001", 13, 50, 48, 20, 90)]), []); // direction differs
+  });
+  test("rot 90 (reading down the page) split number joins along y", () => {
+    // rot 90: run along +y, glyphs rise toward +x. "E" from y 100 (w 12), "-001" from y 113 (gap 1)
+    const c = sheetnoCandidates([T("E", 500, 100, 12, 20, 90), T("-001", 500, 113, 48, 20, 90)]);
+    const run = c.find((x) => x.str === "E-001")!;
+    assert.deepEqual(run.idx, [0, 1]);
+    // union box: x 500–520, y 100–161 → center (510, 130.5)
+    assertClose(run.center[0], 510, "cx", 1e-9);
+    assertClose(run.center[1], 130.5, "cy", 1e-9);
+  });
+  test("a sheet number inside a longer row is found as a sub-run", () => {
+    const c = sheetnoCandidates([T("DWG", 0, 50, 36), T("E", 44, 50, 12), T("-", 57, 50, 12), T("001", 70, 50, 36)]);
+    assert.ok(c.some((x) => x.str === "E-001" && x.idx.join() === "1,2,3"));
   });
 });

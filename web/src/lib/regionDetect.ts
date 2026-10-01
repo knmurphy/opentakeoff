@@ -34,11 +34,13 @@ export type Edge = "top" | "right" | "bottom" | "left";
  * border-to-border strip (the MIN_STRIP_TOKENS floor uses it); `sheetnoPos` is the
  * judged pattern token's center [along, across] as fractions of the strip
  * (along from the near end of the chain's extent, across from the border);
- * `sheetnoIdx` is that token's index in `DetectSheet.tokens`. */
+ * `sheetnoIdx` is that token's index in `DetectSheet.tokens` (for a joined run,
+ * its first part's) and `sheetnoText` the text judged. */
 export interface DetectCandidateDiag {
   edge: Edge; d: number; frame: boolean; chainCover: number; extent: [number, number];
   touch: "near" | "far" | "both" | null; freeEndGap: number | null; area: number;
   tokens: number; stripTokens: number; density: number; sheetno: boolean; sheetnoPos: [number, number] | null; sheetnoIdx: number | null;
+  sheetnoText: string | null;
   repeat: boolean; accepted: boolean; reason: string;
 }
 export interface DetectDiag {  // per sheet; recomputed, not persisted
@@ -100,6 +102,18 @@ export const SHEETNO_FAR_FROM = 0.5;
 /** … and in the outer part of the depth, nearest the border (outer 60%; the
  * S501 detail tag "B10" sits at 92% of the depth and fails). */
 export const SHEETNO_OUTER = 0.6;
+/** Step 4: a sheet number may arrive split into several text runs ("E" "-"
+ * "001" on the Shreveport electrical sheets, found on the tune set in task
+ * 6b). Runs of the same direction join when their baselines lie within
+ * this × h of each other … */
+export const SHEETNO_RUN_BASELINE = 0.25;
+/** … and the gap along the text direction is at most this × h (h: the larger
+ * glyph height of the two) … */
+export const SHEETNO_RUN_GAP = 0.5;
+/** … joined without a space when the gap is at most this × h, else with one. */
+export const SHEETNO_RUN_NOSPACE = 0.15;
+/** Sub-runs of up to this many parts are tried against TB_SHEETNO_RE. */
+export const SHEETNO_RUN_MAX_PARTS = 6;
 /** Step 4: confidence by the number of rules (A, B, C) satisfied — rule
  * labels, not calibrated probabilities. With no accepted strip: ABSTAIN. */
 export const CONFIDENCE_BY_RULES: Readonly<Record<number, number>> = { 3: 0.95, 2: 0.85, 1: 0.7 };
@@ -457,6 +471,100 @@ export function tokenCenter(t: DetectToken): [number, number] {
   return [t.x + (c * w) / 2 + (s * t.h) / 2, t.y + (s * w) / 2 - (c * t.h) / 2];
 }
 
+/** A sheet-number candidate: a single token, or a run of split tokens
+ * joined (see SHEETNO_RUN_*), whose text fits TB_SHEETNO_RE. `h` is the
+ * largest part's glyph height, `center` the center of the parts' union box,
+ * `idx` the parts' token indices in reading order. */
+export interface SheetnoCandidate { str: string; h: number; center: [number, number]; idx: number[] }
+
+const runCache = new WeakMap<readonly DetectToken[], SheetnoCandidate[]>();
+
+/** Every sheet-number candidate on a sheet: single tokens first, in token
+ * order (the original path), then joined runs. Tokens join into a chain when
+ * they read in the same direction (`rot`), their baselines lie within
+ * SHEETNO_RUN_BASELINE × h and the gap between them along the text direction
+ * is ≤ SHEETNO_RUN_GAP × h (h the larger of the two; each token takes the
+ * nearest such successor). Every contiguous sub-run of 2 to
+ * SHEETNO_RUN_MAX_PARTS parts is joined — without a space where the gap is ≤
+ * SHEETNO_RUN_NOSPACE × h, with one otherwise — and kept when the joined
+ * string fits TB_SHEETNO_RE, or, where a space was inserted, the string with
+ * the spaces removed does. Cached per token array. */
+export function sheetnoCandidates(tokens: readonly DetectToken[]): SheetnoCandidate[] {
+  const hit = runCache.get(tokens);
+  if (hit) return hit;
+  const out: SheetnoCandidate[] = [];
+  tokens.forEach((t, i) => {
+    const str = t.str.trim();
+    if (TB_SHEETNO_RE.test(str)) out.push({ str, h: t.h, center: tokenCenter(t), idx: [i] });
+  });
+  // text frame per token: a = along the run direction, b = baseline offset across it
+  const info = tokens.map((t, i) => {
+    const rot = ((Math.round(t.rot ?? 0) % 360) + 360) % 360;
+    const r = (rot * Math.PI) / 180;
+    const c = Math.round(Math.cos(r) * 1e12) / 1e12, s = Math.round(Math.sin(r) * 1e12) / 1e12;
+    const w = t.w ?? 0.6 * t.h * t.str.length;
+    const a0 = t.x * c + t.y * s;
+    return { i, rot, a0, a1: a0 + w, b: -t.x * s + t.y * c, h: t.h, str: t.str.trim() };
+  }).filter((x) => x.str !== "" && Number.isFinite(x.a0) && Number.isFinite(x.b) && x.h > 0);
+  const byRot = new Map<number, typeof info>();
+  for (const x of info) byRot.set(x.rot, [...(byRot.get(x.rot) ?? []), x]);
+  const next = new Map<number, { j: number; gap: number }>();
+  for (const group of byRot.values()) {
+    group.sort((p, q) => p.b - q.b);
+    const maxH = Math.max(...group.map((x) => x.h));
+    for (let k = 0; k < group.length; k++) {
+      const p = group[k];
+      // baseline window: only tokens within SHEETNO_RUN_BASELINE × maxH can qualify
+      let lo = k, hi = k;
+      while (lo > 0 && p.b - group[lo - 1].b <= SHEETNO_RUN_BASELINE * maxH) lo--;
+      while (hi < group.length - 1 && group[hi + 1].b - p.b <= SHEETNO_RUN_BASELINE * maxH) hi++;
+      let best: { j: number; gap: number } | null = null;
+      for (let m = lo; m <= hi; m++) {
+        const q = group[m];
+        const h = Math.max(p.h, q.h);
+        if (m === k || q.a0 <= p.a0 || Math.abs(q.b - p.b) > SHEETNO_RUN_BASELINE * h + 1e-9) continue;
+        const gap = q.a0 - p.a1;
+        if (gap > SHEETNO_RUN_GAP * h + 1e-9 || gap < -SHEETNO_RUN_GAP * h) continue;
+        if (!best || Math.abs(gap) < Math.abs(best.gap)) best = { j: q.i, gap };
+      }
+      if (best) next.set(p.i, best);
+    }
+  }
+  // one predecessor per token: the one with the smallest gap
+  const prevOf = new Map<number, number>();
+  for (const [i, { j, gap }] of next) {
+    const cur = prevOf.get(j);
+    if (cur === undefined || Math.abs(gap) < Math.abs(next.get(cur)!.gap)) prevOf.set(j, i);
+  }
+  for (const [i, { j }] of [...next]) if (prevOf.get(j) !== i) next.delete(i);
+  const byIdx = new Map(info.map((x) => [x.i, x]));
+  for (const x of info) {
+    if (prevOf.has(x.i) && next.get(prevOf.get(x.i)!)?.j === x.i) continue;   // not a chain head
+    const chain = [x.i];
+    for (let k = next.get(x.i); k && chain.length < 10_000; k = next.get(k.j)) chain.push(k.j);
+    if (chain.length < 2) continue;
+    for (let s0 = 0; s0 < chain.length; s0++) {
+      let str = byIdx.get(chain[s0])!.str, spaced = false;
+      for (let e = s0 + 1; e < chain.length && e - s0 < SHEETNO_RUN_MAX_PARTS; e++) {
+        const p = byIdx.get(chain[e - 1])!, q = byIdx.get(chain[e])!;
+        const sp = q.a0 - p.a1 > SHEETNO_RUN_NOSPACE * Math.max(p.h, q.h) + 1e-9;
+        str += (sp ? " " : "") + q.str;
+        spaced ||= sp;
+        const variant = TB_SHEETNO_RE.test(str) ? str : spaced && TB_SHEETNO_RE.test(str.replace(/\s+/g, "")) ? str.replace(/\s+/g, "") : null;
+        if (!variant) continue;
+        const idx = chain.slice(s0, e + 1);
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const k of idx) for (const [cx, cy] of tokenCorners(tokens[k])) {
+          x0 = Math.min(x0, cx); y0 = Math.min(y0, cy); x1 = Math.max(x1, cx); y1 = Math.max(y1, cy);
+        }
+        out.push({ str: variant, h: Math.max(...idx.map((k) => tokens[k].h)), center: [(x0 + x1) / 2, (y0 + y1) / 2], idx });
+      }
+    }
+  }
+  runCache.set(tokens, out);
+  return out;
+}
+
 export type TitleBlockRule = "A" | "B" | "C";
 /** A strip found by repetition alone (step 3, task 6): used as a candidate
  * without a frame on an edge that has no chain candidate. */
@@ -504,16 +612,26 @@ interface Judged { c: StripCandidate; diag: DetectCandidateDiag; rules: TitleBlo
 function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox: boolean[], c: StripCandidate, repeat: boolean, p: Readonly<RegionParams>): Judged {
   const [e0, e1] = c.extent;
   const area = (e1 - e0) * c.d;
-  let n = 0, nFull = 0, nRest = 0, best = -1, bestUV: [number, number] = [0, 0];
+  let n = 0, nFull = 0, nRest = 0, bestUV: [number, number] = [0, 0];
   centers.forEach(([x, y], i) => {
     if (!inBox[i]) return;
     const [u, v] = stripUV(c.edge, box, x, y);
     if (u >= 0 && u <= 1 && v >= 0 && v <= c.d) nFull++;
     if (!(u >= e0 && u <= e1 && v >= 0 && v <= c.d)) { nRest++; return; }
     n++;
-    const t = sheet.tokens[i];
-    if (TB_SHEETNO_RE.test(t.str.trim()) && (best < 0 || t.h > sheet.tokens[best].h)) { best = i; bestUV = [u, v]; }
   });
+  // the largest (by glyph height) sheet-number candidate centred in the extent-bounded strip;
+  // on equal height the one with more parts (a joined run beats its own first part)
+  let pick: SheetnoCandidate | null = null;
+  const [bx0, by0, bx1, by1] = box;
+  for (const k of sheetnoCandidates(sheet.tokens)) {
+    const [x, y] = k.center;
+    if (!(x >= bx0 && x <= bx1 && y >= by0 && y <= by1)) continue;
+    const [u, v] = stripUV(c.edge, box, x, y);
+    if (!(u >= e0 && u <= e1 && v >= 0 && v <= c.d)) continue;
+    if (!pick || k.h > pick.h || (k.h === pick.h && k.idx.length > pick.idx.length)) { pick = k; bestUV = [u, v]; }
+  }
+  const best = pick ? pick.idx[0] : -1;
   const restArea = 1 - area;
   const density = nRest > 0 && restArea > 0 ? (n / area) / (nRest / restArea) : n > 0 ? Infinity : 0;
   const sheetnoPos: [number, number] | null = best < 0 ? null : [(bestUV[0] - e0) / (e1 - e0), bestUV[1] / c.d];
@@ -532,7 +650,7 @@ function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox
     c, rules,
     diag: {
       edge: c.edge, d: c.d, frame: c.frame, chainCover: c.cover, extent: [e0, e1], touch: c.touch, freeEndGap: c.freeEndGap,
-      area, tokens: n, stripTokens: nFull, density, sheetno, sheetnoPos, sheetnoIdx: best < 0 ? null : best, repeat, accepted: rules.length > 0, reason,
+      area, tokens: n, stripTokens: nFull, density, sheetno, sheetnoPos, sheetnoIdx: best < 0 ? null : best, sheetnoText: pick?.str ?? null, repeat, accepted: rules.length > 0, reason,
     },
   };
 }
