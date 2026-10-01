@@ -1,0 +1,9 @@
+{
+  "name": "reader483-pr-evidence",
+  "private": true,
+  "type": "module",
+  "description": "Screenshot and DOM-assertion run for #483 PR A, from a fresh browser profile",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
