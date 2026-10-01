@@ -82,7 +82,7 @@ const git = (args: string[]) => {
   return { code: r.status ?? 128, out: r.stdout ?? "" };
 };
 const head = git(["rev-parse", "HEAD"]).out.trim();
-const dirty = git(["status", "--porcelain", "--", "web/src", "web/bench", "evals/regions/labels"]).out.trim() !== "";
+const dirty = git(["status", "--porcelain", "--", "web/src", "web/bench", "evals/regions/labels", ":!web/bench/regions-results.json"]).out.trim() !== "";
 const order = checkOrder(git);
 const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
 
@@ -107,7 +107,7 @@ console.log(`tolerance       ${pct(tol, 2)} of the border box across the edge = 
 console.log(`                (with the max spread instead of p90 it would be ${pct(tolIfMax, 2)})`);
 
 // ── run ──────────────────────────────────────────────────────────────────────
-interface SectionOut { name: string; status: string; sets: Array<{ name: string; pages: number; sha256: string | null; ms: number; summary: Summary | null; skipped?: string }>; total?: Summary; perLabeler?: Record<string, Summary>; grouping?: ReturnType<typeof groupingCounts>; rows?: ScoreRow[]; meanExcluded?: string[]; pdfs: Record<string, string> }
+interface SectionOut { name: string; status: string; sets: Array<{ name: string; pages: number; sha256: string | null; ms: number; summary: Summary | null; skipped?: string }>; total?: Summary; perLabeler?: Record<string, Summary>; grouping?: ReturnType<typeof groupingCounts>; rows?: ScoreRow[]; meanExcluded?: string[]; noTextLayer?: string[]; pdfs: Record<string, string> }
 const results: SectionOut[] = [];
 const allRows: ScoreRow[] = [];
 const hashes: Record<string, string> = {};
@@ -121,6 +121,7 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
   const rowsBy: Record<"A" | "B" | "mean", ScoreRow[]> = { A: [], B: [], mean: [] };
   const groupRows: Array<{ set: string; key: string; family: string; group: string | null }> = [];
   const meanExcluded: string[] = [];
+  const noText: string[] = [];
   for (const set of sec.sets) {
     if (!existsSync(set.path)) {
       out.sets.push({ name: set.name, pages: set.pages, sha256: null, ms: 0, summary: null, skipped: "PDF absent (node evals/regions/fetch.mjs)" });
@@ -136,6 +137,7 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
     const setRows: ScoreRow[] = [];
     for (const s of sheets) {
       const dg = diag.get(s.key)!, rg = regions.get(s.key)!;
+      if (s.tokens.length === 0) { noText.push(s.key); continue; }   // plan: counted and excluded (vector piece; OCR is 2b)
       const la = LA.get(s.key), lb = LB.get(s.key);
       if (!la || !lb) { console.log(`  (no label for ${s.key}; not scored)`); continue; }
       const m = meanLabel(la, lb);
@@ -153,6 +155,7 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
   out.grouping = groupingCounts(groupRows);
   out.rows = rowsBy.mean;
   out.meanExcluded = meanExcluded;
+  out.noTextLayer = noText;
   allRows.push(...rowsBy.mean);
   results.push(out);
 }
@@ -167,7 +170,12 @@ const V = order.verified;
 const rowLine = (name: string, s: Summary) =>
   `  ${name.padEnd(46)} n=${String(s.n).padStart(2)}  edge ${String(s.edgeOk).padStart(2)}/${s.n}  |d err| med ${pct(s.dErrMedian).padStart(6)} max ${pct(s.dErrMax).padStart(6)}  pass ${fmtPass(s.pass, s.n, V).padEnd(14)}  abstain ${s.abstain}/${s.n}`;
 for (const sec of results) {
-  console.log(`\n── ${sec.name.toUpperCase()}${sec.name === "held-out" ? "" : " (in-sample: the rules were designed on these; not a generalization result)"} ──`);
+  const note: Record<string, string> = {
+    tune: " (in-sample, tune: constants were calibrated here; not a generalization result)",
+    "in-sample": " (in-sample: the rules were designed by looking at these; never tuned on; not a generalization result)",
+    "held-out": " (headline numbers come only from this section)",
+  };
+  console.log(`\n── ${sec.name.toUpperCase()}${note[sec.name] ?? ""} ──`);
   if (sec.status === "not run") { console.log("  not run (constants not yet run on held-out; `--held-out` is the one held-out run)"); continue; }
   for (const s of sec.sets) {
     if (!s.summary) console.log(`  ${s.name.padEnd(46)} skipped: ${s.skipped}`);
@@ -177,12 +185,13 @@ for (const sec of results) {
   console.log(rowLine(`TOTAL vs mean label`, t));
   console.log(rowLine(`TOTAL vs labeler A`, sec.perLabeler!.A));
   console.log(rowLine(`TOTAL vs labeler B`, sec.perLabeler!.B));
+  console.log(`  excluded, no text layer (vector detector; OCR is piece 2b): ${sec.noTextLayer!.length}${sec.noTextLayer!.length ? ` — ${sec.noTextLayer!.join(", ")}` : ""}`);
   if (sec.meanExcluded!.length) console.log(`  labelers disagree on the edge (excluded from the mean): ${sec.meanExcluded!.join(", ")}`);
   const neg = t.negatives;
   const up = binomUpper95(neg.falsePositives, neg.n);
   console.log(`  false positives on labeled negatives: ${neg.n === 0 ? "no labeled negatives (n = 0)" : neg.n < 5 ? `${neg.falsePositives}/${neg.n}, 95% upper bound ${pct(up, 1)} (n < 5: not a rate)` : `${neg.falsePositives}/${neg.n} (95% upper bound ${pct(up, 1)})`}`);
   const g = sec.grouping!;
-  console.log(`  grouping: ${g.families} label families; families split ${g.splitFamilies}/${g.familyUnits} (set, family) units; cross-family pairs merged ${g.mergedPairs}/${g.crossPairs}; same-family sheet pairs split ${g.splitSheetPairs}/${g.sameFamilySheetPairs}; ungrouped (abstained) ${g.ungrouped}${g.meaningful ? "" : " — not statistically meaningful (< 3 families)"}`);
+  console.log(`  grouping: ${g.families} label families; families split ${g.splitFamilies}/${g.familyUnits} (set, family) units; cross-family pairs merged ${g.mergedPairs}/${g.crossPairs}; same-family sheet pairs split ${g.splitSheetPairs}/${g.sameFamilySheetPairs}; ungrouped (abstained) ${g.ungrouped}${g.meaningful ? "" : " — not statistically meaningful (< 3 families)"}${g.crossPairs === 0 ? " — merges not measurable (no two families share a set)" : ""}`);
   console.log(`  per rule / confidence tier (rule labels, not calibrated probabilities):`);
   for (const [tier, c] of Object.entries(t.tiers).sort()) console.log(`    ${tier.padEnd(8)} n=${c.n}  pass ${fmtPass(c.pass, c.n, V)}`);
   console.log(`  framed strips: n=${t.framed.n} pass ${fmtPass(t.framed.pass, t.framed.n, V)}; frameless strips: n=${t.frameless.n}, edge ${t.frameless.edgeOk}/${t.frameless.n}, |d err| ≤ 25% of d ${fmtPass(t.frameless.pass, t.frameless.n, V)}`);
