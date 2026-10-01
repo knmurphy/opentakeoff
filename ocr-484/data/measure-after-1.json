@@ -1,0 +1,21 @@
+{
+ "run": "1",
+ "setupDownloadAndStartS": 0.804,
+ "sheet1ReadS": 47.431,
+ "sheet1Label": "Read in 47.3 s · OCR",
+ "sheet2StartS": 0.281,
+ "sheet2ReadS": 49.002,
+ "labels": [
+  "demo-image-only · 2 | no scale | Read in 49.1 s · OCR | Preview"
+ ],
+ "sheet1": {
+  "baseMB": 2017,
+  "peakMB": 2902,
+  "addedMB": 885
+ },
+ "sheet2": {
+  "baseMB": 821,
+  "peakMB": 3614,
+  "addedMB": 2793
+ }
+}

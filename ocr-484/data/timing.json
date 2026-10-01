@@ -1,0 +1,117 @@
+{
+ "note": "page-read time per sheet, app runs; process snapshots removed",
+ "runs": [
+  {
+   "tag": "after-read",
+   "ver": "after",
+   "sheet": 1,
+   "ms": 39982,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read",
+   "ver": "after",
+   "sheet": 2,
+   "ms": 42420,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read2",
+   "ver": "after",
+   "sheet": 1,
+   "ms": 39875,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read2",
+   "ver": "after",
+   "sheet": 2,
+   "ms": 42400,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read3",
+   "ver": "after",
+   "sheet": 1,
+   "ms": 40050,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read3",
+   "ver": "after",
+   "sheet": 2,
+   "ms": 42730,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read4",
+   "ver": "after",
+   "sheet": 1,
+   "ms": 40386,
+   "rasters": 8
+  },
+  {
+   "tag": "after-read4",
+   "ver": "after",
+   "sheet": 2,
+   "ms": 45201,
+   "rasters": 8
+  },
+  {
+   "tag": "before-read",
+   "ver": "before",
+   "sheet": 1,
+   "ms": 41602,
+   "rasters": 7
+  },
+  {
+   "tag": "before-read",
+   "ver": "before",
+   "sheet": 2,
+   "ms": 50602,
+   "rasters": 9
+  },
+  {
+   "tag": "before-read2",
+   "ver": "before",
+   "sheet": 1,
+   "ms": 45778,
+   "rasters": 7
+  },
+  {
+   "tag": "before-read2",
+   "ver": "before",
+   "sheet": 2,
+   "ms": 50453,
+   "rasters": 9
+  },
+  {
+   "tag": "before-read3",
+   "ver": "before",
+   "sheet": 1,
+   "ms": 41453,
+   "rasters": 7
+  },
+  {
+   "tag": "before-read3",
+   "ver": "before",
+   "sheet": 2,
+   "ms": 48462,
+   "rasters": 9
+  },
+  {
+   "tag": "before-read4",
+   "ver": "before",
+   "sheet": 1,
+   "ms": 41776,
+   "rasters": 7
+  },
+  {
+   "tag": "before-read4",
+   "ver": "before",
+   "sheet": 2,
+   "ms": 47749,
+   "rasters": 9
+  }
+ ]
+}
