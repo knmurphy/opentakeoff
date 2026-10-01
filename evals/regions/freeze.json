@@ -1,10 +1,23 @@
 {
- "frozenAt": "2026-10-01T01:04:20.630Z",
- "commit": "10fbb5e83bc300bd4bff4d226c235e923bd1ccb3",
- "hash": "780cb8bbeac06935d7cd037c67ec2eea3577168d5e0b990b40dcf59bdaa20783",
+ "frozenAt": "2026-10-01T01:12:28.589Z",
+ "commit": "83b7f8b2275ece9c2bd7752d70f081b057920fbe",
+ "hash": "e6d966d818fbcd9b0c8b4c45faf8f94c01b3e2b0f064a1422c2135f5b888f7c7",
  "sources": {
+  "evals/regions/labels/labeler-A.json": "fb6e755c136c122e27a80e4fcc0f74274f7a692d6ca0f30aba6ee70a315224e2",
+  "evals/regions/labels/labeler-B.json": "3f4c2279153c65d69cb233cbe2b7fda98569b7522305578a8ee9ba3630c39344",
+  "evals/regions/labels/reconciled.json": "762accf19f83e50398f2b222363feb83939828585915f6c8bf2b0597087ff1d4",
+  "web/bench/regionHeldOut.ts": "d83bb3559cb1fc7fca0ab338e83253d9b686aba1edbe51aca95c682380fd5ce0",
+  "web/bench/regionRun.mts": "bcfea133f658e7fa2b699d184ebae780b79e00035357242d47c72a708d7ad059",
+  "web/bench/regionScore.ts": "bbb19df1feb2f3b338fa9e45d79ef89b302161c491643a9ad86c464e158ce5fd",
+  "web/bench/regionSheets.mts": "3ddadf7c568d2ea895f0e0bbb0995389bc767176679340dc130030a1740f4332",
+  "web/bench/regionSheets.ts": "db96e2063bb99b9fb5c09f798e8393174b059d689eeb203e2a833833c436cae4",
+  "web/bench/regions.mts": "0378bfae91c9bf1ceb7057f1db604fcd91b2bc7f9aff2a51526d150fd2f4486b",
+  "web/bench/regionsReconcile.mts": "f18735bab5ffd6512b4f0099326e870c1d383e578adee1dc7f08b90fe492d368",
+  "web/src/lib/oneclick.ts": "5f1caac388e328f6107889b70a844e8dcc627a63972ec64f000fd8f5539f1e05",
   "web/src/lib/regionDetect.ts": "d41ac677136b63b33b937252db95ef7147586779ddc4c54f4479f8e7e475dd2c",
-  "web/src/lib/regions.ts": "9008f9abc524fb80f6188fd0725dcb41f2dbdddf15681539579debd1c0684f65"
+  "web/src/lib/regions.ts": "9008f9abc524fb80f6188fd0725dcb41f2dbdddf15681539579debd1c0684f65",
+  "web/src/lib/sheets.ts": "d91975f01601d3d56e9ed489e86622a8b4b81aec0e3968da8de424b74b81041d",
+  "web/src/lib/takeoffConstants.ts": "cdc87826ade81318f1a5364ce410cd33b2e590c34445de2feb15a231ace23144"
  },
  "logicRev": 2,
  "params": {
