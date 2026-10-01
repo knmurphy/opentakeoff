@@ -3,7 +3,7 @@
 // swept range; then the midpoint of the best plateau.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { compareTune, plateauAround, chooseValue, heldOutAllowed, type TuneResult } from "../bench/regionCalib.ts";
+import { compareTune, plateauAround, chooseValue, type TuneResult } from "../bench/regionCalib.ts";
 
 const R = (pass: number, edgeOk = 24, groupErr = 0, abstain = 0): TuneResult => ({ pass, edgeOk, groupErr, abstain });
 
@@ -53,16 +53,5 @@ describe("chooseValue", () => {
   });
   test("the plan value must be in the swept range", () => {
     assert.throws(() => chooseValue([1, 2], [R(1), R(1)], 3, false));
-  });
-});
-
-describe("heldOutAllowed", () => {
-  test("refused when not frozen, or when the current hash differs; allowed when it matches", () => {
-    assert.equal(heldOutAllowed(undefined, undefined, "h").ok, false);
-    assert.equal(heldOutAllowed("", "h", "h").ok, false);
-    const differ = heldOutAllowed("2026-10-01", "aaa", "bbb");
-    assert.equal(differ.ok, false);
-    assert.match(differ.reason, /differ/);
-    assert.equal(heldOutAllowed("2026-10-01", "aaa", "aaa").ok, true);
   });
 });

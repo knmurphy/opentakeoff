@@ -63,10 +63,11 @@ export const TB_SHEETNO_RE = /^[A-Z]{1,3}\d?[-. ]?\d{1,3}(\.\d{1,2})?[A-Z]?$/;
 // swept one at a time and the plan's value kept under the pre-registered rule
 // (the tune result at every plan value was already the best in its range, so
 // none changed). Re-run after the split-sheet-number change (logic revision 2,
-// also found on the tune set): still none changed. Then frozen:
-// REGION_CONSTANTS_FROZEN / REGION_CONSTANTS_HASH below; bench:regions refuses
-// the held-out run if the defaults or the logic revision differ from the
-// frozen hash. Fractions are of the page (step 1) or of the border box
+// also found on the tune set): still none changed. Then frozen in
+// evals/regions/freeze.json (bench/regionsFreeze.mts): a sha256 over this
+// file's and regions.ts's source and the defaults, with the freeze commit;
+// bench:regions refuses the held-out run if either source or a default
+// changed since (bench/regionHeldOut.ts). Fractions are of the page (step 1) or of the border box
 // (steps 2–5), as noted.
 
 /** Step 1: rules within this fraction of the page edge are ignored (Dublin and
@@ -178,17 +179,11 @@ export const DEFAULT_REGION_PARAMS: Readonly<RegionParams> = Object.freeze({
   bandGap: BAND_GAP, frameBandRatio: FRAME_BAND_RATIO, groupMinJaccard: GROUP_MIN_JACCARD, groupDTol: GROUP_D_TOL, bandMinCover: BAND_MIN_COVER,
 });
 
-/** Revision of the detection logic, part of the frozen hash. Bump it with any
- * change to what the detector decides (not only constants), so the held-out
- * guard sees it. 1: task 6a; 2: split sheet numbers joined (task 6b). */
+/** Revision of the detection logic — information only (recorded in the
+ * freeze file and the bench output). The freeze hash covers the detector
+ * source itself, so it does not depend on this being bumped.
+ * 1: task 6a; 2: split sheet numbers joined (task 6b). */
 export const REGION_LOGIC_REV = 2;
-/** When the defaults were frozen (UTC) after the task 6b calibration on the
- * tune set, and the sha256 of `regionParamsCanonical(DEFAULT_REGION_PARAMS)`
- * (constants + logic revision). Changing a default or the revision changes
- * the hash: a test then fails, and the bench's held-out run is refused until
- * the change is re-frozen and logged. */
-export const REGION_CONSTANTS_FROZEN = "2026-10-01T00:42Z";
-export const REGION_CONSTANTS_HASH = "52f209da03eda801c79e6d4cbb68013568a386cf67891c0989bd3eb056330c0d";
 
 /** The defaults merged with overrides; unknown keys and non-finite values throw. */
 export function resolveRegionParams(over: Partial<RegionParams> = {}): Readonly<RegionParams> {
@@ -200,8 +195,8 @@ export function resolveRegionParams(over: Partial<RegionParams> = {}): Readonly<
   return Object.keys(over).length ? Object.freeze({ ...DEFAULT_REGION_PARAMS, ...over }) : DEFAULT_REGION_PARAMS;
 }
 
-/** Canonical JSON of a parameter set plus the logic revision (keys sorted),
- * the input of `REGION_CONSTANTS_HASH`. */
+/** Canonical JSON of a parameter set plus the logic revision (keys sorted);
+ * the params part of the freeze hash (bench/regionHeldOut.ts). */
 export function regionParamsCanonical(p: Readonly<RegionParams>, logicRev: number = REGION_LOGIC_REV): string {
   const o: Record<string, number> = {};
   const all: Record<string, number> = { ...(p as unknown as Record<string, number>), logicRev };

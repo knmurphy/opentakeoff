@@ -48,15 +48,3 @@ export function chooseValue(values: readonly number[], results: readonly TuneRes
   if (integer && !Number.isInteger(mid)) mid = mid > plan ? Math.floor(mid) : Math.ceil(mid);
   return { chosen: mid, changed: mid !== plan, planPlateau, bestPlateau: bp };
 }
-
-/** The held-out run's guard: allowed only when the constants were frozen
- * (a date and a hash) and the current defaults hash to the frozen value. */
-export function heldOutAllowed(frozen: unknown, frozenHash: unknown, currentHash: string): { ok: boolean; reason: string } {
-  if (typeof frozen !== "string" || !frozen || typeof frozenHash !== "string" || !frozenHash) {
-    return { ok: false, reason: "detector constants are not frozen (REGION_CONSTANTS_FROZEN)" };
-  }
-  if (currentHash !== frozenHash) {
-    return { ok: false, reason: `detector constants differ from the frozen set of ${frozen} (hash ${currentHash} ≠ ${frozenHash})` };
-  }
-  return { ok: true, reason: `constants frozen ${frozen}, hash ${frozenHash}` };
-}

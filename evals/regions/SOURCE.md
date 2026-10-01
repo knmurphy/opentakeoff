@@ -39,6 +39,16 @@ Held out: 34 pages (7+10+7+4+5+1). Nobody opens held-out pages before the
 constants are frozen, except the labelers, who see renders only; every such
 opening is logged below.
 
+## Held-out runs
+
+`npm run bench:regions -- --held-out --reason "<why>"` (from `web/`) is the
+one held-out evaluation. It is refused unless the tree is clean, HEAD descends
+from the freeze commit in `freeze.json`, the detector sources and constants
+still hash to the frozen value, and no run has started at that hash. Every
+refusal, start (before any held-out page is opened) and finish is appended to
+`heldout-runs.jsonl` (committed, append-only); results go only to
+`web/bench/regions-heldout-results.json`.
+
 ## Access log
 
 - 2026-09-30 — in-sample sets (Shreveport combined; Dublin parts 1 and 4)
