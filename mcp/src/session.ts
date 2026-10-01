@@ -5,7 +5,7 @@
 // what the canvas commits (web/src/pages/TakeoffCanvas.jsx), so an exported
 // takeoff round-trips into the app.
 import path from "node:path";
-import { openPdf, positionedText, textSpans, textItemsInRegion, OPS, type DocHandle, type PageHandle, type TextSpan, type OcgEntry } from "./pdf.ts";
+import { openPdf, positionedText, textSpans, baselineRuns, textItemsInRegion, OPS, type DocHandle, type PageHandle, type TextSpan, type OcgEntry } from "./pdf.ts";
 import { expandForScaleNotes, mixedScaleWarning } from "./scalewarn.ts";
 import { classifyLayerName, layerRoleCodes, segRoles, type LayerInfo } from "../../web/src/lib/layers.ts";
 import { buildSheetGraph, resolveTag, classifySheetRole, rowKeyAnswersFor, type SheetGraph, type SheetSpans, type Bbox } from "../../web/src/lib/sheetgraph.ts";
@@ -15,6 +15,9 @@ import { UserError, round1, round2 } from "./format.ts";
 import { mintTwin, splitFromFamily, variantTag, propagateRowAdd, propagateRowPatch, propagateRowRemove,
          markRowLocal, dropRowLocal, type VariantCond, type VariantRow } from "../../web/src/lib/variants.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
+import { parseSheetKey } from "../../web/src/lib/sheetKey.ts";
+import type { DetectSheet } from "../../web/src/lib/regionDetect.ts";
+import { buildDetectSheet } from "./regionmap.ts";
 import { buildSheetDxf, type DxfBuild } from "../../web/src/lib/dxf.ts";
 import {
   extractVectorGeometry, buildMask, traceRegion, snapVertices, ringArea,
@@ -828,7 +831,9 @@ export class Session {
 
   /** The file (basename) a sheet key belongs to — the key codec's inverse. */
   fileFor(sheetKey: string): string {
-    return sheetKey.split("#")[0];
+    // the web codec: split on the LAST '#' and only before a numeric page —
+    // a file name may itself hold '#'
+    return parseSheetKey(sheetKey).file;
   }
 
   /** Absolute source path for a loaded file — the marked set re-reads bytes. */
@@ -1144,6 +1149,26 @@ export class Session {
       }
     }
     return s.geo;
+  }
+
+  /** The region detector's input for one sheet (regionmap.ts). Geometry is
+   * THROWAWAY unless a tool already paid for it (the sheet graph's rule): the
+   * cached s.geo is reused, otherwise the op list is dropped and the page
+   * cleaned, so detecting a set never retains every sheet's vectors. A sheet
+   * with no text layer gets no tokens and no rules (it abstains; nothing on
+   * it can be a find_text hit). */
+  async detectSheet(name: string): Promise<DetectSheet> {
+    const s = this.sheet(name);
+    const runs = baselineRuns(s.page);
+    let segs: ArrayLike<number> = [];
+    if (runs.length) {
+      if (s.geo) segs = s.geo.segs;
+      else {
+        segs = extractVectorGeometry(await s.page.operatorList(), s.page.viewport.transform, OPS).segs;
+        s.page.cleanup();
+      }
+    }
+    return buildDetectSheet({ key: s.key, widthPx: s.widthPx, heightPx: s.heightPx, widthPt: s.widthPt, heightPt: s.heightPt }, runs, segs);
   }
 
   /** Per-layer role codes for buildMask (#85), with optional include/exclude
