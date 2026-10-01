@@ -678,6 +678,11 @@ export const findTextOutput = {
     sheet_region: hitRegionSchema.nullable().optional()
       .describe("The sheet region the hit's center falls in: title_block (the sheet's own number, firm, dates) or drawing_area (plan content). null = the border margin (grid labels, border numerals). Absent when regions_unavailable is set"),
   })),
+  region_overrides_unattached: z.array(z.object({
+    kind: z.enum(["template", "move", "sheet"]),
+    key: z.string().describe("The correction's template key, or the sheet key it names"),
+    reason: z.string().describe('no-match, ambiguous, no-sig, no-anchor, conflict, or no-sheet (the set has no such sheet)'),
+  })).optional().describe("Present when the imported takeoff's region corrections include some that did not attach to this set: reported, never applied elsewhere"),
   regions_unavailable: z.string().optional().describe("Present when the set's regions could not be detected (past the 60-sheet / 20 s cap, or detection failed): why. Hits then carry no sheet_region"),
 };
 

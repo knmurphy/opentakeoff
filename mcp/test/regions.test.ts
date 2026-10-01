@@ -325,3 +325,111 @@ test("find_text: region overrides on an imported takeoff apply in memory and are
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ── review follow-ups ───────────────────────────────────────────────────────
+
+const sigOf = (s: Session) => (s as unknown as { regionSignature(): string }).regionSignature();
+
+test("region cache key: the same file reloaded unchanged keeps its signature; a new mtime or a new size changes it", async () => {
+  const { appendFile, stat, utimes } = await import("node:fs/promises");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "regions-sig-"));
+  try {
+    const file = path.join(dir, "sheet.pdf");
+    await copyFile(A601, file);
+    const fixed = new Date("2026-01-02T03:04:05Z");
+    await utimes(file, fixed, fixed);
+    const s = await loaded(file);
+    const sig0 = sigOf(s);
+    await s.regionSet();
+    await s.loadPlan(file);
+    assert.equal(sigOf(s), sig0, "same path, size and mtime → same signature");
+
+    // mtime only (same path, same size): a path- or size-only key would miss it
+    const later = new Date("2026-02-03T04:05:06Z");
+    await utimes(file, later, later);
+    await s.loadPlan(file);
+    const sig1 = sigOf(s);
+    assert.notEqual(sig1, sig0, "mtime is in the signature");
+
+    // size only (same path, mtime restored): a path- or mtime-only key would miss it
+    const size0 = (await stat(file)).size;
+    await appendFile(file, "\n% trailing bytes after %%EOF\n");
+    await utimes(file, later, later);
+    assert.notEqual((await stat(file)).size, size0);
+    await s.loadPlan(file);
+    const sig2 = sigOf(s);
+    assert.notEqual(sig2, sig1, "size is in the signature");
+
+    const before = s.regionDetections;
+    const r = await s.regionSet();
+    assert.ok(r.ok, "the grown file still parses and detects");
+    assert.equal(s.regionDetections, before + 1, "a changed file is detected again");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** Three pages: a bordered sheet with text, the same border with NO text
+ * layer (a scan's stand-in), and a second bordered sheet with text. */
+async function mixedSetPdf(file: string) {
+  const { StandardFonts } = await import("pdf-lib");
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const label of ["OFFICE 101", null, "LOBBY 102"]) {
+    const page = doc.addPage([1224, 792]);
+    page.drawRectangle({ x: 36, y: 36, width: 1152, height: 720, borderWidth: 1.5 });
+    if (label) page.drawText(label, { x: 600, y: 400, size: 12, font });
+  }
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(file, await doc.save());
+}
+
+test("a sheet with no text layer abstains; the rest of the set still gets regions", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "regions-mixed-"));
+  try {
+    const file = path.join(dir, "mixed.pdf");
+    await mixedSetPdf(file);
+    const s = await loaded(file);
+    const r = await s.regionSet();
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(r.abstained, ["mixed.pdf#2"]);
+    assert.deepEqual([...r.map.keys()].sort(), ["mixed.pdf", "mixed.pdf#3"]);
+    assert.equal((await find(s, "mixed.pdf", "OFFICE 101")).hits[0].sheet_region?.kind, "drawing_area");
+    assert.equal((await find(s, "mixed.pdf#3", "LOBBY 102")).hits[0].sheet_region?.kind, "drawing_area");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("region overrides naming a sheet that isn't in the map are reported, not applied; overrides persist across merge, reset on replace", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "regions-ov2-"));
+  try {
+    const s = await loaded(A601);
+    const key = keyOf(A601);
+    const user = (id: string) => ({ id, kind: "legend", parent: "drawing_area", bbox: [0.3, 0.3, 0.5, 0.6], evidence: [], confidence: 1, source: "user" });
+    const doc = { ...s.exportPayload(), region_overrides: { sheets: { "nope.pdf": { regions: [user("u:ghost")] }, [key]: { removed: ["title_block"] } } } };
+    const file = path.join(dir, "takeoff.json");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(file, JSON.stringify(doc));
+    const { importTakeoff } = await import("../src/importing.ts");
+    await importTakeoff(s, file);
+
+    const r = (await s.findTextWithRegions(key, "A-601")) as Found & { region_overrides_unattached?: { kind: string; key: string; reason: string }[] };
+    assert.equal(r.hits[0].sheet_region, null, "the A601 correction applies");
+    assert.deepEqual(r.region_overrides_unattached, [{ kind: "sheet", key: "nope.pdf", reason: "no-sheet" }]);
+    const res = await s.regionSet();
+    assert.ok(res.ok && !res.map.has("nope.pdf"), "nothing was added for the unknown sheet");
+
+    // merge keeps the session's corrections; replace drops them
+    await s.loadPlan(PORTERVILLE, { merge: true });
+    assert.equal((await find(s, key, "A-601")).hits[0].sheet_region, null);
+    await s.loadPlan(A601);
+    assert.equal(s.regionOverrides, null);
+    const fresh = (await s.findTextWithRegions(key, "A-601")) as Found & { region_overrides_unattached?: unknown };
+    assert.equal(fresh.hits[0].sheet_region?.kind, "title_block");
+    assert.equal(fresh.region_overrides_unattached, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

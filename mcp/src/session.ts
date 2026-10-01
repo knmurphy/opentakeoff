@@ -18,7 +18,7 @@ import { mintTwin, splitFromFamily, variantTag, propagateRowAdd, propagateRowPat
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import { parseSheetKey } from "../../web/src/lib/sheetKey.ts";
 import { detectSetRegions, type DetectSheet } from "../../web/src/lib/regionDetect.ts";
-import { applyOverrides, hitRegion, setSignature, type HitRegion, type RegionOverrides, type SheetRegions } from "../../web/src/lib/regions.ts";
+import { applyOverrides, resolveOverrides, hitRegion, setSignature, type HitRegion, type RegionOverrides, type SheetRegions } from "../../web/src/lib/regions.ts";
 import { buildDetectSheet } from "./regionmap.ts";
 import { buildSheetDxf, type DxfBuild } from "../../web/src/lib/dxf.ts";
 import {
@@ -625,11 +625,19 @@ export const UNDO_CAP = 100;
  * detection runs once per loaded set, and only below this cap — a set with
  * more sheets, or a detection still extracting after this long, leaves hits
  * without sheet_region and the reply says regions are unavailable. These
- * are the plan's defaults until a 24-sheet set is measured. On the three
- * committed sheets detection took 0.36–0.49 s per sheet (about 1 s for the
- * three as one set); at that rate the 20 s cap binds before the 60-sheet one. */
+ * are still the plan's defaults. Measured (3 runs each, uncapped): the
+ * three committed sheets took 0.36–0.49 s each (about 1 s as one set); a
+ * real 24-sheet set took 9.1–10.1 s to detect after a 3.1–3.4 s load, inside
+ * the 20 s cap, with peak RSS 370–400 MB after load rising to 873–899 MB
+ * (peak heap 528–534 MB). At ~0.4 s a sheet the 20 s cap binds before the
+ * 60-sheet one (about 50 sheets). */
 export const REGION_CAP_SHEETS = 60;
 export const REGION_CAP_MS = 20_000;
+
+/** A correction that did not attach to the detected map: a template or move
+ * resolveOverrides refused (its reason), or a sheet entry naming a sheet the
+ * map doesn't hold ("no-sheet"). Reported, never applied elsewhere. */
+export interface RegionUnattached { kind: "template" | "move" | "sheet"; key: string; reason: string }
 
 /** One loaded set's detected title block / drawing area per sheet, or why
  * there is none. `abstained`: sheets with no text layer (no tokens, so no
@@ -749,7 +757,10 @@ export class Session {
   rules: Rule[] = [];
   /** Region corrections from an imported takeoff document's additive
    * `region_overrides` key (sanitized). Read-only: applied to the detected
-   * map in memory, never written back (no export carries them). */
+   * map in memory, never written back (no export carries them). They belong
+   * to the session's takeoff, like its conditions: a merge load_plan keeps
+   * them, a replacing load_plan clears them, and a later import carrying the
+   * key replaces them. */
   regionOverrides: RegionOverrides | null = null;
   /** find_text's region-detection cap; tests lower it. */
   regionCap = { sheets: REGION_CAP_SHEETS, ms: REGION_CAP_MS };
@@ -758,7 +769,7 @@ export class Session {
   /** ONE in-flight detection per loaded set, keyed by setSignature over the
    * loaded files (path + size, builtAt = mtime). load_plan clears it. */
   private regionCache: { sig: string; promise: Promise<RegionSet> } | null = null;
-  private regionApplied: { base: Map<string, SheetRegions>; ov: RegionOverrides; out: Map<string, SheetRegions> } | null = null;
+  private regionApplied: { base: Map<string, SheetRegions>; ov: RegionOverrides; out: Map<string, SheetRegions>; unattached: RegionUnattached[] } | null = null;
 
   /** Newest-last. Capped at UNDO_CAP; the oldest entry falls off the front. */
   private journal: JournalEntry[] = [];
@@ -5300,14 +5311,18 @@ export class Session {
 
   /** The detected map with the imported corrections applied (applyOverrides,
    * in memory; memoized per map and overrides object). */
-  private regionsInUse(map: Map<string, SheetRegions>): Map<string, SheetRegions> {
+  private regionsInUse(map: Map<string, SheetRegions>): { map: Map<string, SheetRegions>; unattached: RegionUnattached[] } {
     const ov = this.regionOverrides;
-    if (!ov) return map;
+    if (!ov) return { map, unattached: [] };
     const memo = this.regionApplied;
-    if (memo && memo.base === map && memo.ov === ov) return memo.out;
+    if (memo && memo.base === map && memo.ov === ov) return { map: memo.out, unattached: memo.unattached };
     const out = applyOverrides(map, ov);
-    this.regionApplied = { base: map, ov, out };
-    return out;
+    const unattached: RegionUnattached[] = [
+      ...resolveOverrides(map, ov).unattached,
+      ...Object.keys(ov.sheets ?? {}).filter((k) => !map.has(k)).map((key) => ({ kind: "sheet" as const, key, reason: "no-sheet" })),
+    ];
+    this.regionApplied = { base: map, ov, out, unattached };
+    return { map: out, unattached };
   }
 
   /** find_text as the tool answers it: findText's hits, each with the
@@ -5319,11 +5334,13 @@ export class Session {
     if (!base.hits.length) return base;
     const rs = await this.regionSet();
     if (!rs.ok) return { ...base, regions_unavailable: `${rs.reason}; hits carry no sheet_region` };
-    const sheet = this.regionsInUse(rs.map).get(base.sheet);
+    const inUse = this.regionsInUse(rs.map);
+    const sheet = inUse.map.get(base.sheet);
     if (!sheet) return { ...base, regions_unavailable: `${base.sheet} was not part of region detection; hits carry no sheet_region` };
     return {
       ...base,
       hits: base.hits.map((h) => ({ ...h, sheet_region: hitRegion(sheet, h.center[0], h.center[1]) as HitRegion | null })),
+      ...(inUse.unattached.length ? { region_overrides_unattached: inUse.unattached } : {}),
     };
   }
 }
