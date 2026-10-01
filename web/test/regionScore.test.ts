@@ -4,7 +4,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   median, quantileNearestRank, labelSpread, passTolerance, binomUpper95, meanLabel, scoreSheet, summarize,
-  groupingCounts, checkOrder, fmtPass, TOL_FLOOR, type LabelEntry, type Detected,
+  groupingCounts, checkOrder, fmtPass, TOL_FLOOR, jaccard, capJaccardRows, type LabelEntry, type Detected,
 } from "../bench/regionScore.ts";
 import type { Edge } from "../src/lib/regionDetect.ts";
 
@@ -214,5 +214,25 @@ describe("checkOrder (labels committed before detector code)", () => {
     assert.equal(fmtPass(3, 4, true), "3/4 (75.0%)");
     assert.equal(fmtPass(3, 4, false), "UNVERIFIED ORDER");
     assert.equal(fmtPass(0, 0, true), "0/0");
+  });
+});
+
+describe("cap vs uncapped Jaccard", () => {
+  test("jaccard: |A ∩ B| / |A ∪ B|; two empty sets → 1", () => {
+    near(jaccard(["a", "b", "c"], ["b", "c", "d"]), 0.5);
+    assert.equal(jaccard([], []), 1);
+    assert.equal(jaccard(["a"], []), 0);
+  });
+  test("one row per group pair, with and without the cap", () => {
+    // g1 uncapped {a, b, c, d}, capped {a, b}; g2 uncapped {c, d, e}, capped {c, d}
+    const rows = capJaccardRows("s", [
+      { id: "g1", uncapped: ["a", "b", "c", "d"], capped: ["a", "b"] },
+      { id: "g2", uncapped: ["c", "d", "e"], capped: ["c", "d"] },
+    ]);
+    assert.equal(rows.length, 1);
+    const r = rows[0];
+    assert.deepEqual([r.set, r.a, r.b, r.nA, r.nB, r.nCappedA, r.nCappedB], ["s", "g1", "g2", 4, 3, 2, 2]);
+    near(r.uncapped, 2 / 5);   // {c, d} / {a, b, c, d, e}
+    near(r.capped, 0);         // {} / {a, b, c, d}
   });
 });

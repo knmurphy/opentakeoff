@@ -9,7 +9,7 @@ import {
   REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions, STATIC_MIN_SHEETS, FIELD_MIN_SHEETS, REPEAT_MIN_SHARE, type RepeatInput, type TokenClasses,
   type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
-import { aspectBucket, cleanRegions, hitRegion, type SheetRegions } from "../src/lib/regions.ts";
+import { aspectBucket, capStatics, cleanRegions, hitRegion, type SheetRegions } from "../src/lib/regions.ts";
 import * as Synth from "./fixtures/regionSynth.ts";
 
 // Sheet 2000 × 1000 px: shorter side 1000 →
@@ -1520,5 +1520,21 @@ describe("sheetnoCandidates (split sheet numbers)", () => {
   test("a sheet number inside a longer row is found as a sub-run", () => {
     const c = sheetnoCandidates([T("DWG", 0, 50, 36), T("E", 44, 50, 12), T("-", 57, 50, 12), T("001", 70, 50, 36)]);
     assert.ok(c.some((x) => x.str === "E-001" && x.idx.join() === "1,2,3"));
+  });
+});
+
+describe("detectSetRegions groupStatics (uncapped statics per group)", () => {
+  test("capping a group's uncapped statics gives its signature's statics", () => {
+    for (const set of [Synth.uniformSet24(), Synth.mixedSet(), Synth.smallConsultantsSet()]) {
+      const r = detectSetRegions(set.sheets.map((x) => x.sheet));
+      const ids = new Set([...r.regions.values()].flatMap((g) => (g.group ? [g.group] : [])));
+      assert.deepEqual(new Set(r.groupStatics.keys()), ids, set.name);
+      for (const g of r.regions.values()) {
+        if (!g.group) continue;
+        const raw = r.groupStatics.get(g.group)!;
+        assert.deepEqual(capStatics(raw), g.group_sig!.statics, set.name);
+        assert.deepEqual(raw, [...raw].sort(), "sorted");
+      }
+    }
   });
 });

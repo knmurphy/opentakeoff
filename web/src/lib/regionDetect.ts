@@ -986,8 +986,9 @@ function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
  * always a `drawing_area` (the border box minus the strip). Regions pass
  * through `cleanRegions` with the sheet's dims. The result does not depend on
  * the input order; the maps iterate in sheet-key order. Duplicate sheet keys
- * throw. */
-export function detectSetRegions(sheets: readonly DetectSheet[], params: Partial<RegionParams> = {}): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> } {
+ * throw. `groupStatics` holds each group's statics before the signature's
+ * cap (sorted), for the bench's cap-vs-uncapped Jaccard record. */
+export function detectSetRegions(sheets: readonly DetectSheet[], params: Partial<RegionParams> = {}): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag>; groupStatics: Map<string, string[]> } {
   const P = resolveRegionParams(params);
   const order = [...sheets].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   for (let i = 1; i < order.length; i++) {
@@ -1031,16 +1032,19 @@ export function detectSetRegions(sheets: readonly DetectSheet[], params: Partial
     if (sa.size && sb.size) return jaccardOf(sa, sb) >= P.groupMinJaccard;
     return small && !sa.size && !sb.size && samePageIn(prep[a].sheet.pageIn, prep[b].sheet.pageIn);
   });
+  const uncapped: string[][] = [];
   const sigs: GroupSig[] = groups.map((g) => {
     const ds = g.map((i) => dec[i].d!).sort((a, b) => a - b);
     const pages = g.map((i) => prep[i].sheet.pageIn);
     const page = pages.every((p) => samePageIn(p, pages[0])) ? pages[0] : undefined;
     const count = new Map<string, number>();
     for (const i of g) for (const s of statics[i]) count.set(s, (count.get(s) ?? 0) + 1);
+    const list = [...count].filter(([, n]) => n * 2 >= g.length).map(([s]) => s).sort();
+    uncapped.push(list);
     return {
       edge: dec[g[0]].edge!, d: ds[(ds.length - 1) >> 1], aspect: prep[g[0]].aspect,
       ...(page ? { page_in: [page[0], page[1]] as [number, number] } : {}),
-      statics: capStatics([...count].filter(([, n]) => n * 2 >= g.length).map(([s]) => s)),
+      statics: capStatics(list),
     };
   });
   const ids = assignGroupIds(groups.map((g, k) => ({ sig: sigs[k], keys: g.map((i) => prep[i].sheet.key) })));
@@ -1075,5 +1079,7 @@ export function detectSetRegions(sheets: readonly DetectSheet[], params: Partial
     });
     diag.set(sheet.key, det[i].diag);
   });
-  return { regions, diag };
+  const groupStatics = new Map<string, string[]>();
+  ids.forEach((id, k) => groupStatics.set(id, uncapped[k]));
+  return { regions, diag, groupStatics };
 }

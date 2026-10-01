@@ -239,3 +239,31 @@ export function fmtPass(k: number, n: number, verified: boolean): string {
   if (n === 0) return "0/0";
   return `${k}/${n} (${((100 * k) / n).toFixed(1)}%)`;
 }
+
+/** |A ∩ B| / |A ∪ B| over distinct strings; two empty sets → 1. */
+export function jaccard(a: readonly string[], b: readonly string[]): number {
+  const A = new Set(a), B = new Set(b);
+  let both = 0;
+  for (const x of A) if (B.has(x)) both++;
+  const union = A.size + B.size - both;
+  return union ? both / union : 1;
+}
+
+export interface CapJaccardRow {
+  set: string; a: string; b: string;
+  nA: number; nB: number; nCappedA: number; nCappedB: number;
+  uncapped: number; capped: number;
+}
+/** Per pair of a set's groups: the static-string Jaccard of their signatures
+ * with the 20-string cap (what matchGroup compares) and without it. */
+export function capJaccardRows(set: string, groups: readonly { id: string; uncapped: readonly string[]; capped: readonly string[] }[]): CapJaccardRow[] {
+  const out: CapJaccardRow[] = [];
+  for (let i = 0; i < groups.length; i++) for (let j = i + 1; j < groups.length; j++) {
+    const g = groups[i], h = groups[j];
+    out.push({
+      set, a: g.id, b: h.id, nA: g.uncapped.length, nB: h.uncapped.length, nCappedA: g.capped.length, nCappedB: h.capped.length,
+      uncapped: jaccard(g.uncapped, h.uncapped), capped: jaccard(g.capped, h.capped),
+    });
+  }
+  return out;
+}

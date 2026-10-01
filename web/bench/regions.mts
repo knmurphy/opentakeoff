@@ -20,7 +20,7 @@ import { loadPdfSheets } from "./regionSheets.mts";
 import { sheetKeyFor } from "./regionSheets.ts";
 import {
   labelSpread, passTolerance, binomUpper95, meanLabel, scoreSheet, summarize, groupingCounts, checkOrder, fmtPass, median,
-  type ScoreRow, type Summary,
+  capJaccardRows, type CapJaccardRow, type ScoreRow, type Summary,
 } from "./regionScore.ts";
 import { heldOutGuard, currentConstantsHash } from "./regionGuard.mts";
 import { DEFAULT_REGION_PARAMS, REGION_CONSTANTS_FROZEN, REGION_CONSTANTS_HASH } from "../src/lib/regionDetect.ts";
@@ -107,7 +107,7 @@ console.log(`tolerance       ${pct(tol, 2)} of the border box across the edge = 
 console.log(`                (with the max spread instead of p90 it would be ${pct(tolIfMax, 2)})`);
 
 // ── run ──────────────────────────────────────────────────────────────────────
-interface SectionOut { name: string; status: string; sets: Array<{ name: string; pages: number; sha256: string | null; ms: number; summary: Summary | null; skipped?: string }>; total?: Summary; perLabeler?: Record<string, Summary>; grouping?: ReturnType<typeof groupingCounts>; rows?: ScoreRow[]; meanExcluded?: string[]; noTextLayer?: string[]; pdfs: Record<string, string> }
+interface SectionOut { name: string; status: string; sets: Array<{ name: string; pages: number; sha256: string | null; ms: number; summary: Summary | null; skipped?: string }>; total?: Summary; perLabeler?: Record<string, Summary>; grouping?: ReturnType<typeof groupingCounts>; rows?: ScoreRow[]; meanExcluded?: string[]; noTextLayer?: string[]; capJaccard?: { groups: Array<{ set: string; id: string; sheets: number; uncapped: number; capped: number }>; pairs: CapJaccardRow[]; crossSet: CapJaccardRow[] }; pdfs: Record<string, string> }
 const results: SectionOut[] = [];
 const allRows: ScoreRow[] = [];
 const hashes: Record<string, string> = {};
@@ -122,6 +122,9 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
   const groupRows: Array<{ set: string; key: string; family: string; group: string | null }> = [];
   const meanExcluded: string[] = [];
   const noText: string[] = [];
+  const capRows: CapJaccardRow[] = [];
+  const capAll: Array<{ id: string; uncapped: string[]; capped: string[] }> = [];
+  const capGroups: Array<{ set: string; id: string; sheets: number; uncapped: number; capped: number }> = [];
   for (const set of sec.sets) {
     if (!existsSync(set.path)) {
       out.sets.push({ name: set.name, pages: set.pages, sha256: null, ms: 0, summary: null, skipped: "PDF absent (node evals/regions/fetch.mjs)" });
@@ -132,7 +135,13 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
     hashes[set.file] = h; out.pdfs[set.file] = h;
     const sheets: DetectSheet[] = await loadPdfSheets(set.path, set.file);
     const t0 = performance.now();
-    const { regions, diag } = detectSetRegions(sheets);
+    const { regions, diag, groupStatics } = detectSetRegions(sheets);
+    const capped = new Map<string, string[]>();
+    for (const r of regions.values()) if (r.group && r.group_sig) capped.set(r.group, r.group_sig.statics);
+    const groupsHere = [...groupStatics.keys()].sort().map((id) => ({ id, uncapped: groupStatics.get(id)!, capped: capped.get(id) ?? [] }));
+    capRows.push(...capJaccardRows(set.name, groupsHere));
+    for (const g of groupsHere) capAll.push({ id: `${set.name}:${g.id}`, uncapped: g.uncapped, capped: g.capped });
+    for (const g of groupsHere) capGroups.push({ set: set.name, id: g.id, sheets: [...regions.values()].filter((r) => r.group === g.id).length, uncapped: g.uncapped.length, capped: g.capped.length });
     const ms = performance.now() - t0;
     const setRows: ScoreRow[] = [];
     for (const s of sheets) {
@@ -156,6 +165,9 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
   out.rows = rowsBy.mean;
   out.meanExcluded = meanExcluded;
   out.noTextLayer = noText;
+  // pairs of groups from different sets (e.g. a template made on one Dublin part, matched on another)
+  const crossSet = capJaccardRows("cross-set", capAll.filter((g) => g.uncapped.length)).filter((r) => r.a.split(":")[0] !== r.b.split(":")[0]);
+  out.capJaccard = { groups: capGroups, pairs: capRows, crossSet };
   allRows.push(...rowsBy.mean);
   results.push(out);
 }
@@ -195,6 +207,14 @@ for (const sec of results) {
   console.log(`  per rule / confidence tier (rule labels, not calibrated probabilities):`);
   for (const [tier, c] of Object.entries(t.tiers).sort()) console.log(`    ${tier.padEnd(8)} n=${c.n}  pass ${fmtPass(c.pass, c.n, V)}`);
   console.log(`  framed strips: n=${t.framed.n} pass ${fmtPass(t.framed.pass, t.framed.n, V)}; frameless strips: n=${t.frameless.n}, edge ${t.frameless.edgeOk}/${t.frameless.n}, |d err| ≤ 25% of d ${fmtPass(t.frameless.pass, t.frameless.n, V)}`);
+  const cj = sec.capJaccard!;
+  console.log(`  static-string cap (20 strings, 80 chars) — statics per group, uncapped → capped:`);
+  for (const g of cj.groups) console.log(`    ${g.set} ${g.id} (${g.sheets} sheets): ${g.uncapped} → ${g.capped}`);
+  if (cj.pairs.length) {
+    console.log(`  Jaccard per group pair, uncapped → capped (what matchGroup compares):`);
+    for (const r of cj.pairs) console.log(`    ${r.set} ${r.a} × ${r.b}: ${r.uncapped.toFixed(3)} → ${r.capped.toFixed(3)}`);
+  } else console.log(`  Jaccard per group pair: no set has two groups`);
+  for (const r of cj.crossSet) console.log(`    across sets ${r.a} × ${r.b}: ${r.uncapped.toFixed(3)} → ${r.capped.toFixed(3)}`);
   const bad = sec.rows!.filter((r) => !r.pass);
   if (bad.length) {
     console.log(`  not passing (${bad.length}):`);
