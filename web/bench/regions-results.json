@@ -1,6 +1,6 @@
 {
  "mode": "normal",
- "commit": "b0cb03c0be00143a54ab2cf227c18564a1038479",
+ "commit": "25b7ed179b5e9c78ce9463023fd23735d86ac37f",
  "dirty": false,
  "labelCommit": "b63f76403ae21a8a45b07e9a473ad5426b6566c5",
  "order": {
@@ -40,15 +40,28 @@
   }
  },
  "freeze": {
-  "frozenAt": "2026-10-01T01:04:20.630Z",
-  "commit": "10fbb5e83bc300bd4bff4d226c235e923bd1ccb3",
-  "hash": "780cb8bbeac06935d7cd037c67ec2eea3577168d5e0b990b40dcf59bdaa20783"
+  "frozenAt": "2026-10-01T01:12:28.589Z",
+  "commit": "83b7f8b2275ece9c2bd7752d70f081b057920fbe",
+  "hash": "e6d966d818fbcd9b0c8b4c45faf8f94c01b3e2b0f064a1422c2135f5b888f7c7"
  },
  "current": {
-  "hash": "780cb8bbeac06935d7cd037c67ec2eea3577168d5e0b990b40dcf59bdaa20783",
+  "hash": "e6d966d818fbcd9b0c8b4c45faf8f94c01b3e2b0f064a1422c2135f5b888f7c7",
   "sources": {
+   "evals/regions/labels/labeler-A.json": "fb6e755c136c122e27a80e4fcc0f74274f7a692d6ca0f30aba6ee70a315224e2",
+   "evals/regions/labels/labeler-B.json": "3f4c2279153c65d69cb233cbe2b7fda98569b7522305578a8ee9ba3630c39344",
+   "evals/regions/labels/reconciled.json": "762accf19f83e50398f2b222363feb83939828585915f6c8bf2b0597087ff1d4",
+   "web/bench/regionHeldOut.ts": "d83bb3559cb1fc7fca0ab338e83253d9b686aba1edbe51aca95c682380fd5ce0",
+   "web/bench/regionRun.mts": "bcfea133f658e7fa2b699d184ebae780b79e00035357242d47c72a708d7ad059",
+   "web/bench/regionScore.ts": "bbb19df1feb2f3b338fa9e45d79ef89b302161c491643a9ad86c464e158ce5fd",
+   "web/bench/regionSheets.mts": "3ddadf7c568d2ea895f0e0bbb0995389bc767176679340dc130030a1740f4332",
+   "web/bench/regionSheets.ts": "db96e2063bb99b9fb5c09f798e8393174b059d689eeb203e2a833833c436cae4",
+   "web/bench/regions.mts": "0378bfae91c9bf1ceb7057f1db604fcd91b2bc7f9aff2a51526d150fd2f4486b",
+   "web/bench/regionsReconcile.mts": "f18735bab5ffd6512b4f0099326e870c1d383e578adee1dc7f08b90fe492d368",
+   "web/src/lib/oneclick.ts": "5f1caac388e328f6107889b70a844e8dcc627a63972ec64f000fd8f5539f1e05",
    "web/src/lib/regionDetect.ts": "d41ac677136b63b33b937252db95ef7147586779ddc4c54f4479f8e7e475dd2c",
-   "web/src/lib/regions.ts": "9008f9abc524fb80f6188fd0725dcb41f2dbdddf15681539579debd1c0684f65"
+   "web/src/lib/regions.ts": "9008f9abc524fb80f6188fd0725dcb41f2dbdddf15681539579debd1c0684f65",
+   "web/src/lib/sheets.ts": "d91975f01601d3d56e9ed489e86622a8b4b81aec0e3968da8de424b74b81041d",
+   "web/src/lib/takeoffConstants.ts": "cdc87826ade81318f1a5364ce410cd33b2e590c34445de2feb15a231ace23144"
   },
   "logicRev": 2,
   "params": {
@@ -90,7 +103,7 @@
      "name": "shreveport-combined.pdf",
      "pages": 24,
      "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
-     "ms": 190.51154799999858,
+     "ms": 172.75067099999978,
      "summary": {
       "n": 24,
       "edgeOk": 24,
@@ -723,7 +736,7 @@
      "name": "dublin-part1.pdf",
      "pages": 11,
      "sha256": "b53cdfa35f55fd2e00451922612d38ec694b4674f5f40c39656a185991aa59e2",
-     "ms": 31.048509999998714,
+     "ms": 51.744596999998976,
      "summary": {
       "n": 11,
       "edgeOk": 11,
@@ -756,7 +769,7 @@
      "name": "dublin-part4.pdf",
      "pages": 13,
      "sha256": "4b58cff60984c662d60891c1e447bbd203794f89df954899918f09679be37b1f",
-     "ms": 57.74648100000195,
+     "ms": 53.51014900000155,
      "summary": {
       "n": 13,
       "edgeOk": 13,
@@ -789,7 +802,7 @@
      "name": "va-dublin-bldg9a-finish-plan-A601.pdf",
      "pages": 1,
      "sha256": "1a23fbc600afa8443d88046c491d922f34885a485e7dd8d617617738d12c0a60",
-     "ms": 1.620495999999548,
+     "ms": 1.1244750000005297,
      "summary": {
       "n": 1,
       "edgeOk": 1,
@@ -822,7 +835,7 @@
      "name": "va-shreveport-fisher-house-site-utility-C300.pdf",
      "pages": 1,
      "sha256": "70734211d5fb945f13b516c83d131692684f1ac00c56e6bee240b05254afea8a",
-     "ms": 1.7474269999984244,
+     "ms": 3.0567019999980403,
      "summary": {
       "n": 1,
       "edgeOk": 1,
@@ -855,7 +868,7 @@
      "name": "sample-finish-plan.pdf",
      "pages": 2,
      "sha256": "53aa2a44efc8f9a2e625ed223fcfbf9ee19d15eb8469ba57183874b6a8e2a56f",
-     "ms": 17.291355000001204,
+     "ms": 15.581695000000764,
      "summary": {
       "n": 2,
       "edgeOk": 2,
@@ -888,7 +901,7 @@
      "name": "porterville-adu-a1-101.pdf",
      "pages": 1,
      "sha256": "4f35c62a9adcf8d2eb42e632a4d1ae9b1d314bb426297e4ac13ae0a32897f6b7",
-     "ms": 3.923702999996749,
+     "ms": 1.9864650000017718,
      "summary": {
       "n": 1,
       "edgeOk": 1,
@@ -921,7 +934,7 @@
      "name": "va-roseburg-a03a.pdf",
      "pages": 1,
      "sha256": "ff80f35af4702e874d823d5da04f1de141af710559173083b6a9b10e4e73135f",
-     "ms": 0.9986840000019583,
+     "ms": 0.4929690000026312,
      "summary": {
       "n": 0,
       "edgeOk": 0,
@@ -1718,8 +1731,8 @@
   "tuneSet": "shreveport-combined.pdf",
   "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
   "sheets": 24,
-  "at": "2026-10-01T01:04Z",
-  "commit": "78d28dc7183ae693927fe75962c00887b308b83c",
+  "at": "2026-10-01T01:12Z",
+  "commit": "8391a2e8366c52fffe3db0938075b3471698a91f",
   "dirty": false,
   "logicRev": 2,
   "metric": "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the reconciled key (evals/regions/labels/reconciled.json); lexicographic",
