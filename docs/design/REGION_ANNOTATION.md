@@ -2,10 +2,32 @@
 
 Status: draft on the fork. Not proposed upstream yet.
 
-Built so far: the region map module (`web/src/lib/regions.ts`, tests in
-`web/test/regions.test.ts`): types, lookup, storage rules and corrections.
-Not yet wired into search, the MCP or the takeoff document, and no detector
-yet.
+Built so far (piece 2a, [plan](REGION_ANNOTATION_PLAN.md)):
+
+- `web/src/lib/regions.ts` — region map types, lookup, storage, corrections
+  matched by title-block signature.
+- `web/src/lib/regionDetect.ts` — title block vs drawing area detector
+  (border, strip candidates, sheet-number and repetition signals, grouping).
+- MCP `find_text` hits carry `sheet_region`.
+- `npm run bench:regions` (web/) — evaluation against blind labels on public
+  VA sets fetched by `evals/regions/fetch.mjs`.
+
+Measured so far (vector sheets, VA sets only; tolerance 0.5% of the sheet
+dimension; numbers in `web/bench/regions-results.json`):
+
+| Set | Role | Sheets | Correct edge and depth |
+|---|---|---|---|
+| Shreveport Fisher House | tune (thresholds fitted here) | 24 | 24/24 |
+| Dublin parts 1 and 4, committed sheets | in-sample (seen while designing) | 29 | 29/29 |
+| Dublin parts 2, 5, 7, 10, 11, 13 | held out | 34 | **not run yet** |
+
+The in-sample result depends on one label reconciled after the detector's
+output was seen (Porterville; see `evals/regions/labels/README.md`). Against
+labeler B alone it is 28/29. Held-out numbers are the only ones to quote.
+
+Not yet: search labels and filters in the web app, the correction UI, raster
+(OCR) sheets, title-block parts, detail viewports. MCP detection peaks at
+about 900 MB on a 24-sheet set; worth a look before larger sets.
 
 ## Problem
 
