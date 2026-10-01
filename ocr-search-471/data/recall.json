@@ -1,0 +1,2289 @@
+{
+ "method": "n = 2 sheets of one plan (the tracked demo, web/public/demo/sample-finish-plan.pdf). Key: pageTextIndex (extractRegionText full page -> buildSheetIndex) on the vector sheets. OCR: ocrSheetIndex over the app's stored lines for its real read of demo-image-only.pdf (same sheets as a 200 DPI image-only PDF), shipped engine, headless Chrome for Testing, :8931 build. Coverage counts distinct terms per sheet, pooled as (sheet, term) pairs. Codes: planIndex isCode (TAG_RE | ROOM_RE | SHEET_NO_RE). False terms: OCR terms not in the same sheet's key, over OCR distinct terms.",
+ "engine": "ppocrv5-mobile-en-1+ort-1.26.0-dev.20260416-b7804b056c",
+ "overall": {
+  "keyTerms": 764,
+  "found": 620,
+  "coveragePct": 81.2,
+  "codeTerms": 161,
+  "codeFound": 138,
+  "codeCoveragePct": 85.7,
+  "tagTerms": 52,
+  "tagFound": 49,
+  "tagCoveragePct": 94.2,
+  "roomTerms": 103,
+  "roomFound": 84,
+  "roomCoveragePct": 81.6,
+  "occurrenceWeightedPct": 86.3,
+  "ocrTerms": 748,
+  "falseTerms": 128,
+  "falseRatePct": 17.1
+ },
+ "perSheet": [
+  {
+   "sheet": 1,
+   "keyTokens": 1024,
+   "ocrTokens": 749,
+   "ocrLines": 425,
+   "keyTerms": 359,
+   "found": 276,
+   "coveragePct": 76.9,
+   "codeTerms": 74,
+   "codeFound": 60,
+   "codeCoveragePct": 81.1,
+   "tagTerms": 12,
+   "tagFound": 10,
+   "roomTerms": 60,
+   "roomFound": 49,
+   "occurrenceWeightedPct": 79.4,
+   "ocrTerms": 329,
+   "falseTerms": 53,
+   "falseRatePct": 16.1,
+   "codeMisses": [
+    "22",
+    "28",
+    "33",
+    "133",
+    "150",
+    "151",
+    "157",
+    "170",
+    "706",
+    "E-02",
+    "151A",
+    "CE-3",
+    "AF101",
+    "07"
+   ],
+   "missesOnlyInRotatedRuns": 17,
+   "keyTermsOnlyInRotatedRuns": 17,
+   "falseTagShaped": 11
+  },
+  {
+   "sheet": 2,
+   "keyTokens": 1081,
+   "ocrTokens": 973,
+   "ocrLines": 613,
+   "keyTerms": 405,
+   "found": 344,
+   "coveragePct": 84.9,
+   "codeTerms": 87,
+   "codeFound": 78,
+   "codeCoveragePct": 89.7,
+   "tagTerms": 40,
+   "tagFound": 39,
+   "roomTerms": 43,
+   "roomFound": 35,
+   "occurrenceWeightedPct": 90.8,
+   "ocrTerms": 419,
+   "falseTerms": 75,
+   "falseRatePct": 17.9,
+   "codeMisses": [
+    "16",
+    "28",
+    "79",
+    "133",
+    "134",
+    "170",
+    "171",
+    "08",
+    "T1"
+   ],
+   "missesOnlyInRotatedRuns": 17,
+   "keyTermsOnlyInRotatedRuns": 17,
+   "falseTagShaped": 3
+  }
+ ],
+ "topMisses": [
+  {
+   "sheet": 1,
+   "term": "ONE",
+   "occurrences": 14,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "ONE",
+   "occurrences": 14,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "1/PT",
+   "occurrences": 13,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "FOOT",
+   "occurrences": 8,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "FOOT",
+   "occurrences": 8,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "INCH",
+   "occurrences": 6,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "INCH",
+   "occurrences": 6,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "ABA",
+   "occurrences": 4,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "FIRST",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "NUMBER",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "THREE",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "THREE",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "WEST",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "2021",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "28",
+   "occurrences": 2,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "28",
+   "occurrences": 2,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "BUILDING",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "DATE",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "DRAWING",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "HALF",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": true
+  }
+ ],
+ "topFalseTerms": [
+  {
+   "sheet": 1,
+   "term": "P-1",
+   "occurrences": 31,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "P-2",
+   "occurrences": 15,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "P-3",
+   "occurrences": 14,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "VCT-1",
+   "occurrences": 10,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "11",
+   "occurrences": 2,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ABATOILET",
+   "occurrences": 2,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ANDERSON",
+   "occurrences": 2,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ANDERSON",
+   "occurrences": 2,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CPT-2",
+   "occurrences": 2,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "100",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "13605",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "13605",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "1ST",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "1ST",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "231",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "50",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "50",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "55402-1540",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "55441",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "55441",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  }
+ ],
+ "allMisses": [
+  {
+   "sheet": 1,
+   "term": "ONE",
+   "occurrences": 14,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "ONE",
+   "occurrences": 14,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "1/PT",
+   "occurrences": 13,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "FOOT",
+   "occurrences": 8,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "FOOT",
+   "occurrences": 8,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "INCH",
+   "occurrences": 6,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "INCH",
+   "occurrences": 6,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "ABA",
+   "occurrences": 4,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "FIRST",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "NUMBER",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "THREE",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "THREE",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "WEST",
+   "occurrences": 3,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "2021",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "28",
+   "occurrences": 2,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "28",
+   "occurrences": 2,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "BUILDING",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "DATE",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "DRAWING",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "HALF",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "HALF",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "INCHES",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "INCHES",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "MACTH",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "PROJECT",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "REVISION",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "TITLE",
+   "occurrences": 2,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "07",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "07/6/2021",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "08",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "1'-0",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "1/8",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "11:01:47",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "11:01:51",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "133",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "133",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "134",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "150",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "151",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "151A",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "157",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "16",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "170",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "170",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "171",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "2020",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "22",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "23'-6",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "28_1ST",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "28_1ST",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "33",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "6231",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "656-19-306",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "656-19-306",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "7/6/2021",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "7/6/2021",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "706",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "79",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "ACCESS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "ADDENDUM",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "AF101",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "AREA",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "BASEMENT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "BREAK",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "BREAK",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "C:\\USERS\\PUBLIC\\DOCUMENTS\\REVIT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "C:\\USERS\\PUBLIC\\DOCUMENTS\\REVIT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "CE-3",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "CLOUD",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "COMMENTS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "CONFERENCE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "CONFERENCE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "CONFERENCE/BREAK",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "CONFERENCE/BREAK",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "CONNECTING",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "CONSTRUCTION",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "CONSTRUCTION",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "CORNERS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "CPT-1/VCT-1",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "CT-4/SC-1",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "DESCRIPTION",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "DOCUMENTS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "DOCUMENTS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "E-02",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "EAST",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "EIGHTH",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "EIGHTH",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "EIGHTHS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "EIGHTHS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "FLOOR_R19_SSCHLOTTHAUER.RVT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "FLOOR_R19_SSCHLOTTHAUER.RVT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "FORM",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "GWB",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "HAC",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "HANDRAIL",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "HORIZONTAL",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "ISSUE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "ISSUE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "LEGEND",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "LOCATION",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "LOCATION",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "MANUFACTURER",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "MATERIAL/PRODUCT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "MECH",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "MED",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "MENTAL",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "MISC",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "MORE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "MULTI",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "MULTI-USE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "OPENING",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "OXYGEN",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "P-1/P-2",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "PHASE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "PHASE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "PORCELAIN",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "PRE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "PREBID",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "PRODUCT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "PROJECTS\\15451_BLDG",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "PROJECTS\\15451_BLDG",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "QUARTER",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "QUARTER",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "QUARTERS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 2,
+   "term": "QUARTERS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": true
+  },
+  {
+   "sheet": 1,
+   "term": "RENOVATE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "RENOVATE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "RESINOUS/EPOXY",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "RRTP",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "RRTP",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "SAINT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "SAINT",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "SET",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "SPACE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "STAMP",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "STORAGE",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "SYSTEMS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "T1",
+   "occurrences": 1,
+   "code": true,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 2,
+   "term": "TESTING",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "THIS",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "VERTICAL",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "WALL/CEILING",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "WALLBACK",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  },
+  {
+   "sheet": 1,
+   "term": "WORK",
+   "occurrences": 1,
+   "code": false,
+   "onlyRotated": false
+  }
+ ],
+ "allFalseTerms": [
+  {
+   "sheet": 1,
+   "term": "P-1",
+   "occurrences": 31,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "P-2",
+   "occurrences": 15,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "P-3",
+   "occurrences": 14,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "VCT-1",
+   "occurrences": 10,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "11",
+   "occurrences": 2,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ABATOILET",
+   "occurrences": 2,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ANDERSON",
+   "occurrences": 2,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ANDERSON",
+   "occurrences": 2,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CPT-2",
+   "occurrences": 2,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "100",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "13605",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "13605",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "1ST",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "1ST",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "231",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "50",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "50",
+   "occurrences": 1,
+   "code": true,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "55402-1540",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "55441",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "55441",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "612.465.7550",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "612.465.7551",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "763.412.4000",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "763.412.4000",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "763.412.4090",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "763.412.4090",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "7O6",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ABATOILE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ABATONET",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ADDITIONALINFORMATION",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ADMINISTRATION",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "AE-MN.C0M",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "AE-MN.C0M",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "AIN",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "AIN",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ANS",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ANUFACTU",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ATERIAL",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ATERIAL/P",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "AVE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "AVE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "BASEENISH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "BER",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CARE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "CARE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CE-3A",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "CEKINGFINSH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CG-CPT-2",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "CIAL",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "CLOU",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "COMPE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "CONSULTINGENGINEERING",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CORIDOR",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "CRT-1",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "CYARNM",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "DUNHAM",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "DUNHAMENG.COM",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ELOORFINSH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ENGINEERING",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ENGINEERING",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ENNTT",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ENYEL",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "FLOORFINISH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "FNISH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "FOB",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "HANDRAILNOT",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "HEAL",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "HEALTH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "HITE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "INNEAPOLIS",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "INNESOTA",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ISSUEDATE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ISSUEDATE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "LGND",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "LLC",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "LLC",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "MECHACSS",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "MENTALHEALTH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "MINNESOTA",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "MINNESOTA",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "MISC.INISHES",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "MOREFINISH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "MULT",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "MULTI-USESPACE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "NOWORKTHISARE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "ONOU",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "OSTR",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "OVATEBULDING",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "P-1V",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "P-5",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "P-Y",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "P1",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "PHONE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "PLYMOUTH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "PLYMOUTH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "PORC",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "PRE-FINISHED",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "PROJ",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "PROJ",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "PT-/PT-2",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "PT-3",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "R00M",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 1,
+   "term": "R0OM",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "RAX",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "RER",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "RES-W",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "ROOMI",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "S(XTH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "SFB",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "STORAG",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "STREET",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "SUIT",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "SYSTEM",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "SYSTEM",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "TAMP",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "TESTNG",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "TFLOREASTR",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "TLE",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "TOHLET",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "TOIL",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "U.S",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "VAFORMO8",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "VCT-1170",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "VCT1",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  },
+  {
+   "sheet": 2,
+   "term": "WALLFINIGH",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "WEB",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 2,
+   "term": "WESI",
+   "occurrences": 1,
+   "code": false,
+   "tag": false
+  },
+  {
+   "sheet": 1,
+   "term": "WSF-1",
+   "occurrences": 1,
+   "code": true,
+   "tag": true
+  }
+ ]
+}
