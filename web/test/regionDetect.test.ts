@@ -1014,14 +1014,16 @@ describe("step 3: repetition band and repeat", () => {
  * rules, the chain, `statics` at u 0.05 + 0.1·k (v 0.7·d), 15 per-sheet
  * fillers (text unique to the sheet), the sheet number `num` at u 0.9, v 0.3·d
  * (h 40), and the DRAWING tokens. `boiler` adds "VA FORM 08-6231" at u 0.55,
- * v 0.03 (inside any strip deeper than 3%). */
-function tbSheet(key: string, d: number, statics: string[], num: string, o: { boiler?: boolean; pageIn?: [number, number] } = {}): DetectSheet {
+ * v 0.03 (inside any strip deeper than 3%); `sv` puts the statics at that
+ * depth instead; `extra` adds tokens. */
+function tbSheet(key: string, d: number, statics: string[], num: string, o: { boiler?: boolean; pageIn?: [number, number]; sv?: number; extra?: DetectToken[] } = {}): DetectSheet {
   const tokens: DetectToken[] = [
-    ...statics.map((t, k) => tokUV(t, "bottom", 0.05 + 0.1 * k, 0.7 * d)),
+    ...statics.map((t, k) => tokUV(t, "bottom", 0.05 + 0.1 * k, o.sv ?? 0.7 * d)),
     ...Array.from({ length: 15 }, (_, k) => tokUV(`${key}/${k}`, "bottom", (k + 0.5) / 15, 0.75 * d)),
     tokUV(num, "bottom", 0.9, 0.3 * d, 40),
     ...(o.boiler ? [tokUV(Synth.BOILERPLATE, "bottom", 0.55, 0.03)] : []),
     ...DRAWING,
+    ...(o.extra ?? []),
   ];
   return { key, w: PW, h: PH, ...(o.pageIn ? { pageIn: o.pageIn } : {}), tokens, lines: [...BORDER_RULES, chainAt("bottom", d)], source: "vector" };
 }
@@ -1052,6 +1054,12 @@ describe("detectSetRegions: output (step 6)", () => {
     assert.ok(tb.evidence.includes("repetition"), "fillers are fields, statics static: the band repeats");
     assert.equal(tb.confidence, 0.95);
     assert.equal(da.confidence, tb.confidence);
+  });
+
+  test("cleanRegions really runs: a degenerate sheet (w 0) keeps no zero-area region", () => {
+    const m = detectSetRegions([{ key: "flat.pdf", w: 0, h: PH, tokens: [], lines: [], source: "vector" }]).regions.get("flat.pdf")!;
+    assert.deepEqual(m.regions, []);
+    assert.deepEqual(m.border, [0, 0, 0, PH]);
   });
 
   test("the regions pass cleanRegions (with dims) unchanged", () => {
@@ -1157,6 +1165,95 @@ describe("detectSetRegions: grouping (step 5)", () => {
     const ids = new Set([...a.values()].map((r) => r.group));
     assert.equal(ids.size, 4);
     assert.deepEqual([...b].sort(), [...a].sort());
+  });
+
+  test("the maps iterate in sheet-key order, whatever the input order", () => {
+    const set = [...firmY(2), ...firmX(3), tbSheet("a.pdf", 0.1, [], "A-101")];
+    const want = set.map((x) => x.key).sort();
+    for (const input of [set, [...set].reverse()]) {
+      const { regions, diag } = detectSetRegions(input);
+      assert.deepEqual([...regions.keys()], want);
+      assert.deepEqual([...diag.keys()], want);
+    }
+  });
+
+  test("duplicate sheet keys are an error", () => {
+    assert.throws(() => detectSetRegions([...firmX(2), firmX(1)[0]]), /duplicate sheet key "x\.pdf#1"/);
+  });
+
+  test("a sheet alone in its candidate group keeps its pass-1 statics (amendment 7)", () => {
+    // statics at v 0.09 on four sheets: three with the chain at 0.1, one at 0.13 (|Δd| 3%: its own
+    // candidate group). Classified alone it would have no statics; it keeps the bucket's.
+    const lone = tbSheet("x.pdf#4", 0.13, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], "A-104", { sv: 0.09 });
+    const set = [...[1, 2, 3].map((i) => tbSheet(`x.pdf#${i}`, 0.1, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], `A-10${i}`, { sv: 0.09 })), lone];
+    const { diag } = detectSetRegions(set);
+    const dg = diag.get("x.pdf#4")!;
+    assertClose(dg.d!, 0.13, "d", 1e-6);
+    assert.deepEqual(dg.staticIdx.filter((i) => i < 3), [0, 1, 2]);
+  });
+
+  test("group_sig d is the lower median of the members' depths", () => {
+    // two sheets of one firm (statics on both) at d 0.10 and 0.11
+    const two = [tbSheet("m.pdf#1", 0.1, ["XRAY ARCHITECTS", "12 MAIN ST"], "A-101", { sv: 0.09 }), tbSheet("m.pdf#2", 0.11, ["XRAY ARCHITECTS", "12 MAIN ST"], "A-102", { sv: 0.09 })];
+    const m = detectSetRegions(two).regions;
+    assert.equal(m.get("m.pdf#1")!.group, m.get("m.pdf#2")!.group);
+    assertClose(m.get("m.pdf#1")!.group_sig!.d, 0.1, "d", 1e-6);
+  });
+
+  test("group_sig statics: strings held by at least half the members", () => {
+    // one candidate group of 6: firm X (4 sheets), firm Y (2). "HALF" sits on X1, X2 and Y1 (3 of 6:
+    // static), "QUARTER" on X1, Y1 and Y2 (static). In X's signature HALF (2 of 4) is kept and
+    // QUARTER (1 of 4) is not; in Y's both (1 of 2 and 2 of 2) are kept.
+    const at = (str: string, u: number) => tokUV(str, "bottom", u, 0.09);
+    const H = at("HALF", 0.6), Q = at("QUARTER", 0.75);
+    const xs = [[H, Q], [H], [], []].map((extra, i) => tbSheet(`x.pdf#${i + 1}`, 0.1, ["XRAY ARCHITECTS", "12 MAIN ST", "DRAWN BY"], `A-10${i + 1}`, { sv: 0.09, extra }));
+    const ys = [[H, Q], [Q]].map((extra, i) => tbSheet(`y.pdf#${i + 1}`, 0.1, ["YANKEE ENGINEERS", "40 OAK AVE", "CHECKED"], `M-20${i + 1}`, { sv: 0.09, extra }));
+    const m = detectSetRegions([...xs, ...ys]).regions;
+    assert.equal(distinct(m), 2);
+    const sx = m.get("x.pdf#1")!.group_sig!.statics, sy = m.get("y.pdf#1")!.group_sig!.statics;
+    assert.ok(sx.includes("HALF") && !sx.includes("QUARTER"), `X: ${sx}`);
+    assert.ok(sy.includes("HALF") && sy.includes("QUARTER"), `Y: ${sy}`);
+  });
+
+  test("frameless sheets share a candidate group on aspect bucket and edge alone (amendment 4)", () => {
+    // three borderless sheets (border = page 3000 × 2000), bottom, no rules. Common statics at v
+    // 0.02–0.06; "DEEP NOTE" at v 0.10 on A and B only (static: 2 of 3), so A and B are 0.1026
+    // deep and C 0.0626. One candidate group keeps the common statics in every signature; split
+    // by d, the common statics would be static in every candidate group and dropped.
+    const P = (u: number, v: number): [number, number] => [u * PW, PH - v * PH];
+    const common = ["ALPHA ARCHITECTS", "1 PARK ROW", "DRAWN BY", "CHECKED BY", "PROJECT NO", "SHEET TITLE"];
+    const fl = (key: string, deep: boolean, num: string): DetectSheet => ({
+      key, w: PW, h: PH, lines: [], source: "vector",
+      tokens: [
+        ...common.map((t, k) => tokC(t, ...P(0.05 + 0.18 * k, 0.02 + 0.02 * (k % 3)))),
+        ...(deep ? [tokC("DEEP NOTE", ...P(0.5, 0.1))] : []),
+        ...Array.from({ length: 16 }, (_, k) => tokC(`${key}/${k}`, ...P((k + 0.5) / 16, 0.03))),
+        tokC(num, ...P(0.9, 0.015), 20),
+        ...Array.from({ length: 12 }, (_, k) => tokC(`${key}:${k}`, ...P(0.1 + 0.07 * k, 0.6))),
+      ],
+    });
+    const { regions, diag } = detectSetRegions([fl("a.pdf", true, "A-101"), fl("b.pdf", true, "A-102"), fl("c.pdf", false, "A-103")]);
+    assertClose(diag.get("a.pdf")!.d!, 0.1 + 5 / 2000, "a d", 1e-6);
+    assertClose(diag.get("c.pdf")!.d!, 0.06 + 5 / 2000, "c d", 1e-6);
+    assert.ok(regions.get("c.pdf")!.group_sig!.statics.includes("ALPHA ARCHITECTS"));
+    assert.notEqual(regions.get("a.pdf")!.group, regions.get("c.pdf")!.group);   // step 5 still tests |Δd|
+  });
+
+  test("small sets count only sheets with a title block: two title blocks and a cover are small", () => {
+    // two statics-free title-block sheets with the same page size share a group (the < 3 rule)
+    const cover: DetectSheet = { key: "cover.pdf", w: PW, h: PH, pageIn: [36, 24], tokens: DRAWING, lines: BORDER_RULES, source: "vector" };
+    const two = [tbSheet("p.pdf", 0.1, [], "A-101", { pageIn: [36, 24] }), tbSheet("q.pdf", 0.1, [], "A-102", { pageIn: [36, 24] })];
+    const m = detectSetRegions([...two, cover]).regions;
+    assert.equal(m.get("cover.pdf")!.group, undefined);
+    assert.ok(m.get("p.pdf")!.group && m.get("p.pdf")!.group === m.get("q.pdf")!.group);
+  });
+
+  test("known limitation: 2-sheet sets can't tell firms apart when they share only boilerplate", () => {
+    // two firms, one sheet each, both with the VA boilerplate: with 2 sheets only the boilerplate
+    // is static (each firm's strings are on 1 sheet), one candidate group keeps it, Jaccard 1
+    const m = detectSetRegions([...firmX(1, { boiler: true }), ...firmY(1, { boiler: true })]).regions;
+    assert.equal(m.get("x.pdf#1")!.group, m.get("y.pdf#1")!.group);
+    assert.deepEqual(m.get("x.pdf#1")!.group_sig!.statics, [Synth.BOILERPLATE]);
   });
 });
 

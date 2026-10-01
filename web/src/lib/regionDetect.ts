@@ -797,7 +797,8 @@ function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
  * bucket → detect → candidate groups (same aspect bucket and edge, |Δd| ≤
  * GROUP_D_TOL; frameless sheets: bucket and edge only) → statics and fields
  * per candidate group (sheets without a title block, and a sheet alone in its
- * candidate group, keep their bucket's) → detect again. Step 5 then groups on the second pass.
+ * candidate group, keep their bucket's) → detect again. Step 5 then groups
+ * on the second pass.
  *
  * A sheet's statics for grouping are the normalized texts of its static
  * tokens inside its title-block strip. With two or more candidate groups, a
@@ -805,7 +806,8 @@ function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
  * Two sheets with distinctive statics share a group when they have the same
  * aspect bucket and edge, |Δd| ≤ GROUP_D_TOL and Jaccard ≥ GROUP_MIN_JACCARD
  * (transitively). A sheet without distinctive statics is its own group; in a
- * set of fewer than 3 sheets, such sheets with the same page size in inches,
+ * set with fewer than 3 sheets that have a title block, such sheets with the
+ * same page size in inches,
  * edge and |Δd| ≤ GROUP_D_TOL share one. A sheet without a title block has
  * no group and no signature (a signature needs an edge).
  *
@@ -813,9 +815,13 @@ function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
  * `title_block` region (the strip, border to border) and `group` / `group_sig`;
  * always a `drawing_area` (the border box minus the strip). Regions pass
  * through `cleanRegions` with the sheet's dims. The result does not depend on
- * the input order. */
+ * the input order; the maps iterate in sheet-key order. Duplicate sheet keys
+ * throw. */
 export function detectSetRegions(sheets: readonly DetectSheet[]): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> } {
   const order = [...sheets].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  for (let i = 1; i < order.length; i++) {
+    if (order[i].key === order[i - 1].key) throw new Error(`detectSetRegions: duplicate sheet key "${order[i].key}"`);
+  }
   const prep: Prepared[] = order.map((sheet) => ({ sheet, box: findBorder(sheet).box, aspect: aspectBucket(sheet.w, sheet.h) }));
   const all = prep.map((_, i) => i);
   // pass 1: per aspect bucket
@@ -846,7 +852,8 @@ export function detectSetRegions(sheets: readonly DetectSheet[]): { regions: Map
     const common = [...per[0]].filter((s) => per.every((p) => p.has(s)));
     for (const s of statics) for (const c of common) s.delete(c);
   }
-  const small = prep.length < 3;
+  // the < 3 rule counts the sheets with a title block (a cover does not make a set "large")
+  const small = dec.filter((d) => d.edge).length < 3;
   const groups = components(dec.flatMap((d, i) => (d.edge ? [i] : [])), (a, b) => {
     if (!sameGeom(prep, dec, a, b)) return false;
     const sa = statics[a], sb = statics[b];
