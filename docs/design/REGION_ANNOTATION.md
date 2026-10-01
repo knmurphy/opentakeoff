@@ -322,6 +322,17 @@ For the upstream issue later, following the #466 layout:
 - On-device OCR engine: `feat/ocr-engine-469` (#469).
 - Plan-set search and index: `claude/client-side-ocr-search-index-n699t0` (#471).
 
+## Known limitations (title-block detection, piece 2a)
+
+- **Frameless title blocks** (no inner rule) are found conservatively or
+  not at all: the strip ends at the deepest repeated text, and with fewer
+  than 15 tokens the detector abstains. None of the 88 labeled real pages is
+  frameless.
+- **Two-sheet sets of different firms** that share only agency boilerplate
+  (e.g. a VA form number) at the same spot fall into one group: two sheets
+  give too little repetition to tell the firm strings from the boilerplate.
+- **Left and top title blocks** are tested on synthetic sheets only.
+
 ## Problems found along the way
 
 Not region work, but found while researching it:
