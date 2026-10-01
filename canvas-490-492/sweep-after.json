@@ -1,0 +1,31 @@
+{
+ "tag": "after",
+ "area_hint": {
+  "hint": "",
+  "toolName": ""
+ },
+ "area": {
+  "positions": 1200,
+  "star": 873,
+  "chip": 873
+ },
+ "pin_hint": {
+  "hint": "Pin — click two corners around any part of the sheet.",
+  "toolName": ""
+ },
+ "pin": {
+  "positions": 1200,
+  "star": 0,
+  "chip": 0
+ },
+ "schedule_hint": {
+  "hint": "",
+  "toolName": ""
+ },
+ "schedule": {
+  "positions": 1200,
+  "star": 0,
+  "chip": 0
+ },
+ "errs": []
+}
