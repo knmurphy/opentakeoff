@@ -1,5 +1,6 @@
 {
- "commit": "95ecc2557d6c49ba1bb45abeec5ba2b5cf885ec4",
+ "mode": "normal",
+ "commit": "b0cb03c0be00143a54ab2cf227c18564a1038479",
  "dirty": false,
  "labelCommit": "b63f76403ae21a8a45b07e9a473ad5426b6566c5",
  "order": {
@@ -15,29 +16,42 @@
   ],
   "maintainer": "not available — agent labels only; no human noise floor"
  },
+ "answerKey": "evals/regions/labels/reconciled.json",
+ "resolved": [
+  "porterville-adu-a1-101.pdf"
+ ],
  "spread": {
-  "n": 54,
+  "n": 53,
   "edgeDisagree": 0,
   "median": 0.0010000000000000009,
   "p90": 0.0010000000000000009,
-  "max": 0.013999999999999999
+  "max": 0.0010000000000000009
  },
  "tolerance": {
   "frac": 0.005,
+  "rule": "max(2 × max(inter-agent max spread after reconciliation, maintainer), 0.5%)",
+  "interAgentMax": 0.0010000000000000009,
   "interAgentP90": 0.0010000000000000009,
   "maintainer": null,
-  "ifMaxSpread": 0.027999999999999997,
   "px": {
    "min": 19.98899550848676,
    "max": 24.403378555798685,
    "median": 20.049146610281486
   }
  },
- "constants": {
-  "frozen": "2026-10-01T00:42Z",
-  "hash": "52f209da03eda801c79e6d4cbb68013568a386cf67891c0989bd3eb056330c0d",
-  "current": "52f209da03eda801c79e6d4cbb68013568a386cf67891c0989bd3eb056330c0d",
-  "values": {
+ "freeze": {
+  "frozenAt": "2026-10-01T01:04:20.630Z",
+  "commit": "10fbb5e83bc300bd4bff4d226c235e923bd1ccb3",
+  "hash": "780cb8bbeac06935d7cd037c67ec2eea3577168d5e0b990b40dcf59bdaa20783"
+ },
+ "current": {
+  "hash": "780cb8bbeac06935d7cd037c67ec2eea3577168d5e0b990b40dcf59bdaa20783",
+  "sources": {
+   "web/src/lib/regionDetect.ts": "d41ac677136b63b33b937252db95ef7147586779ddc4c54f4479f8e7e475dd2c",
+   "web/src/lib/regions.ts": "9008f9abc524fb80f6188fd0725dcb41f2dbdddf15681539579debd1c0684f65"
+  },
+  "logicRev": 2,
+  "params": {
    "borderMinSpan": 0.75,
    "borderMaxFrac": 0.08,
    "chainGapFrac": 0.005,
@@ -76,7 +90,7 @@
      "name": "shreveport-combined.pdf",
      "pages": 24,
      "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
-     "ms": 226.08650899999884,
+     "ms": 190.51154799999858,
      "summary": {
       "n": 24,
       "edgeOk": 24,
@@ -191,7 +205,7 @@
       "pass": 0
      }
     },
-    "mean": {
+    "reconciled": {
      "n": 24,
      "edgeOk": 24,
      "pass": 24,
@@ -709,7 +723,7 @@
      "name": "dublin-part1.pdf",
      "pages": 11,
      "sha256": "b53cdfa35f55fd2e00451922612d38ec694b4674f5f40c39656a185991aa59e2",
-     "ms": 41.857984000002034,
+     "ms": 31.048509999998714,
      "summary": {
       "n": 11,
       "edgeOk": 11,
@@ -742,7 +756,7 @@
      "name": "dublin-part4.pdf",
      "pages": 13,
      "sha256": "4b58cff60984c662d60891c1e447bbd203794f89df954899918f09679be37b1f",
-     "ms": 93.83458500000052,
+     "ms": 57.74648100000195,
      "summary": {
       "n": 13,
       "edgeOk": 13,
@@ -775,7 +789,7 @@
      "name": "va-dublin-bldg9a-finish-plan-A601.pdf",
      "pages": 1,
      "sha256": "1a23fbc600afa8443d88046c491d922f34885a485e7dd8d617617738d12c0a60",
-     "ms": 3.3615060000011,
+     "ms": 1.620495999999548,
      "summary": {
       "n": 1,
       "edgeOk": 1,
@@ -808,7 +822,7 @@
      "name": "va-shreveport-fisher-house-site-utility-C300.pdf",
      "pages": 1,
      "sha256": "70734211d5fb945f13b516c83d131692684f1ac00c56e6bee240b05254afea8a",
-     "ms": 1.5043100000002596,
+     "ms": 1.7474269999984244,
      "summary": {
       "n": 1,
       "edgeOk": 1,
@@ -841,7 +855,7 @@
      "name": "sample-finish-plan.pdf",
      "pages": 2,
      "sha256": "53aa2a44efc8f9a2e625ed223fcfbf9ee19d15eb8469ba57183874b6a8e2a56f",
-     "ms": 18.707730999998603,
+     "ms": 17.291355000001204,
      "summary": {
       "n": 2,
       "edgeOk": 2,
@@ -874,14 +888,14 @@
      "name": "porterville-adu-a1-101.pdf",
      "pages": 1,
      "sha256": "4f35c62a9adcf8d2eb42e632a4d1ae9b1d314bb426297e4ac13ae0a32897f6b7",
-     "ms": 2.951561000001675,
+     "ms": 3.923702999996749,
      "summary": {
       "n": 1,
       "edgeOk": 1,
-      "pass": 0,
+      "pass": 1,
       "abstain": 0,
-      "dErrMedian": 0.0074969496115657175,
-      "dErrMax": 0.0074969496115657175,
+      "dErrMedian": 0.0004969496115657113,
+      "dErrMax": 0.0004969496115657113,
       "negatives": {
        "n": 0,
        "falsePositives": 0
@@ -889,12 +903,12 @@
       "tiers": {
        "A": {
         "n": 1,
-        "pass": 0
+        "pass": 1
        }
       },
       "framed": {
        "n": 1,
-       "pass": 0
+       "pass": 1
       },
       "frameless": {
        "n": 0,
@@ -907,7 +921,7 @@
      "name": "va-roseburg-a03a.pdf",
      "pages": 1,
      "sha256": "ff80f35af4702e874d823d5da04f1de141af710559173083b6a9b10e4e73135f",
-     "ms": 0.7521679999990738,
+     "ms": 0.9986840000019583,
      "summary": {
       "n": 0,
       "edgeOk": 0,
@@ -944,10 +958,10 @@
    "total": {
     "n": 29,
     "edgeOk": 29,
-    "pass": 28,
+    "pass": 29,
     "abstain": 0,
-    "dErrMedian": 0.0011572575076339298,
-    "dErrMax": 0.0074969496115657175,
+    "dErrMedian": 0.0008768041128190407,
+    "dErrMax": 0.0029651678758743777,
     "negatives": {
      "n": 0,
      "falsePositives": 0
@@ -959,12 +973,12 @@
      },
      "A": {
       "n": 3,
-      "pass": 2
+      "pass": 3
      }
     },
     "framed": {
      "n": 29,
-     "pass": 28
+     "pass": 29
     },
     "frameless": {
      "n": 0,
@@ -1035,13 +1049,13 @@
       "pass": 0
      }
     },
-    "mean": {
+    "reconciled": {
      "n": 29,
      "edgeOk": 29,
-     "pass": 28,
+     "pass": 29,
      "abstain": 0,
-     "dErrMedian": 0.0011572575076339298,
-     "dErrMax": 0.0074969496115657175,
+     "dErrMedian": 0.0008768041128190407,
+     "dErrMax": 0.0029651678758743777,
      "negatives": {
       "n": 0,
       "falsePositives": 0
@@ -1053,12 +1067,12 @@
       },
       "A": {
        "n": 3,
-       "pass": 2
+       "pass": 3
       }
      },
      "framed": {
       "n": 29,
-      "pass": 28
+      "pass": 29
      },
      "frameless": {
       "n": 0,
@@ -1594,17 +1608,19 @@
      "detEdge": "right",
      "detD": 0.1184969496115657,
      "labelEdge": "right",
-     "labelD": 0.11099999999999999,
+     "labelD": 0.118,
      "negative": false,
      "edgeOk": true,
-     "dErr": 0.0074969496115657175,
-     "pass": false,
+     "dErr": 0.0004969496115657113,
+     "pass": true,
      "falsePositive": false,
      "framelessPass": false,
      "tolPx": 24.403378555798685
     }
    ],
-   "meanExcluded": [],
+   "meanExcluded": [
+    "porterville-adu-a1-101.pdf"
+   ],
    "noTextLayer": [
     "va-roseburg-a03a.pdf"
    ],
@@ -1702,11 +1718,11 @@
   "tuneSet": "shreveport-combined.pdf",
   "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
   "sheets": 24,
-  "at": "2026-10-01T00:44Z",
-  "commit": "8753b3a550c9f100297efa6258e8703cade2b6c0",
+  "at": "2026-10-01T01:04Z",
+  "commit": "78d28dc7183ae693927fe75962c00887b308b83c",
   "dirty": false,
   "logicRev": 2,
-  "metric": "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the mean of labelers A and B; lexicographic",
+  "metric": "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the reconciled key (evals/regions/labels/reconciled.json); lexicographic",
   "rule": "keep the plan's value unless the tune result there is worse than elsewhere in the swept range; then the midpoint of the best plateau (widest in value span, then nearest the plan value; integers round toward the plan value)",
   "tolerance": 0.005,
   "defaults": {
@@ -3746,12 +3762,570 @@
    "bandMinCover": 0.5
   }
  },
- "runLog": [
-  {
-   "at": "2026-10-01T00:45:03.703Z",
-   "commit": "95ecc2557d6c49ba1bb45abeec5ba2b5cf885ec4",
-   "dirty": false,
-   "heldOut": false
-  }
- ]
+ "sensitivity": {
+  "scope": "tune + in-sample (dry run of the held-out code path; in-sample, information only)",
+  "rows": [
+   {
+    "constant": "BORDER_MIN_SPAN",
+    "key": "borderMinSpan",
+    "value": 0.75,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BORDER_MIN_SPAN",
+    "key": "borderMinSpan",
+    "value": 0.5,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 52,
+    "abstain": 0,
+    "dErrMedian": 0.002595468308559501
+   },
+   {
+    "constant": "BORDER_MIN_SPAN",
+    "key": "borderMinSpan",
+    "value": 0.95,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 52,
+    "pass": 42,
+    "abstain": 1,
+    "dErrMedian": 0.0026595661423567535
+   },
+   {
+    "constant": "BORDER_MAX_FRAC",
+    "key": "borderMaxFrac",
+    "value": 0.08,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BORDER_MAX_FRAC",
+    "key": "borderMaxFrac",
+    "value": 0.04,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 52,
+    "abstain": 0,
+    "dErrMedian": 0.002595468308559501
+   },
+   {
+    "constant": "BORDER_MAX_FRAC",
+    "key": "borderMaxFrac",
+    "value": 0.15,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 52,
+    "pass": 52,
+    "abstain": 1,
+    "dErrMedian": 0.0025216624817769803
+   },
+   {
+    "constant": "CHAIN_GAP_FRAC",
+    "key": "chainGapFrac",
+    "value": 0.005,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "CHAIN_GAP_FRAC",
+    "key": "chainGapFrac",
+    "value": 0,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0022416090812136524
+   },
+   {
+    "constant": "CHAIN_GAP_FRAC",
+    "key": "chainGapFrac",
+    "value": 0.03,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "MIN_CHAIN_COVER",
+    "key": "minChainCover",
+    "value": 0.7,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "MIN_CHAIN_COVER",
+    "key": "minChainCover",
+    "value": 0.4,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 26,
+    "abstain": 0,
+    "dErrMedian": 0.014267768633373049
+   },
+   {
+    "constant": "MIN_CHAIN_COVER",
+    "key": "minChainCover",
+    "value": 0.95,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0022416090812136524
+   },
+   {
+    "constant": "STRIP_D_MIN",
+    "key": "stripDMin",
+    "value": 0.06,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STRIP_D_MIN",
+    "key": "stripDMin",
+    "value": 0.01,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STRIP_D_MIN",
+    "key": "stripDMin",
+    "value": 0.08,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STRIP_D_MAX",
+    "key": "stripDMax",
+    "value": 0.3,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STRIP_D_MAX",
+    "key": "stripDMax",
+    "value": 0.15,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STRIP_D_MAX",
+    "key": "stripDMax",
+    "value": 0.45,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "TOUCH_FRAC",
+    "key": "touchFrac",
+    "value": 0.01,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "TOUCH_FRAC",
+    "key": "touchFrac",
+    "value": 0.0025,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0022416090812136524
+   },
+   {
+    "constant": "TOUCH_FRAC",
+    "key": "touchFrac",
+    "value": 0.05,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0022416090812136524
+   },
+   {
+    "constant": "MIN_STRIP_TOKENS",
+    "key": "minStripTokens",
+    "value": 15,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "MIN_STRIP_TOKENS",
+    "key": "minStripTokens",
+    "value": 1,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "MIN_STRIP_TOKENS",
+    "key": "minStripTokens",
+    "value": 80,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 31,
+    "pass": 30,
+    "abstain": 20,
+    "dErrMedian": 0.0026595661423567535
+   },
+   {
+    "constant": "SHEETNO_OUTER",
+    "key": "sheetnoOuter",
+    "value": 0.6,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "SHEETNO_OUTER",
+    "key": "sheetnoOuter",
+    "value": 0.3,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 52,
+    "pass": 51,
+    "abstain": 1,
+    "dErrMedian": 0.002599210976451549
+   },
+   {
+    "constant": "SHEETNO_OUTER",
+    "key": "sheetnoOuter",
+    "value": 1,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "SHEETNO_FAR_FROM",
+    "key": "sheetnoFarFrom",
+    "value": 0.5,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "SHEETNO_FAR_FROM",
+    "key": "sheetnoFarFrom",
+    "value": 0,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "SHEETNO_FAR_FROM",
+    "key": "sheetnoFarFrom",
+    "value": 0.9,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "REPEAT_POS_TOL",
+    "key": "repeatPosTol",
+    "value": 0.02,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "REPEAT_POS_TOL",
+    "key": "repeatPosTol",
+    "value": 0.0025,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "REPEAT_POS_TOL",
+    "key": "repeatPosTol",
+    "value": 0.05,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STATIC_MIN_SHEETS",
+    "key": "staticMinSheets",
+    "value": 2,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STATIC_MIN_SHEETS",
+    "key": "staticMinSheets",
+    "value": 1,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "STATIC_MIN_SHEETS",
+    "key": "staticMinSheets",
+    "value": 16,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BAND_GAP",
+    "key": "bandGap",
+    "value": 0.04,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BAND_GAP",
+    "key": "bandGap",
+    "value": 0.005,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BAND_GAP",
+    "key": "bandGap",
+    "value": 0.2,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "FRAME_BAND_RATIO",
+    "key": "frameBandRatio",
+    "value": 1.5,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "FRAME_BAND_RATIO",
+    "key": "frameBandRatio",
+    "value": 1,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0022416090812136524
+   },
+   {
+    "constant": "FRAME_BAND_RATIO",
+    "key": "frameBandRatio",
+    "value": 3,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "GROUP_MIN_JACCARD",
+    "key": "groupMinJaccard",
+    "value": 0.5,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "GROUP_MIN_JACCARD",
+    "key": "groupMinJaccard",
+    "value": 0.2,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "GROUP_MIN_JACCARD",
+    "key": "groupMinJaccard",
+    "value": 0.9,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "GROUP_D_TOL",
+    "key": "groupDTol",
+    "value": 0.015,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "GROUP_D_TOL",
+    "key": "groupDTol",
+    "value": 0.0025,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "GROUP_D_TOL",
+    "key": "groupDTol",
+    "value": 0.04,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BAND_MIN_COVER",
+    "key": "bandMinCover",
+    "value": 0.5,
+    "role": "chosen",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BAND_MIN_COVER",
+    "key": "bandMinCover",
+    "value": 0.2,
+    "role": "low",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   },
+   {
+    "constant": "BAND_MIN_COVER",
+    "key": "bandMinCover",
+    "value": 0.9,
+    "role": "high",
+    "n": 53,
+    "edgeOk": 53,
+    "pass": 53,
+    "abstain": 0,
+    "dErrMedian": 0.0024478566549944597
+   }
+  ]
+ }
 }
