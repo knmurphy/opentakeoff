@@ -587,52 +587,66 @@ export function classifyRepetition(sheets: readonly RepeatInput[]): TokenClasses
   const half = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
   const needStatic = Math.max(STATIC_MIN_SHEETS, half), needField = Math.max(FIELD_MIN_SHEETS, half);
   if (n < needStatic) return out;
-  const changedNeed = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
-  const T = REPEAT_POS_TOL, EPS = 1e-9;
-  const pts = sheets.map(({ tokens, box }) => {
+  const T = REPEAT_POS_TOL, TOL = REPEAT_POS_TOL + 1e-9;
+  // every usable token of the set in flat arrays: normalized center, sheet, interned text
+  const xs: number[] = [], ys: number[] = [], sheetOf: number[] = [], textOf: number[] = [], idxOf: number[] = [];
+  const textIds = new Map<string, number>();
+  sheets.forEach(({ tokens, box }, s) => {
     const [bx0, by0, bx1, by1] = box;
     const bw = bx1 - bx0, bh = by1 - by0;
-    return tokens.map((t) => {
-      const [x, y] = tokenCenter(t);
-      return { x: (x - bx0) / bw, y: (y - by0) / bh, text: normText(t.str) };
+    tokens.forEach((t, i) => {
+      const text = normText(t.str);
+      const [cx, cy] = tokenCenter(t);
+      const x = (cx - bx0) / bw, y = (cy - by0) / bh;
+      if (!text || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      let id = textIds.get(text);
+      if (id === undefined) { id = textIds.size; textIds.set(text, id); }
+      xs.push(x); ys.push(y); sheetOf.push(s); textOf.push(id); idxOf.push(i);
     });
   });
-  // a grid of REPEAT_POS_TOL cells per sheet: a query looks at the 3 × 3 cells around it
-  const grids = pts.map((ps) => {
-    const g = new Map<string, number[]>();
-    ps.forEach((p, i) => {
-      if (!p.text || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
-      const k = `${Math.floor(p.x / T)},${Math.floor(p.y / T)}`;
-      const cell = g.get(k);
-      if (cell) cell.push(i); else g.set(k, [i]);
-    });
-    return g;
-  });
-  const near = (s: number, x: number, y: number): number[] => {
-    const cx = Math.floor(x / T), cy = Math.floor(y / T), hit: number[] = [];
-    for (let a = cx - 1; a <= cx + 1; a++) for (let b = cy - 1; b <= cy + 1; b++) {
-      for (const i of grids[s].get(`${a},${b}`) ?? []) {
-        const p = pts[s][i];
-        if (Math.abs(p.x - x) <= T + EPS && Math.abs(p.y - y) <= T + EPS) hit.push(i);
+  // one grid of REPEAT_POS_TOL cells for the whole set, keyed by number: a query scans the 3 × 3
+  // cells around it, so its work is the neighbourhood, not every sheet
+  const KEY = 1_000_003;
+  const cellKey = (cx: number, cy: number) => cx * KEY + cy;
+  const grid = new Map<number, number[]>();
+  for (let k = 0; k < xs.length; k++) {
+    const key = cellKey(Math.floor(xs[k] / T), Math.floor(ys[k] / T));
+    const cell = grid.get(key);
+    if (cell) cell.push(k); else grid.set(key, [k]);
+  }
+  // per sheet stamps count distinct sheets without clearing between queries
+  const occStamp = new Int32Array(n).fill(-1), sameStamp = new Int32Array(n).fill(-1);
+  // a query's answer depends only on (position, text) — the token's own sheet always holds
+  // it — so identical queries (cloned or reissued sheets) are answered once
+  const memo = new Map<string, [number, number]>();
+  let q = 0;
+  for (let k = 0; k < xs.length; k++) {
+    const x = xs[k], y = ys[k], tid = textOf[k];
+    const mk = `${x},${y},${tid}`;
+    let res = memo.get(mk);
+    if (!res) {
+      let same = 0, occupied = 0;
+      const cx = Math.floor(x / T), cy = Math.floor(y / T);
+      for (let a = cx - 1; a <= cx + 1; a++) for (let b = cy - 1; b <= cy + 1; b++) {
+        const cell = grid.get(cellKey(a, b));
+        if (!cell) continue;
+        for (const j of cell) {
+          if (Math.abs(xs[j] - x) > TOL || Math.abs(ys[j] - y) > TOL) continue;
+          const o = sheetOf[j];
+          if (occStamp[o] !== q) { occStamp[o] = q; occupied++; }
+          if (textOf[j] === tid && sameStamp[o] !== q) { sameStamp[o] = q; same++; }
+        }
       }
+      q++;
+      res = [same, occupied];
+      memo.set(mk, res);
     }
-    return hit;
-  };
-  pts.forEach((ps, s) => {
-    ps.forEach((p, i) => {
-      if (!p.text || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
-      let same = 0, occupied = 0, changed = 0;
-      for (let o = 0; o < n; o++) {
-        const hit = near(o, p.x, p.y);
-        if (!hit.length) continue;
-        occupied++;
-        if (hit.some((j) => pts[o][j].text === p.text)) same++;
-        else if (o !== s) changed++;
-      }
-      if (same >= needStatic) out[s].staticIdx.push(i);
-      else if (occupied >= needField && changed >= changedNeed) out[s].fieldIdx.push(i);
-    });
-  });
+    const [same, occupied] = res;
+    // every occupied sheet without this text is a change (the token's own sheet holds it)
+    const changed = occupied - same;
+    if (same >= needStatic) out[sheetOf[k]].staticIdx.push(idxOf[k]);
+    else if (occupied >= needField && changed >= half) out[sheetOf[k]].fieldIdx.push(idxOf[k]);
+  }
   return out;
 }
 

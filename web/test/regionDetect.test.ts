@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   longAxisLines, TB_SHEETNO_RE, findBorder, tokenCenter, findCandidates, stripUV, farEnd, confidenceFor, detectTitleBlock,
   MIN_STRIP_TOKENS, classifyRepetition, repetitionBands, repeatOptions, normText, framesBand, FRAME_BAND_RATIO, BAND_GAP,
-  REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions,
+  REPEAT_POS_TOL, BAND_DEPTH, detectSetRegions, STATIC_MIN_SHEETS, FIELD_MIN_SHEETS, REPEAT_MIN_SHARE, type RepeatInput, type TokenClasses,
   type DetectLine, type DetectSheet, type DetectToken, type Edge, type DetectOptions,
 } from "../src/lib/regionDetect.ts";
 import { aspectBucket, cleanRegions, hitRegion, type SheetRegions } from "../src/lib/regions.ts";
@@ -755,6 +755,88 @@ describe("steps 2 and 4: edge cases", () => {
 });
 
 // ── step 3: repetition across the set ───────────────────────────────────────
+/** Reference for classifyRepetition: the plain O(n² · T) definition (every
+ * token against every sheet), kept to check the indexed implementation. */
+function classifyRepetitionRef(sheets: readonly RepeatInput[]): TokenClasses[] {
+  const n = sheets.length;
+  const out: TokenClasses[] = sheets.map(() => ({ staticIdx: [], fieldIdx: [] }));
+  const half = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
+  const needStatic = Math.max(STATIC_MIN_SHEETS, half), needField = Math.max(FIELD_MIN_SHEETS, half);
+  if (n < needStatic) return out;
+  const T = REPEAT_POS_TOL + 1e-9;
+  const pts = sheets.map(({ tokens, box }) => tokens.map((t) => {
+    const [x, y] = tokenCenter(t);
+    return { x: (x - box[0]) / (box[2] - box[0]), y: (y - box[1]) / (box[3] - box[1]), text: normText(t.str) };
+  }));
+  const ok = (p: { x: number; y: number; text: string }) => !!p.text && Number.isFinite(p.x) && Number.isFinite(p.y);
+  pts.forEach((ps, s) => ps.forEach((p, i) => {
+    if (!ok(p)) return;
+    let same = 0, occupied = 0, changed = 0;
+    for (let o = 0; o < n; o++) {
+      const hit = pts[o].filter((q) => ok(q) && Math.abs(q.x - p.x) <= T && Math.abs(q.y - p.y) <= T);
+      if (!hit.length) continue;
+      occupied++;
+      if (hit.some((q) => q.text === p.text)) same++;
+      else if (o !== s) changed++;
+    }
+    if (same >= needStatic) out[s].staticIdx.push(i);
+    else if (occupied >= needField && changed >= half) out[s].fieldIdx.push(i);
+  }));
+  return out;
+}
+
+describe("classifyRepetition: the indexed implementation equals the reference", () => {
+  const inputs = (set: Synth.SynthSet) => set.sheets.map((x) => ({ tokens: x.sheet.tokens, box: findBorder(x.sheet).box }));
+  const sets = [Synth.uniformSet24(), Synth.mixedSet(), Synth.smallConsultantsSet(), Synth.borderlessSet(), Synth.repeatOnlySet(),
+    ...[1, 3, 5, 11, 18, 19, 4242].map((k) => Synth.randomSet(k))];
+  for (const set of sets) {
+    test(set.name, () => {
+      const all = inputs(set);
+      for (const sub of [all, all.slice(0, 2), all.slice(0, 3), all.slice(1, 6)]) {
+        assert.deepEqual(classifyRepetition(sub), classifyRepetitionRef(sub));
+      }
+    });
+  }
+});
+
+describe("classifyRepetition: scaling", () => {
+  // uniformSet24's sheets cloned under new keys (exact copies: every title-block token repeats on
+  // every sheet), and jittered copies (every token moved by up to ±1 px, so no two queries match)
+  const base = Synth.uniformSet24().sheets.map((x) => x.sheet);
+  const clones = (n: number, jitter = 0) => {
+    const rng = Synth.mulberry32(7);
+    return Array.from({ length: n }, (_, i) => {
+      const b = base[i % base.length];
+      const tokens = jitter ? b.tokens.map((t) => ({ ...t, x: t.x + (rng() - 0.5) * 2 * jitter, y: t.y + (rng() - 0.5) * 2 * jitter })) : b.tokens;
+      return { ...b, key: `c${String(i).padStart(4, "0")}.pdf`, tokens };
+    });
+  };
+  const inputsOf = (sh: DetectSheet[]) => sh.map((x) => ({ tokens: x.tokens, box: findBorder(x).box }));
+  const best = (f: () => void) => Math.min(...[0, 1, 2].map(() => { const t = performance.now(); f(); return performance.now() - t; }));
+
+  test("100 → 200 cloned sheets costs < 3× (or under 200 ms)", () => {
+    const i100 = inputsOf(clones(100)), i200 = inputsOf(clones(200));
+    classifyRepetition(i100);   // warm-up
+    const t100 = best(() => classifyRepetition(i100)), t200 = best(() => classifyRepetition(i200));
+    assert.ok(t200 < 3 * t100 || t200 < 200, `100 sheets ${t100.toFixed(0)} ms, 200 sheets ${t200.toFixed(0)} ms`);
+  });
+
+  test("detectSetRegions: 200 cloned sheets < 3 s, 200 jittered sheets < 6 s (was 27 s)", () => {
+    for (const [sheets, limit] of [[clones(200), 3000], [clones(200, 1), 6000]] as const) {
+      const t = performance.now();
+      const { regions } = detectSetRegions(sheets);
+      const ms = performance.now() - t;
+      assert.equal(regions.size, 200);
+      assert.ok(ms < limit, `${ms.toFixed(0)} ms (limit ${limit})`);
+    }
+  });
+
+  test("jittered clones classify like the reference", () => {
+    const sub = inputsOf(clones(30, 1));
+    assert.deepEqual(classifyRepetition(sub), classifyRepetitionRef(sub));
+  });
+});
+
 describe("step 3: statics and fields (classifyRepetition)", () => {
   // page 1000 × 1000 with the border box at the page edge: normalized = px / 1000
   const B1: [number, number, number, number] = [0, 0, 1000, 1000];
