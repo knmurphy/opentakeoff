@@ -16,10 +16,9 @@ import { join, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { detectSetRegions, DEFAULT_REGION_PARAMS, REGION_LOGIC_REV, type DetectSheet, type RegionParams } from "../src/lib/regionDetect.ts";
 import { loadPdfSheets } from "./regionSheets.mts";
-import { sheetKeyFor } from "./regionSheets.ts";
-import { labelSpread, passTolerance, meanLabel, scoreSheet, summarize, groupingCounts } from "./regionScore.ts";
+import { scoreSheet, summarize, groupingCounts } from "./regionScore.ts";
 import { chooseValue, compareTune, type TuneResult } from "./regionCalib.ts";
-import { toDetected, loadLabels } from "./regionRun.mts";
+import { toDetected, loadAnswerKeys, toleranceFor, benchSets, keysOf } from "./regionRun.mts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..");
@@ -32,11 +31,12 @@ if (!existsSync(path)) { console.error(`tune PDF absent: node evals/regions/fetc
 const sha = createHash("sha256").update(readFileSync(path)).digest("hex");
 if (sha !== T.sha256) throw new Error(`${T.file}: sha256 mismatch`);
 
-const keys = new Set(Array.from({ length: T.pages }, (_, i) => sheetKeyFor(T.file, i + 1)));
-const LA = loadLabels(join(repo, "evals/regions/labels/labeler-A.json"), keys);
-const LB = loadLabels(join(repo, "evals/regions/labels/labeler-B.json"), keys);
-const spread = labelSpread([...LA.values()], [...LB.values()]);
-const tol = passTolerance(spread.p90 ?? 0, null);
+// labels: the tune set's reconciled key for scoring; the tolerance is the bench's (max inter-agent
+// spread over the tune + in-sample labels after reconciliation — labels only, nothing is tuned on them)
+const allSets = await benchSets(repo);
+const keysets = loadAnswerKeys(repo, keysOf(allSets.filter((s) => s.role !== "held-out")));
+const { tol, spread } = toleranceFor(keysOf(allSets.filter((s) => s.role !== "held-out")), keysets);
+const LR = keysets.R;
 const sheets: DetectSheet[] = await loadPdfSheets(path, T.file);
 
 interface RunOut extends TuneResult { dErrMedian: number | null; dErrMax: number | null }
@@ -44,7 +44,7 @@ function run(over: Partial<RegionParams>): RunOut {
   const { regions, diag } = detectSetRegions(sheets, over);
   const rows = [], groupRows = [];
   for (const s of sheets) {
-    const m = meanLabel(LA.get(s.key)!, LB.get(s.key)!);
+    const m = LR.get(s.key)!;
     const det = toDetected(T.file, s, regions.get(s.key)!, diag.get(s.key)!, m.title_block?.edge ?? null);
     rows.push(scoreSheet(det, m, tol));
     groupRows.push({ set: T.file, key: s.key, family: m.family, group: det.group });
@@ -79,7 +79,7 @@ const t0 = performance.now();
 const base = run({});
 const fmt = (r: RunOut) => `${r.pass}/${r.edgeOk}/${r.groupErr}/${r.abstain}`;
 console.log(`══ region constants calibration — tune set only: ${T.file} (${sheets.length} sheets, sha256 ${sha}) ══`);
-console.log(`tolerance ${(tol * 100).toFixed(2)}% (inter-agent p90 over the tune labels ${((spread.p90 ?? 0) * 100).toFixed(2)}%, floor 0.5%)`);
+console.log(`tolerance ${(tol * 100).toFixed(2)}% (max inter-agent spread over tune + in-sample labels after reconciliation ${((spread.max ?? 0) * 100).toFixed(2)}%, floor 0.5%); scored against the reconciled key`);
 console.log(`result = pass/edge/grouping errors/abstain (n = ${sheets.length}); defaults: ${fmt(base)}; |d err| median ${((base.dErrMedian ?? 0) * 100).toFixed(2)}%`);
 const out = [];
 for (const c of SWEEP) {
@@ -109,7 +109,7 @@ writeFileSync(join(here, "regions-calibration.json"), JSON.stringify({
   commit: spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim(),
   dirty: spawnSync("git", ["status", "--porcelain", "--", "web/src", "web/bench", "evals/regions/labels", ":!web/bench/regions-calibration.json", ":!web/bench/regions-results.json"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "",
   logicRev: REGION_LOGIC_REV,
-  metric: "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the mean of labelers A and B; lexicographic",
+  metric: "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the reconciled key (evals/regions/labels/reconciled.json); lexicographic",
   rule: "keep the plan's value unless the tune result there is worse than elsewhere in the swept range; then the midpoint of the best plateau (widest in value span, then nearest the plan value; integers round toward the plan value)",
   tolerance: tol, defaults: base, constants: out, chosen,
 }, null, 1) + "\n");

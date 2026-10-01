@@ -4,7 +4,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   median, quantileNearestRank, labelSpread, passTolerance, binomUpper95, meanLabel, scoreSheet, summarize,
-  groupingCounts, checkOrder, fmtPass, TOL_FLOOR, jaccard, capJaccardRows, type LabelEntry, type Detected,
+  groupingCounts, checkOrder, fmtPass, TOL_FLOOR, jaccard, capJaccardRows, reconcile, RECONCILE_THRESHOLD, type LabelEntry, type Detected,
 } from "../bench/regionScore.ts";
 import type { Edge } from "../src/lib/regionDetect.ts";
 
@@ -187,7 +187,7 @@ describe("checkOrder (labels committed before detector code)", () => {
   const git = (table: Record<string, { code: number; out: string }>) => (args: string[]) => table[args.join(" ")] ?? { code: 128, out: "" };
   test("labels commit is an ancestor of the first detector commit → verified", () => {
     const r = checkOrder(git({
-      "log -1 --format=%H -- evals/regions/labels": { code: 0, out: "L\n" },
+      "log -1 --format=%H -- evals/regions/labels/labeler-A.json evals/regions/labels/labeler-B.json": { code: 0, out: "L\n" },
       "log --reverse --format=%H -- web/src/lib/regionDetect.ts": { code: 0, out: "D1\nD2\n" },
       "merge-base --is-ancestor L D1": { code: 0, out: "" },
     }));
@@ -195,14 +195,14 @@ describe("checkOrder (labels committed before detector code)", () => {
   });
   test("not an ancestor, or git cannot tell → unverified with the reason", () => {
     const notAnc = checkOrder(git({
-      "log -1 --format=%H -- evals/regions/labels": { code: 0, out: "L" },
+      "log -1 --format=%H -- evals/regions/labels/labeler-A.json evals/regions/labels/labeler-B.json": { code: 0, out: "L" },
       "log --reverse --format=%H -- web/src/lib/regionDetect.ts": { code: 0, out: "D1" },
       "merge-base --is-ancestor L D1": { code: 1, out: "" },
     }));
     assert.equal(notAnc.verified, false);
     assert.match(notAnc.reason, /not an ancestor/);
     const cant = checkOrder(git({
-      "log -1 --format=%H -- evals/regions/labels": { code: 0, out: "L" },
+      "log -1 --format=%H -- evals/regions/labels/labeler-A.json evals/regions/labels/labeler-B.json": { code: 0, out: "L" },
       "log --reverse --format=%H -- web/src/lib/regionDetect.ts": { code: 0, out: "D1" },
     }));
     assert.equal(cant.verified, false);
@@ -234,5 +234,35 @@ describe("cap vs uncapped Jaccard", () => {
     assert.deepEqual([r.set, r.a, r.b, r.nA, r.nB, r.nCappedA, r.nCappedB], ["s", "g1", "g2", 4, 3, 2, 2]);
     near(r.uncapped, 2 / 5);   // {c, d} / {a, b, c, d, e}
     near(r.capped, 0);         // {} / {a, b, c, d}
+  });
+});
+
+describe("reconcile (labels after resolving > 1% disagreements)", () => {
+  const E = (key: string, d: number, border: LabelEntry["border"] = [0.04, 0.03, 0.98, 0.96], edge: Edge = "right"): LabelEntry =>
+    ({ key, border, title_block: { edge, inner: 1 - d, d }, family: "F" });
+  test("agreeing sheets take the mean; > 1% takes the named labeler with resolved_by; spread excludes resolved", () => {
+    assert.equal(RECONCILE_THRESHOLD, 0.01);
+    const a = [E("k1", 0.1), E("p", 0.118, [0.04, 0.03, 1, 0.96])];
+    const b = [E("k1", 0.102), E("p", 0.104, [0.04, 0.03, 0.986, 0.96])];
+    const r = reconcile(a, b, { p: { take: "A", resolved_by: "written definition; pending maintainer confirmation" } });
+    assert.deepEqual(r.unresolved, []);
+    const k1 = r.sheets.find((x) => x.key === "k1")!;
+    near(k1.title_block!.d, 0.101);
+    assert.equal(k1.resolved_by, undefined);
+    const p = r.sheets.find((x) => x.key === "p")!;
+    assert.equal(p.title_block!.d, 0.118);
+    assert.deepEqual(p.border, [0.04, 0.03, 1, 0.96]);
+    assert.equal(p.resolved_by, "written definition; pending maintainer confirmation");
+    assert.deepEqual(r.resolved, ["p"]);
+  });
+  test("exactly 1% is not a disagreement; over 1% without a resolution, or an edge mismatch, is unresolved", () => {
+    const r = reconcile([E("k", 0.1), E("x", 0.1), E("y", 0.1)], [E("k", 0.11), E("x", 0.1201), E("y", 0.1, undefined, "bottom")], {});
+    assert.deepEqual(r.unresolved.sort(), ["x", "y"]);
+    near(r.sheets.find((s) => s.key === "k")!.title_block!.d, 0.105);
+  });
+  test("labelSpread can exclude the resolved sheets", () => {
+    const a = [E("k1", 0.1), E("p", 0.118)], b = [E("k1", 0.102), E("p", 0.104)];
+    near(labelSpread(a, b).max!, 0.014);
+    near(labelSpread(a, b, new Set(["p"])).max!, 0.002);
   });
 });

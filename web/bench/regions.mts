@@ -19,12 +19,12 @@ import { detectSetRegions, type DetectSheet } from "../src/lib/regionDetect.ts";
 import { loadPdfSheets } from "./regionSheets.mts";
 import { sheetKeyFor } from "./regionSheets.ts";
 import {
-  labelSpread, passTolerance, binomUpper95, meanLabel, scoreSheet, summarize, groupingCounts, checkOrder, fmtPass, median,
+  binomUpper95, scoreSheet, summarize, groupingCounts, checkOrder, fmtPass, median,
   capJaccardRows, type CapJaccardRow, type ScoreRow, type Summary,
 } from "./regionScore.ts";
 import { heldOutGuard, currentConstantsHash } from "./regionGuard.mts";
 import { DEFAULT_REGION_PARAMS, REGION_CONSTANTS_FROZEN, REGION_CONSTANTS_HASH } from "../src/lib/regionDetect.ts";
-import { toDetected, loadLabels } from "./regionRun.mts";
+import { toDetected, loadAnswerKeys, toleranceFor, benchSets, keysOf, type BenchSet } from "./regionRun.mts";
 import { compareTune } from "./regionCalib.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -35,22 +35,8 @@ const reasonAt = argv.indexOf("--reason");
 const reason = reasonAt >= 0 ? argv[reasonAt + 1] ?? "" : "";
 
 // ── sets ─────────────────────────────────────────────────────────────────────
-const { SETS } = await import(join(repo, "evals/regions/fetch.mjs"));
-interface BenchSet { name: string; path: string; file: string; pages: number; role: "tune" | "in-sample" | "held-out"; sha256?: string }
-const pdfDir = join(repo, "evals/regions/pdfs");
-const fetched: BenchSet[] = (SETS as Array<{ file: string; pages: number; role: BenchSet["role"]; sha256: string }>)
-  .map((s) => ({ name: s.file, path: join(pdfDir, s.file), file: s.file, pages: s.pages, role: s.role, sha256: s.sha256 }));
-// committed single sheets: each its own set (in-sample)
-const committed: BenchSet[] = [
-  ["evals/four-asks-2026-09-02/sheets/va-dublin-bldg9a-finish-plan-A601.pdf", 1],
-  ["evals/four-asks-2026-09-02/sheets/va-shreveport-fisher-house-site-utility-C300.pdf", 1],
-  ["web/public/demo/sample-finish-plan.pdf", 2],
-  ["evals/mcp-workflow-bench/plan-set/porterville/porterville-adu-a1-101.pdf", 1],
-  ["evals/mcp-workflow-bench/plan-set/roseburg/va-roseburg-a03a.pdf", 1],
-].map(([p, n]) => {
-  const file = String(p).replace(/^.*\//, "");
-  return { name: file, path: join(repo, String(p)), file, pages: Number(n), role: "in-sample" as const };
-});
+const allSets = await benchSets(repo);
+const fetched = allSets.filter((s) => s.sha256), committed = allSets.filter((s) => !s.sha256);
 
 if (heldOut) {
   const g = heldOutGuard();
@@ -72,9 +58,9 @@ const sections: Array<{ name: string; role: BenchSet["role"]; sets: BenchSet[] }
 // ── labels: filtered to the keys of the sets in this run, by key only ───────
 const allowed = new Set<string>();
 for (const sec of sections) for (const s of sec.sets) for (let n = 1; n <= s.pages; n++) allowed.add(sheetKeyFor(s.file, n));
-const inSampleKeys = new Set<string>();
-for (const sec of sections.filter((x) => x.role !== "held-out")) for (const s of sec.sets) for (let n = 1; n <= s.pages; n++) inSampleKeys.add(sheetKeyFor(s.file, n));
-const LA = loadLabels(join(repo, "evals/regions/labels/labeler-A.json"), allowed), LB = loadLabels(join(repo, "evals/regions/labels/labeler-B.json"), allowed);
+const inSampleKeys = keysOf(allSets.filter((s) => s.role !== "held-out"));
+const keysets = loadAnswerKeys(repo, allowed);
+const LA = keysets.A, LB = keysets.B, LR = keysets.R;
 
 // ── header ───────────────────────────────────────────────────────────────────
 const git = (args: string[]) => {
@@ -86,14 +72,11 @@ const dirty = git(["status", "--porcelain", "--", "web/src", "web/bench", "evals
 const order = checkOrder(git);
 const sha = (p: string) => createHash("sha256").update(readFileSync(p)).digest("hex");
 
-// tolerance: inter-agent spread over the tune + in-sample sheets only (fixed before any held-out run)
-const inA = [...LA.values()].filter((e) => inSampleKeys.has(e.key)), inB = [...LB.values()].filter((e) => inSampleKeys.has(e.key));
-const spread = labelSpread(inA, inB);
-const interAgent = spread.p90 ?? 0;
+// tolerance: max inter-agent spread over the tune + in-sample sheets after reconciliation
+// (fixed before any held-out run)
+const T0 = toleranceFor(inSampleKeys, keysets);
+const spread = T0.spread, tol = T0.tol;
 const maintainer: number | null = null;  // no maintainer labels yet
-const tol = passTolerance(interAgent, maintainer);
-const tolIfMax = passTolerance(spread.max ?? 0, maintainer);
-
 const pct = (x: number | null, dp = 2) => (x === null ? "—" : `${(100 * x).toFixed(dp)}%`);
 console.log("══ bench:regions — title block vs drawing area (piece 2a, vector) ══");
 console.log(`commit          ${head}${dirty ? " (+ uncommitted changes)" : ""}`);
@@ -102,9 +85,9 @@ console.log(`order check     ${order.verified ? "verified" : "UNVERIFIED ORDER"}
 const constHash = currentConstantsHash();
 console.log(`constants       frozen ${REGION_CONSTANTS_FROZEN}, hash ${REGION_CONSTANTS_HASH.slice(0, 16)}… — current defaults ${constHash === REGION_CONSTANTS_HASH ? "match" : `DIFFER (${constHash.slice(0, 16)}…)`}`);
 console.log(`labels          two agent labelers (A, B); maintainer spread: not available — agent labels only; no human noise floor`);
-console.log(`spread A vs B   d over ${spread.n} tune + in-sample sheets: median ${pct(spread.median, 2)}, p90 ${pct(spread.p90, 2)}, max ${pct(spread.max, 2)}; edge disagreements ${spread.edgeDisagree}`);
-console.log(`tolerance       ${pct(tol, 2)} of the border box across the edge = max(2 × max(inter-agent p90 ${pct(interAgent, 2)}, maintainer n/a), 0.5%)`);
-console.log(`                (with the max spread instead of p90 it would be ${pct(tolIfMax, 2)})`);
+console.log(`answer key      evals/regions/labels/reconciled.json: mean of A and B; resolved (> 1% apart): ${T0.resolved.join(", ") || "none"} (written definition; pending maintainer confirmation)`);
+console.log(`spread A vs B   d over ${spread.n} tune + in-sample sheets after reconciliation: max ${pct(spread.max, 2)} (p90 ${pct(spread.p90, 2)}, median ${pct(spread.median, 2)}; information); edge disagreements ${spread.edgeDisagree}`);
+console.log(`tolerance       ${pct(tol, 2)} of the border box across the edge = max(2 × max(inter-agent max ${pct(spread.max, 2)}, maintainer n/a), 0.5%)`);
 
 // ── run ──────────────────────────────────────────────────────────────────────
 interface SectionOut { name: string; status: string; sets: Array<{ name: string; pages: number; sha256: string | null; ms: number; summary: Summary | null; skipped?: string }>; total?: Summary; perLabeler?: Record<string, Summary>; grouping?: ReturnType<typeof groupingCounts>; rows?: ScoreRow[]; meanExcluded?: string[]; noTextLayer?: string[]; capJaccard?: { groups: Array<{ set: string; id: string; sheets: number; uncapped: number; capped: number }>; pairs: CapJaccardRow[]; crossSet: CapJaccardRow[] }; pdfs: Record<string, string> }
@@ -118,7 +101,7 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
     continue;
   }
   const out: SectionOut = { name: sec.name, status: "run", sets: [], pdfs: {} };
-  const rowsBy: Record<"A" | "B" | "mean", ScoreRow[]> = { A: [], B: [], mean: [] };
+  const rowsBy: Record<"A" | "B" | "reconciled", ScoreRow[]> = { A: [], B: [], reconciled: [] };
   const groupRows: Array<{ set: string; key: string; family: string; group: string | null }> = [];
   const meanExcluded: string[] = [];
   const noText: string[] = [];
@@ -147,28 +130,28 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
     for (const s of sheets) {
       const dg = diag.get(s.key)!, rg = regions.get(s.key)!;
       if (s.tokens.length === 0) { noText.push(s.key); continue; }   // plan: counted and excluded (vector piece; OCR is 2b)
-      const la = LA.get(s.key), lb = LB.get(s.key);
-      if (!la || !lb) { console.log(`  (no label for ${s.key}; not scored)`); continue; }
-      const m = meanLabel(la, lb);
+      const la = LA.get(s.key), lb = LB.get(s.key), lr = LR.get(s.key);
+      if (!la || !lb || !lr) { console.log(`  (no label for ${s.key}; not scored)`); continue; }
+      const m = lr;
       const det = toDetected(set.name, s, rg, dg, m.title_block?.edge ?? null);
       rowsBy.A.push(scoreSheet(det, la, tol));
       rowsBy.B.push(scoreSheet(det, lb, tol));
-      if (m.disagree) meanExcluded.push(s.key);
-      else { const r = scoreSheet(det, m, tol); rowsBy.mean.push(r); setRows.push(r); }
+      if (lr.resolved_by) meanExcluded.push(s.key);
+      { const r = scoreSheet(det, lr, tol); rowsBy.reconciled.push(r); setRows.push(r); }
       groupRows.push({ set: set.name, key: s.key, family: m.family, group: det.group });
     }
     out.sets.push({ name: set.name, pages: sheets.length, sha256: h, ms, summary: summarize(setRows) });
   }
-  out.total = summarize(rowsBy.mean);
-  out.perLabeler = { A: summarize(rowsBy.A), B: summarize(rowsBy.B), mean: out.total };
+  out.total = summarize(rowsBy.reconciled);
+  out.perLabeler = { A: summarize(rowsBy.A), B: summarize(rowsBy.B), reconciled: out.total };
   out.grouping = groupingCounts(groupRows);
-  out.rows = rowsBy.mean;
+  out.rows = rowsBy.reconciled;
   out.meanExcluded = meanExcluded;
   out.noTextLayer = noText;
   // pairs of groups from different sets (e.g. a template made on one Dublin part, matched on another)
   const crossSet = capJaccardRows("cross-set", capAll.filter((g) => g.uncapped.length)).filter((r) => r.a.split(":")[0] !== r.b.split(":")[0]);
   out.capJaccard = { groups: capGroups, pairs: capRows, crossSet };
-  allRows.push(...rowsBy.mean);
+  allRows.push(...rowsBy.reconciled);
   results.push(out);
 }
 
@@ -194,11 +177,11 @@ for (const sec of results) {
     else console.log(rowLine(s.name, s.summary) + `  (${s.ms.toFixed(0)} ms)`);
   }
   const t = sec.total!;
-  console.log(rowLine(`TOTAL vs mean label`, t));
+  console.log(rowLine(`TOTAL vs reconciled labels`, t));
   console.log(rowLine(`TOTAL vs labeler A`, sec.perLabeler!.A));
   console.log(rowLine(`TOTAL vs labeler B`, sec.perLabeler!.B));
   console.log(`  excluded, no text layer (vector detector; OCR is piece 2b): ${sec.noTextLayer!.length}${sec.noTextLayer!.length ? ` — ${sec.noTextLayer!.join(", ")}` : ""}`);
-  if (sec.meanExcluded!.length) console.log(`  labelers disagree on the edge (excluded from the mean): ${sec.meanExcluded!.join(", ")}`);
+  if (sec.meanExcluded!.length) console.log(`  resolved in the reconciled key (labelers > 1% apart; written definition, pending maintainer confirmation): ${sec.meanExcluded!.join(", ")}`);
   const neg = t.negatives;
   const up = binomUpper95(neg.falsePositives, neg.n);
   console.log(`  false positives on labeled negatives: ${neg.n === 0 ? "no labeled negatives (n = 0)" : neg.n < 5 ? `${neg.falsePositives}/${neg.n}, 95% upper bound ${pct(up, 1)} (n < 5: not a rate)` : `${neg.falsePositives}/${neg.n} (95% upper bound ${pct(up, 1)})`}`);
@@ -242,7 +225,8 @@ runLog.push({ at: new Date().toISOString(), commit: head, dirty, heldOut, ...(he
 writeFileSync(outPath, JSON.stringify({
   commit: head, dirty, labelCommit: order.labelCommit, order,
   labels: { labelers: ["A", "B"], maintainer: "not available — agent labels only; no human noise floor" },
-  spread, tolerance: { frac: tol, interAgentP90: interAgent, maintainer, ifMaxSpread: tolIfMax, px: tolPx.length ? { min: Math.min(...tolPx), max: Math.max(...tolPx), median: median(tolPx) } : null },
+  answerKey: "evals/regions/labels/reconciled.json", resolved: T0.resolved,
+  spread, tolerance: { frac: tol, rule: "max(2 × max(inter-agent max spread after reconciliation, maintainer), 0.5%)", interAgentMax: spread.max, interAgentP90: spread.p90, maintainer, px: tolPx.length ? { min: Math.min(...tolPx), max: Math.max(...tolPx), median: median(tolPx) } : null },
   constants: { frozen: REGION_CONSTANTS_FROZEN, hash: REGION_CONSTANTS_HASH, current: constHash, values: DEFAULT_REGION_PARAMS },
   pdfs: hashes, sections: results, calibration, runLog,
 }, null, 1) + "\n");

@@ -47,11 +47,12 @@ export interface Spread { n: number; edgeDisagree: number; median: number | null
 /** Inter-labeler spread of d over the keys both files label: per sheet
  * |dA − dB| (0 when both say none); a sheet whose edges differ (or one says
  * none) is counted in `edgeDisagree` and not measured. */
-export function labelSpread(a: readonly LabelEntry[], b: readonly LabelEntry[]): Spread {
+export function labelSpread(a: readonly LabelEntry[], b: readonly LabelEntry[], exclude: ReadonlySet<string> = new Set()): Spread {
   const bm = new Map(b.map((e) => [e.key, e]));
   const diffs: number[] = [];
   let edgeDisagree = 0;
   for (const ea of a) {
+    if (exclude.has(ea.key)) continue;
     const eb = bm.get(ea.key);
     if (!eb) continue;
     const ta = ea.title_block, tb = eb.title_block;
@@ -214,19 +215,22 @@ export function groupingCounts(rows: readonly GroupRow[]): GroupingCounts {
 
 export type GitRun = (args: string[]) => { code: number; out: string };
 export interface OrderCheck { verified: boolean; labelCommit: string | null; detectorCommit: string | null; reason: string }
-export const LABELS_DIR = "evals/regions/labels";
+/** The blind labels the order check is about. Derived files in the same
+ * directory (reconciled.json, README) may change later without breaking
+ * the "labels before detector" order. */
+export const LABEL_FILES = ["evals/regions/labels/labeler-A.json", "evals/regions/labels/labeler-B.json"];
 export const DETECTOR_FILE = "web/src/lib/regionDetect.ts";
 
-/** The plan's order check: the last commit touching the labels must be an
+/** The plan's order check: the last commit touching the blind label files must be an
  * ancestor of the first commit touching the detector module
  * (`git merge-base --is-ancestor`). Anything git cannot answer (shallow
  * clone, no such commit) is unverified, with the reason. */
 export function checkOrder(git: GitRun): OrderCheck {
-  const l = git(["log", "-1", "--format=%H", "--", LABELS_DIR]);
+  const l = git(["log", "-1", "--format=%H", "--", ...LABEL_FILES]);
   const labelCommit = l.code === 0 ? l.out.trim().split("\n")[0] || null : null;
   const d = git(["log", "--reverse", "--format=%H", "--", DETECTOR_FILE]);
   const detectorCommit = d.code === 0 ? d.out.trim().split("\n")[0] || null : null;
-  if (!labelCommit) return { verified: false, labelCommit, detectorCommit, reason: `cannot check: no commit found for ${LABELS_DIR}` };
+  if (!labelCommit) return { verified: false, labelCommit, detectorCommit, reason: `cannot check: no commit found for ${LABEL_FILES.join(", ")}` };
   if (!detectorCommit) return { verified: false, labelCommit, detectorCommit, reason: `cannot check: no commit found for ${DETECTOR_FILE}` };
   const a = git(["merge-base", "--is-ancestor", labelCommit, detectorCommit]);
   if (a.code === 0) return { verified: true, labelCommit, detectorCommit, reason: `labels ${labelCommit} is an ancestor of ${detectorCommit}` };
@@ -266,4 +270,41 @@ export function capJaccardRows(set: string, groups: readonly { id: string; uncap
     });
   }
   return out;
+}
+
+/** Disagreements over this |Δd| are resolved, not averaged (plan, "Labels"). */
+export const RECONCILE_THRESHOLD = 0.01;
+export interface ReconciledEntry extends LabelEntry { resolved_by?: string }
+export interface Resolution { take: "A" | "B"; resolved_by: string }
+
+/** The reconciled answer key: per sheet the mean of A and B (border, inner,
+ * d), except where |Δd| > RECONCILE_THRESHOLD or the edges differ: those
+ * take the labeler named in `resolutions`, marked `resolved_by`, or are
+ * listed in `unresolved` (and left out). Keys in input order of `a`. */
+export function reconcile(a: readonly LabelEntry[], b: readonly LabelEntry[], resolutions: Readonly<Record<string, Resolution>>):
+  { sheets: ReconciledEntry[]; resolved: string[]; unresolved: string[] } {
+  const bm = new Map(b.map((e) => [e.key, e]));
+  const sheets: ReconciledEntry[] = [], resolved: string[] = [], unresolved: string[] = [];
+  const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+  for (const ea of a) {
+    const eb = bm.get(ea.key);
+    if (!eb) continue;
+    const ta = ea.title_block, tb = eb.title_block;
+    const agree = (!ta && !tb) || (!!ta && !!tb && ta.edge === tb.edge && Math.abs(ta.d - tb.d) <= RECONCILE_THRESHOLD + 1e-12);
+    if (!agree) {
+      const res = resolutions[ea.key];
+      if (!res) { unresolved.push(ea.key); continue; }
+      const src = res.take === "A" ? ea : eb;
+      sheets.push({ key: ea.key, border: [...src.border], title_block: src.title_block ? { ...src.title_block } : null, family: src.family, resolved_by: res.resolved_by });
+      resolved.push(ea.key);
+      continue;
+    }
+    const m = meanLabel(ea, eb);
+    sheets.push({
+      key: ea.key, border: m.border.map(r6) as LabelEntry["border"],
+      title_block: m.title_block ? { edge: m.title_block.edge, inner: r6(m.title_block.inner), d: r6(m.title_block.d) } : null,
+      family: m.family,
+    });
+  }
+  return { sheets, resolved, unresolved };
 }
