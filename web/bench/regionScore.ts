@@ -167,6 +167,7 @@ export interface GroupingCounts {
   familyUnits: number; splitFamilies: number;        // (set, family) with ≥ 2 grouped sheets; split = > 1 id
   crossPairs: number; mergedPairs: number;           // family pairs inside one set; merged = they share an id
   sameFamilySheetPairs: number; splitSheetPairs: number;
+  crossSheetPairs: number; mergedSheetPairs: number;  // sheet pairs of different families in one set; merged = same id
   ungrouped: number;
   meaningful: boolean;                               // ≥ 3 label families
 }
@@ -180,6 +181,7 @@ export function groupingCounts(rows: readonly GroupRow[]): GroupingCounts {
   const bySet = new Map<string, GroupRow[]>();
   for (const r of grouped) bySet.set(r.set, [...(bySet.get(r.set) ?? []), r]);
   let familyUnits = 0, splitFamilies = 0, crossPairs = 0, mergedPairs = 0, sameFamilySheetPairs = 0, splitSheetPairs = 0;
+  let crossSheetPairs = 0, mergedSheetPairs = 0;
   for (const rs of bySet.values()) {
     const byFam = new Map<string, GroupRow[]>();
     for (const r of rs) byFam.set(r.family, [...(byFam.get(r.family) ?? []), r]);
@@ -198,11 +200,15 @@ export function groupingCounts(rows: readonly GroupRow[]): GroupingCounts {
       crossPairs++;
       const ids = new Set(fams[i][1].map((m) => m.group));
       if (fams[j][1].some((m) => ids.has(m.group))) mergedPairs++;
+      for (const a of fams[i][1]) for (const b of fams[j][1]) {
+        crossSheetPairs++;
+        if (a.group === b.group) mergedSheetPairs++;
+      }
     }
   }
   return {
     families, familyUnits, splitFamilies, crossPairs, mergedPairs, sameFamilySheetPairs, splitSheetPairs,
-    ungrouped: rows.length - grouped.length, meaningful: families >= 3,
+    crossSheetPairs, mergedSheetPairs, ungrouped: rows.length - grouped.length, meaningful: families >= 3,
   };
 }
 

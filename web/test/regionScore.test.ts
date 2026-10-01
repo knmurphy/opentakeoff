@@ -172,6 +172,8 @@ describe("groupingCounts", () => {
     assert.deepEqual([g.mergedPairs, g.crossPairs], [1, 1]);
     // same-family sheet pairs: s1 X 3 pairs (1–2 same, 1–3 and 2–3 split), s2 X 1 pair → 2 of 4 split
     assert.deepEqual([g.splitSheetPairs, g.sameFamilySheetPairs], [2, 4]);
+    // cross-family sheet pairs inside a set, among grouped sheets: s1 (1,4) (2,4) (3,4); same id: (1,4) (2,4)
+    assert.deepEqual([g.mergedSheetPairs, g.crossSheetPairs], [2, 3]);
     assert.equal(g.ungrouped, 1);
     assert.equal(g.meaningful, true);
   });

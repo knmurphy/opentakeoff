@@ -54,10 +54,16 @@ export interface DetectDiag {  // per sheet; recomputed, not persisted
 export const TB_SHEETNO_RE = /^[A-Z]{1,3}\d?[-. ]?\d{1,3}(\.\d{1,2})?[A-Z]?$/;
 
 // ── detection constants ─────────────────────────────────────────────────────
-// Values as stated in docs/design/REGION_ANNOTATION_PLAN.md ("Algorithm"); none
-// is calibrated yet. The calibration sweep on the tune set (task 6, part b)
-// may revise them and will name its data here. Fractions are of
-// the page (step 1) or of the border box (steps 2–5), as noted.
+// Values as stated in docs/design/REGION_ANNOTATION_PLAN.md ("Algorithm").
+// Calibrated in task 6b on the TUNE set only (Shreveport Fisher House
+// "Combined Drawings", 24 sheets; bench/regionsCalibrate.mts →
+// bench/regions-calibration.json): each constant in DEFAULT_REGION_PARAMS was
+// swept one at a time and the plan's value kept under the pre-registered rule
+// (the tune result at every plan value was already the best in its range, so
+// none changed). Then frozen: REGION_CONSTANTS_FROZEN / REGION_CONSTANTS_HASH
+// below; bench:regions refuses the held-out run if the defaults differ from the
+// frozen hash. Fractions are of the page (step 1) or of the border box
+// (steps 2–5), as noted.
 
 /** Step 1: rules within this fraction of the page edge are ignored (Dublin and
  * the sample plan draw page-edge rules outside the real border). */
@@ -135,6 +141,48 @@ export const GROUP_D_TOL = 0.015;
 export const GROUP_MIN_JACCARD = 0.5;
 /** Step 5: page sizes in inches are equal to this, per axis (rounding only). */
 const PAGE_TOL_IN = 0.01;
+
+/** The detector constants the task 6b calibration sweeps, as one parameter
+ * set. Every step reads them from here; `DEFAULT_REGION_PARAMS` holds the
+ * named constants above, and callers (the calibration bench) override single
+ * values through `detectSetRegions(sheets, params)`. */
+export interface RegionParams {
+  borderMinSpan: number; borderMaxFrac: number; chainGapFrac: number; minChainCover: number;
+  stripDMin: number; stripDMax: number; touchFrac: number; minStripTokens: number;
+  sheetnoOuter: number; sheetnoFarFrom: number; repeatPosTol: number; staticMinSheets: number;
+  bandGap: number; frameBandRatio: number; groupMinJaccard: number; groupDTol: number; bandMinCover: number;
+}
+export const DEFAULT_REGION_PARAMS: Readonly<RegionParams> = Object.freeze({
+  borderMinSpan: BORDER_MIN_SPAN, borderMaxFrac: BORDER_MAX_FRAC, chainGapFrac: CHAIN_GAP_FRAC, minChainCover: MIN_CHAIN_COVER,
+  stripDMin: STRIP_D_MIN, stripDMax: STRIP_D_MAX, touchFrac: TOUCH_FRAC, minStripTokens: MIN_STRIP_TOKENS,
+  sheetnoOuter: SHEETNO_OUTER, sheetnoFarFrom: SHEETNO_FAR_FROM, repeatPosTol: REPEAT_POS_TOL, staticMinSheets: STATIC_MIN_SHEETS,
+  bandGap: BAND_GAP, frameBandRatio: FRAME_BAND_RATIO, groupMinJaccard: GROUP_MIN_JACCARD, groupDTol: GROUP_D_TOL, bandMinCover: BAND_MIN_COVER,
+});
+
+/** Date the defaults were frozen after the task 6b calibration on the tune
+ * set, and the sha256 of `regionParamsCanonical(DEFAULT_REGION_PARAMS)`.
+ * Changing any default changes the hash: a test then fails, and the bench's
+ * held-out run is refused until the change is re-frozen and logged. */
+export const REGION_CONSTANTS_FROZEN = "2026-10-01";
+export const REGION_CONSTANTS_HASH = "74deab0f6db4ef568306304f10391a0c4395e48d0a3a67d99a7b2dc49e2461b9";
+
+/** The defaults merged with overrides; unknown keys and non-finite values throw. */
+export function resolveRegionParams(over: Partial<RegionParams> = {}): Readonly<RegionParams> {
+  if (over === DEFAULT_REGION_PARAMS) return DEFAULT_REGION_PARAMS;
+  for (const [k, v] of Object.entries(over)) {
+    if (!(k in DEFAULT_REGION_PARAMS)) throw new Error(`region params: unknown constant "${k}"`);
+    if (typeof v !== "number" || !Number.isFinite(v)) throw new Error(`region params: ${k} must be a finite number`);
+  }
+  return Object.keys(over).length ? Object.freeze({ ...DEFAULT_REGION_PARAMS, ...over }) : DEFAULT_REGION_PARAMS;
+}
+
+/** Canonical JSON of a parameter set (keys sorted), the input of
+ * `REGION_CONSTANTS_HASH`. */
+export function regionParamsCanonical(p: Readonly<RegionParams>): string {
+  const o: Record<string, number> = {};
+  for (const k of Object.keys(p).sort()) o[k] = (p as unknown as Record<string, number>)[k];
+  return JSON.stringify(o);
+}
 
 // ── line adapter ────────────────────────────────────────────────────────────
 /** A segment counts as axis-aligned within this many degrees of an axis. */
@@ -246,7 +294,7 @@ function sheetPieces(sheet: DetectSheet): { hor: Piece[]; ver: Piece[] } {
  * sides: pass 1 measures spans against the page sides, pass 2 against the
  * sides of the pass-1 box (Porterville-style top/bottom rules stop on the
  * title strip at 80–85% of the border width, under 75% of the page width). */
-export function findBorder(sheet: DetectSheet): DetectBorder {
+export function findBorder(sheet: DetectSheet, p: Readonly<RegionParams> = DEFAULT_REGION_PARAMS): DetectBorder {
   const { w, h } = sheet;
   const { hor, ver } = sheetPieces(sheet);
   const gapTol = COLLINEAR_GAP_FRAC * Math.min(w, h);
@@ -254,8 +302,8 @@ export function findBorder(sheet: DetectSheet): DetectBorder {
   const side = (runs: Piece[], dim: number, span: number, low: boolean): number | null => {
     let best: number | null = null;
     for (const r of runs) {
-      if (r.b - r.a < BORDER_MIN_SPAN * span) continue;
-      if (low ? r.pos > BORDER_MAX_FRAC * dim : r.pos < dim - BORDER_MAX_FRAC * dim) continue;
+      if (r.b - r.a < p.borderMinSpan * span) continue;
+      if (low ? r.pos > p.borderMaxFrac * dim : r.pos < dim - p.borderMaxFrac * dim) continue;
       if (best === null || (low ? r.pos < best : r.pos > best)) best = r.pos;
     }
     return best;
@@ -336,42 +384,43 @@ function uvDist(u: number, v: number, r: UVRule): number {
  * (T-junction). Border rules sit at depth ≈ 0 or ≈ 1, outside the depth
  * bounds, so they never count as strip boundaries. Output: per edge in EDGES
  * order, smallest d first. */
-export function findCandidates(sheet: DetectSheet, border: DetectBorder): StripCandidate[] {
+export function findCandidates(sheet: DetectSheet, border: DetectBorder, p: Readonly<RegionParams> = DEFAULT_REGION_PARAMS): StripCandidate[] {
   const box = border.box;
   const bw = box[2] - box[0], bh = box[3] - box[1];
   if (!(bw > 0 && bh > 0)) return [];
   const { hor, ver } = sheetPieces(sheet);
   // chain joining uses the border length along the rule's own axis
-  const H = mergeRuns(hor, DEDUPE_FRAC * sheet.h, CHAIN_GAP_FRAC * bw, 0);
-  const V = mergeRuns(ver, DEDUPE_FRAC * sheet.w, CHAIN_GAP_FRAC * bh, 0);
+  const H = mergeRuns(hor, DEDUPE_FRAC * sheet.h, p.chainGapFrac * bw, 0);
+  const V = mergeRuns(ver, DEDUPE_FRAC * sheet.w, p.chainGapFrac * bh, 0);
+  const TOUCH = p.touchFrac;
   const out: StripCandidate[] = [];
   for (const edge of EDGES) {
     const rules = uvRules(edge, box, H, V);
     // border rules (parallel at depth ≈ 0 / ≈ 1, perpendicular at u ≈ 0 / ≈ 1) are not "other chains"
     const isBorderRule = (r: UVRule) => (r.par
-      ? r.v0 <= TOUCH_FRAC || r.v0 >= 1 - TOUCH_FRAC
-      : r.u0 <= TOUCH_FRAC || r.u0 >= 1 - TOUCH_FRAC);
+      ? r.v0 <= TOUCH || r.v0 >= 1 - TOUCH
+      : r.u0 <= TOUCH || r.u0 >= 1 - TOUCH);
     const found: StripCandidate[] = [];
     for (const c of rules) {
       if (!c.par) continue;
       const d = c.v0;
-      if (d < STRIP_D_MIN || d > STRIP_D_MAX) continue;
+      if (d < p.stripDMin || d > p.stripDMax) continue;
       const lo = Math.max(0, c.u0), hi = Math.min(1, c.u1);
       const cover = hi - lo;
-      if (cover < MIN_CHAIN_COVER) continue;
-      const near = c.u0 <= TOUCH_FRAC, far = c.u1 >= 1 - TOUCH_FRAC;
+      if (cover < p.minChainCover) continue;
+      const near = c.u0 <= TOUCH, far = c.u1 >= 1 - TOUCH;
       if (!near && !far) continue;
       let freeEndGap: number | null = null;
       if (!(near && far)) {
         const uf = near ? c.u1 : c.u0;
-        const junction = rules.filter((r) => !r.par && Math.abs(r.u0 - uf) <= TOUCH_FRAC &&
-          r.v0 <= d + TOUCH_FRAC && r.v1 >= d - TOUCH_FRAC);
-        if (junction.length > 0 && !junction.some((r) => r.v0 <= TOUCH_FRAC)) continue;
+        const junction = rules.filter((r) => !r.par && Math.abs(r.u0 - uf) <= TOUCH &&
+          r.v0 <= d + TOUCH && r.v1 >= d - TOUCH);
+        if (junction.length > 0 && !junction.some((r) => r.v0 <= TOUCH)) continue;
         let gap = Infinity;
         for (const r of rules) {
           if (r === c || isBorderRule(r)) continue;
           const g = uvDist(uf, d, r);
-          if (g > TOUCH_FRAC && g < gap) gap = g;
+          if (g > TOUCH && g < gap) gap = g;
         }
         freeEndGap = Number.isFinite(gap) ? gap : null;
       }
@@ -424,6 +473,8 @@ export interface DetectOptions {
   repeatStrips?: RepeatStrip[];
   /** Step 3's static and field token indices, copied into the diagnostics. */
   classes?: TokenClasses;
+  /** Detector constants (default: DEFAULT_REGION_PARAMS). */
+  params?: Readonly<RegionParams>;
 }
 /** The per-sheet title-block decision. `strip` is the accepted strip, border
  * to border along its edge (image px); null when abstaining. */
@@ -450,7 +501,7 @@ interface Judged { c: StripCandidate; diag: DetectCandidateDiag; rules: TitleBlo
  * chain's extent, v in [0, d]); acceptance needs MIN_STRIP_TOKENS in the full
  * border-to-border strip (u in [0, 1]), then rule
  * A (frame + sheetno), B (frame + repeat) or C (repeat + sheetno). */
-function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox: boolean[], c: StripCandidate, repeat: boolean): Judged {
+function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox: boolean[], c: StripCandidate, repeat: boolean, p: Readonly<RegionParams>): Judged {
   const [e0, e1] = c.extent;
   const area = (e1 - e0) * c.d;
   let n = 0, nFull = 0, nRest = 0, best = -1, bestUV: [number, number] = [0, 0];
@@ -466,10 +517,10 @@ function judge(sheet: DetectSheet, box: Bbox, centers: [number, number][], inBox
   const restArea = 1 - area;
   const density = nRest > 0 && restArea > 0 ? (n / area) / (nRest / restArea) : n > 0 ? Infinity : 0;
   const sheetnoPos: [number, number] | null = best < 0 ? null : [(bestUV[0] - e0) / (e1 - e0), bestUV[1] / c.d];
-  const sheetno = !!sheetnoPos && sheetnoPos[0] >= SHEETNO_FAR_FROM && sheetnoPos[1] <= SHEETNO_OUTER;
+  const sheetno = !!sheetnoPos && sheetnoPos[0] >= p.sheetnoFarFrom && sheetnoPos[1] <= p.sheetnoOuter;
   const rules: TitleBlockRule[] = [];
   let reason: string;
-  if (nFull < MIN_STRIP_TOKENS) reason = "few-tokens";
+  if (nFull < p.minStripTokens) reason = "few-tokens";
   else {
     if (c.frame && sheetno) rules.push("A");
     if (c.frame && repeat) rules.push("B");
@@ -503,12 +554,13 @@ function beats(a: Judged, b: Judged): "rules" | "area" | "density" | "order" | n
 /** Steps 1, 2 and 4 on one sheet: the title-block decision (or abstain) and
  * the diagnostics. Repetition (step 3) comes in through `opts`. */
 export function detectTitleBlock(sheet: DetectSheet, opts: DetectOptions = {}): { decision: TitleBlockDecision; diag: DetectDiag } {
-  const border = findBorder(sheet);
+  const p = opts.params ?? DEFAULT_REGION_PARAMS;
+  const border = findBorder(sheet, p);
   const box = border.box;
   const [bx0, by0, bx1, by1] = box;
   const centers = sheet.tokens.map(tokenCenter);
   const inBox = centers.map(([x, y]) => x >= bx0 && x <= bx1 && y >= by0 && y <= by1);
-  const chains = findCandidates(sheet, border);
+  const chains = findCandidates(sheet, border, p);
   const all: StripCandidate[] = [...chains];
   for (const r of opts.repeatStrips ?? []) {
     // a strip of zero length or depth has no area to judge (and would divide by zero)
@@ -525,7 +577,7 @@ export function detectTitleBlock(sheet: DetectSheet, opts: DetectOptions = {}): 
     const onEdge = all.filter((c) => c.edge === edge).sort((a, b) => a.d - b.d || Number(b.frame) - Number(a.frame));
     let won: Judged | null = null;
     for (const c of onEdge) {
-      const j = judge(sheet, box, centers, inBox, c, c.frame ? opts.repeat?.(c) ?? false : true);
+      const j = judge(sheet, box, centers, inBox, c, c.frame ? opts.repeat?.(c) ?? false : true, p);
       if (won) { j.diag.accepted = false; j.diag.reason = "not-tried"; }
       else if (j.rules.length) won = j;
       judged.push(j);
@@ -581,13 +633,13 @@ export interface TokenClasses { staticIdx: number[]; fieldIdx: number[] }
  *    other sheets none of the tokens there has this text.
  * Tokens with empty text are neither. Output in input order, indices
  * ascending. */
-export function classifyRepetition(sheets: readonly RepeatInput[]): TokenClasses[] {
+export function classifyRepetition(sheets: readonly RepeatInput[], p: Readonly<RegionParams> = DEFAULT_REGION_PARAMS): TokenClasses[] {
   const n = sheets.length;
   const out: TokenClasses[] = sheets.map(() => ({ staticIdx: [], fieldIdx: [] }));
   const half = Math.ceil(REPEAT_MIN_SHARE * n - 1e-9);
-  const needStatic = Math.max(STATIC_MIN_SHEETS, half), needField = Math.max(FIELD_MIN_SHEETS, half);
+  const needStatic = Math.max(p.staticMinSheets, half), needField = Math.max(FIELD_MIN_SHEETS, half);
   if (n < needStatic) return out;
-  const T = REPEAT_POS_TOL, TOL = REPEAT_POS_TOL + 1e-9;
+  const T = p.repeatPosTol, TOL = p.repeatPosTol + 1e-9;
   // every usable token of the set in flat arrays: normalized center, sheet, interned text
   const xs: number[] = [], ys: number[] = [], sheetOf: number[] = [], textOf: number[] = [], idxOf: number[] = [];
   const textIds = new Map<string, number>();
@@ -666,7 +718,7 @@ export function tokenCorners(t: DetectToken): [number, number][] {
   return [[t.x, t.y], [t.x + ax, t.y + ay], [t.x + ux, t.y + uy], [t.x + ax + ux, t.y + ay + uy]];
 }
 
-export function repetitionBands(tokens: readonly DetectToken[], box: Bbox, idx: readonly number[]): Partial<Record<Edge, RepeatBand>> {
+export function repetitionBands(tokens: readonly DetectToken[], box: Bbox, idx: readonly number[], p: Readonly<RegionParams> = DEFAULT_REGION_PARAMS): Partial<Record<Edge, RepeatBand>> {
   const out: Partial<Record<Edge, RepeatBand>> = {};
   if (!(box[2] > box[0] && box[3] > box[1])) return out;
   for (const edge of EDGES) {
@@ -679,7 +731,7 @@ export function repetitionBands(tokens: readonly DetectToken[], box: Bbox, idx: 
     let b: RepeatBand | null = null;
     let front = cands.length ? cands[0].lo : 0;
     for (const c of cands) {
-      if (c.lo > front + BAND_GAP) break;
+      if (c.lo > front + p.bandGap) break;
       front = Math.max(front, c.hi);
       if (!b) b = { edge, u0: c.u, u1: c.u, v0: c.v, v1: c.v, vBox: c.hi };
       else {
@@ -700,8 +752,8 @@ function depthSpan(t: DetectToken, edge: Edge, box: Bbox): [number, number] {
 
 /** Whether a chain at depth d frames the static band, given the deepest
  * static glyph edge inside its strip: deepest ≥ d / FRAME_BAND_RATIO. */
-export const framesBand = (deepest: number, d: number): boolean =>
-  deepest > 0 && deepest >= d / FRAME_BAND_RATIO - 1e-9;
+export const framesBand = (deepest: number, d: number, ratio: number = FRAME_BAND_RATIO): boolean =>
+  deepest > 0 && deepest >= d / ratio - 1e-9;
 
 /** Step 3's inputs to detectTitleBlock for one sheet, from its token
  * classes (statics only shape the band; plan amendments 2, 5–7):
@@ -714,42 +766,42 @@ export const framesBand = (deepest: number, d: number): boolean =>
  *    deep as the band's deepest glyph edge (detectTitleBlock drops it when a
  *    chain on the edge frames the band, else tries it with the chains,
  *    smallest d first). */
-export function repeatOptions(tokens: readonly DetectToken[], box: Bbox, classes: TokenClasses): DetectOptions {
-  const bands = repetitionBands(tokens, box, classes.staticIdx);
+export function repeatOptions(tokens: readonly DetectToken[], box: Bbox, classes: TokenClasses, p: Readonly<RegionParams> = DEFAULT_REGION_PARAMS): DetectOptions {
+  const bands = repetitionBands(tokens, box, classes.staticIdx, p);
   const statics = EDGES.map((edge) => classes.staticIdx.flatMap((i) => {
     const [u, v] = stripUV(edge, box, ...tokenCenter(tokens[i]));
     return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? [{ u, v, hi: depthSpan(tokens[i], edge, box)[1] }] : [];
   }));
   const inStrip = (edge: Edge, d: number) => statics[EDGES.indexOf(edge)].filter((t) => t.v <= d);
-  const frames = (edge: Edge, d: number) => framesBand(Math.max(0, ...inStrip(edge, d).map((t) => t.hi)), d);
+  const frames = (edge: Edge, d: number) => framesBand(Math.max(0, ...inStrip(edge, d).map((t) => t.hi)), d, p.frameBandRatio);
   const repeat = (c: StripCandidate) => {
     if (!frames(c.edge, c.d)) return false;
     const us = inStrip(c.edge, c.d).map((t) => t.u);
-    return Math.max(...us) - Math.min(...us) >= BAND_MIN_COVER;
+    return Math.max(...us) - Math.min(...us) >= p.bandMinCover;
   };
   const repeatStrips: RepeatStrip[] = [];
   for (const edge of EDGES) {
     const b = bands[edge];
-    if (b && b.vBox > 0 && b.u1 - b.u0 >= BAND_MIN_COVER) repeatStrips.push({ edge, d: b.vBox, extent: [0, 1] });
+    if (b && b.vBox > 0 && b.u1 - b.u0 >= p.bandMinCover) repeatStrips.push({ edge, d: b.vBox, extent: [0, 1] });
   }
-  return { repeat, frames, repeatStrips, classes };
+  return { repeat, frames, repeatStrips, classes, ...(p === DEFAULT_REGION_PARAMS ? {} : { params: p }) };
 }
 
 // ── steps 5 and 6: grouping and output ──────────────────────────────────────
 interface Prepared { sheet: DetectSheet; box: Bbox; aspect: number }
 
 /** Step 3 over each list of sheet indices; indices in no list keep `prev`. */
-function classifyWithin(prep: readonly Prepared[], lists: readonly number[][], prev?: readonly TokenClasses[]): TokenClasses[] {
+function classifyWithin(prep: readonly Prepared[], lists: readonly number[][], p: Readonly<RegionParams>, prev?: readonly TokenClasses[]): TokenClasses[] {
   const out: TokenClasses[] = prep.map((_, i) => prev?.[i] ?? { staticIdx: [], fieldIdx: [] });
   for (const list of lists) {
-    const cls = classifyRepetition(list.map((i) => ({ tokens: prep[i].sheet.tokens, box: prep[i].box })));
+    const cls = classifyRepetition(list.map((i) => ({ tokens: prep[i].sheet.tokens, box: prep[i].box })), p);
     list.forEach((i, k) => { out[i] = cls[k]; });
   }
   return out;
 }
 
-function detectWith(prep: readonly Prepared[], cls: readonly TokenClasses[]) {
-  return prep.map((p, i) => detectTitleBlock(p.sheet, repeatOptions(p.sheet.tokens, p.box, cls[i])));
+function detectWith(prep: readonly Prepared[], cls: readonly TokenClasses[], params: Readonly<RegionParams>) {
+  return prep.map((p, i) => detectTitleBlock(p.sheet, { ...repeatOptions(p.sheet.tokens, p.box, cls[i], params), params }));
 }
 
 /** Connected components of `link` over `idx` (sorted lists, sorted by first member). */
@@ -764,8 +816,8 @@ function components(idx: readonly number[], link: (a: number, b: number) => bool
   return [...by.values()].map((l) => l.sort((a, b) => a - b)).sort((a, b) => a[0] - b[0]);
 }
 
-const sameGeom = (p: readonly Prepared[], dec: readonly TitleBlockDecision[], a: number, b: number) =>
-  p[a].aspect === p[b].aspect && dec[a].edge === dec[b].edge && Math.abs(dec[a].d! - dec[b].d!) <= GROUP_D_TOL + 1e-9;
+const sameGeom = (p: readonly Prepared[], dec: readonly TitleBlockDecision[], a: number, b: number, dTol: number) =>
+  p[a].aspect === p[b].aspect && dec[a].edge === dec[b].edge && Math.abs(dec[a].d! - dec[b].d!) <= dTol + 1e-9;
 
 /** Whether a sheet's accepted strip is a repetition-only (frameless) one. */
 const isFrameless = (r: { decision: TitleBlockDecision }) => !!r.decision.edge && !r.decision.evidence.includes("frame-line");
@@ -774,10 +826,10 @@ const isFrameless = (r: { decision: TitleBlockDecision }) => !!r.decision.edge &
  * aspect bucket and edge and |Δd| ≤ GROUP_D_TOL (geometry only); two sheets
  * with frameless strips need no d test (plan amendment, task 6a: their
  * pass-1 depths scatter). */
-function candidateGroups(prep: readonly Prepared[], det: readonly { decision: TitleBlockDecision }[]): number[][] {
+function candidateGroups(prep: readonly Prepared[], det: readonly { decision: TitleBlockDecision }[], dTol: number): number[][] {
   const dec = det.map((r) => r.decision);
   const withTB = dec.flatMap((d, i) => (d.edge ? [i] : []));
-  return components(withTB, (a, b) => sameGeom(prep, dec, a, b) ||
+  return components(withTB, (a, b) => sameGeom(prep, dec, a, b, dTol) ||
     (isFrameless(det[a]) && isFrameless(det[b]) && prep[a].aspect === prep[b].aspect && dec[a].edge === dec[b].edge));
 }
 
@@ -817,23 +869,24 @@ function jaccardOf(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
  * through `cleanRegions` with the sheet's dims. The result does not depend on
  * the input order; the maps iterate in sheet-key order. Duplicate sheet keys
  * throw. */
-export function detectSetRegions(sheets: readonly DetectSheet[]): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> } {
+export function detectSetRegions(sheets: readonly DetectSheet[], params: Partial<RegionParams> = {}): { regions: Map<string, SheetRegions>; diag: Map<string, DetectDiag> } {
+  const P = resolveRegionParams(params);
   const order = [...sheets].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   for (let i = 1; i < order.length; i++) {
     if (order[i].key === order[i - 1].key) throw new Error(`detectSetRegions: duplicate sheet key "${order[i].key}"`);
   }
-  const prep: Prepared[] = order.map((sheet) => ({ sheet, box: findBorder(sheet).box, aspect: aspectBucket(sheet.w, sheet.h) }));
+  const prep: Prepared[] = order.map((sheet) => ({ sheet, box: findBorder(sheet, P).box, aspect: aspectBucket(sheet.w, sheet.h) }));
   const all = prep.map((_, i) => i);
   // pass 1: per aspect bucket
   const buckets = components(all, (a, b) => prep[a].aspect === prep[b].aspect);
-  const cls1 = classifyWithin(prep, buckets);
-  const det1 = detectWith(prep, cls1);
+  const cls1 = classifyWithin(prep, buckets, P);
+  const det1 = detectWith(prep, cls1, P);
   // pass 2: per candidate group
   // a sheet alone in its candidate group keeps its bucket's classes (amendment 7)
-  const cls = classifyWithin(prep, candidateGroups(prep, det1).filter((g) => g.length > 1), cls1);
-  const det = detectWith(prep, cls);
+  const cls = classifyWithin(prep, candidateGroups(prep, det1, P.groupDTol).filter((g) => g.length > 1), P, cls1);
+  const det = detectWith(prep, cls, P);
   const dec = det.map((r) => r.decision);
-  const cgroups = candidateGroups(prep, det);
+  const cgroups = candidateGroups(prep, det, P.groupDTol);
 
   // step 5: statics inside each sheet's strip; distinctive ones only with ≥ 2 candidate groups
   const statics: Set<string>[] = prep.map((p, i) => {
@@ -855,9 +908,9 @@ export function detectSetRegions(sheets: readonly DetectSheet[]): { regions: Map
   // the < 3 rule counts the sheets with a title block (a cover does not make a set "large")
   const small = dec.filter((d) => d.edge).length < 3;
   const groups = components(dec.flatMap((d, i) => (d.edge ? [i] : [])), (a, b) => {
-    if (!sameGeom(prep, dec, a, b)) return false;
+    if (!sameGeom(prep, dec, a, b, P.groupDTol)) return false;
     const sa = statics[a], sb = statics[b];
-    if (sa.size && sb.size) return jaccardOf(sa, sb) >= GROUP_MIN_JACCARD;
+    if (sa.size && sb.size) return jaccardOf(sa, sb) >= P.groupMinJaccard;
     return small && !sa.size && !sb.size && samePageIn(prep[a].sheet.pageIn, prep[b].sheet.pageIn);
   });
   const sigs: GroupSig[] = groups.map((g) => {

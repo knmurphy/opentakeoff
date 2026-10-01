@@ -1,0 +1,2045 @@
+{
+ "tuneSet": "shreveport-combined.pdf",
+ "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
+ "sheets": 24,
+ "at": "2026-10-01",
+ "metric": "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the mean of labelers A and B; lexicographic",
+ "rule": "keep the plan's value unless the tune result there is worse than elsewhere in the swept range; then the midpoint of the best plateau (widest in value span, then nearest the plan value; integers round toward the plan value)",
+ "tolerance": 0.005,
+ "defaults": {
+  "pass": 24,
+  "edgeOk": 24,
+  "groupErr": 0,
+  "abstain": 0,
+  "dErrMedian": 0.002662620442206831,
+  "dErrMax": 0.004284009071250358
+ },
+ "constants": [
+  {
+   "constant": "BORDER_MIN_SPAN",
+   "key": "borderMinSpan",
+   "plan": 0.75,
+   "range": [
+    0.5,
+    0.95
+   ],
+   "sweep": [
+    {
+     "value": 0.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.55,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.65,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.75,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.85,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.9,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.95,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.5,
+    0.95
+   ],
+   "bestPlateau": [
+    0.5,
+    0.95
+   ],
+   "chosen": 0.75,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "BORDER_MAX_FRAC",
+   "key": "borderMaxFrac",
+   "plan": 0.08,
+   "range": [
+    0.02,
+    0.15
+   ],
+   "sweep": [
+    {
+     "value": 0.02,
+     "pass": 0,
+     "edgeOk": 18,
+     "groupErr": 0,
+     "abstain": 6,
+     "dErrMedian": 0.03746023611111113,
+     "dErrMax": 0.04234476127688891
+    },
+    {
+     "value": 0.03,
+     "pass": 0,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.025865772746870894,
+     "dErrMax": 0.027159907497600208
+    },
+    {
+     "value": 0.04,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.05,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.06,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.07,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.08,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.09,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.11,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.12,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.13,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.14,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.15,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.04,
+    0.15
+   ],
+   "bestPlateau": [
+    0.04,
+    0.15
+   ],
+   "chosen": 0.08,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "CHAIN_GAP_FRAC",
+   "key": "chainGapFrac",
+   "plan": 0.005,
+   "range": [
+    0,
+    0.03
+   ],
+   "sweep": [
+    {
+     "value": 0,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.001,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.0025,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.005,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.0075,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.01,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.015,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.02,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.03,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0,
+    0.03
+   ],
+   "bestPlateau": [
+    0,
+    0.03
+   ],
+   "chosen": 0.005,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "MIN_CHAIN_COVER",
+   "key": "minChainCover",
+   "plan": 0.7,
+   "range": [
+    0.4,
+    0.95
+   ],
+   "sweep": [
+    {
+     "value": 0.4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.45,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.55,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.65,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.75,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.85,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.9,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.95,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.4,
+    0.95
+   ],
+   "bestPlateau": [
+    0.4,
+    0.95
+   ],
+   "chosen": 0.7,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "STRIP_D_MIN",
+   "key": "stripDMin",
+   "plan": 0.06,
+   "range": [
+    0.01,
+    0.1
+   ],
+   "sweep": [
+    {
+     "value": 0.01,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.02,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.03,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.04,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.05,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.06,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.07,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.08,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.09,
+     "pass": 1,
+     "edgeOk": 18,
+     "groupErr": 0,
+     "abstain": 6,
+     "dErrMedian": 0.009860060970470264,
+     "dErrMax": 0.015002773808285158
+    },
+    {
+     "value": 0.1,
+     "pass": 0,
+     "edgeOk": 18,
+     "groupErr": 0,
+     "abstain": 6,
+     "dErrMedian": 0.00987864166547809,
+     "dErrMax": 0.015002773808285158
+    }
+   ],
+   "unchangedRange": [
+    0.01,
+    0.08
+   ],
+   "bestPlateau": [
+    0.01,
+    0.08
+   ],
+   "chosen": 0.06,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "STRIP_D_MAX",
+   "key": "stripDMax",
+   "plan": 0.3,
+   "range": [
+    0.15,
+    0.45
+   ],
+   "sweep": [
+    {
+     "value": 0.15,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.175,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.225,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.25,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.275,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.325,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.35,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.375,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.425,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.45,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.15,
+    0.45
+   ],
+   "bestPlateau": [
+    0.15,
+    0.45
+   ],
+   "chosen": 0.3,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "TOUCH_FRAC",
+   "key": "touchFrac",
+   "plan": 0.01,
+   "range": [
+    0.0025,
+    0.05
+   ],
+   "sweep": [
+    {
+     "value": 0.0025,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.005,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.0075,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.01,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.015,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.02,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.03,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.04,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.05,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.0025,
+    0.05
+   ],
+   "bestPlateau": [
+    0.0025,
+    0.05
+   ],
+   "chosen": 0.01,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "MIN_STRIP_TOKENS",
+   "key": "minStripTokens",
+   "plan": 15,
+   "range": [
+    1,
+    150
+   ],
+   "sweep": [
+    {
+     "value": 1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 10,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 15,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 20,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 30,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 40,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 50,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 60,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 80,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 100,
+     "pass": 9,
+     "edgeOk": 9,
+     "groupErr": 0,
+     "abstain": 15,
+     "dErrMedian": 0.0026595661423567535,
+     "dErrMax": 0.002662620442206831
+    },
+    {
+     "value": 150,
+     "pass": 0,
+     "edgeOk": 0,
+     "groupErr": 0,
+     "abstain": 24,
+     "dErrMedian": null,
+     "dErrMax": null
+    }
+   ],
+   "unchangedRange": [
+    1,
+    80
+   ],
+   "bestPlateau": [
+    1,
+    80
+   ],
+   "chosen": 15,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "SHEETNO_OUTER",
+   "key": "sheetnoOuter",
+   "plan": 0.6,
+   "range": [
+    0.3,
+    1
+   ],
+   "sweep": [
+    {
+     "value": 0.3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.9,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.3,
+    1
+   ],
+   "bestPlateau": [
+    0.3,
+    1
+   ],
+   "chosen": 0.6,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "SHEETNO_FAR_FROM",
+   "key": "sheetnoFarFrom",
+   "plan": 0.5,
+   "range": [
+    0,
+    0.9
+   ],
+   "sweep": [
+    {
+     "value": 0,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.9,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0,
+    0.9
+   ],
+   "bestPlateau": [
+    0,
+    0.9
+   ],
+   "chosen": 0.5,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "REPEAT_POS_TOL",
+   "key": "repeatPosTol",
+   "plan": 0.02,
+   "range": [
+    0.0025,
+    0.05
+   ],
+   "sweep": [
+    {
+     "value": 0.0025,
+     "pass": 18,
+     "edgeOk": 18,
+     "groupErr": 0,
+     "abstain": 6,
+     "dErrMedian": 0.0031493535894748306,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.005,
+     "pass": 18,
+     "edgeOk": 18,
+     "groupErr": 0,
+     "abstain": 6,
+     "dErrMedian": 0.0031493535894748306,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.01,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.015,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.02,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.025,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.03,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.04,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.05,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.01,
+    0.05
+   ],
+   "bestPlateau": [
+    0.01,
+    0.05
+   ],
+   "chosen": 0.02,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "STATIC_MIN_SHEETS",
+   "key": "staticMinSheets",
+   "plan": 2,
+   "range": [
+    1,
+    16
+   ],
+   "sweep": [
+    {
+     "value": 1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 10,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 12,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 16,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    1,
+    16
+   ],
+   "bestPlateau": [
+    1,
+    16
+   ],
+   "chosen": 2,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "BAND_GAP",
+   "key": "bandGap",
+   "plan": 0.04,
+   "range": [
+    0.005,
+    0.2
+   ],
+   "sweep": [
+    {
+     "value": 0.005,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.01,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.02,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.03,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.04,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.05,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.06,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.08,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.15,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.005,
+    0.2
+   ],
+   "bestPlateau": [
+    0.005,
+    0.2
+   ],
+   "chosen": 0.04,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "FRAME_BAND_RATIO",
+   "key": "frameBandRatio",
+   "plan": 1.5,
+   "range": [
+    1,
+    3
+   ],
+   "sweep": [
+    {
+     "value": 1,
+     "pass": 18,
+     "edgeOk": 18,
+     "groupErr": 0,
+     "abstain": 6,
+     "dErrMedian": 0.0031493535894748306,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 1.25,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 1.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 1.75,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 2.25,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 2.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 2.75,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    1.25,
+    3
+   ],
+   "bestPlateau": [
+    1.25,
+    3
+   ],
+   "chosen": 1.5,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "GROUP_MIN_JACCARD",
+   "key": "groupMinJaccard",
+   "plan": 0.5,
+   "range": [
+    0.1,
+    0.9
+   ],
+   "sweep": [
+    {
+     "value": 0.1,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 128,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.9,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.2,
+    0.9
+   ],
+   "bestPlateau": [
+    0.2,
+    0.9
+   ],
+   "chosen": 0.5,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "GROUP_D_TOL",
+   "key": "groupDTol",
+   "plan": 0.015,
+   "range": [
+    0.0025,
+    0.04
+   ],
+   "sweep": [
+    {
+     "value": 0.0025,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.005,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.0075,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.01,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.015,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.02,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.03,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.04,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.0025,
+    0.04
+   ],
+   "bestPlateau": [
+    0.0025,
+    0.04
+   ],
+   "chosen": 0.015,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  },
+  {
+   "constant": "BAND_MIN_COVER",
+   "key": "bandMinCover",
+   "plan": 0.5,
+   "range": [
+    0.2,
+    0.9
+   ],
+   "sweep": [
+    {
+     "value": 0.2,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.3,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.4,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.5,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.6,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.7,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.8,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    },
+    {
+     "value": 0.9,
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358
+    }
+   ],
+   "unchangedRange": [
+    0.2,
+    0.9
+   ],
+   "bestPlateau": [
+    0.2,
+    0.9
+   ],
+   "chosen": 0.5,
+   "changed": false,
+   "best": {
+    "pass": 24,
+    "edgeOk": 24,
+    "groupErr": 0,
+    "abstain": 0
+   }
+  }
+ ],
+ "chosen": {
+  "borderMinSpan": 0.75,
+  "borderMaxFrac": 0.08,
+  "chainGapFrac": 0.005,
+  "minChainCover": 0.7,
+  "stripDMin": 0.06,
+  "stripDMax": 0.3,
+  "touchFrac": 0.01,
+  "minStripTokens": 15,
+  "sheetnoOuter": 0.6,
+  "sheetnoFarFrom": 0.5,
+  "repeatPosTol": 0.02,
+  "staticMinSheets": 2,
+  "bandGap": 0.04,
+  "frameBandRatio": 1.5,
+  "groupMinJaccard": 0.5,
+  "groupDTol": 0.015,
+  "bandMinCover": 0.5
+ }
+}

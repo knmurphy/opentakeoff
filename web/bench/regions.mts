@@ -20,9 +20,12 @@ import { loadPdfSheets } from "./regionSheets.mts";
 import { sheetKeyFor } from "./regionSheets.ts";
 import {
   labelSpread, passTolerance, binomUpper95, meanLabel, scoreSheet, summarize, groupingCounts, checkOrder, fmtPass, median,
-  type LabelEntry, type Detected, type ScoreRow, type Summary,
+  type ScoreRow, type Summary,
 } from "./regionScore.ts";
-import { heldOutGuard } from "./regionGuard.mts";
+import { heldOutGuard, currentConstantsHash } from "./regionGuard.mts";
+import { DEFAULT_REGION_PARAMS, REGION_CONSTANTS_FROZEN, REGION_CONSTANTS_HASH } from "../src/lib/regionDetect.ts";
+import { toDetected, loadLabels } from "./regionRun.mts";
+import { compareTune } from "./regionCalib.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "..", "..");
@@ -71,13 +74,7 @@ const allowed = new Set<string>();
 for (const sec of sections) for (const s of sec.sets) for (let n = 1; n <= s.pages; n++) allowed.add(sheetKeyFor(s.file, n));
 const inSampleKeys = new Set<string>();
 for (const sec of sections.filter((x) => x.role !== "held-out")) for (const s of sec.sets) for (let n = 1; n <= s.pages; n++) inSampleKeys.add(sheetKeyFor(s.file, n));
-function loadLabels(which: "A" | "B"): Map<string, LabelEntry> {
-  const raw = JSON.parse(readFileSync(join(repo, `evals/regions/labels/labeler-${which}.json`), "utf8"));
-  const out = new Map<string, LabelEntry>();
-  for (const e of raw.sheets as Array<{ key: string }>) if (allowed.has(e.key)) out.set(e.key, e as unknown as LabelEntry);
-  return out;
-}
-const LA = loadLabels("A"), LB = loadLabels("B");
+const LA = loadLabels(join(repo, "evals/regions/labels/labeler-A.json"), allowed), LB = loadLabels(join(repo, "evals/regions/labels/labeler-B.json"), allowed);
 
 // ── header ───────────────────────────────────────────────────────────────────
 const git = (args: string[]) => {
@@ -102,6 +99,8 @@ console.log("══ bench:regions — title block vs drawing area (piece 2a, vec
 console.log(`commit          ${head}${dirty ? " (+ uncommitted changes)" : ""}`);
 console.log(`label commit    ${order.labelCommit ?? "?"}`);
 console.log(`order check     ${order.verified ? "verified" : "UNVERIFIED ORDER"} — ${order.reason}`);
+const constHash = currentConstantsHash();
+console.log(`constants       frozen ${REGION_CONSTANTS_FROZEN}, hash ${REGION_CONSTANTS_HASH.slice(0, 16)}… — current defaults ${constHash === REGION_CONSTANTS_HASH ? "match" : `DIFFER (${constHash.slice(0, 16)}…)`}`);
 console.log(`labels          two agent labelers (A, B); maintainer spread: not available — agent labels only; no human noise floor`);
 console.log(`spread A vs B   d over ${spread.n} tune + in-sample sheets: median ${pct(spread.median, 2)}, p90 ${pct(spread.p90, 2)}, max ${pct(spread.max, 2)}; edge disagreements ${spread.edgeDisagree}`);
 console.log(`tolerance       ${pct(tol, 2)} of the border box across the edge = max(2 × max(inter-agent p90 ${pct(interAgent, 2)}, maintainer n/a), 0.5%)`);
@@ -137,20 +136,10 @@ for (const sec of [...sections, ...(heldOut ? [] : [{ name: "held-out", role: "h
     const setRows: ScoreRow[] = [];
     for (const s of sheets) {
       const dg = diag.get(s.key)!, rg = regions.get(s.key)!;
-      const tb = rg.regions.find((r) => r.kind === "title_block");
       const la = LA.get(s.key), lb = LB.get(s.key);
       if (!la || !lb) { console.log(`  (no label for ${s.key}; not scored)`); continue; }
       const m = meanLabel(la, lb);
-      const edgeForDim = m.title_block?.edge ?? dg.edge ?? "bottom";
-      const box = dg.border!;
-      const dimPx = edgeForDim === "top" || edgeForDim === "bottom" ? box[3] - box[1] : box[2] - box[0];
-      const det: Detected = {
-        key: s.key, set: set.name, edge: dg.edge, d: dg.d,
-        rules: (tb?.evidence ?? []).filter((e) => e.startsWith("rule:")).map((e) => e.slice(5)),
-        confidence: tb?.confidence ?? rg.regions[0]?.confidence ?? 0,
-        frameless: !!tb && !tb.evidence.includes("frame-line"),
-        group: rg.group ?? null, dimPx,
-      };
+      const det = toDetected(set.name, s, rg, dg, m.title_block?.edge ?? null);
       rowsBy.A.push(scoreSheet(det, la, tol));
       rowsBy.B.push(scoreSheet(det, lb, tol));
       if (m.disagree) meanExcluded.push(s.key);
@@ -204,17 +193,28 @@ for (const sec of results) {
   }
 }
 
+// ── calibration (tune set only; bench/regionsCalibrate.mts) ──────────────────
+let calibration: { tuneSet: string; constants: Array<{ constant: string; plan: number; range: [number, number]; unchangedRange: [number, number]; chosen: number; changed: boolean; sweep: Array<{ value: number; pass: number; edgeOk: number; groupErr: number; abstain: number }> }> } | null = null;
+try { calibration = JSON.parse(readFileSync(join(here, "regions-calibration.json"), "utf8")); } catch { /* not calibrated yet */ }
+if (calibration) {
+  console.log(`\n── CALIBRATION (tune set only: ${calibration.tuneSet}; result = pass/edge/grouping errors/abstain) ──`);
+  console.log(`  ${"constant".padEnd(18)} ${"swept".padEnd(14)} ${"unchanged over".padEnd(15)} chosen   worst result in range`);
+  for (const c of calibration.constants) {
+    const worst = c.sweep.reduce((a, b) => (compareTune(b, a) < 0 ? b : a));
+    console.log(`  ${c.constant.padEnd(18)} ${`${c.range[0]}–${c.range[1]}`.padEnd(14)} ${`${c.unchangedRange[0]}–${c.unchangedRange[1]}`.padEnd(15)} ${String(c.chosen).padEnd(8)} ${worst.pass}/${worst.edgeOk}/${worst.groupErr}/${worst.abstain} at ${worst.value}${c.changed ? `  (changed from ${c.plan})` : ""}`);
+  }
+} else console.log("\n── CALIBRATION ── not run (node --import tsx bench/regionsCalibrate.mts)");
+
 // ── output file ──────────────────────────────────────────────────────────────
 const outPath = join(here, "regions-results.json");
 let runLog: unknown[] = [];
 try { runLog = JSON.parse(readFileSync(outPath, "utf8")).runLog ?? []; } catch { /* first run */ }
 runLog.push({ at: new Date().toISOString(), commit: head, dirty, heldOut, ...(heldOut ? { reason } : {}) });
-let calibration: unknown = null;
-try { calibration = JSON.parse(readFileSync(join(here, "regions-calibration.json"), "utf8")); } catch { /* not calibrated yet */ }
 writeFileSync(outPath, JSON.stringify({
   commit: head, dirty, labelCommit: order.labelCommit, order,
   labels: { labelers: ["A", "B"], maintainer: "not available — agent labels only; no human noise floor" },
   spread, tolerance: { frac: tol, interAgentP90: interAgent, maintainer, ifMaxSpread: tolIfMax, px: tolPx.length ? { min: Math.min(...tolPx), max: Math.max(...tolPx), median: median(tolPx) } : null },
+  constants: { frozen: REGION_CONSTANTS_FROZEN, hash: REGION_CONSTANTS_HASH, current: constHash, values: DEFAULT_REGION_PARAMS },
   pdfs: hashes, sections: results, calibration, runLog,
 }, null, 1) + "\n");
 console.log(`\nwrote ${outPath}`);
