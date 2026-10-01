@@ -1,0 +1,3660 @@
+{
+ "commit": "5bf03dd99f65109e6106710fff49122ede53ed78",
+ "dirty": false,
+ "labelCommit": "b63f76403ae21a8a45b07e9a473ad5426b6566c5",
+ "order": {
+  "verified": true,
+  "labelCommit": "b63f76403ae21a8a45b07e9a473ad5426b6566c5",
+  "detectorCommit": "d663f13562804aa508efb38017094123338c89a8",
+  "reason": "labels b63f76403ae21a8a45b07e9a473ad5426b6566c5 is an ancestor of d663f13562804aa508efb38017094123338c89a8"
+ },
+ "labels": {
+  "labelers": [
+   "A",
+   "B"
+  ],
+  "maintainer": "not available — agent labels only; no human noise floor"
+ },
+ "spread": {
+  "n": 54,
+  "edgeDisagree": 0,
+  "median": 0.0010000000000000009,
+  "p90": 0.0010000000000000009,
+  "max": 0.013999999999999999
+ },
+ "tolerance": {
+  "frac": 0.005,
+  "interAgentP90": 0.0010000000000000009,
+  "maintainer": null,
+  "ifMaxSpread": 0.027999999999999997,
+  "px": {
+   "min": 19.98899550848676,
+   "max": 24.403378555798685,
+   "median": 20.049146610281486
+  }
+ },
+ "constants": {
+  "frozen": "2026-10-01",
+  "hash": "74deab0f6db4ef568306304f10391a0c4395e48d0a3a67d99a7b2dc49e2461b9",
+  "current": "74deab0f6db4ef568306304f10391a0c4395e48d0a3a67d99a7b2dc49e2461b9",
+  "values": {
+   "borderMinSpan": 0.75,
+   "borderMaxFrac": 0.08,
+   "chainGapFrac": 0.005,
+   "minChainCover": 0.7,
+   "stripDMin": 0.06,
+   "stripDMax": 0.3,
+   "touchFrac": 0.01,
+   "minStripTokens": 15,
+   "sheetnoOuter": 0.6,
+   "sheetnoFarFrom": 0.5,
+   "repeatPosTol": 0.02,
+   "staticMinSheets": 2,
+   "bandGap": 0.04,
+   "frameBandRatio": 1.5,
+   "groupMinJaccard": 0.5,
+   "groupDTol": 0.015,
+   "bandMinCover": 0.5
+  }
+ },
+ "pdfs": {
+  "shreveport-combined.pdf": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
+  "dublin-part1.pdf": "b53cdfa35f55fd2e00451922612d38ec694b4674f5f40c39656a185991aa59e2",
+  "dublin-part4.pdf": "4b58cff60984c662d60891c1e447bbd203794f89df954899918f09679be37b1f",
+  "va-dublin-bldg9a-finish-plan-A601.pdf": "1a23fbc600afa8443d88046c491d922f34885a485e7dd8d617617738d12c0a60",
+  "va-shreveport-fisher-house-site-utility-C300.pdf": "70734211d5fb945f13b516c83d131692684f1ac00c56e6bee240b05254afea8a",
+  "sample-finish-plan.pdf": "53aa2a44efc8f9a2e625ed223fcfbf9ee19d15eb8469ba57183874b6a8e2a56f",
+  "porterville-adu-a1-101.pdf": "4f35c62a9adcf8d2eb42e632a4d1ae9b1d314bb426297e4ac13ae0a32897f6b7",
+  "va-roseburg-a03a.pdf": "ff80f35af4702e874d823d5da04f1de141af710559173083b6a9b10e4e73135f"
+ },
+ "sections": [
+  {
+   "name": "tune",
+   "status": "run",
+   "sets": [
+    {
+     "name": "shreveport-combined.pdf",
+     "pages": 24,
+     "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
+     "ms": 244.9947059999995,
+     "summary": {
+      "n": 24,
+      "edgeOk": 24,
+      "pass": 24,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A+B+C": {
+        "n": 18,
+        "pass": 18
+       },
+       "B": {
+        "n": 6,
+        "pass": 6
+       }
+      },
+      "framed": {
+       "n": 24,
+       "pass": 24
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    }
+   ],
+   "pdfs": {
+    "shreveport-combined.pdf": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd"
+   },
+   "total": {
+    "n": 24,
+    "edgeOk": 24,
+    "pass": 24,
+    "abstain": 0,
+    "dErrMedian": 0.002662620442206831,
+    "dErrMax": 0.004284009071250358,
+    "negatives": {
+     "n": 0,
+     "falsePositives": 0
+    },
+    "tiers": {
+     "A+B+C": {
+      "n": 18,
+      "pass": 18
+     },
+     "B": {
+      "n": 6,
+      "pass": 6
+     }
+    },
+    "framed": {
+     "n": 24,
+     "pass": 24
+    },
+    "frameless": {
+     "n": 0,
+     "edgeOk": 0,
+     "pass": 0
+    }
+   },
+   "perLabeler": {
+    "A": {
+     "n": 24,
+     "edgeOk": 24,
+     "pass": 24,
+     "abstain": 0,
+     "dErrMedian": 0.0031626204422068316,
+     "dErrMax": 0.004784009071250359,
+     "negatives": {
+      "n": 0,
+      "falsePositives": 0
+     },
+     "tiers": {
+      "A+B+C": {
+       "n": 18,
+       "pass": 18
+      },
+      "B": {
+       "n": 6,
+       "pass": 6
+      }
+     },
+     "framed": {
+      "n": 24,
+      "pass": 24
+     },
+     "frameless": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0
+     }
+    },
+    "B": {
+     "n": 24,
+     "edgeOk": 24,
+     "pass": 24,
+     "abstain": 0,
+     "dErrMedian": 0.0021626204422068307,
+     "dErrMax": 0.0037840090712503577,
+     "negatives": {
+      "n": 0,
+      "falsePositives": 0
+     },
+     "tiers": {
+      "A+B+C": {
+       "n": 18,
+       "pass": 18
+      },
+      "B": {
+       "n": 6,
+       "pass": 6
+      }
+     },
+     "framed": {
+      "n": 24,
+      "pass": 24
+     },
+     "frameless": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0
+     }
+    },
+    "mean": {
+     "n": 24,
+     "edgeOk": 24,
+     "pass": 24,
+     "abstain": 0,
+     "dErrMedian": 0.002662620442206831,
+     "dErrMax": 0.004284009071250358,
+     "negatives": {
+      "n": 0,
+      "falsePositives": 0
+     },
+     "tiers": {
+      "A+B+C": {
+       "n": 18,
+       "pass": 18
+      },
+      "B": {
+       "n": 6,
+       "pass": 6
+      }
+     },
+     "framed": {
+      "n": 24,
+      "pass": 24
+     },
+     "frameless": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0
+     }
+    }
+   },
+   "grouping": {
+    "families": 2,
+    "familyUnits": 2,
+    "splitFamilies": 0,
+    "crossPairs": 1,
+    "mergedPairs": 0,
+    "sameFamilySheetPairs": 148,
+    "splitSheetPairs": 0,
+    "crossSheetPairs": 128,
+    "mergedSheetPairs": 0,
+    "ungrouped": 0,
+    "meaningful": false
+   },
+   "rows": [
+    {
+     "key": "shreveport-combined.pdf",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08831680256441664,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0031831974355833598,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.133805447751698
+    },
+    {
+     "key": "shreveport-combined.pdf#2",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08835135550819746,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0031486444918025353,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126426463323664
+    },
+    {
+     "key": "shreveport-combined.pdf#3",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08834993731285287,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.003150062687147126,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126426545457086
+    },
+    {
+     "key": "shreveport-combined.pdf#4",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08836688645245855,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0031331135475414496,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.12288913819968
+    },
+    {
+     "key": "shreveport-combined.pdf#5",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.0892689038518505,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0022310961481494945,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126426545457086
+    },
+    {
+     "key": "shreveport-combined.pdf#6",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09034274678683289,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.001157253213167106,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126426463323664
+    },
+    {
+     "key": "shreveport-combined.pdf#7",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08929408451244705,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.002205915487552945,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126426463323664
+    },
+    {
+     "key": "shreveport-combined.pdf#8",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08925839091878635,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0022416090812136524,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126426545457086
+    },
+    {
+     "key": "shreveport-combined.pdf#9",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.0889045316914405,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.002595468308559501,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.133805447751698
+    },
+    {
+     "key": "shreveport-combined.pdf#10",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08721874560961301,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.004281254390386985,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.109568131599076
+    },
+    {
+     "key": "shreveport-combined.pdf#11",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08721599092874964,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.004284009071250358,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.109568131599076
+    },
+    {
+     "key": "shreveport-combined.pdf#12",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08721884919875239,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.004281150801247607,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.109568131599076
+    },
+    {
+     "key": "shreveport-combined.pdf#13",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08831911143908576,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0031808885609142384,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.133805447751698
+    },
+    {
+     "key": "shreveport-combined.pdf#14",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.0872412371436873,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.004258762856312701,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.1044075914837
+    },
+    {
+     "key": "shreveport-combined.pdf#15",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08831766608101216,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0031823339189878397,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.133805447751698
+    },
+    {
+     "key": "shreveport-combined.pdf#16",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08831766608101216,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0031823339189878397,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.133805447751698
+    },
+    {
+     "key": "shreveport-combined.pdf#17",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "B",
+     "detEdge": "bottom",
+     "detD": 0.0888970463556564,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0026029536443435974,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13445470927991
+    },
+    {
+     "key": "shreveport-combined.pdf#18",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "B",
+     "detEdge": "bottom",
+     "detD": 0.08884043385764324,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0026595661423567535,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13376249449291
+    },
+    {
+     "key": "shreveport-combined.pdf#19",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "B",
+     "detEdge": "bottom",
+     "detD": 0.08883737955779317,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.002662620442206831,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13445470927991
+    },
+    {
+     "key": "shreveport-combined.pdf#20",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "B",
+     "detEdge": "bottom",
+     "detD": 0.08884043385764324,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0026595661423567535,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13376249449291
+    },
+    {
+     "key": "shreveport-combined.pdf#21",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08884043385764324,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0026595661423567535,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13376249449291
+    },
+    {
+     "key": "shreveport-combined.pdf#22",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08884043385764324,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0026595661423567535,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13376249449291
+    },
+    {
+     "key": "shreveport-combined.pdf#23",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "B",
+     "detEdge": "bottom",
+     "detD": 0.08885248668229039,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0026475133177096127,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.131031353048314
+    },
+    {
+     "key": "shreveport-combined.pdf#24",
+     "set": "shreveport-combined.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "B",
+     "detEdge": "bottom",
+     "detD": 0.08883737955779317,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.002662620442206831,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.13445470927991
+    }
+   ],
+   "meanExcluded": [],
+   "noTextLayer": []
+  },
+  {
+   "name": "in-sample",
+   "status": "run",
+   "sets": [
+    {
+     "name": "dublin-part1.pdf",
+     "pages": 11,
+     "sha256": "b53cdfa35f55fd2e00451922612d38ec694b4674f5f40c39656a185991aa59e2",
+     "ms": 30.617472000001726,
+     "summary": {
+      "n": 11,
+      "edgeOk": 11,
+      "pass": 11,
+      "abstain": 0,
+      "dErrMedian": 0.0005643349000397785,
+      "dErrMax": 0.0008768041128190407,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A+B+C": {
+        "n": 11,
+        "pass": 11
+       }
+      },
+      "framed": {
+       "n": 11,
+       "pass": 11
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    },
+    {
+     "name": "dublin-part4.pdf",
+     "pages": 13,
+     "sha256": "4b58cff60984c662d60891c1e447bbd203794f89df954899918f09679be37b1f",
+     "ms": 71.38039899999785,
+     "summary": {
+      "n": 13,
+      "edgeOk": 13,
+      "pass": 13,
+      "abstain": 0,
+      "dErrMedian": 0.001611809153290747,
+      "dErrMax": 0.0029549698349013442,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A+B+C": {
+        "n": 13,
+        "pass": 13
+       }
+      },
+      "framed": {
+       "n": 13,
+       "pass": 13
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    },
+    {
+     "name": "va-dublin-bldg9a-finish-plan-A601.pdf",
+     "pages": 1,
+     "sha256": "1a23fbc600afa8443d88046c491d922f34885a485e7dd8d617617738d12c0a60",
+     "ms": 0.9210440000024391,
+     "summary": {
+      "n": 1,
+      "edgeOk": 1,
+      "pass": 1,
+      "abstain": 0,
+      "dErrMedian": 0.0012786421603468434,
+      "dErrMax": 0.0012786421603468434,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A": {
+        "n": 1,
+        "pass": 1
+       }
+      },
+      "framed": {
+       "n": 1,
+       "pass": 1
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    },
+    {
+     "name": "va-shreveport-fisher-house-site-utility-C300.pdf",
+     "pages": 1,
+     "sha256": "70734211d5fb945f13b516c83d131692684f1ac00c56e6bee240b05254afea8a",
+     "ms": 2.3688040000015462,
+     "summary": {
+      "n": 1,
+      "edgeOk": 1,
+      "pass": 1,
+      "abstain": 0,
+      "dErrMedian": 0.0011572575076339298,
+      "dErrMax": 0.0011572575076339298,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A": {
+        "n": 1,
+        "pass": 1
+       }
+      },
+      "framed": {
+       "n": 1,
+       "pass": 1
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    },
+    {
+     "name": "sample-finish-plan.pdf",
+     "pages": 2,
+     "sha256": "53aa2a44efc8f9a2e625ed223fcfbf9ee19d15eb8469ba57183874b6a8e2a56f",
+     "ms": 20.852478999997402,
+     "summary": {
+      "n": 2,
+      "edgeOk": 2,
+      "pass": 2,
+      "abstain": 0,
+      "dErrMedian": 0.002965167868399697,
+      "dErrMax": 0.0029651678758743777,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A+B+C": {
+        "n": 2,
+        "pass": 2
+       }
+      },
+      "framed": {
+       "n": 2,
+       "pass": 2
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    },
+    {
+     "name": "porterville-adu-a1-101.pdf",
+     "pages": 1,
+     "sha256": "4f35c62a9adcf8d2eb42e632a4d1ae9b1d314bb426297e4ac13ae0a32897f6b7",
+     "ms": 1.0247630000012578,
+     "summary": {
+      "n": 1,
+      "edgeOk": 1,
+      "pass": 0,
+      "abstain": 0,
+      "dErrMedian": 0.0074969496115657175,
+      "dErrMax": 0.0074969496115657175,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {
+       "A": {
+        "n": 1,
+        "pass": 0
+       }
+      },
+      "framed": {
+       "n": 1,
+       "pass": 0
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    },
+    {
+     "name": "va-roseburg-a03a.pdf",
+     "pages": 1,
+     "sha256": "ff80f35af4702e874d823d5da04f1de141af710559173083b6a9b10e4e73135f",
+     "ms": 0.6943900000005669,
+     "summary": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0,
+      "abstain": 0,
+      "dErrMedian": null,
+      "dErrMax": null,
+      "negatives": {
+       "n": 0,
+       "falsePositives": 0
+      },
+      "tiers": {},
+      "framed": {
+       "n": 0,
+       "pass": 0
+      },
+      "frameless": {
+       "n": 0,
+       "edgeOk": 0,
+       "pass": 0
+      }
+     }
+    }
+   ],
+   "pdfs": {
+    "dublin-part1.pdf": "b53cdfa35f55fd2e00451922612d38ec694b4674f5f40c39656a185991aa59e2",
+    "dublin-part4.pdf": "4b58cff60984c662d60891c1e447bbd203794f89df954899918f09679be37b1f",
+    "va-dublin-bldg9a-finish-plan-A601.pdf": "1a23fbc600afa8443d88046c491d922f34885a485e7dd8d617617738d12c0a60",
+    "va-shreveport-fisher-house-site-utility-C300.pdf": "70734211d5fb945f13b516c83d131692684f1ac00c56e6bee240b05254afea8a",
+    "sample-finish-plan.pdf": "53aa2a44efc8f9a2e625ed223fcfbf9ee19d15eb8469ba57183874b6a8e2a56f",
+    "porterville-adu-a1-101.pdf": "4f35c62a9adcf8d2eb42e632a4d1ae9b1d314bb426297e4ac13ae0a32897f6b7",
+    "va-roseburg-a03a.pdf": "ff80f35af4702e874d823d5da04f1de141af710559173083b6a9b10e4e73135f"
+   },
+   "total": {
+    "n": 29,
+    "edgeOk": 29,
+    "pass": 28,
+    "abstain": 0,
+    "dErrMedian": 0.0011572575076339298,
+    "dErrMax": 0.0074969496115657175,
+    "negatives": {
+     "n": 0,
+     "falsePositives": 0
+    },
+    "tiers": {
+     "A+B+C": {
+      "n": 26,
+      "pass": 26
+     },
+     "A": {
+      "n": 3,
+      "pass": 2
+     }
+    },
+    "framed": {
+     "n": 29,
+     "pass": 28
+    },
+    "frameless": {
+     "n": 0,
+     "edgeOk": 0,
+     "pass": 0
+    }
+   },
+   "perLabeler": {
+    "A": {
+     "n": 29,
+     "edgeOk": 29,
+     "pass": 29,
+     "abstain": 0,
+     "dErrMedian": 0.0008768041128190407,
+     "dErrMax": 0.003465167875874378,
+     "negatives": {
+      "n": 0,
+      "falsePositives": 0
+     },
+     "tiers": {
+      "A+B+C": {
+       "n": 26,
+       "pass": 26
+      },
+      "A": {
+       "n": 3,
+       "pass": 3
+      }
+     },
+     "framed": {
+      "n": 29,
+      "pass": 29
+     },
+     "frameless": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0
+     }
+    },
+    "B": {
+     "n": 29,
+     "edgeOk": 29,
+     "pass": 28,
+     "abstain": 0,
+     "dErrMedian": 0.0008768041128190407,
+     "dErrMax": 0.01449694961156571,
+     "negatives": {
+      "n": 0,
+      "falsePositives": 0
+     },
+     "tiers": {
+      "A+B+C": {
+       "n": 26,
+       "pass": 26
+      },
+      "A": {
+       "n": 3,
+       "pass": 2
+      }
+     },
+     "framed": {
+      "n": 29,
+      "pass": 28
+     },
+     "frameless": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0
+     }
+    },
+    "mean": {
+     "n": 29,
+     "edgeOk": 29,
+     "pass": 28,
+     "abstain": 0,
+     "dErrMedian": 0.0011572575076339298,
+     "dErrMax": 0.0074969496115657175,
+     "negatives": {
+      "n": 0,
+      "falsePositives": 0
+     },
+     "tiers": {
+      "A+B+C": {
+       "n": 26,
+       "pass": 26
+      },
+      "A": {
+       "n": 3,
+       "pass": 2
+      }
+     },
+     "framed": {
+      "n": 29,
+      "pass": 28
+     },
+     "frameless": {
+      "n": 0,
+      "edgeOk": 0,
+      "pass": 0
+     }
+    }
+   },
+   "grouping": {
+    "families": 4,
+    "familyUnits": 3,
+    "splitFamilies": 0,
+    "crossPairs": 0,
+    "mergedPairs": 0,
+    "sameFamilySheetPairs": 134,
+    "splitSheetPairs": 0,
+    "crossSheetPairs": 0,
+    "mergedSheetPairs": 0,
+    "ungrouped": 0,
+    "meaningful": true
+   },
+   "rows": [
+    {
+     "key": "dublin-part1.pdf",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09156433490003978,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0005643349000397785,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part1.pdf#2",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09017984369117803,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0008201563088219704,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.036552441995088
+    },
+    {
+     "key": "dublin-part1.pdf#3",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09028373290762653,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0007162670923734626,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part1.pdf#4",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.0914387330094181,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0004387330094181019,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 19.99688463021761
+    },
+    {
+     "key": "dublin-part1.pdf#5",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09048239318337258,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0005176068166274223,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.036552441995088
+    },
+    {
+     "key": "dublin-part1.pdf#6",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09048239318337258,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0005176068166274223,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.036552441995088
+    },
+    {
+     "key": "dublin-part1.pdf#7",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09012319588718096,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0008768041128190407,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part1.pdf#8",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09012319588718096,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0008768041128190407,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part1.pdf#9",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09012319588718096,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0008768041128190407,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part1.pdf#10",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09056760285515345,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.00043239714484655245,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.036552441995088
+    },
+    {
+     "key": "dublin-part1.pdf#11",
+     "set": "dublin-part1.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09056760285515345,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.00043239714484655245,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.036552441995088
+    },
+    {
+     "key": "dublin-part4.pdf",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08972571571497462,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0012742842850253788,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part4.pdf#2",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08938819084670925,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.001611809153290747,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.01754143186899
+    },
+    {
+     "key": "dublin-part4.pdf#3",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.0902915520432331,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0007084479567669028,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.0117632983431
+    },
+    {
+     "key": "dublin-part4.pdf#4",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09021787971816865,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0007821202818313472,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.028104993974097
+    },
+    {
+     "key": "dublin-part4.pdf#5",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09012319588718096,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0008768041128190407,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.049146610281486
+    },
+    {
+     "key": "dublin-part4.pdf#6",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.0889571627849173,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0020428372150826934,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.03223321198335
+    },
+    {
+     "key": "dublin-part4.pdf#7",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08979927769581547,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.001200722304184526,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.01963904369695
+    },
+    {
+     "key": "dublin-part4.pdf#8",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08979927769581547,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.001200722304184526,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.01963904369695
+    },
+    {
+     "key": "dublin-part4.pdf#9",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.09344785665499446,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0024478566549944597,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 19.98899550848676
+    },
+    {
+     "key": "dublin-part4.pdf#10",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08828186647055206,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0027181335294479414,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.01219707646695
+    },
+    {
+     "key": "dublin-part4.pdf#11",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08804503016509865,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0029549698349013442,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.01219707646695
+    },
+    {
+     "key": "dublin-part4.pdf#12",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08814659537705308,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.00285340462294692,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 19.989138408925108
+    },
+    {
+     "key": "dublin-part4.pdf#13",
+     "set": "dublin-part4.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08814659537705308,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.00285340462294692,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 19.989138408925108
+    },
+    {
+     "key": "va-dublin-bldg9a-finish-plan-A601.pdf",
+     "set": "va-dublin-bldg9a-finish-plan-A601.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A",
+     "detEdge": "bottom",
+     "detD": 0.08972135783965315,
+     "labelEdge": "bottom",
+     "labelD": 0.091,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0012786421603468434,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.04905062683512
+    },
+    {
+     "key": "va-shreveport-fisher-house-site-utility-C300.pdf",
+     "set": "va-shreveport-fisher-house-site-utility-C300.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A",
+     "detEdge": "bottom",
+     "detD": 0.09034274249236607,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0011572575076339298,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.126428540266378
+    },
+    {
+     "key": "sample-finish-plan.pdf",
+     "set": "sample-finish-plan.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08853483212412562,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0029651678758743777,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.035374991225417
+    },
+    {
+     "key": "sample-finish-plan.pdf#2",
+     "set": "sample-finish-plan.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A+B+C",
+     "detEdge": "bottom",
+     "detD": 0.08853483213907498,
+     "labelEdge": "bottom",
+     "labelD": 0.0915,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0029651678609250165,
+     "pass": true,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 20.035374991554026
+    },
+    {
+     "key": "porterville-adu-a1-101.pdf",
+     "set": "porterville-adu-a1-101.pdf",
+     "abstain": false,
+     "frameless": false,
+     "tier": "A",
+     "detEdge": "right",
+     "detD": 0.1184969496115657,
+     "labelEdge": "right",
+     "labelD": 0.11099999999999999,
+     "negative": false,
+     "edgeOk": true,
+     "dErr": 0.0074969496115657175,
+     "pass": false,
+     "falsePositive": false,
+     "framelessPass": false,
+     "tolPx": 24.403378555798685
+    }
+   ],
+   "meanExcluded": [],
+   "noTextLayer": [
+    "va-roseburg-a03a.pdf"
+   ]
+  },
+  {
+   "name": "held-out",
+   "status": "not run",
+   "sets": [],
+   "pdfs": {}
+  }
+ ],
+ "calibration": {
+  "tuneSet": "shreveport-combined.pdf",
+  "sha256": "4594fe00e04c5dedf9e1bc468336d2967405e605158874c56dc08335c6823dfd",
+  "sheets": 24,
+  "at": "2026-10-01",
+  "metric": "pass, edgeOk (higher better), groupErr = same-family sheet pairs split + cross-family sheet pairs merged, abstain (lower better); vs the mean of labelers A and B; lexicographic",
+  "rule": "keep the plan's value unless the tune result there is worse than elsewhere in the swept range; then the midpoint of the best plateau (widest in value span, then nearest the plan value; integers round toward the plan value)",
+  "tolerance": 0.005,
+  "defaults": {
+   "pass": 24,
+   "edgeOk": 24,
+   "groupErr": 0,
+   "abstain": 0,
+   "dErrMedian": 0.002662620442206831,
+   "dErrMax": 0.004284009071250358
+  },
+  "constants": [
+   {
+    "constant": "BORDER_MIN_SPAN",
+    "key": "borderMinSpan",
+    "plan": 0.75,
+    "range": [
+     0.5,
+     0.95
+    ],
+    "sweep": [
+     {
+      "value": 0.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.55,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.65,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.75,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.85,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.9,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.95,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.5,
+     0.95
+    ],
+    "bestPlateau": [
+     0.5,
+     0.95
+    ],
+    "chosen": 0.75,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "BORDER_MAX_FRAC",
+    "key": "borderMaxFrac",
+    "plan": 0.08,
+    "range": [
+     0.02,
+     0.15
+    ],
+    "sweep": [
+     {
+      "value": 0.02,
+      "pass": 0,
+      "edgeOk": 18,
+      "groupErr": 0,
+      "abstain": 6,
+      "dErrMedian": 0.03746023611111113,
+      "dErrMax": 0.04234476127688891
+     },
+     {
+      "value": 0.03,
+      "pass": 0,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.025865772746870894,
+      "dErrMax": 0.027159907497600208
+     },
+     {
+      "value": 0.04,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.05,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.06,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.07,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.08,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.09,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.11,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.12,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.13,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.14,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.15,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.04,
+     0.15
+    ],
+    "bestPlateau": [
+     0.04,
+     0.15
+    ],
+    "chosen": 0.08,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "CHAIN_GAP_FRAC",
+    "key": "chainGapFrac",
+    "plan": 0.005,
+    "range": [
+     0,
+     0.03
+    ],
+    "sweep": [
+     {
+      "value": 0,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.001,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.0025,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.005,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.0075,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.01,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.015,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.02,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.03,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0,
+     0.03
+    ],
+    "bestPlateau": [
+     0,
+     0.03
+    ],
+    "chosen": 0.005,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "MIN_CHAIN_COVER",
+    "key": "minChainCover",
+    "plan": 0.7,
+    "range": [
+     0.4,
+     0.95
+    ],
+    "sweep": [
+     {
+      "value": 0.4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.45,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.55,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.65,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.75,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.85,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.9,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.95,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.4,
+     0.95
+    ],
+    "bestPlateau": [
+     0.4,
+     0.95
+    ],
+    "chosen": 0.7,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "STRIP_D_MIN",
+    "key": "stripDMin",
+    "plan": 0.06,
+    "range": [
+     0.01,
+     0.1
+    ],
+    "sweep": [
+     {
+      "value": 0.01,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.02,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.03,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.04,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.05,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.06,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.07,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.08,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.09,
+      "pass": 1,
+      "edgeOk": 18,
+      "groupErr": 0,
+      "abstain": 6,
+      "dErrMedian": 0.009860060970470264,
+      "dErrMax": 0.015002773808285158
+     },
+     {
+      "value": 0.1,
+      "pass": 0,
+      "edgeOk": 18,
+      "groupErr": 0,
+      "abstain": 6,
+      "dErrMedian": 0.00987864166547809,
+      "dErrMax": 0.015002773808285158
+     }
+    ],
+    "unchangedRange": [
+     0.01,
+     0.08
+    ],
+    "bestPlateau": [
+     0.01,
+     0.08
+    ],
+    "chosen": 0.06,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "STRIP_D_MAX",
+    "key": "stripDMax",
+    "plan": 0.3,
+    "range": [
+     0.15,
+     0.45
+    ],
+    "sweep": [
+     {
+      "value": 0.15,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.175,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.225,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.25,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.275,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.325,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.35,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.375,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.425,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.45,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.15,
+     0.45
+    ],
+    "bestPlateau": [
+     0.15,
+     0.45
+    ],
+    "chosen": 0.3,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "TOUCH_FRAC",
+    "key": "touchFrac",
+    "plan": 0.01,
+    "range": [
+     0.0025,
+     0.05
+    ],
+    "sweep": [
+     {
+      "value": 0.0025,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.005,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.0075,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.01,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.015,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.02,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.03,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.04,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.05,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.0025,
+     0.05
+    ],
+    "bestPlateau": [
+     0.0025,
+     0.05
+    ],
+    "chosen": 0.01,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "MIN_STRIP_TOKENS",
+    "key": "minStripTokens",
+    "plan": 15,
+    "range": [
+     1,
+     150
+    ],
+    "sweep": [
+     {
+      "value": 1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 10,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 15,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 20,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 30,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 40,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 50,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 60,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 80,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 100,
+      "pass": 9,
+      "edgeOk": 9,
+      "groupErr": 0,
+      "abstain": 15,
+      "dErrMedian": 0.0026595661423567535,
+      "dErrMax": 0.002662620442206831
+     },
+     {
+      "value": 150,
+      "pass": 0,
+      "edgeOk": 0,
+      "groupErr": 0,
+      "abstain": 24,
+      "dErrMedian": null,
+      "dErrMax": null
+     }
+    ],
+    "unchangedRange": [
+     1,
+     80
+    ],
+    "bestPlateau": [
+     1,
+     80
+    ],
+    "chosen": 15,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "SHEETNO_OUTER",
+    "key": "sheetnoOuter",
+    "plan": 0.6,
+    "range": [
+     0.3,
+     1
+    ],
+    "sweep": [
+     {
+      "value": 0.3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.9,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.3,
+     1
+    ],
+    "bestPlateau": [
+     0.3,
+     1
+    ],
+    "chosen": 0.6,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "SHEETNO_FAR_FROM",
+    "key": "sheetnoFarFrom",
+    "plan": 0.5,
+    "range": [
+     0,
+     0.9
+    ],
+    "sweep": [
+     {
+      "value": 0,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.9,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0,
+     0.9
+    ],
+    "bestPlateau": [
+     0,
+     0.9
+    ],
+    "chosen": 0.5,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "REPEAT_POS_TOL",
+    "key": "repeatPosTol",
+    "plan": 0.02,
+    "range": [
+     0.0025,
+     0.05
+    ],
+    "sweep": [
+     {
+      "value": 0.0025,
+      "pass": 18,
+      "edgeOk": 18,
+      "groupErr": 0,
+      "abstain": 6,
+      "dErrMedian": 0.0031493535894748306,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.005,
+      "pass": 18,
+      "edgeOk": 18,
+      "groupErr": 0,
+      "abstain": 6,
+      "dErrMedian": 0.0031493535894748306,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.01,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.015,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.02,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.025,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.03,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.04,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.05,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.01,
+     0.05
+    ],
+    "bestPlateau": [
+     0.01,
+     0.05
+    ],
+    "chosen": 0.02,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "STATIC_MIN_SHEETS",
+    "key": "staticMinSheets",
+    "plan": 2,
+    "range": [
+     1,
+     16
+    ],
+    "sweep": [
+     {
+      "value": 1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 10,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 12,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 16,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     1,
+     16
+    ],
+    "bestPlateau": [
+     1,
+     16
+    ],
+    "chosen": 2,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "BAND_GAP",
+    "key": "bandGap",
+    "plan": 0.04,
+    "range": [
+     0.005,
+     0.2
+    ],
+    "sweep": [
+     {
+      "value": 0.005,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.01,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.02,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.03,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.04,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.05,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.06,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.08,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.15,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.005,
+     0.2
+    ],
+    "bestPlateau": [
+     0.005,
+     0.2
+    ],
+    "chosen": 0.04,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "FRAME_BAND_RATIO",
+    "key": "frameBandRatio",
+    "plan": 1.5,
+    "range": [
+     1,
+     3
+    ],
+    "sweep": [
+     {
+      "value": 1,
+      "pass": 18,
+      "edgeOk": 18,
+      "groupErr": 0,
+      "abstain": 6,
+      "dErrMedian": 0.0031493535894748306,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 1.25,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 1.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 1.75,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 2.25,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 2.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 2.75,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     1.25,
+     3
+    ],
+    "bestPlateau": [
+     1.25,
+     3
+    ],
+    "chosen": 1.5,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "GROUP_MIN_JACCARD",
+    "key": "groupMinJaccard",
+    "plan": 0.5,
+    "range": [
+     0.1,
+     0.9
+    ],
+    "sweep": [
+     {
+      "value": 0.1,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 128,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.9,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.2,
+     0.9
+    ],
+    "bestPlateau": [
+     0.2,
+     0.9
+    ],
+    "chosen": 0.5,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "GROUP_D_TOL",
+    "key": "groupDTol",
+    "plan": 0.015,
+    "range": [
+     0.0025,
+     0.04
+    ],
+    "sweep": [
+     {
+      "value": 0.0025,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.005,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.0075,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.01,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.015,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.02,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.03,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.04,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.0025,
+     0.04
+    ],
+    "bestPlateau": [
+     0.0025,
+     0.04
+    ],
+    "chosen": 0.015,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   },
+   {
+    "constant": "BAND_MIN_COVER",
+    "key": "bandMinCover",
+    "plan": 0.5,
+    "range": [
+     0.2,
+     0.9
+    ],
+    "sweep": [
+     {
+      "value": 0.2,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.3,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.4,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.5,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.6,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.7,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.8,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     },
+     {
+      "value": 0.9,
+      "pass": 24,
+      "edgeOk": 24,
+      "groupErr": 0,
+      "abstain": 0,
+      "dErrMedian": 0.002662620442206831,
+      "dErrMax": 0.004284009071250358
+     }
+    ],
+    "unchangedRange": [
+     0.2,
+     0.9
+    ],
+    "bestPlateau": [
+     0.2,
+     0.9
+    ],
+    "chosen": 0.5,
+    "changed": false,
+    "best": {
+     "pass": 24,
+     "edgeOk": 24,
+     "groupErr": 0,
+     "abstain": 0
+    }
+   }
+  ],
+  "chosen": {
+   "borderMinSpan": 0.75,
+   "borderMaxFrac": 0.08,
+   "chainGapFrac": 0.005,
+   "minChainCover": 0.7,
+   "stripDMin": 0.06,
+   "stripDMax": 0.3,
+   "touchFrac": 0.01,
+   "minStripTokens": 15,
+   "sheetnoOuter": 0.6,
+   "sheetnoFarFrom": 0.5,
+   "repeatPosTol": 0.02,
+   "staticMinSheets": 2,
+   "bandGap": 0.04,
+   "frameBandRatio": 1.5,
+   "groupMinJaccard": 0.5,
+   "groupDTol": 0.015,
+   "bandMinCover": 0.5
+  }
+ },
+ "runLog": [
+  {
+   "at": "2026-10-01T00:33:08.732Z",
+   "commit": "5bf03dd99f65109e6106710fff49122ede53ed78",
+   "dirty": false,
+   "heldOut": false
+  }
+ ]
+}
