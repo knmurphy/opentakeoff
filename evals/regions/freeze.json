@@ -1,0 +1,31 @@
+{
+ "frozenAt": "2026-10-01T01:04:20.630Z",
+ "commit": "10fbb5e83bc300bd4bff4d226c235e923bd1ccb3",
+ "hash": "780cb8bbeac06935d7cd037c67ec2eea3577168d5e0b990b40dcf59bdaa20783",
+ "sources": {
+  "web/src/lib/regionDetect.ts": "d41ac677136b63b33b937252db95ef7147586779ddc4c54f4479f8e7e475dd2c",
+  "web/src/lib/regions.ts": "9008f9abc524fb80f6188fd0725dcb41f2dbdddf15681539579debd1c0684f65"
+ },
+ "logicRev": 2,
+ "params": {
+  "borderMinSpan": 0.75,
+  "borderMaxFrac": 0.08,
+  "chainGapFrac": 0.005,
+  "minChainCover": 0.7,
+  "stripDMin": 0.06,
+  "stripDMax": 0.3,
+  "touchFrac": 0.01,
+  "minStripTokens": 15,
+  "sheetnoOuter": 0.6,
+  "sheetnoFarFrom": 0.5,
+  "repeatPosTol": 0.02,
+  "staticMinSheets": 2,
+  "bandGap": 0.04,
+  "frameBandRatio": 1.5,
+  "groupMinJaccard": 0.5,
+  "groupDTol": 0.015,
+  "bandMinCover": 0.5
+ },
+ "calibration": "web/bench/regions-calibration.json",
+ "note": "held-out guard: HEAD must descend from `commit` and the sources + params must hash to `hash` (bench/regionHeldOut.ts)"
+}
