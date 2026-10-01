@@ -9,6 +9,7 @@
 // upstream widens the reply instead of failing validation.
 import { z } from "zod";
 import { REPORT_SCHEMA } from "../../web/src/lib/takeoffConstants.ts";
+import { REGION_KINDS, type RegionKind } from "../../web/src/lib/regions.ts";
 
 const point = z.tuple([z.number(), z.number()]);
 
@@ -652,6 +653,17 @@ export const undoLastOutput = {
   note: z.string().optional(),
 };
 
+/** regions.ts HitRegion — the sheet region a find_text hit falls in. */
+const hitRegionSchema = z.object({
+  id: z.string(),
+  kind: z.enum(REGION_KINDS as [RegionKind, ...RegionKind[]]).describe('"title_block" or "drawing_area" (detected today); finer kinds come from corrections'),
+  label: z.string().describe('Display name, e.g. "Title block"'),
+  path: z.array(z.string()).describe("Labels from the top-level region down; the drawing area is left out when something more specific is under it"),
+  detail: z.object({ number: z.string().optional(), sheet_ref: z.string().optional(), title: z.string().optional(), scale: z.string().optional() }).optional(),
+  confidence: z.number().describe("0–1"),
+  source: z.enum(["vector", "ocr", "layer", "user"]).describe('"user" = an estimator\'s correction from the imported takeoff'),
+});
+
 /** findText — the complement to readSheetTextOutput: WHERE a known string
  * sits, not what a region says. */
 export const findTextOutput = {
@@ -663,7 +675,10 @@ export const findTextOutput = {
     str: z.string().describe("The matched pdf.js text run, verbatim (may be shorter than the full label — runs aren't merged into lines)"),
     bbox: z.tuple([z.number(), z.number(), z.number(), z.number()]).describe("[x0, y0, x1, y1] image px"),
     center: z.tuple([z.number(), z.number()]).describe("Bbox center, image px — feed straight into one_click's seed"),
+    sheet_region: hitRegionSchema.nullable().optional()
+      .describe("The sheet region the hit's center falls in: title_block (the sheet's own number, firm, dates) or drawing_area (plan content). null = the border margin (grid labels, border numerals). Absent when regions_unavailable is set"),
   })),
+  regions_unavailable: z.string().optional().describe("Present when the set's regions could not be detected (past the 60-sheet / 20 s cap, or detection failed): why. Hits then carry no sheet_region"),
 };
 
 /** editMaterials — session.ts's MaterialRow, verbatim. */

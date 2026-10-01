@@ -5,6 +5,7 @@
 // what the canvas commits (web/src/pages/TakeoffCanvas.jsx), so an exported
 // takeoff round-trips into the app.
 import path from "node:path";
+import { stat } from "node:fs/promises";
 import { openPdf, positionedText, textSpans, baselineRuns, textItemsInRegion, OPS, type DocHandle, type PageHandle, type TextSpan, type OcgEntry } from "./pdf.ts";
 import { expandForScaleNotes, mixedScaleWarning } from "./scalewarn.ts";
 import { classifyLayerName, layerRoleCodes, segRoles, type LayerInfo } from "../../web/src/lib/layers.ts";
@@ -16,7 +17,8 @@ import { mintTwin, splitFromFamily, variantTag, propagateRowAdd, propagateRowPat
          markRowLocal, dropRowLocal, type VariantCond, type VariantRow } from "../../web/src/lib/variants.ts";
 import { STANDARD_SCALES, RENDER_SCALE, detectScale, extractSheetNumber, type DetectedScale } from "../../web/src/lib/sheets.ts";
 import { parseSheetKey } from "../../web/src/lib/sheetKey.ts";
-import type { DetectSheet } from "../../web/src/lib/regionDetect.ts";
+import { detectSetRegions, type DetectSheet } from "../../web/src/lib/regionDetect.ts";
+import { applyOverrides, hitRegion, setSignature, type HitRegion, type RegionOverrides, type SheetRegions } from "../../web/src/lib/regions.ts";
 import { buildDetectSheet } from "./regionmap.ts";
 import { buildSheetDxf, type DxfBuild } from "../../web/src/lib/dxf.ts";
 import {
@@ -619,6 +621,23 @@ export interface SheetSummary {
 /** Bounded gesture history, not an archive — mirrors the canvas's UNDO_CAP. */
 export const UNDO_CAP = 100;
 
+/** find_text's sheet_region (docs/design/REGION_ANNOTATION_PLAN.md, task 9):
+ * detection runs once per loaded set, and only below this cap — a set with
+ * more sheets, or a detection still extracting after this long, leaves hits
+ * without sheet_region and the reply says regions are unavailable. These
+ * are the plan's defaults until a 24-sheet set is measured. On the three
+ * committed sheets detection took 0.36–0.49 s per sheet (about 1 s for the
+ * three as one set); at that rate the 20 s cap binds before the 60-sheet one. */
+export const REGION_CAP_SHEETS = 60;
+export const REGION_CAP_MS = 20_000;
+
+/** One loaded set's detected title block / drawing area per sheet, or why
+ * there is none. `abstained`: sheets with no text layer (no tokens, so no
+ * detection — and no find_text hits either). */
+export type RegionSet =
+  | { ok: true; map: Map<string, SheetRegions>; abstained: string[]; ms: number }
+  | { ok: false; reason: string };
+
 /** The agent-scoped command journal. Every mutation this server performs
  * records one entry carrying enough state to invert it exactly: a commit
  * removes by id, an edit restores the pre-edit shape verbatim, a delete
@@ -695,7 +714,7 @@ export class Session {
   filePath: string | null = null;
   /** The working document set (#152), by basename — one entry per load_plan,
    * several under merge: true. Source paths ride along for byte re-reads. */
-  private docs = new Map<string, { doc: DocHandle; path: string }>();
+  private docs = new Map<string, { doc: DocHandle; path: string; size: number; mtimeMs: number }>();
   private nextOrd = 1;
   private sheets = new Map<string, SheetState>();
   conditions: Condition[] = [];
@@ -728,6 +747,18 @@ export class Session {
    * stays behind the canvas's human Preview→Apply gate). apply_rules re-runs
    * them; applied_to mirrors the canvas's audit-trail semantics. */
   rules: Rule[] = [];
+  /** Region corrections from an imported takeoff document's additive
+   * `region_overrides` key (sanitized). Read-only: applied to the detected
+   * map in memory, never written back (no export carries them). */
+  regionOverrides: RegionOverrides | null = null;
+  /** find_text's region-detection cap; tests lower it. */
+  regionCap = { sheets: REGION_CAP_SHEETS, ms: REGION_CAP_MS };
+  /** Detections started this session — one per loaded set (a test hook). */
+  regionDetections = 0;
+  /** ONE in-flight detection per loaded set, keyed by setSignature over the
+   * loaded files (path + size, builtAt = mtime). load_plan clears it. */
+  private regionCache: { sig: string; promise: Promise<RegionSet> } | null = null;
+  private regionApplied: { base: Map<string, SheetRegions>; ov: RegionOverrides; out: Map<string, SheetRegions> } | null = null;
 
   /** Newest-last. Capped at UNDO_CAP; the oldest entry falls off the front. */
   private journal: JournalEntry[] = [];
@@ -777,6 +808,7 @@ export class Session {
       this.nextOrd = 1;
       this.scheduleWithheld = [];
       this.rules = [];
+      this.regionOverrides = null;
       // the journal's entries reference shapes that no longer exist — undoing
       // across a document swap would be a lie, so the history goes with them
       this.journal = [];
@@ -785,10 +817,13 @@ export class Session {
       throw new UserError(`${base} is already loaded — merge adds NEW documents. To reload it, call load_plan without merge (replaces the whole session).`);
     }
     this.graph = null;   // the sheet graph (#87) indexes the OLD document set
+    this.regionCache = null;   // so does the region map (find_text's sheet_region)
+    this.regionApplied = null;
 
     const doc = await openPdf(filePath);
     const resolved = path.resolve(filePath);
-    this.docs.set(base, { doc, path: resolved });
+    const st = await stat(resolved).catch(() => null);
+    this.docs.set(base, { doc, path: resolved, size: st?.size ?? 0, mtimeMs: st?.mtimeMs ?? 0 });
     if (!this.file) { this.file = base; this.filePath = resolved; }
     const added: SheetSummary[] = [];
     for (let n = 1; n <= doc.numPages; n++) {
@@ -5214,5 +5249,81 @@ export class Session {
       center: [round1((sp.x0 + sp.x1) / 2), round1((sp.y0 + sp.y1) / 2)] as [number, number],
     }));
     return { sheet: s.key, q: query, count: all.length, truncated: all.length > hits.length, hits };
+  }
+
+  // ── regions (find_text's sheet_region) ────────────────────────────────────
+
+  /** The loaded set's identity for the region cache: every file's absolute
+   * path and size, with its modification time as setSignature's builtAt
+   * (the MCP has no builtAt of its own). */
+  private regionSignature(): string {
+    return setSignature([...this.docs.values()].map((d) => ({ file: `${d.path}:${d.size}`, builtAt: d.mtimeMs })));
+  }
+
+  /** The loaded set's region map — detected once, shared: concurrent first
+   * callers get the SAME promise, later callers the settled one, until
+   * load_plan changes the set. Never rejects; a failure is `{ ok: false }`. */
+  regionSet(): Promise<RegionSet> {
+    if (!this.docs.size) throw new UserError("No plan loaded — call load_plan first.");
+    const sig = this.regionSignature();
+    if (this.regionCache?.sig === sig) return this.regionCache.promise;
+    const promise = this.detectRegions();
+    this.regionCache = { sig, promise };
+    return promise;
+  }
+
+  private async detectRegions(): Promise<RegionSet> {
+    this.regionDetections++;
+    const cap = this.regionCap;
+    const sheets = this.sheetList();
+    if (sheets.length > cap.sheets) {
+      return { ok: false, reason: `the loaded set has ${sheets.length} sheet${sheets.length === 1 ? "" : "s"}, past the ${cap.sheets}-sheet region-detection cap` };
+    }
+    const t0 = performance.now();
+    const over = () => `region detection passed its ${cap.ms / 1000} s cap`;
+    try {
+      const inputs: DetectSheet[] = [];
+      const abstained: string[] = [];
+      for (const s of sheets) {
+        if (performance.now() - t0 > cap.ms) return { ok: false, reason: over() };
+        const d = await this.detectSheet(s.key);
+        if (d.tokens.length) inputs.push(d);
+        else abstained.push(s.key);
+      }
+      if (performance.now() - t0 > cap.ms) return { ok: false, reason: over() };
+      const { regions } = detectSetRegions(inputs);
+      return { ok: true, map: regions, abstained, ms: Math.round(performance.now() - t0) };
+    } catch (e) {
+      return { ok: false, reason: `region detection failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+
+  /** The detected map with the imported corrections applied (applyOverrides,
+   * in memory; memoized per map and overrides object). */
+  private regionsInUse(map: Map<string, SheetRegions>): Map<string, SheetRegions> {
+    const ov = this.regionOverrides;
+    if (!ov) return map;
+    const memo = this.regionApplied;
+    if (memo && memo.base === map && memo.ov === ov) return memo.out;
+    const out = applyOverrides(map, ov);
+    this.regionApplied = { base: map, ov, out };
+    return out;
+  }
+
+  /** find_text as the tool answers it: findText's hits, each with the
+   * sheet region its center falls in (hitRegion — null in the border margin).
+   * When the set's regions are unavailable (past the cap, or detection
+   * failed), hits carry no sheet_region and `regions_unavailable` says why. */
+  async findTextWithRegions(name: string, q: string, opts: { region?: { x0: number; y0: number; x1: number; y1: number }; limit?: number } = {}) {
+    const base = this.findText(name, q, opts);
+    if (!base.hits.length) return base;
+    const rs = await this.regionSet();
+    if (!rs.ok) return { ...base, regions_unavailable: `${rs.reason}; hits carry no sheet_region` };
+    const sheet = this.regionsInUse(rs.map).get(base.sheet);
+    if (!sheet) return { ...base, regions_unavailable: `${base.sheet} was not part of region detection; hits carry no sheet_region` };
+    return {
+      ...base,
+      hits: base.hits.map((h) => ({ ...h, sheet_region: hitRegion(sheet, h.center[0], h.center[1]) as HitRegion | null })),
+    };
   }
 }

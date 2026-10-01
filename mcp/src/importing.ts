@@ -14,6 +14,7 @@ import {
 import { UserError } from "./format.ts";
 import { sanitizeApprovals, type Session, type Shape, type Condition, type Markup, type Rfi, type TakeoffProposal, type ConditionEditProposal } from "./session.ts";
 import type { Rule } from "../../web/src/lib/rules.ts";
+import { sanitizeRegionOverrides } from "../../web/src/lib/regions.ts";
 
 // untyped canvas JS — typed facades state the contract at the boundary
 const parseTakeoffImport = parseJs as unknown as (text: string) => Record<string, unknown>;
@@ -106,6 +107,15 @@ export async function importTakeoff(session: Session, filePath: string) {
     session.rules.push({ ...raw, applied_to: [...(raw.applied_to ?? [])], seed_condition_id: mapped ?? raw.seed_condition_id });
     knownRuleIds.add(raw.id);
     rulesImported++;
+  }
+
+  // region corrections (REGION_ANNOTATION_PLAN, task 9): the document's
+  // additive region_overrides key, sanitized, applied by find_text in memory
+  // only — read here, never written (nothing in this server mints or exports
+  // them). A file without the key leaves the session's corrections alone.
+  if (Object.prototype.hasOwnProperty.call(imported, "region_overrides")) {
+    const ov = sanitizeRegionOverrides(imported.region_overrides);
+    session.regionOverrides = Object.keys(ov).length ? ov : null;
   }
 
   // the imported SHAPES journal as one reversible gesture; adopted conditions,
