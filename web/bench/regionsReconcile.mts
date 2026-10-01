@@ -29,6 +29,7 @@ writeFileSync(join(dir, "reconciled.json"), JSON.stringify({
   labeler: "reconciled", definition: A.definition,
   method: `mean of labelers A and B per sheet; sheets with |Δd| > ${RECONCILE_THRESHOLD * 100}% or differing edges take the labeler named in resolved_by's resolution`,
   generated_by: "web/bench/regionsReconcile.mts",
+  note: "porterville-adu-a1-101.pdf was resolved by the agent running the bench, per the written definition (a side with no frame line uses the page edge → labeler A), AFTER the bench had shown the detector agreeing with labeler A (d 0.118); this moved in-sample from 28/29 to 29/29. Not blind to detector output; pending maintainer confirmation from the render.",
   sheets: r.sheets,
 }, null, 1) + "\n");
 console.log(`reconciled.json: ${r.sheets.length} sheets, ${r.resolved.length} resolved (${r.resolved.filter((k) => k in RESOLUTIONS).join(", ")}), 0 unresolved`);
