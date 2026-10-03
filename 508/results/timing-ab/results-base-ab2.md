@@ -1,0 +1,73 @@
+# Tile-leak measurement: base-ab2
+
+- url: http://localhost:5313/
+- worktree: <base checkout>
+- head: 788e39bfe9c42b3260ea75e84a655e4574f9bc8c
+- date: 2026-10-03T18:57:13.857Z
+
+| scenario | run | checkpoint | chip | tile workers (live/ever) | fonts per tile | fonts settle ms (max) | tile heap MB | tile backing MB | live keys per tile | opens / closes per tile |
+|---|---|---|---|---|---|---|---|---|---|---|
+| rapid | 1 | flips=0 | 1/2 | 5/5 | 5,5,5,5,5 | 208 | 101.5 | 42 | 1,1,1,1,1 | 1,1,1,1,1 / 0,0,0,0,0 |
+| rapid | 1 | after-rapid | 1/2 | 5/5 | 15,10,10,10,15 | 215 | 103 | 42 | 1,1,1,1,1 | 11,11,11,11,11 / 10,10,10,10,10 |
+| rapid | 1 | after-away-and-back | 1/2 | 5/5 | 25,20,20,20,25 | 207 | 103.7 | 42 | 1,1,1,1,1 | 13,13,13,13,13 / 12,12,12,12,12 |
+| rapid | 2 | flips=0 | 1/2 | 5/5 | 5,5,5,5,5 | 210 | 101.5 | 42 | 1,1,1,1,1 | 1,1,1,1,1 / 0,0,0,0,0 |
+| rapid | 2 | after-rapid | 1/2 | 5/5 | 15,10,10,10,15 | 210 | 103 | 42 | 1,1,1,1,1 | 11,11,11,11,11 / 10,10,10,10,10 |
+| rapid | 2 | after-away-and-back | 1/2 | 5/5 | 25,20,20,20,25 | 213 | 103.7 | 42 | 1,1,1,1,1 | 13,13,13,13,13 / 12,12,12,12,12 |
+| zoomed | 1 | flips=0 | 1/2 | 5/5 | 5,5,5,5,5 | 220 | 101.5 | 42 | 1,1,1,1,1 | 1,1,1,1,1 / 0,0,0,0,0 |
+| zoomed | 1 | after-5-zoom-flips | 1/2 | 5/5 | 35,35,35,35,35 | 206 | 103.5 | 42 | 1,1,1,1,1 | 7,7,7,7,7 / 6,6,6,6,6 |
+| zoomed | 2 | flips=0 | 1/2 | 5/5 | 5,5,5,5,5 | 207 | 101.5 | 42 | 1,1,1,1,1 | 1,1,1,1,1 / 0,0,0,0,0 |
+| zoomed | 2 | after-5-zoom-flips | 1/2 | 5/5 | 35,35,35,35,35 | 211 | 103.5 | 42 | 1,1,1,1,1 | 7,7,7,7,7 / 6,6,6,6,6 |
+| rapidEarly | 1 | after-rapid | 2/2 | 5/5 | 10,5,5,5,5 | 207 | 55.6 | 42 | 1,1,1,1,1 | 8,8,8,8,8 / 7,7,7,7,7 |
+| rapidEarly | 1 | after-away-and-back | 2/2 | 5/5 | 20,15,15,15,15 | 214 | 57 | 42 | 1,1,1,1,1 | 10,10,10,10,10 / 9,9,9,9,9 |
+| rapidEarly | 2 | after-rapid | 2/2 | 5/5 | 10,10,5,5,5 | 207 | 55.7 | 42 | 1,1,1,1,1 | 8,8,8,8,8 / 7,7,7,7,7 |
+| rapidEarly | 2 | after-away-and-back | 2/2 | 5/5 | 20,20,15,15,15 | 211 | 57 | 42 | 1,1,1,1,1 | 10,10,10,10,10 / 9,9,9,9,9 |
+
+| scenario | run | conclusive | flip→idle median / max ms | exceptions | console errors | [tiles] msgs | log errors | closeBeforeReady | closeWithUnanswered (renders) | "sheet closed" replies | readyAfterClose | msgs dispatched while render / open pending | opens / sheet replies | error capture probe | renderTile for unopened key | idle timeouts |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| rapid | 1 | INCONCLUSIVE | 874.5 / 1053 | 0 | 0 | 2 | 10 | 0 | 0 (0) | 0 | 0 | 0 / 0 | 65 / 65 | live | 2 | 0 |
+| rapid | 2 | INCONCLUSIVE | 880 / 1085 | 0 | 0 | 2 | 10 | 0 | 0 (0) | 0 | 0 | 0 / 0 | 65 / 65 | live | 2 | 0 |
+| zoomed | 1 | INCONCLUSIVE | 859.5 / 1082 | 0 | 0 | 1 | 10 | 0 | 0 (0) | 0 | 0 | 0 / 0 | 35 / 35 | live | 1 | 0 |
+| zoomed | 2 | INCONCLUSIVE | 859 / 1086 | 0 | 0 | 1 | 10 | 0 | 0 (0) | 0 | 0 | 0 / 0 | 35 / 35 | live | 1 | 0 |
+| rapidEarly | 1 | yes | 901 / 1196 | 0 | 0 | 2 | 10 | 20 | 0 (0) | 0 | 20 | 0 / 20 | 50 / 50 | live | 2 | 0 |
+| rapidEarly | 2 | yes | 897 / 1173 | 0 | 0 | 2 | 10 | 20 | 0 (0) | 0 | 20 | 0 / 20 | 50 / 50 | live | 2 | 0 |
+
+## Screenshots
+
+| scenario | run | step | chip | sha256 |
+|---|---|---|---|---|
+| rapid | 1 | after-load | 1/2 | `97069df37144398d` |
+| rapid | 1 | after-rapid | 1/2 | `666955b9f88968f2` |
+| rapid | 1 | after-away-and-back | 1/2 | `3bb1c504a87e9bc3` |
+| rapid | 2 | after-load | 1/2 | `97069df37144398d` |
+| rapid | 2 | after-rapid | 1/2 | `666955b9f88968f2` |
+| rapid | 2 | after-away-and-back | 1/2 | `3bb1c504a87e9bc3` |
+| zoomed | 1 | after-load | 1/2 | `97069df37144398d` |
+| zoomed | 1 | zoomed-in-settled | 1/2 | `bd7b8cc0fe19f53d` |
+| zoomed | 1 | after-5-zoom-flips | 1/2 | `999a84e0d7d9ef89` |
+| zoomed | 2 | after-load | 1/2 | `97069df37144398d` |
+| zoomed | 2 | zoomed-in-settled | 1/2 | `bd7b8cc0fe19f53d` |
+| zoomed | 2 | after-5-zoom-flips | 1/2 | `999a84e0d7d9ef89` |
+| rapidEarly | 1 | after-rapid | 2/2 | `45f4701cb324280e` |
+| rapidEarly | 1 | after-away-and-back | 2/2 | `7c22126b30b251c2` |
+| rapidEarly | 2 | after-rapid | 2/2 | `45f4701cb324280e` |
+| rapidEarly | 2 | after-away-and-back | 2/2 | `7c22126b30b251c2` |
+
+| scenario | step | identical across runs |
+|---|---|---|
+| rapid | after-load | yes |
+| rapid | after-rapid | yes |
+| rapid | after-away-and-back | yes |
+| zoomed | after-load | yes |
+| zoomed | zoomed-in-settled | yes |
+| zoomed | after-5-zoom-flips | yes |
+| rapidEarly | after-rapid | yes |
+| rapidEarly | after-away-and-back | yes |
+
+## Scenario details
+
+- rapid run1: before clicks {"opens":5,"sheetReady":5,"renderTile":14,"tilesOut":14}; 10 clicks over 456 ms, final chip 1/2, tile after last click: true, last click → last tile 1144 ms, final sheet canvas identical to away-and-back: true (whole-frame sha equal: false; differing px whole/canvas: 5/0, bbox 61x31+282+17)
+- rapid run2: before clicks {"opens":5,"sheetReady":5,"renderTile":14,"tilesOut":14}; 10 clicks over 458 ms, final chip 1/2, tile after last click: true, last click → last tile 1093 ms, final sheet canvas identical to away-and-back: true (whole-frame sha equal: false; differing px whole/canvas: 5/0, bbox 61x31+282+17)
+- rapidEarly run1: before clicks {"opens":0,"sheetReady":0,"renderTile":0,"tilesOut":0}; 10 clicks over 462 ms, final chip 2/2, tile after last click: true, last click → last tile 858 ms, final sheet canvas identical to away-and-back: true (whole-frame sha equal: false; differing px whole/canvas: 393/0, bbox 382x875+283+17)
+- rapidEarly run2: before clicks {"opens":0,"sheetReady":0,"renderTile":0,"tilesOut":0}; 10 clicks over 493 ms, final chip 2/2, tile after last click: true, last click → last tile 951 ms, final sheet canvas identical to away-and-back: true (whole-frame sha equal: false; differing px whole/canvas: 393/0, bbox 382x875+283+17)
+- zoomed run1: flip 0 ms after the first post-zoom renderTile; per cycle closeWithUnanswered(renders)/renderToClickMs: 0(0)/0, 0(0)/3, 0(0)/0, 0(0)/0, 0(0)/3
+- zoomed run2: flip 0 ms after the first post-zoom renderTile; per cycle closeWithUnanswered(renders)/renderToClickMs: 0(0)/0, 0(0)/3, 0(0)/3, 0(0)/0, 0(0)/3

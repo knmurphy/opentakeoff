@@ -1,0 +1,57 @@
+# Mutation 1: identity check removed in ok
+@@ -124,7 +124,7 @@ export function createTileSheetRegistry(deps: TileSheetDeps): TileSheetRegistry
+     sheets.set(sheetKey, entry);
+     ready.then(
+       () => {
+-        if (sheets.get(sheetKey) === entry) safePost({ type: "sheetReady", sheetKey });
++        safePost({ type: "sheetReady", sheetKey });
+       },
+       (err) => {
+         // A closed entry rejects here through the gate; a superseded one may
+✖ T3b: the old page resolves, then close and reopen in the same turn; its success handler is ignored (3.034417ms)
+ℹ tests 24
+ℹ pass 23
+ℹ fail 1
+✖ failing tests:
+✖ T3b: the old page resolves, then close and reopen in the same turn; its success handler is ignored (3.034417ms)
+  AssertionError [ERR_ASSERTION]: no sheetReady before the new load resolves
+
+# Mutation 2: identity check removed in err
+@@ -129,7 +129,6 @@ export function createTileSheetRegistry(deps: TileSheetDeps): TileSheetRegistry
+       (err) => {
+         // A closed entry rejects here through the gate; a superseded one may
+         // reject late. Neither may touch the key's current entry.
+-        if (sheets.get(sheetKey) !== entry) return;
+         sheets.delete(sheetKey);
+         destroyTask(entry.task);
+         safePost({ type: "sheetError", sheetKey, message: messageOf(err) });
+✖ T1 (closed mid-load): no reply for the abandoned load, destroy called once (3.191875ms)
+✖ T3a: close and reopen during the load (same turn); the old load's success is ignored (0.373333ms)
+✖ T3a: close and reopen during the load (flushed); the old load's success is ignored (0.331167ms)
+✖ T3c: the new load resolves first and the old one late; still one sheetReady (0.229792ms)
+✖ T4: close and reopen during the load; the old load fails (old rejects first) (0.285417ms)
+✖ T4: close and reopen during the load; the old load fails (new resolves first) (0.265167ms)
+✖ T5: a render queued on a load that never settles finishes when the sheet closes (0.4745ms)
+ℹ tests 24
+ℹ pass 17
+ℹ fail 7
+✖ failing tests:
+✖ T1 (closed mid-load): no reply for the abandoned load, destroy called once (3.191875ms)
+  AssertionError [ERR_ASSERTION]: zero posts
+✖ T3a: close and reopen during the load (same turn); the old load's success is ignored (0.373333ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+✖ T3a: close and reopen during the load (flushed); the old load's success is ignored (0.331167ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+✖ T3c: the new load resolves first and the old one late; still one sheetReady (0.229792ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+✖ T4: close and reopen during the load; the old load fails (old rejects first) (0.285417ms)
+  AssertionError [ERR_ASSERTION]: no sheetError from the old load
+✖ T4: close and reopen during the load; the old load fails (new resolves first) (0.265167ms)
+  AssertionError [ERR_ASSERTION]: no sheetError from the old load
+✖ T5: a render queued on a load that never settles finishes when the sheet closes (0.4745ms)
+  AssertionError [ERR_ASSERTION]: the new open still works
+
+# Restored
+ℹ tests 24
+ℹ pass 24
+ℹ fail 0

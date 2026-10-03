@@ -1,0 +1,323 @@
+✖ T1: closing an open sheet destroys its document once; a second close is a no-op (8.80275ms)
+✖ T1 (closed mid-load): no reply for the abandoned load, destroy called once (2.209375ms)
+✖ T2: a failed load is destroyed and reported once; the sheet is then not open (0.468875ms)
+✖ T3a: close and reopen during the load (same turn); the old load's success is ignored (0.4275ms)
+✖ T3a: close and reopen during the load (flushed); the old load's success is ignored (0.358ms)
+✖ T3b: the old page resolves, then close and reopen in the same turn; its success handler is ignored (0.323875ms)
+✖ T3c: the new load resolves first and the old one late; still one sheetReady (0.441167ms)
+✖ T4: close and reopen during the load; the old load fails (old rejects first) (0.453541ms)
+✖ T4: close and reopen during the load; the old load fails (new resolves first) (0.335791ms)
+✖ T5: a render queued on a load that never settles finishes when the sheet closes (0.531042ms)
+✖ T6: closing cancels the render in progress, which gets one "sheet closed" reply (RenderingCancelledException) (0.368417ms)
+✖ T6: closing cancels the render in progress, which gets one "sheet closed" reply (plain Error) (0.312667ms)
+✔ T6b: a render cancelled by reqId isn't cancelled again by the close, and stays silent (0.4715ms)
+✖ T7: a cancel landing in the same turn the render finishes closes the bitmap (0.268708ms)
+✔ T8: closing one sheet leaves another sheet's render alone (0.26425ms)
+✔ T9: openDocument throwing reports sheetError and registers nothing, so a reopen tries again (0.528334ms)
+✖ T10: a tile post that throws closes the bitmap, replies tileError, and doesn't block the sheet (0.2425ms)
+✔ T11: a duplicate open for an open sheet doesn't load it again (0.212625ms)
+✔ T12: the render dep throwing replies tileError and doesn't block the sheet (0.208125ms)
+✔ T13: destroy() rejecting is caught; close and reopen still work (0.243167ms)
+✔ T13 (destroy throws synchronously): close, a failed load and reopen still behave (0.292083ms)
+✖ T14: a render's cancel throwing inside the close doesn't stop the teardown (0.302167ms)
+✖ T15: closeSheet's handle() settles without waiting for destroy() (0.286333ms)
+✖ T16: a RenderingCancelledException nobody asked for is still answered with a tileError (0.286875ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 7
+ℹ fail 17
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1024.707208
+
+✖ failing tests:
+
+test at test/tileSheetRegistry.test.ts:1:2951
+✖ T1: closing an open sheet destroys its document once; a second close is a no-op (8.80275ms)
+  AssertionError [ERR_ASSERTION]: destroy called once
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:142:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:3504
+✖ T1 (closed mid-load): no reply for the abandoned load, destroy called once (2.209375ms)
+  AssertionError [ERR_ASSERTION]: zero posts
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:158:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:3847
+✖ T2: a failed load is destroyed and reported once; the sheet is then not open (0.468875ms)
+  AssertionError [ERR_ASSERTION]: destroy called
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:168:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:4349
+✖ T3a: close and reopen during the load (same turn); the old load's success is ignored (0.4275ms)
+  AssertionError [ERR_ASSERTION]: no sheetReady from the old load
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:189:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:4349
+✖ T3a: close and reopen during the load (flushed); the old load's success is ignored (0.358ms)
+  AssertionError [ERR_ASSERTION]: no sheetReady from the old load
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:189:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:5207
+✖ T3b: the old page resolves, then close and reopen in the same turn; its success handler is ignored (0.323875ms)
+  AssertionError [ERR_ASSERTION]: no sheetReady before the new load resolves
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:212:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:5675
+✖ T3c: the new load resolves first and the old one late; still one sheetReady (0.441167ms)
+  AssertionError [ERR_ASSERTION]: the late old load adds nothing
+  
+  2 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:229:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:6156
+✖ T4: close and reopen during the load; the old load fails (old rejects first) (0.453541ms)
+  AssertionError [ERR_ASSERTION]: no sheetError from the old load
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:250:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:6156
+✖ T4: close and reopen during the load; the old load fails (new resolves first) (0.335791ms)
+  AssertionError [ERR_ASSERTION]: no sheetError from the old load
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:250:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:6922
+✖ T5: a render queued on a load that never settles finishes when the sheet closes (0.531042ms)
+  AssertionError [ERR_ASSERTION]: the queued render settles
+  
+  false !== true
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:270:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:7826
+✖ T6: closing cancels the render in progress, which gets one "sheet closed" reply (RenderingCancelledException) (0.368417ms)
+  AssertionError [ERR_ASSERTION]: its handle cancelled once
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:296:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:7826
+✖ T6: closing cancels the render in progress, which gets one "sheet closed" reply (plain Error) (0.312667ms)
+  AssertionError [ERR_ASSERTION]: its handle cancelled once
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:296:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:8760
+✖ T7: a cancel landing in the same turn the render finishes closes the bitmap (0.268708ms)
+  AssertionError [ERR_ASSERTION]: bitmap closed
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:330:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:10101
+✖ T10: a tile post that throws closes the bitmap, replies tileError, and doesn't block the sheet (0.2425ms)
+  AssertionError [ERR_ASSERTION]: bitmap closed
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:378:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:12509
+✖ T14: a render's cancel throwing inside the close doesn't stop the teardown (0.302167ms)
+  AssertionError [ERR_ASSERTION]: destroy still called
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:460:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:13236
+✖ T15: closeSheet's handle() settles without waiting for destroy() (0.286333ms)
+  AssertionError [ERR_ASSERTION]: destroy was called, and is still pending
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:479:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test/tileSheetRegistry.test.ts:1:13677
+✖ T16: a RenderingCancelledException nobody asked for is still answered with a tileError (0.286875ms)
+  AssertionError [ERR_ASSERTION]: exactly one tileError
+  
+  0 !== 1
+  
+      at TestContext.<anonymous> (<fix checkout>/web/test/tileSheetRegistry.test.ts:493:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 0,
+    expected: 1,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

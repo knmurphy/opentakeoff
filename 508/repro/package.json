@@ -1,0 +1,1 @@
+{"name":"tile-leak-evidence","private":true,"dependencies":{"pdf-lib":"1.17.1","playwright-core":"1.63.0"}}
