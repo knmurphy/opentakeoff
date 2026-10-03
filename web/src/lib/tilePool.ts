@@ -34,7 +34,7 @@ type OutMsg =
   | { type: "tileError"; reqId: number; sheetKey: string; message: string };
 
 // Phone-class devices get a pool of ONE: the broadcast design means every
-// worker holds its own copy of the PDF bytes plus its own nested pdf.js parse,
+// worker holds its own copy of the PDF bytes plus its own in-thread pdf.js parse,
 // and on an iPhone that 3× footprint is what got the workers jetsam-killed
 // (reported live 2026-08-15: "worker failed", planset stuck half-rendered).
 // Desktop pool sizing is unchanged.

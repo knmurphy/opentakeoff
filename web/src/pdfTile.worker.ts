@@ -21,19 +21,19 @@
 // first getDocument() call in a fresh realm just throws `No
 // "GlobalWorkerOptions.workerSrc" specified.` (confirmed live — there's no
 // `disableWorker` option on this version's DocumentInitParameters either).
-// So: yes, this nests a worker inside a worker for the parse step. That's a
-// real extra thread hop, but it's still off the main UI thread, which is the
-// only thing that actually matters here — parsing was never going to be the
-// expensive part; painting (this worker's own job) is.
+// It doesn't start a nested worker, though: _initialize next reads
+// `window.location`, which throws in a worker, so pdf.js falls back to its
+// fake worker, which import()s workerSrc and parses on this worker's own
+// thread (measured in #508: globalThis.pdfjsWorker is set in every tile
+// worker). Importing pdf.worker.min.mjs in a dedicated worker also runs its
+// initializeFromPort(self), which adds a message listener here and posts one
+// { action: "ready" } message; tilePool reads only `type` and ignores it.
+// Parsing on this thread is fine: it's still off the main UI thread, and
+// parsing was never the expensive part; painting (this worker's own job) is.
 //
-// Protocol:
-//   in : { type:"openSheet", sheetKey, file, pageNum, data: ArrayBuffer }
-//        { type:"renderTile", reqId, sheetKey, scale, rect:{x,y,w,h}, dark }
-//        { type:"cancel", reqId }
-//        { type:"closeSheet", sheetKey }
-//   out: { type:"sheetReady", sheetKey } | { type:"sheetError", sheetKey, message }
-//        { type:"tile", reqId, sheetKey, bitmap: ImageBitmap, w, h }
-//        { type:"tileError", reqId, sheetKey, message }
+// The message handling (sheet lifecycle, render chain, cancel, replies) lives
+// in lib/tileSheetRegistry.ts, tested under Node; this file wires in pdf.js,
+// the OffscreenCanvas render and postMessage. The protocol is listed there.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 if (typeof (Promise as any).withResolvers !== "function") {
@@ -47,6 +47,7 @@ if (typeof (Promise as any).withResolvers !== "function") {
 
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { createTileSheetRegistry, type TileInMsg } from "./lib/tileSheetRegistry.ts";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -93,14 +94,6 @@ class WorkerFilterFactory {
   destroy() { /* nothing cached */ }
 }
 
-interface SheetEntry {
-  ready: Promise<unknown>; // resolves to the pdf.js page object
-  chain: Promise<void>;    // serializes renders on this sheet's page
-}
-
-const sheets = new Map<string, SheetEntry>();
-const inflight = new Map<number, { cancelled: boolean; task?: { cancel: () => void } }>();
-
 // tsconfig's `lib` is DOM-only (no "webworker" — TS disallows DOM + webworker
 // together in one program, and this repo's app code needs DOM). That makes
 // `self` type as `Window`, whose postMessage(message, targetOrigin, transfer)
@@ -119,98 +112,53 @@ function invertOffscreen(canvas: OffscreenCanvas) {
   ctx.restore();
 }
 
-type InMsg =
-  | { type: "openSheet"; sheetKey: string; pageNum: number; data: ArrayBuffer }
-  | { type: "renderTile"; reqId: number; sheetKey: string; scale: number; rect: { x: number; y: number; w: number; h: number }; dark: boolean }
-  | { type: "cancel"; reqId: number }
-  | { type: "closeSheet"; sheetKey: string };
-
-self.onmessage = async (e: MessageEvent<InMsg>) => {
-  const msg = e.data;
-  if (msg.type === "openSheet") {
-    if (sheets.has(msg.sheetKey)) return; // idempotent — same file, already opening/open
-    const ready = (async () => {
-      // workerSrc is set above (see header) — the parse step runs in a nested
-      // worker. CanvasFactory/FilterFactory MUST be overridden here: the DOM
-      // defaults dereference `document` mid-render (see class comments above).
-      const task = pdfjsLib.getDocument({
-        data: msg.data,
-        verbosity: 0,
-        CanvasFactory: OffscreenCanvasFactory,
-        FilterFactory: WorkerFilterFactory,
-        // FontLoader gates ALL embedded-font binding on `ownerDocument.fonts`
-        // (default ownerDocument = globalThis.document = undefined here), so
-        // without this every glyph paints as a .notdef tofu box (confirmed
-        // live at 102% zoom). Workers have their own FontFaceSet — self.fonts
-        // — and OffscreenCanvas text drawing reads from it, so handing pdf.js
-        // the worker global as its "document" makes embedded fonts load
-        // exactly like they do on the main thread. (FontLoader's DOM-y
-        // createElement/styleSheet path is only reached when FontFaceSet is
-        // MISSING, so it stays dead here.)
-        ownerDocument: self as unknown as Document,
-      });
-      const doc = await task.promise;
-      const page = await doc.getPage(msg.pageNum);
-      return page;
-    })();
-    sheets.set(msg.sheetKey, { ready, chain: Promise.resolve() });
-    ready.then(
-      () => post({ type: "sheetReady", sheetKey: msg.sheetKey }),
-      (err) => { sheets.delete(msg.sheetKey); post({ type: "sheetError", sheetKey: msg.sheetKey, message: String(err?.message || err) }); },
-    );
-    return;
-  }
-
-  if (msg.type === "closeSheet") {
-    sheets.delete(msg.sheetKey);
-    return;
-  }
-
-  if (msg.type === "cancel") {
-    const f = inflight.get(msg.reqId);
-    if (f) { f.cancelled = true; try { f.task?.cancel(); } catch { /* already done */ } }
-    return;
-  }
-
-  if (msg.type === "renderTile") {
-    const { reqId, sheetKey, scale, rect, dark } = msg;
-    const entry = sheets.get(sheetKey);
-    const flag = { cancelled: false } as { cancelled: boolean; task?: { cancel: () => void } };
-    inflight.set(reqId, flag);
-    if (!entry) {
-      inflight.delete(reqId);
-      post({ type: "tileError", reqId, sheetKey, message: "sheet not open" });
-      return;
-    }
-    entry.chain = entry.chain.then(async () => {
-      if (flag.cancelled) { inflight.delete(reqId); return; }
-      try {
-        const page = await entry.ready;
-        if (flag.cancelled) { inflight.delete(reqId); return; }
-        const canvas = new OffscreenCanvas(Math.max(1, rect.w), Math.max(1, rect.h));
-        const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const viewport = (page as any).getViewport({ scale });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const renderTask = (page as any).render({
-          canvasContext: ctx,
-          viewport,
-          transform: [1, 0, 0, 1, -rect.x, -rect.y],
-        });
-        flag.task = renderTask;
-        await renderTask.promise;
-        if (flag.cancelled) { inflight.delete(reqId); return; }
-        if (dark) invertOffscreen(canvas);
-        const bitmap = canvas.transferToImageBitmap();
-        inflight.delete(reqId);
-        post({ type: "tile", reqId, sheetKey, w: rect.w, h: rect.h, bitmap }, [bitmap]);
-      } catch (err) {
-        inflight.delete(reqId);
-        // RenderingCancelledException on supersede/cancel is expected, not an error
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if ((err as any)?.name === "RenderingCancelledException" || flag.cancelled) return;
-        post({ type: "tileError", reqId, sheetKey, message: String((err as Error)?.message || err) });
-      }
+const registry = createTileSheetRegistry({
+  openDocument(data, pageNum) {
+    // workerSrc is set above (see header); the parse runs on this thread.
+    // CanvasFactory/FilterFactory MUST be overridden here: the DOM defaults
+    // dereference `document` mid-render (see class comments above).
+    const task = pdfjsLib.getDocument({
+      data,
+      verbosity: 0,
+      CanvasFactory: OffscreenCanvasFactory,
+      FilterFactory: WorkerFilterFactory,
+      // FontLoader gates ALL embedded-font binding on `ownerDocument.fonts`
+      // (default ownerDocument = globalThis.document = undefined here), so
+      // without this every glyph paints as a .notdef tofu box (confirmed
+      // live at 102% zoom). Workers have their own FontFaceSet — self.fonts
+      // — and OffscreenCanvas text drawing reads from it, so handing pdf.js
+      // the worker global as its "document" makes embedded fonts load
+      // exactly like they do on the main thread. (FontLoader's DOM-y
+      // createElement/styleSheet path is only reached when FontFaceSet is
+      // MISSING, so it stays dead here.) Those FontFaces stay in self.fonts
+      // until the task is destroyed, which the registry does when the sheet
+      // closes or fails to load (#508).
+      ownerDocument: self as unknown as Document,
     });
-  }
-};
+    return { task, page: task.promise.then((doc) => doc.getPage(pageNum)) };
+  },
+  renderTile(page, { scale, rect, dark }) {
+    const canvas = new OffscreenCanvas(Math.max(1, rect.w), Math.max(1, rect.h));
+    const ctx = canvas.getContext("2d") as OffscreenCanvasRenderingContext2D;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const viewport = (page as any).getViewport({ scale });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const renderTask = (page as any).render({
+      canvasContext: ctx,
+      viewport,
+      transform: [1, 0, 0, 1, -rect.x, -rect.y],
+    });
+    return {
+      // The registry checks for a cancel after this resolves and closes the
+      // bitmap if one landed.
+      promise: renderTask.promise.then(() => {
+        if (dark) invertOffscreen(canvas);
+        return { bitmap: canvas.transferToImageBitmap(), w: rect.w, h: rect.h };
+      }),
+      cancel: () => renderTask.cancel(),
+    };
+  },
+  post: (msg, transfer) => post(msg, transfer ?? []),
+});
+
+self.onmessage = (e: MessageEvent<TileInMsg>) => { void registry.handle(e.data); };
