@@ -18,12 +18,12 @@
 // The only schedule module that imports the sheet graph: the canvas loads it
 // with import() when a marquee is read, and seeds conditions from the light
 // scheduleRows.ts.
-import { FOREIGN_HDR, extractTables, isNonFinishSchedule, readFinishMarquee, traceFinishMarquee, type Bbox, type GraphSpan, type MarqueeRead, type TableRow } from "./sheetgraph.ts";
+import { FOREIGN_HDR, extractTables, isNonFinishSchedule, readFinishMarquee, traceFinishMarquee, type Bbox, type GraphSpan, type MarqueeRead, type ScheduleTable, type TableRow } from "./sheetgraph.ts";
 import { FINISH_SECTION_CATEGORY, type FinishSection } from "./finishSections.ts";
 import { normalizeNotUsed } from "./notUsed.ts";
 import { finishCodeOk } from "./finishCode.ts";
 import { repairKey } from "./ocr/wordClean.ts";
-import { reshapeBox } from "./scheduleReshape.ts";
+import { reshapeBox, type AliasReshaped } from "./scheduleReshape.ts";
 import type { Category, CategorySource, ScheduleRow, Token } from "./scheduleRows.ts";
 
 /** Why a marquee gave no rows. "no-table": no finish table was read at all
@@ -249,23 +249,160 @@ const overlapFrac = (a: Bbox, b: Bbox): number => {
  *  section (sheetgraph.ts ExtractOpts.resetAtBlankBand); the vector read
  *  never sets it. */
 export function readScheduleSpans(spans: GraphSpan[], opts?: { ocr?: boolean }): ScheduleRead {
-  const first = readBox(spans, opts);
-  // A box that read no rows gets one more look with its layout normalized
+  const parsed = readParsed(spans, opts);
+  const first = parsed.read;
+  // A box that read rows gets one more look with its alias headers renamed
+  // (secondLook). A box that read no rows gets one with its layout normalized
   // (scheduleReshape.ts, #483): alias headers, a key column printed second,
   // a legend with no header row. Never after a refusal by title: a DOOR
   // SCHEDULE stays refused however its columns are arranged.
-  if (first.rows.length || ("refused" in first && first.refused === "title")) return first;
+  if (first.rows.length) return secondLook(parsed, spans, (s) => readParsed(s, opts), (p) => p).read;
+  if ("refused" in first && first.refused === "title") return first;
   const reshaped = reshapeBox(spans);
   if (!reshaped) return first;
   const second = readBox(reshaped.spans, opts);
   return second.rows.length && second.rows.length >= reshaped.codes ? second : first;
 }
 
-function readBox(spans: GraphSpan[], opts?: { ocr?: boolean }): ScheduleRead {
+/** A read and the parsed table its rows come from, row for row. */
+interface Parsed { read: ScheduleRead; table: ScheduleTable | null }
+
+/** The look at a box that already read rows: its alias headers renamed
+ *  (reshapeBox aliasesOnly), read again with `read`, and that read used only
+ *  when movedOnlyAliasCells says the alias columns' own cells are all that
+ *  moved. readScheduleSpans and readScheduleDebug both decide here; `of`
+ *  takes the read and its table out of what `read` returns. */
+function secondLook<T>(first: T, spans: GraphSpan[], read: (s: GraphSpan[]) => T, of: (t: T) => Parsed): T {
+  const look = reshapeBox(spans, { aliasesOnly: true });
+  if (!look) return first;
+  const second = read(look.spans);
+  return movedOnlyAliasCells(of(first), of(second), spans, look) ? second : first;
+}
+
+const wordsIn = (s: string | undefined) => (s ?? "").split(/\s+/).filter(Boolean);
+const sameWords = (a: string[], b: string[]) => a.length === b.length && a.every((w, i) => w === b[i]);
+/** Each word of b, counted, minus those of a: what b has that a hasn't. */
+const gained = (a: string[], b: string[]): string[] => {
+  const left = new Map<string, number>();
+  for (const w of a) left.set(w, (left.get(w) ?? 0) + 1);
+  return b.filter((w) => { const n = left.get(w) ?? 0; left.set(w, n - 1); return n <= 0; });
+};
+/** The words taken out of a to leave b, in order; null when b isn't a with words taken out. */
+const takenOut = (a: string[], b: string[]): string[] | null => {
+  const out: string[] = [];
+  let j = 0;
+  for (const w of a) { if (j < b.length && w === b[j]) j++; else out.push(w); }
+  return j === b.length ? out : null;
+};
+
+/** The rows of `second` matched to `first`'s, index for index, and its rows
+ *  whose code `first` skipped; null unless
+ *  (a) the rows are the same (finish_tag and section, in order) apart from
+ *      rows whose code `first` skipped (EPOX, whose cells sat in one column);
+ *  (b) code_checks, ocr_code, read_as and key_rule are the same;
+ *  (c) skipped only shrinks, each code leaving it read as one of those rows. */
+function matchRows(first: ScheduleRead, second: ScheduleRead): { pairs: Array<[number, number]>; extra: number[] } | null {
+  if ("refused" in second) return null;
+  const skipped = ("skipped" in first && first.skipped) || [];
+  const stillSkipped = ("skipped" in second && second.skipped) || [];
+  const pairs: Array<[number, number]> = [], extra: number[] = [];
+  let i = 0;
+  for (const [j, r] of second.rows.entries()) {
+    const f = first.rows[i];
+    if (f && f.finish_tag === r.finish_tag && f.section === r.section) { pairs.push([i, j]); i++; }
+    else if (skipped.includes(r.finish_tag)) extra.push(j);
+    else return null;
+  }
+  if (i !== first.rows.length) return null;
+  const extraTags = extra.map((j) => second.rows[j].finish_tag);
+  if (gained(skipped, [...stillSkipped, ...extraTags]).length || stillSkipped.length + extraTags.length !== skipped.length) return null;
+  for (const [i, j] of pairs) {
+    const f = first.rows[i], r = second.rows[j];
+    if (JSON.stringify(f.code_checks) !== JSON.stringify(r.code_checks) || f.ocr_code !== r.ocr_code || f.read_as !== r.read_as || f.key_rule !== r.key_rule) return null;
+  }
+  return { pairs, extra };
+}
+
+/** @internal Exported for tests: matchRows's row guards alone. */
+export function sameRead(first: ScheduleRead, second: ScheduleRead): boolean {
+  return matchRows(first, second) !== null;
+}
+
+/** Whether the renamed read moved each alias column's own cells and nothing
+ *  else. An alias column's own spans are the spans below the header whose x
+ *  range overlaps its header cell's printed text and no other header cell's
+ *  (a span under two header cells: no); each sits in one row of the renamed
+ *  read, by the rows' printed extents (a span between rows: no). Then, in
+ *  each row the first read had, the renamed column's cell is exactly its
+ *  spans' words, in print order; and every other cell is the first read's,
+ *  less only those words (taken from wherever the first read put them). So a
+ *  row's category, read from its section and its MATERIAL and DESCRIPTION
+ *  cells, changes only when the alias words leave one of those cells. A row
+ *  `first` skipped has its renamed cells checked the same way, and an alias
+ *  column with spans only in such rows is not used (a notes block beside the
+ *  header could be the only text in it). */
+function movedOnlyAliasCells(a: Parsed, b: Parsed, spans: GraphSpan[], look: AliasReshaped): boolean {
+  const match = matchRows(a.read, b.read);
+  const ta = a.table, tb = b.table;
+  if (!match || !ta || !tb || ta.rows.length !== a.read.rows.length || tb.rows.length !== b.read.rows.length) return false;
+  const right = (t: GraphSpan) => t.x + (t.w || 0);
+  const mid = (t: GraphSpan) => t.y + (t.h || 0) / 2;
+  const over = (s: GraphSpan, t: GraphSpan) => Math.min(right(s), right(t)) - Math.max(s.x, t.x) > 0;
+  const renamedCells = new Set(look.renamed.map((c) => c.cell));
+  const others = look.header.filter((t) => !renamedCells.has(t));
+  const headerBottom = Math.max(...look.header.map((t) => t.y + (t.h || 0)));
+  const extents = tb.rows.map((r) => {
+    const boxes = Object.values(r.cells).map((c) => c.bbox);
+    return [Math.min(...boxes.map((x) => x[1])), Math.max(...boxes.map((x) => x[3]))];
+  });
+  const tableBottom = Math.max(...extents.map((e) => e[1]));
+  // own[c][j]: renamed column c's spans in row j of the renamed read
+  const own = look.renamed.map(() => tb.rows.map((): GraphSpan[] => []));
+  for (const s of spans) {
+    if (look.header.includes(s) || mid(s) <= headerBottom || mid(s) > tableBottom) continue;
+    const under = look.renamed.flatMap((c, i) => (over(s, c.cell) ? [i] : []));
+    if (!under.length) continue;
+    if (under.length > 1 || others.some((t) => over(s, t))) return false;
+    const rows = extents.flatMap((e, j) => (mid(s) >= e[0] && mid(s) <= e[1] ? [j] : []));
+    if (rows.length !== 1) return false;
+    own[under[0]][rows[0]].push(s);
+  }
+  const printOrder = (p: GraphSpan, q: GraphSpan) => (Math.abs(mid(p) - mid(q)) > Math.min(p.h || 10, q.h || 10) / 2 ? mid(p) - mid(q) : p.x - q.x);
+  const ownWords = (c: number, j: number) => [...own[c][j]].sort(printOrder).flatMap((s) => wordsIn(s.str));
+  // each renamed column's cell is its own spans' words, in every row of the renamed read
+  for (const [c, rn] of look.renamed.entries()) {
+    for (const [j, r] of tb.rows.entries()) if (!sameWords(wordsIn(r.cells[rn.to]?.text), ownWords(c, j))) return false;
+    if (own[c].some((x) => x.length) && !match.pairs.some(([, j]) => own[c][j].length)) return false;
+  }
+  const targets = new Set(look.renamed.map((c) => c.to));
+  for (const [i, j] of match.pairs) {
+    const f = ta.rows[i], r = tb.rows[j];
+    const moved = look.renamed.flatMap((_, c) => ownWords(c, j));
+    const taken: string[] = [];
+    for (const col of new Set([...Object.keys(f.cells), ...Object.keys(r.cells)])) {
+      const was = wordsIn(f.cells[col]?.text), now = wordsIn(r.cells[col]?.text);
+      if (targets.has(col)) { if (was.length) return false; continue; }
+      if (sameWords(was, now)) continue;
+      const out = takenOut(was, now);
+      if (!out) return false;
+      taken.push(...out);
+    }
+    if (taken.length !== moved.length || gained(moved, taken).length) return false;
+  }
+  return true;
+}
+
+/** The read of a box, and the parsed table its rows come from. */
+function readParsed(spans: GraphSpan[], opts?: { ocr?: boolean }): Parsed {
   const parsed = readFinishMarquee({ key: "crop", spans }, { ocr: !!opts?.ocr });
   const original = readOf(parsed, spans, !!opts?.ocr);
-  if (!opts?.ocr || !parsed || parsed.kind !== "table" || "refused" in original) return original;
+  const table = parsed && parsed.kind === "table" ? parsed.table : null;
+  if (!opts?.ocr || !parsed || parsed.kind !== "table" || "refused" in original) return { read: original, table };
   return recoverNumericCodeRows(parsed, original, spans);
+}
+
+function readBox(spans: GraphSpan[], opts?: { ocr?: boolean }): ScheduleRead {
+  return readParsed(spans, opts).read;
 }
 
 /** A numeric-only first read (88-2) is not a finish key, so the parser
@@ -274,10 +411,11 @@ function readBox(spans: GraphSpan[], opts?: { ocr?: boolean }): ScheduleRead {
  * inside an already accepted finish table, keeping its existing keys, then
  * expose each recovered row with an EMPTY code: the person must enter it.
  * No alternate becomes a condition tag and no input span is rewritten. */
-function recoverNumericCodeRows(parsed: Extract<MarqueeRead, { kind: "table" }>, original: ScheduleRead, spans: GraphSpan[]): ScheduleRead {
+function recoverNumericCodeRows(parsed: Extract<MarqueeRead, { kind: "table" }>, original: ScheduleRead, spans: GraphSpan[]): Parsed {
+  const kept: Parsed = { read: original, table: parsed.table };
   const table = parsed.table;
   const keyBoxes = table.rows.flatMap(r => r.cells[table.headers[0]] ? [r.cells[table.headers[0]].bbox] : []);
-  if (!keyBoxes.length) return original;
+  if (!keyBoxes.length) return kept;
   const left = Math.min(...keyBoxes.map(b => b[0]));
   const right = Math.max(...keyBoxes.map(b => b[2]));
   const inside = (s: GraphSpan, b: Bbox) => s.x + s.w / 2 >= b[0] && s.x + s.w / 2 <= b[2] && s.y + s.h / 2 >= b[1] && s.y + s.h / 2 <= b[3];
@@ -299,12 +437,12 @@ function recoverNumericCodeRows(parsed: Extract<MarqueeRead, { kind: "table" }>,
     candidates.push(s);
     bottom = Math.max(bottom, s.y + s.h / 2 + 1.5 * pitch);
   }
-  if (!candidates.length) return original;
+  if (!candidates.length) return kept;
   const candidateSet = new Set(candidates);
   const reparsed = readFinishMarquee({ key: "crop", spans: spans.map(s => candidateSet.has(s) ? { ...s, str: s.codeAlternate! } : s) }, { ocr: true });
-  if (!reparsed || reparsed.kind !== "table") return original;
+  if (!reparsed || reparsed.kind !== "table") return kept;
   const read = readOf(reparsed, spans, true);
-  if ("refused" in read) return original;
+  if ("refused" in read) return kept;
   const recovered = new Map<number, GraphSpan>();
   reparsed.table.rows.forEach((r, i) => {
     const box = r.cells[reparsed.table.headers[0]]?.bbox;
@@ -314,14 +452,14 @@ function recoverNumericCodeRows(parsed: Extract<MarqueeRead, { kind: "table" }>,
   // Refuse a reparse that loses, reorders or renames an established identity.
   const oldKeys = original.rows.map(r => r.finish_tag);
   const keptKeys = read.rows.filter((_, i) => !recovered.has(i)).map(r => r.finish_tag);
-  if (!recovered.size || JSON.stringify(oldKeys) !== JSON.stringify(keptKeys)) return original;
-  return { ...read, rows: read.rows.map((row, i) => {
+  if (!recovered.size || JSON.stringify(oldKeys) !== JSON.stringify(keptKeys)) return kept;
+  return { table: reparsed.table, read: { ...read, rows: read.rows.map((row, i) => {
     const candidate = recovered.get(i);
     if (!candidate) return row;
     const result = { ...row, finish_tag: "", suggested: false, code_checks: [{ first: candidate.str, second: candidate.codeAlternate! }] };
     delete result.read_as;
     return result;
-  }) };
+  }) } };
 }
 
 /** @internal Tests only: the primary read (before numeric-row recovery)
@@ -331,11 +469,14 @@ function recoverNumericCodeRows(parsed: Extract<MarqueeRead, { kind: "table" }>,
 export function readScheduleDebug(spans: GraphSpan[], opts?: { ocr?: boolean }): { read: ScheduleRead } & Omit<ReturnType<typeof traceFinishMarquee>, "read"> {
   const trace = (s: GraphSpan[]) => {
     const t = traceFinishMarquee({ key: "crop", spans: s }, { ocr: !!opts?.ocr });
-    return { read: readOf(t.read, s, !!opts?.ocr), rows: t.rows, consumed: t.consumed, diag: t.diag };
+    return { read: readOf(t.read, s, !!opts?.ocr), rows: t.rows, consumed: t.consumed, diag: t.diag, table: t.read && t.read.kind === "table" ? t.read.table : null };
   };
-  // the same second look readScheduleSpans takes, traced on the reshaped box
+  // the same second looks readScheduleSpans takes, traced on the reshaped
+  // box; like for like where the read recovers no numeric code (the trace
+  // is taken before that recovery)
   const first = trace(spans);
-  if (first.read.rows.length || ("refused" in first.read && first.read.refused === "title")) return first;
+  if (first.read.rows.length) return secondLook(first, spans, trace, (t) => t);
+  if ("refused" in first.read && first.read.refused === "title") return first;
   const reshaped = reshapeBox(spans);
   const second = reshaped ? trace(reshaped.spans) : null;
   return second && second.read.rows.length && second.read.rows.length >= reshaped!.codes ? second : first;
