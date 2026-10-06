@@ -1,0 +1,34 @@
+| spans | mode | align | n | read on base | changed | box right->wrong | boxes w/ a row right->wrong | boxes w/ any field right->wrong | fixed clean |
+|---|---|---|---|---|---|---|---|---|---|
+| cell | text | left | 2 | 499 | 113 | 0 | 0 | 1 | 112 |
+| cell | text | left | 3 | 499 | 195 | 0 | 0 | 0 | 195 |
+| cell | text | left | 4 | 498 | 216 | 0 | 0 | 0 | 216 |
+| cell | text | left | 8 | 498 | 238 | 0 | 0 | 0 | 238 |
+| cell | text | mixed | 2 | 499 | 66 | 0 | 0 | 0 | 66 |
+| cell | text | mixed | 3 | 499 | 85 | 0 | 0 | 0 | 84 |
+| cell | text | mixed | 4 | 497 | 116 | 0 | 0 | 3 | 112 |
+| cell | text | mixed | 8 | 495 | 207 | 0 | 0 | 2 | 205 |
+| cell | ocr | left | 2 | 499 | 113 | 0 | 0 | 1 | 112 |
+| cell | ocr | left | 3 | 499 | 195 | 0 | 0 | 0 | 195 |
+| cell | ocr | left | 4 | 498 | 216 | 0 | 0 | 0 | 216 |
+| cell | ocr | left | 8 | 498 | 238 | 0 | 0 | 0 | 238 |
+| cell | ocr | mixed | 2 | 499 | 66 | 0 | 0 | 0 | 66 |
+| cell | ocr | mixed | 3 | 499 | 85 | 0 | 0 | 0 | 84 |
+| cell | ocr | mixed | 4 | 497 | 116 | 0 | 0 | 3 | 112 |
+| cell | ocr | mixed | 8 | 495 | 207 | 0 | 0 | 2 | 205 |
+| word | text | left | 2 | 499 | 102 | 0 | 0 | 2 | 96 |
+| word | text | left | 3 | 496 | 186 | 0 | 0 | 6 | 178 |
+| word | text | left | 4 | 499 | 215 | 1 | 1 | 9 | 202 |
+| word | text | left | 8 | 497 | 239 | 1 | 3 | 18 | 221 |
+| word | text | mixed | 2 | 499 | 62 | 1 | 2 | 5 | 52 |
+| word | text | mixed | 3 | 494 | 86 | 2 | 2 | 6 | 72 |
+| word | text | mixed | 4 | 496 | 116 | 2 | 7 | 20 | 89 |
+| word | text | mixed | 8 | 493 | 210 | 0 | 6 | 59 | 150 |
+| word | ocr | left | 2 | 499 | 102 | 0 | 0 | 2 | 96 |
+| word | ocr | left | 3 | 496 | 186 | 0 | 0 | 6 | 178 |
+| word | ocr | left | 4 | 499 | 215 | 1 | 1 | 9 | 202 |
+| word | ocr | left | 8 | 497 | 239 | 1 | 3 | 18 | 221 |
+| word | ocr | mixed | 2 | 499 | 62 | 1 | 2 | 5 | 52 |
+| word | ocr | mixed | 3 | 494 | 86 | 2 | 2 | 6 | 72 |
+| word | ocr | mixed | 4 | 496 | 116 | 2 | 7 | 20 | 89 |
+| word | ocr | mixed | 8 | 493 | 210 | 0 | 6 | 59 | 150 |

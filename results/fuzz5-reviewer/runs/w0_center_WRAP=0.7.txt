@@ -1,0 +1,2 @@
+{"words":false,"ocr":true,"opts":{"words":false,"WRAP":0.7,"AL":"center"},"N":500,"readOnBase":403,"zeroRowChanged":0,"changed":82,"rightBoxChanged":0,"boxHard":0,"rowHardBoxes":0,"fieldRegBoxes":1,"fixed":81}
+  {"seed":134,"hdr":"CODE|MATERIAL|MFG|NOTES|COLOR","widths":[73,173,263,84,272],"AL":"center","tables":1,"bad":["FL-1.remarks: \"\" -> \"1. SEE SPEC FOR TAG\" (truth \"\")","TL-2.remarks: \"\" -> \"2. ALL FINISHES BY OWNER\" (truth \"\")"]}

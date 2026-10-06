@@ -1,0 +1,24 @@
+control               exit=0 killed_by=0: 
+noguard               exit=1 killed_by=18: a far notes block beside the header line adds nothing to remarks (ocr=false) | a section heading 
+nowire                exit=1 killed_by=15: a far notes block beside the header line adds nothing to remarks (ocr=false) | a section heading 
+countonly             exit=1 killed_by=4: a four-letter code skipped today reads as a row once its maker has a column (ocr=false) | a sectio
+nosection             exit=1 killed_by=3: a section heading inside the MFG column falls back to today's read (ocr=false) | a section heading
+shift                 exit=1 killed_by=5: no column moves on a box that reads: TAG before CODE stays put (ocr=false) | the header is the lin
+debug                 exit=1 killed_by=2: the debug trace makes the same choice as the read (ocr=false) | the debug trace makes the same cho
+legend                exit=1 killed_by=1: a box printed in the reader's own headers is never reshaped, and a legend gets no alias look
+present               exit=1 killed_by=4: NOTES beside COMMENTS: no comment is lost (ocr=false) | an alias beside the column it names is not
+noconserve            exit=1 killed_by=1: sameRead: the alias read is used only when it just moved text between the fields of the same rows
+noskipped             exit=1 killed_by=2: a four-letter code skipped today reads as a row once its maker has a column (ocr=false) | sameRead
+noshrink              exit=1 killed_by=1: sameRead: the alias read is used only when it just moved text between the fields of the same rows
+firstheader           exit=1 killed_by=2: the header is the line nearest the data, not a note above it (ocr=false) | the header is the line 
+nopresentprefix       exit=1 killed_by=2: an alias beside the column it names is not renamed (ocr=false) | an alias beside the column it nam
+twoword               exit=1 killed_by=2: a header cell naming two columns doesn't stop the rename (ocr=false) | a header cell naming two co
+nocommentseq          exit=1 killed_by=2: NOTES beside COMMENTS: no comment is lost (ocr=false) | NOTES beside COMMENTS: no comment is lost 
+nochecks              exit=1 killed_by=2: sameRead: the alias read is used only when it just moved text between the fields of the same rows 
+nokeyrule             exit=1 killed_by=1: sameRead: a row's key rule must not change
+noearned              exit=1 killed_by=2: a skipped code that would be the only home of a renamed column's text falls back (ocr=false) | sam
+nofirstcode           exit=1 killed_by=1: a box with no code line gets no alias look
+nosplit               exit=1 killed_by=8: a four-letter code skipped today reads as a row once its maker has a column (ocr=true) | sameRead:
+nokeepone             exit=1 killed_by=7: sameRead: an alias column's words leave the column that took them, from the edge facing it, and no
+noabsorber-identical  exit=1 killed_by=1: sameRead: an alias column's words leave the column that took them, from the edge facing it, and no
+absorberleft          exit=1 killed_by=17: MFG | COLOR on a box that reads: maker and color in place (ocr=false) | MFR and NOTES on a box th

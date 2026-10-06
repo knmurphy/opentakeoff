@@ -1,0 +1,13 @@
+0  [web] node scripts/check-one-ort.mjs
+0  [web] npm run typecheck
+0  [web] npm run lint
+0  [web] npm run test:coverage
+0  [web] npm run bench
+0  [web] git diff --exit-code -- bench/results.json
+0  [web] npm run build
+0  [web] node scripts/check-ocr-dist.mjs
+0  [mcp] npm run typecheck
+0  [mcp] mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info test/*.test.ts
+0  [.] node scripts/check-doc-links.mjs
+0  [.] git status --porcelain
+0  [.] git diff --stat 4d6cfd0e -- mcp web/bench/results.json

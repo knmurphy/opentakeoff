@@ -1,0 +1,2 @@
+{"words":true,"ocr":true,"opts":{"words":true,"HFIT":0,"NARROW":1,"HJ":3,"AL":"left"},"N":500,"readOnBase":438,"zeroRowChanged":0,"changed":50,"rightBoxChanged":0,"boxHard":0,"rowHardBoxes":0,"fieldRegBoxes":1,"fixed":49}
+  {"seed":289,"hdr":"CODE|MATERIAL|SPECIFICATION|COLOR","widths":[93,196,88,152],"AL":"left","tables":1,"bad":["RB-3.spec_color: \"WARM WHITE\" -> \"WHITE\" (truth \"WARM WHITE\")"]}

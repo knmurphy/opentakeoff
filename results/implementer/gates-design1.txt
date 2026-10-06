@@ -1,0 +1,29 @@
+0  [web] node scripts/check-one-ort.mjs
+0  [web] node scripts/fetch-voice-model.mjs
+0  [web] node scripts/stage-ocr-model.mjs
+0  [web] npm run typecheck
+0  [web] npm run lint
+0  [web] npm run test:coverage
+0  [web] npm run bench
+0  [web] git diff --exit-code -- bench/results.json
+0  [web] npm run build
+0  [web] node scripts/check-ocr-dist.mjs
+0  [mcp] npm run typecheck
+0  [mcp] mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info test/*.test.ts
+0  [mcp] npm run check:tool-count
+0  [mcp] npm run check:protocol-resources
+0  [mcp] npm run check:wiki
+0  [mcp] npm run build
+0  [mcp] npm run smoke:dist
+0  [.] node --test evals/mcp-workflow-bench/score.test.mjs
+1  [.] node evals/mcp-workflow-bench/run.mjs --out <scratch>/bench-out
+0  [.] node evals/mcp-workflow-bench/run.mjs --reference evals/mcp-workflow-bench/plan-set/stcloud/reference.json --out <scratch>/bench-out/plan-set/stcloud
+0  [.] node evals/mcp-workflow-bench/run.mjs --reference evals/mcp-workflow-bench/plan-set/roseburg/reference.json --out <scratch>/bench-out/plan-set/roseburg
+0  [.] node evals/mcp-workflow-bench/run.mjs --reference evals/mcp-workflow-bench/plan-set/porterville/reference.json --out <scratch>/bench-out/plan-set/porterville
+0  [.] node --test scripts/publish-mcp-registry.test.mjs
+0  [.] node scripts/wait-for-npm-availability.test.mjs
+0  [.] node scripts/check-doc-links.mjs
+0  [.] npm run check --prefix protocol
+0  [.] git status --porcelain
+0  [.] git diff --stat 4d6cfd0e -- mcp web/bench/results.json
+0  [.] node evals/mcp-workflow-bench/run.mjs --out <fresh dir> (rerun of gate 19)

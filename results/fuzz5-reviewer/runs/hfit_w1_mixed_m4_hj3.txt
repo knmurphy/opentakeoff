@@ -1,0 +1,1 @@
+{"words":true,"ocr":true,"opts":{"words":true,"HFIT":4,"NARROW":1,"HJ":3,"AL":"mixed"},"N":500,"readOnBase":424,"zeroRowChanged":0,"changed":21,"rightBoxChanged":0,"boxHard":0,"rowHardBoxes":0,"fieldRegBoxes":0,"fixed":20}

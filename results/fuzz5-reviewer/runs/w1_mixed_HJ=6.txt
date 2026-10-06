@@ -1,0 +1,2 @@
+{"words":true,"ocr":true,"opts":{"words":true,"HJ":6,"AL":"mixed"},"N":500,"readOnBase":284,"zeroRowChanged":0,"changed":5,"rightBoxChanged":0,"boxHard":0,"rowHardBoxes":1,"fieldRegBoxes":1,"fixed":4}
+  {"seed":2,"hdr":"CODE|MFG|SPECIFICATION|MATERIAL|COLOR","widths":[69,83,59,273,243],"AL":"mixed","tables":1,"bad":["FL-2.description: \"PORCELAIN TILE\" -> \"TILE — PORCELAIN\" (truth \"PORCELAIN TILE\")"]}

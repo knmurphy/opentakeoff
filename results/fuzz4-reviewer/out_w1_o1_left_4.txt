@@ -1,0 +1,2 @@
+{"words":true,"ocr":true,"AL":"left","NR":4,"N":500,"readOnBase":499,"changed":215,"boxHard":1,"rowHardBoxes":1,"fieldRegBoxes":9,"fixed":202,"changedNoFix":4}
+  {"seed":143,"rowHard":3,"hdr":"CODE|MATERIAL|COLOR|MFG|REMARKS","widths":[94,131,137,111,196],"align":"left","bad":["TL-1.manufacturer: base \"\" -> head \"ALL\" (truth \"\")","TL-1.remarks: base \"ALL FLOORS\" -> head \"FLOORS\" (truth \"ALL FLOORS\")","CPT-2.manufacturer: base \"\" -> head \"ALL\" (truth \"\")","CPT-2.remarks: base \"ALL FLOORS\" -> head \"FLOORS\" (truth \"ALL FLOORS\")"]}

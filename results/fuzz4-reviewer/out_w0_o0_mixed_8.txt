@@ -1,0 +1,1 @@
+{"words":false,"ocr":false,"AL":"mixed","NR":8,"N":500,"readOnBase":495,"changed":207,"boxHard":0,"rowHardBoxes":0,"fieldRegBoxes":2,"fixed":205,"changedNoFix":0}

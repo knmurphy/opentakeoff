@@ -1,0 +1,2800 @@
+TAP version 13
+# Subtest: MFG / SPECIFICATION / NOTES headers read as manufacturer, description and remarks
+ok 1 - MFG / SPECIFICATION / NOTES headers read as manufacturer, description and remarks
+  ---
+  duration_ms: 6.566
+  type: 'test'
+  ...
+# Subtest: a key column printed second reads, with or without the aliases
+ok 2 - a key column printed second reads, with or without the aliases
+  ---
+  duration_ms: 2.898875
+  type: 'test'
+  ...
+# Subtest: a finish legend with no header row reads as code and description
+ok 3 - a finish legend with no header row reads as code and description
+  ---
+  duration_ms: 1.007458
+  type: 'test'
+  ...
+# Subtest: a box printed in the reader's own headers is never reshaped, and a legend gets no alias look
+ok 4 - a box printed in the reader's own headers is never reshaped, and a legend gets no alias look
+  ---
+  duration_ms: 2.317208
+  type: 'test'
+  ...
+# Subtest: negative controls stay unread
+ok 5 - negative controls stay unread
+  ---
+  duration_ms: 0.682834
+  type: 'test'
+  ...
+# Subtest: section headings at the left edge of a MATERIAL | CODE table keep their sections
+ok 6 - section headings at the left edge of a MATERIAL | CODE table keep their sections
+  ---
+  duration_ms: 0.7
+  type: 'test'
+  ...
+# Subtest: a header naming MARK and CODE keys on CODE
+ok 7 - a header naming MARK and CODE keys on CODE
+  ---
+  duration_ms: 0.31
+  type: 'test'
+  ...
+# Subtest: a legend with a note beside some lines keeps every row, the note as remarks
+ok 8 - a legend with a note beside some lines keeps every row, the note as remarks
+  ---
+  duration_ms: 0.423375
+  type: 'test'
+  ...
+# Subtest: ambiguous boxes read nothing rather than rows in the wrong fields
+ok 9 - ambiguous boxes read nothing rather than rows in the wrong fields
+  ---
+  duration_ms: 0.445625
+  type: 'test'
+  ...
+# Subtest: MFG | COLOR on a box that reads: maker and color in place (ocr=false)
+ok 10 - MFG | COLOR on a box that reads: maker and color in place (ocr=false)
+  ---
+  duration_ms: 1.003416
+  type: 'test'
+  ...
+# Subtest: MFR and NOTES on a box that reads (ocr=false)
+ok 11 - MFR and NOTES on a box that reads (ocr=false)
+  ---
+  duration_ms: 0.392709
+  type: 'test'
+  ...
+# Subtest: NOTES printed last on a box that reads (ocr=false)
+ok 12 - NOTES printed last on a box that reads (ocr=false)
+  ---
+  duration_ms: 0.346709
+  type: 'test'
+  ...
+# Subtest: MFG before MATERIAL: the maker leaves the description, and the base row is a base (ocr=false)
+ok 13 - MFG before MATERIAL: the maker leaves the description, and the base row is a base (ocr=false)
+  ---
+  duration_ms: 0.318167
+  type: 'test'
+  ...
+# Subtest: SPEC beside MANUFACTURER: the section joins the description, not the maker (ocr=false)
+ok 14 - SPEC beside MANUFACTURER: the section joins the description, not the maker (ocr=false)
+  ---
+  duration_ms: 0.345375
+  type: 'test'
+  ...
+# Subtest: an alias header reads as the reader's own header word would (ocr=false)
+ok 15 - an alias header reads as the reader's own header word would (ocr=false)
+  ---
+  duration_ms: 2.736542
+  type: 'test'
+  ...
+# Subtest: a four-letter code skipped today reads as a row once its maker has a column (ocr=false)
+ok 16 - a four-letter code skipped today reads as a row once its maker has a column (ocr=false)
+  ---
+  duration_ms: 1.021917
+  type: 'test'
+  ...
+# Subtest: NOT USED under NOTES unticks its row, as under REMARKS (ocr=false)
+ok 17 - NOT USED under NOTES unticks its row, as under REMARKS (ocr=false)
+  ---
+  duration_ms: 0.365875
+  type: 'test'
+  ...
+# Subtest: no column moves on a box that reads: TAG before CODE stays put (ocr=false)
+ok 18 - no column moves on a box that reads: TAG before CODE stays put (ocr=false)
+  ---
+  duration_ms: 0.522375
+  type: 'test'
+  ...
+# Subtest: the header is the line nearest the data, not a note above it (ocr=false)
+ok 19 - the header is the line nearest the data, not a note above it (ocr=false)
+  ---
+  duration_ms: 0.379334
+  type: 'test'
+  ...
+# Subtest: a header cell naming two columns doesn't stop the rename (ocr=false)
+ok 20 - a header cell naming two columns doesn't stop the rename (ocr=false)
+  ---
+  duration_ms: 0.560166
+  type: 'test'
+  ...
+# Subtest: a far notes block beside the header line adds nothing to remarks (ocr=false)
+ok 21 - a far notes block beside the header line adds nothing to remarks (ocr=false)
+  ---
+  duration_ms: 0.776042
+  type: 'test'
+  ...
+# Subtest: NOTES beside COMMENTS: no comment is lost (ocr=false)
+ok 22 - NOTES beside COMMENTS: no comment is lost (ocr=false)
+  ---
+  duration_ms: 0.315375
+  type: 'test'
+  ...
+# Subtest: a section heading inside the MFG column falls back to today's read (ocr=false)
+ok 23 - a section heading inside the MFG column falls back to today's read (ocr=false)
+  ---
+  duration_ms: 0.320583
+  type: 'test'
+  ...
+# Subtest: an alias beside the column it names is not renamed (ocr=false)
+ok 24 - an alias beside the column it names is not renamed (ocr=false)
+  ---
+  duration_ms: 0.728208
+  type: 'test'
+  ...
+# Subtest: a skipped code that would be the only home of a renamed column's text falls back (ocr=false)
+ok 25 - a skipped code that would be the only home of a renamed column's text falls back (ocr=false)
+  ---
+  duration_ms: 0.654125
+  type: 'test'
+  ...
+# Subtest: the debug trace makes the same choice as the read (ocr=false)
+ok 26 - the debug trace makes the same choice as the read (ocr=false)
+  ---
+  duration_ms: 2.553625
+  type: 'test'
+  ...
+# Subtest: MFG | COLOR on a box that reads: maker and color in place (ocr=true)
+ok 27 - MFG | COLOR on a box that reads: maker and color in place (ocr=true)
+  ---
+  duration_ms: 0.632208
+  type: 'test'
+  ...
+# Subtest: MFR and NOTES on a box that reads (ocr=true)
+ok 28 - MFR and NOTES on a box that reads (ocr=true)
+  ---
+  duration_ms: 0.325959
+  type: 'test'
+  ...
+# Subtest: NOTES printed last on a box that reads (ocr=true)
+ok 29 - NOTES printed last on a box that reads (ocr=true)
+  ---
+  duration_ms: 0.290334
+  type: 'test'
+  ...
+# Subtest: MFG before MATERIAL: the maker leaves the description, and the base row is a base (ocr=true)
+ok 30 - MFG before MATERIAL: the maker leaves the description, and the base row is a base (ocr=true)
+  ---
+  duration_ms: 0.269625
+  type: 'test'
+  ...
+# Subtest: SPEC beside MANUFACTURER: the section joins the description, not the maker (ocr=true)
+ok 31 - SPEC beside MANUFACTURER: the section joins the description, not the maker (ocr=true)
+  ---
+  duration_ms: 0.297417
+  type: 'test'
+  ...
+# Subtest: an alias header reads as the reader's own header word would (ocr=true)
+ok 32 - an alias header reads as the reader's own header word would (ocr=true)
+  ---
+  duration_ms: 2.4015
+  type: 'test'
+  ...
+# Subtest: a four-letter code skipped today reads as a row once its maker has a column (ocr=true)
+ok 33 - a four-letter code skipped today reads as a row once its maker has a column (ocr=true)
+  ---
+  duration_ms: 0.344417
+  type: 'test'
+  ...
+# Subtest: NOT USED under NOTES unticks its row, as under REMARKS (ocr=true)
+ok 34 - NOT USED under NOTES unticks its row, as under REMARKS (ocr=true)
+  ---
+  duration_ms: 0.261875
+  type: 'test'
+  ...
+# Subtest: no column moves on a box that reads: TAG before CODE stays put (ocr=true)
+ok 35 - no column moves on a box that reads: TAG before CODE stays put (ocr=true)
+  ---
+  duration_ms: 0.2575
+  type: 'test'
+  ...
+# Subtest: the header is the line nearest the data, not a note above it (ocr=true)
+ok 36 - the header is the line nearest the data, not a note above it (ocr=true)
+  ---
+  duration_ms: 0.259916
+  type: 'test'
+  ...
+# Subtest: a header cell naming two columns doesn't stop the rename (ocr=true)
+ok 37 - a header cell naming two columns doesn't stop the rename (ocr=true)
+  ---
+  duration_ms: 0.221625
+  type: 'test'
+  ...
+# Subtest: a far notes block beside the header line adds nothing to remarks (ocr=true)
+ok 38 - a far notes block beside the header line adds nothing to remarks (ocr=true)
+  ---
+  duration_ms: 0.830417
+  type: 'test'
+  ...
+# Subtest: NOTES beside COMMENTS: no comment is lost (ocr=true)
+ok 39 - NOTES beside COMMENTS: no comment is lost (ocr=true)
+  ---
+  duration_ms: 0.255834
+  type: 'test'
+  ...
+# Subtest: a section heading inside the MFG column falls back to today's read (ocr=true)
+ok 40 - a section heading inside the MFG column falls back to today's read (ocr=true)
+  ---
+  duration_ms: 0.289417
+  type: 'test'
+  ...
+# Subtest: an alias beside the column it names is not renamed (ocr=true)
+ok 41 - an alias beside the column it names is not renamed (ocr=true)
+  ---
+  duration_ms: 0.754459
+  type: 'test'
+  ...
+# Subtest: a skipped code that would be the only home of a renamed column's text falls back (ocr=true)
+ok 42 - a skipped code that would be the only home of a renamed column's text falls back (ocr=true)
+  ---
+  duration_ms: 0.720417
+  type: 'test'
+  ...
+# Subtest: the debug trace makes the same choice as the read (ocr=true)
+ok 43 - the debug trace makes the same choice as the read (ocr=true)
+  ---
+  duration_ms: 2.713042
+  type: 'test'
+  ...
+# Subtest: the alias reshape renames headers only: no span moves
+ok 44 - the alias reshape renames headers only: no span moves
+  ---
+  duration_ms: 0.199833
+  type: 'test'
+  ...
+# Subtest: sameRead: the alias read is used only when it just moved text between the fields of the same rows
+ok 45 - sameRead: the alias read is used only when it just moved text between the fields of the same rows
+  ---
+  duration_ms: 0.2465
+  type: 'test'
+  ...
+# Subtest: sameRead: an alias column's words leave the column that took them, from the edge facing it, and nothing else moves
+ok 46 - sameRead: an alias column's words leave the column that took them, from the edge facing it, and nothing else moves
+  ---
+  duration_ms: 0.199333
+  type: 'test'
+  ...
+# Subtest: a blank MFG column takes no color (ocr=false)
+ok 47 - a blank MFG column takes no color (ocr=false)
+  ---
+  duration_ms: 0.257916
+  type: 'test'
+  ...
+# Subtest: a row with no maker keeps its color when another row's maker is renamed (ocr=false)
+ok 48 - a row with no maker keeps its color when another row's maker is renamed (ocr=false)
+  ---
+  duration_ms: 0.256291
+  type: 'test'
+  ...
+# Subtest: a wide neighbour's cells don't move into the renamed column (ocr=false)
+ok 49 - a wide neighbour's cells don't move into the renamed column (ocr=false)
+  ---
+  duration_ms: 0.600667
+  type: 'test'
+  ...
+# Subtest: an OCR box glued across MFG | COLOR keeps the first read (ocr=false)
+ok 50 - an OCR box glued across MFG | COLOR keeps the first read (ocr=false)
+  ---
+  duration_ms: 0.480041
+  type: 'test'
+  ...
+# Subtest: a blank MFG column takes no color (ocr=true)
+ok 51 - a blank MFG column takes no color (ocr=true)
+  ---
+  duration_ms: 0.234167
+  type: 'test'
+  ...
+# Subtest: a row with no maker keeps its color when another row's maker is renamed (ocr=true)
+ok 52 - a row with no maker keeps its color when another row's maker is renamed (ocr=true)
+  ---
+  duration_ms: 0.201
+  type: 'test'
+  ...
+# Subtest: a wide neighbour's cells don't move into the renamed column (ocr=true)
+ok 53 - a wide neighbour's cells don't move into the renamed column (ocr=true)
+  ---
+  duration_ms: 0.591625
+  type: 'test'
+  ...
+# Subtest: an OCR box glued across MFG | COLOR keeps the first read (ocr=true)
+ok 54 - an OCR box glued across MFG | COLOR keeps the first read (ocr=true)
+  ---
+  duration_ms: 0.224083
+  type: 'test'
+  ...
+# Subtest: a box with no code line gets no alias look
+ok 55 - a box with no code line gets no alias look
+  ---
+  duration_ms: 0.069458
+  type: 'test'
+  ...
+# Subtest: sameRead: a row's key rule must not change
+ok 56 - sameRead: a row's key rule must not change
+  ---
+  duration_ms: 0.072667
+  type: 'test'
+  ...
+# Subtest: a cell split into two runs keeps its words when MFG has none (ocr=false)
+not ok 57 - a cell split into two runs keeps its words when MFG has none (ocr=false)
+  ---
+  duration_ms: 2.579042
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:37759'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     'WARM',
+    +     'WHITE'
+    -     '',
+    -     'WARM WHITE'
+        ],
+        [
+          'FL-2',
+    +     'COOL GRAY',
+    +     '2'
+    -     '',
+    -     'COOL GRAY 2'
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: ''
+      2: 'WARM WHITE'
+    1:
+      0: 'FL-2'
+      1: ''
+      2: 'COOL GRAY 2'
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'WARM'
+      2: 'WHITE'
+    1:
+      0: 'FL-2'
+      1: 'COOL GRAY'
+      2: '2'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:490:12)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed143 (ocr=false)
+not ok 58 - a neighbour's cell nearer the renamed header keeps the first read: seed143 (ocr=false)
+  ---
+  duration_ms: 0.481708
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'TL-1',
+          'LVT',
+    +     'ALL',
+    -     '',
+          'GRAY',
+    +     'FLOORS',
+    -     'ALL FLOORS',
+          'unassigned',
+          true
+        ],
+        [
+          'CPT-2',
+          'RUBBER BASE',
+    +     'ALL',
+    -     '',
+          'GRAY',
+    +     'FLOORS',
+    -     'ALL FLOORS',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'TL-1'
+      1: 'LVT'
+      2: ''
+      3: 'GRAY'
+      4: 'ALL FLOORS'
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'GRAY'
+      4: 'ALL FLOORS'
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'TL-1'
+      1: 'LVT'
+      2: 'ALL'
+      3: 'GRAY'
+      4: 'FLOORS'
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'RUBBER BASE'
+      2: 'ALL'
+      3: 'GRAY'
+      4: 'FLOORS'
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed442 (ocr=false)
+not ok 59 - a neighbour's cell nearer the renamed header keeps the first read: seed442 (ocr=false)
+  ---
+  duration_ms: 0.408916
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'FL-1',
+          'TILE CARPET',
+          '',
+    ...
+          '',
+    +     'COOL GRAY',
+    +     '2',
+    -     'COOL GRAY 2',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'TL-4',
+          'RESILIENT FLOOR',
+          '',
+    +     'GRAY',
+    +     'NOT USED',
+    -     'GRAY NOT USED',
+    -     '',
+          'unassigned',
+    +     false
+    -     true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'TILE CARPET'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'TL-4'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'GRAY NOT USED'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'TILE CARPET'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY'
+      4: '2'
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'TL-4'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'GRAY'
+      4: 'NOT USED'
+      5: 'unassigned'
+      6: false
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed333 (ocr=false)
+not ok 60 - a neighbour's cell nearer the renamed header keeps the first read: seed333 (ocr=false)
+  ---
+  duration_ms: 0.463916
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'FL-1',
+          'PORCELAIN',
+    +     'WHITE',
+    +     'TILE WARM',
+          '',
+    -     'TILE WARM WHITE',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-2',
+    ...
+          'PORCELAIN',
+    +     'VENDOR-T',
+    +     'TILE SLATE',
+          '',
+    -     'TILE SLATE VENDOR-T',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-4',
+          'RUBBER BASE',
+    +     'WHITE',
+    +     'WARM',
+          '',
+    -     'WARM WHITE',
+    -     '',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'PORCELAIN'
+      2: ''
+      3: 'TILE WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: ''
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'PORCELAIN'
+      2: ''
+      3: 'TILE SLATE VENDOR-T'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'FL-4'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'PORCELAIN'
+      2: 'WHITE'
+      3: 'TILE WARM'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: ''
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'PORCELAIN'
+      2: 'VENDOR-T'
+      3: 'TILE SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'FL-4'
+      1: 'RUBBER BASE'
+      2: 'WHITE'
+      3: 'WARM'
+      4: ''
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed121 (ocr=false)
+not ok 61 - a neighbour's cell nearer the renamed header keeps the first read: seed121 (ocr=false)
+  ---
+  duration_ms: 0.365583
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'RB-1',
+          'CERAMIC TILE',
+          '',
+    ...
+          'PORCELAIN TILE',
+    +     'TRANSITIONS',
+    +     'WARM WHITE',
+    +     'INC',
+    -     '',
+    -     'WARM WHITE TRANSITIONS INC',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'CPT-3',
+          'RUBBER BASE',
+    +     'TRANSITIONS',
+    +     'BLUE',
+    +     'INC',
+    -     '',
+    -     'BLUE TRANSITIONS INC',
+    -     '',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'RB-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'PORCELAIN TILE'
+      2: ''
+      3: 'WARM WHITE TRANSITIONS INC'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'BLUE TRANSITIONS INC'
+      4: ''
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'RB-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'PORCELAIN TILE'
+      2: 'TRANSITIONS'
+      3: 'WARM WHITE'
+      4: 'INC'
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'RUBBER BASE'
+      2: 'TRANSITIONS'
+      3: 'BLUE'
+      4: 'INC'
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed197 (ocr=false)
+not ok 62 - a neighbour's cell nearer the renamed header keeps the first read: seed197 (ocr=false)
+  ---
+  duration_ms: 0.375583
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'TL-1',
+          'CARPET TILE',
+          '',
+    ...
+          'SEALED CONCRETE',
+    +     'BLUE PEAK TILE',
+    +     'BLACK',
+    +     'CO',
+    -     '',
+    -     'BLACK BLUE PEAK TILE CO',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'RB-3',
+          'RUBBER BASE',
+    +     'BLUE PEAK TILE',
+    +     'GRAY',
+    +     'CO',
+    -     '',
+    -     'GRAY BLUE PEAK TILE CO',
+    -     '',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'TL-1'
+      1: 'CARPET TILE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'SEALED CONCRETE'
+      2: ''
+      3: 'BLACK BLUE PEAK TILE CO'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'GRAY BLUE PEAK TILE CO'
+      4: ''
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'TL-1'
+      1: 'CARPET TILE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'SEALED CONCRETE'
+      2: 'BLUE PEAK TILE'
+      3: 'BLACK'
+      4: 'CO'
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'RUBBER BASE'
+      2: 'BLUE PEAK TILE'
+      3: 'GRAY'
+      4: 'CO'
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed35 (ocr=false)
+not ok 63 - a neighbour's cell nearer the renamed header keeps the first read: seed35 (ocr=false)
+  ---
+  duration_ms: 0.262333
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'TL-1',
+          'CERAMIC TILE',
+          '',
+    +     'COOL GRAY 2',
+    +     'BLUE PEAK TILE CO',
+    -     'COOL GRAY 2 BLUE PEAK TILE CO',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'CPT-2',
+          'CERAMIC TILE',
+          '',
+    +     'COOL GRAY 2',
+    +     'VENDOR A',
+    -     'COOL GRAY 2 VENDOR A',
+    -     '',
+          'unassigned',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'TL-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2 BLUE PEAK TILE CO'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2 VENDOR A'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'TL-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: 'BLUE PEAK TILE CO'
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: 'VENDOR A'
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed321 (ocr=false)
+not ok 64 - a neighbour's cell nearer the renamed header keeps the first read: seed321 (ocr=false)
+  ---
+  duration_ms: 0.388291
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'CPT-1',
+    +     'PORCELAIN TILE — 30 00',
+    -     '30 00 PORCELAIN TILE',
+          '',
+          'SLATE',
+          '',
+          'unassigned',
+          true
+    ...
+          'CPT-2',
+    +     '00 — 09 30',
+    -     '09 30 00',
+          '',
+          'BLUE',
+          '',
+          'unassigned',
+          true
+    ...
+          'TL-3',
+    +     'PORCELAIN TILE — 096813',
+    -     '096813 PORCELAIN TILE',
+          '',
+          'WARM WHITE',
+          '',
+          'unassigned',
+          true
+    ...
+          'CPT-4',
+    +     '00 — 09 30',
+    -     '09 30 00',
+          '',
+          'BLUE',
+          '',
+          'unassigned',
+          true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'CPT-1'
+      1: '30 00 PORCELAIN TILE'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: '09 30 00'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'TL-3'
+      1: '096813 PORCELAIN TILE'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'CPT-4'
+      1: '09 30 00'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'CPT-1'
+      1: 'PORCELAIN TILE — 30 00'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: '00 — 09 30'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'TL-3'
+      1: 'PORCELAIN TILE — 096813'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'CPT-4'
+      1: '00 — 09 30'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed180 (ocr=false)
+not ok 65 - a neighbour's cell nearer the renamed header keeps the first read: seed180 (ocr=false)
+  ---
+  duration_ms: 0.284416
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'CPT-1',
+    +     'LVT — 09 30 00',
+    -     '09 30 00 LVT',
+          '',
+          'BLUE',
+          '',
+          'unassigned',
+          true
+    ...
+          '',
+    +     'unassigned',
+    -     'base',
+          true
+        ],
+        [
+          'RB-3',
+          'LVT',
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'CPT-1'
+      1: '09 30 00 LVT'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: '09 65 13 RUBBER BASE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'base'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'LVT'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'CPT-1'
+      1: 'LVT — 09 30 00'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: '09 65 13 RUBBER BASE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'LVT'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed34 (ocr=false)
+not ok 66 - a neighbour's cell nearer the renamed header keeps the first read: seed34 (ocr=false)
+  ---
+  duration_ms: 0.40025
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     'RUBBER BASE — 09 30 00',
+    -     'RUBBER BASE',
+          '',
+    +     'WARM WHITE',
+    -     '09 30 00 WARM WHITE',
+          '',
+          'base',
+          true
+        ],
+        [
+          'FL-2',
+    +     'PORCELAIN — 09 65 13',
+    +     'TILE',
+    +     'BLACK',
+    -     'PORCELAIN',
+          '',
+    -     'TILE 09 65 13 BLACK',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-3',
+    +     'RESILIENT — 09 30 00',
+    +     'FLOOR',
+    +     'COOL GRAY 2',
+    -     'RESILIENT',
+          '',
+    -     'FLOOR 09 30 00 COOL GRAY 2',
+    -     '',
+          'unassigned',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'RUBBER BASE'
+      2: ''
+      3: '09 30 00 WARM WHITE'
+      4: ''
+      5: 'base'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'PORCELAIN'
+      2: ''
+      3: 'TILE 09 65 13 BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'RESILIENT'
+      2: ''
+      3: 'FLOOR 09 30 00 COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'RUBBER BASE — 09 30 00'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'base'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'PORCELAIN — 09 65 13'
+      2: 'TILE'
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'RESILIENT — 09 30 00'
+      2: 'FLOOR'
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed189 (ocr=false)
+not ok 67 - a neighbour's cell nearer the renamed header keeps the first read: seed189 (ocr=false)
+  ---
+  duration_ms: 0.460625
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     '09 30 00',
+    +     'CERAMIC TILE',
+    +     'SLATE',
+          '',
+    -     '',
+    -     'CERAMIC TILE 09 30 00 SLATE',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-2',
+          'CARPET TILE',
+    +     'GRAY CO',
+    +     '09 65 13 WARM WHITE',
+          '',
+    -     'GRAY CO 09 65 13 WARM WHITE',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-3',
+    +     'CERAMIC TILE — 09 30 00',
+    +     'VENDOR-T',
+    +     'BLACK',
+    -     'CERAMIC TILE',
+          '',
+    -     'VENDOR-T 09 30 00 BLACK',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'RB-4',
+          '',
+    +     'LVT VENDOR A',
+    +     '096813 WARM WHITE',
+          '',
+    -     'LVT VENDOR A 096813 WARM WHITE',
+    -     '',
+          'unassigned',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: ''
+      2: ''
+      3: 'CERAMIC TILE 09 30 00 SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'CARPET TILE'
+      2: ''
+      3: 'GRAY CO 09 65 13 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'VENDOR-T 09 30 00 BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'RB-4'
+      1: ''
+      2: ''
+      3: 'LVT VENDOR A 096813 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: '09 30 00'
+      2: 'CERAMIC TILE'
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'CARPET TILE'
+      2: 'GRAY CO'
+      3: '09 65 13 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'CERAMIC TILE — 09 30 00'
+      2: 'VENDOR-T'
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'RB-4'
+      1: ''
+      2: 'LVT VENDOR A'
+      3: '096813 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: vendors that don't reach under a centred MFG header keep the first read (ocr=false)
+not ok 68 - vendors that don't reach under a centred MFG header keep the first read (ocr=false)
+  ---
+  duration_ms: 1.203583
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38175'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     'SEALED CONCRETE',
+    +     'BLUE PEAK TILE CO',
+    -     'BLUE PEAK TILE CO SEALED CONCRETE',
+    -     '',
+          'BLACK',
+          '',
+          'unassigned',
+          true
+        ],
+        [
+          'RB-2',
+    +     'SEALED CONCRETE',
+    +     'VENDOR-A',
+    -     'VENDOR-A SEALED CONCRETE',
+    -     '',
+          'GRAY',
+          '',
+          'unassigned',
+          true
+        ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'BLUE PEAK TILE CO SEALED CONCRETE'
+      2: ''
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'VENDOR-A SEALED CONCRETE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'SEALED CONCRETE'
+      2: 'BLUE PEAK TILE CO'
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'SEALED CONCRETE'
+      2: 'VENDOR-A'
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:500:12)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a cell split into two runs keeps its words when MFG has none (ocr=true)
+not ok 69 - a cell split into two runs keeps its words when MFG has none (ocr=true)
+  ---
+  duration_ms: 0.311834
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:37759'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     'WARM',
+    +     'WHITE'
+    -     '',
+    -     'WARM WHITE'
+        ],
+        [
+          'FL-2',
+    +     'COOL GRAY',
+    +     '2'
+    -     '',
+    -     'COOL GRAY 2'
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: ''
+      2: 'WARM WHITE'
+    1:
+      0: 'FL-2'
+      1: ''
+      2: 'COOL GRAY 2'
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'WARM'
+      2: 'WHITE'
+    1:
+      0: 'FL-2'
+      1: 'COOL GRAY'
+      2: '2'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:490:12)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed143 (ocr=true)
+not ok 70 - a neighbour's cell nearer the renamed header keeps the first read: seed143 (ocr=true)
+  ---
+  duration_ms: 0.247875
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'TL-1',
+          'LVT',
+    +     'ALL',
+    -     '',
+          'GRAY',
+    +     'FLOORS',
+    -     'ALL FLOORS',
+          'unassigned',
+          true
+        ],
+        [
+          'CPT-2',
+          'RUBBER BASE',
+    +     'ALL',
+    -     '',
+          'GRAY',
+    +     'FLOORS',
+    -     'ALL FLOORS',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'TL-1'
+      1: 'LVT'
+      2: ''
+      3: 'GRAY'
+      4: 'ALL FLOORS'
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'GRAY'
+      4: 'ALL FLOORS'
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'TL-1'
+      1: 'LVT'
+      2: 'ALL'
+      3: 'GRAY'
+      4: 'FLOORS'
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'RUBBER BASE'
+      2: 'ALL'
+      3: 'GRAY'
+      4: 'FLOORS'
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed442 (ocr=true)
+not ok 71 - a neighbour's cell nearer the renamed header keeps the first read: seed442 (ocr=true)
+  ---
+  duration_ms: 0.510917
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'FL-1',
+          'TILE CARPET',
+          '',
+    ...
+          '',
+    +     'COOL GRAY',
+    +     '2',
+    -     'COOL GRAY 2',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'TL-4',
+          'RESILIENT FLOOR',
+          '',
+    +     'GRAY',
+    +     'NOT USED',
+    -     'GRAY NOT USED',
+    -     '',
+          'unassigned',
+    +     false
+    -     true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'TILE CARPET'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'TL-4'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'GRAY NOT USED'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'TILE CARPET'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY'
+      4: '2'
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'TL-4'
+      1: 'RESILIENT FLOOR'
+      2: ''
+      3: 'GRAY'
+      4: 'NOT USED'
+      5: 'unassigned'
+      6: false
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed333 (ocr=true)
+not ok 72 - a neighbour's cell nearer the renamed header keeps the first read: seed333 (ocr=true)
+  ---
+  duration_ms: 0.377708
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'FL-1',
+          'PORCELAIN',
+    +     'WHITE',
+    +     'TILE WARM',
+          '',
+    -     'TILE WARM WHITE',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-2',
+    ...
+          'PORCELAIN',
+    +     'VENDOR-T',
+    +     'TILE SLATE',
+          '',
+    -     'TILE SLATE VENDOR-T',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-4',
+          'RUBBER BASE',
+    +     'WHITE',
+    +     'WARM',
+          '',
+    -     'WARM WHITE',
+    -     '',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'PORCELAIN'
+      2: ''
+      3: 'TILE WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: ''
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'PORCELAIN'
+      2: ''
+      3: 'TILE SLATE VENDOR-T'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'FL-4'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'PORCELAIN'
+      2: 'WHITE'
+      3: 'TILE WARM'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: ''
+      2: ''
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'PORCELAIN'
+      2: 'VENDOR-T'
+      3: 'TILE SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'FL-4'
+      1: 'RUBBER BASE'
+      2: 'WHITE'
+      3: 'WARM'
+      4: ''
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed121 (ocr=true)
+not ok 73 - a neighbour's cell nearer the renamed header keeps the first read: seed121 (ocr=true)
+  ---
+  duration_ms: 0.38225
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'RB-1',
+          'CERAMIC TILE',
+          '',
+    ...
+          'PORCELAIN TILE',
+    +     'TRANSITIONS',
+    +     'WARM WHITE',
+    +     'INC',
+    -     '',
+    -     'WARM WHITE TRANSITIONS INC',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'CPT-3',
+          'RUBBER BASE',
+    +     'TRANSITIONS',
+    +     'BLUE',
+    +     'INC',
+    -     '',
+    -     'BLUE TRANSITIONS INC',
+    -     '',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'RB-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'PORCELAIN TILE'
+      2: ''
+      3: 'WARM WHITE TRANSITIONS INC'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'BLUE TRANSITIONS INC'
+      4: ''
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'RB-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: 'PORCELAIN TILE'
+      2: 'TRANSITIONS'
+      3: 'WARM WHITE'
+      4: 'INC'
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'CPT-3'
+      1: 'RUBBER BASE'
+      2: 'TRANSITIONS'
+      3: 'BLUE'
+      4: 'INC'
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed197 (ocr=true)
+not ok 74 - a neighbour's cell nearer the renamed header keeps the first read: seed197 (ocr=true)
+  ---
+  duration_ms: 0.504
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'TL-1',
+          'CARPET TILE',
+          '',
+    ...
+          'SEALED CONCRETE',
+    +     'BLUE PEAK TILE',
+    +     'BLACK',
+    +     'CO',
+    -     '',
+    -     'BLACK BLUE PEAK TILE CO',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'RB-3',
+          'RUBBER BASE',
+    +     'BLUE PEAK TILE',
+    +     'GRAY',
+    +     'CO',
+    -     '',
+    -     'GRAY BLUE PEAK TILE CO',
+    -     '',
+          'base',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'TL-1'
+      1: 'CARPET TILE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'SEALED CONCRETE'
+      2: ''
+      3: 'BLACK BLUE PEAK TILE CO'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'RUBBER BASE'
+      2: ''
+      3: 'GRAY BLUE PEAK TILE CO'
+      4: ''
+      5: 'base'
+      6: true
+  actual:
+    0:
+      0: 'TL-1'
+      1: 'CARPET TILE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'SEALED CONCRETE'
+      2: 'BLUE PEAK TILE'
+      3: 'BLACK'
+      4: 'CO'
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'RUBBER BASE'
+      2: 'BLUE PEAK TILE'
+      3: 'GRAY'
+      4: 'CO'
+      5: 'base'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed35 (ocr=true)
+not ok 75 - a neighbour's cell nearer the renamed header keeps the first read: seed35 (ocr=true)
+  ---
+  duration_ms: 0.384666
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'TL-1',
+          'CERAMIC TILE',
+          '',
+    +     'COOL GRAY 2',
+    +     'BLUE PEAK TILE CO',
+    -     'COOL GRAY 2 BLUE PEAK TILE CO',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'CPT-2',
+          'CERAMIC TILE',
+          '',
+    +     'COOL GRAY 2',
+    +     'VENDOR A',
+    -     'COOL GRAY 2 VENDOR A',
+    -     '',
+          'unassigned',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'TL-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2 BLUE PEAK TILE CO'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2 VENDOR A'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'TL-1'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: 'BLUE PEAK TILE CO'
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'COOL GRAY 2'
+      4: 'VENDOR A'
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed321 (ocr=true)
+not ok 76 - a neighbour's cell nearer the renamed header keeps the first read: seed321 (ocr=true)
+  ---
+  duration_ms: 0.381875
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'CPT-1',
+    +     'PORCELAIN TILE — 30 00',
+    -     '30 00 PORCELAIN TILE',
+          '',
+          'SLATE',
+          '',
+          'unassigned',
+          true
+    ...
+          'CPT-2',
+    +     '00 — 09 30',
+    -     '09 30 00',
+          '',
+          'BLUE',
+          '',
+          'unassigned',
+          true
+    ...
+          'TL-3',
+    +     'PORCELAIN TILE — 096813',
+    -     '096813 PORCELAIN TILE',
+          '',
+          'WARM WHITE',
+          '',
+          'unassigned',
+          true
+    ...
+          'CPT-4',
+    +     '00 — 09 30',
+    -     '09 30 00',
+          '',
+          'BLUE',
+          '',
+          'unassigned',
+          true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'CPT-1'
+      1: '30 00 PORCELAIN TILE'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: '09 30 00'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'TL-3'
+      1: '096813 PORCELAIN TILE'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'CPT-4'
+      1: '09 30 00'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'CPT-1'
+      1: 'PORCELAIN TILE — 30 00'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'CPT-2'
+      1: '00 — 09 30'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'TL-3'
+      1: 'PORCELAIN TILE — 096813'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'CPT-4'
+      1: '00 — 09 30'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed180 (ocr=true)
+not ok 77 - a neighbour's cell nearer the renamed header keeps the first read: seed180 (ocr=true)
+  ---
+  duration_ms: 0.292958
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    ... Skipped lines
+    
+      [
+        [
+          'CPT-1',
+    +     'LVT — 09 30 00',
+    -     '09 30 00 LVT',
+          '',
+          'BLUE',
+          '',
+          'unassigned',
+          true
+    ...
+          '',
+    +     'unassigned',
+    -     'base',
+          true
+        ],
+        [
+          'RB-3',
+          'LVT',
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'CPT-1'
+      1: '09 30 00 LVT'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: '09 65 13 RUBBER BASE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'base'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'LVT'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'CPT-1'
+      1: 'LVT — 09 30 00'
+      2: ''
+      3: 'BLUE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'TL-2'
+      1: '09 65 13 RUBBER BASE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'RB-3'
+      1: 'LVT'
+      2: ''
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed34 (ocr=true)
+not ok 78 - a neighbour's cell nearer the renamed header keeps the first read: seed34 (ocr=true)
+  ---
+  duration_ms: 0.381916
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     'RUBBER BASE — 09 30 00',
+    -     'RUBBER BASE',
+          '',
+    +     'WARM WHITE',
+    -     '09 30 00 WARM WHITE',
+          '',
+          'base',
+          true
+        ],
+        [
+          'FL-2',
+    +     'PORCELAIN — 09 65 13',
+    +     'TILE',
+    +     'BLACK',
+    -     'PORCELAIN',
+          '',
+    -     'TILE 09 65 13 BLACK',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-3',
+    +     'RESILIENT — 09 30 00',
+    +     'FLOOR',
+    +     'COOL GRAY 2',
+    -     'RESILIENT',
+          '',
+    -     'FLOOR 09 30 00 COOL GRAY 2',
+    -     '',
+          'unassigned',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'RUBBER BASE'
+      2: ''
+      3: '09 30 00 WARM WHITE'
+      4: ''
+      5: 'base'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'PORCELAIN'
+      2: ''
+      3: 'TILE 09 65 13 BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'RESILIENT'
+      2: ''
+      3: 'FLOOR 09 30 00 COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'RUBBER BASE — 09 30 00'
+      2: ''
+      3: 'WARM WHITE'
+      4: ''
+      5: 'base'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'PORCELAIN — 09 65 13'
+      2: 'TILE'
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'RESILIENT — 09 30 00'
+      2: 'FLOOR'
+      3: 'COOL GRAY 2'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: a neighbour's cell nearer the renamed header keeps the first read: seed189 (ocr=true)
+not ok 79 - a neighbour's cell nearer the renamed header keeps the first read: seed189 (ocr=true)
+  ---
+  duration_ms: 0.40125
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38023'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     '09 30 00',
+    +     'CERAMIC TILE',
+    +     'SLATE',
+          '',
+    -     '',
+    -     'CERAMIC TILE 09 30 00 SLATE',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-2',
+          'CARPET TILE',
+    +     'GRAY CO',
+    +     '09 65 13 WARM WHITE',
+          '',
+    -     'GRAY CO 09 65 13 WARM WHITE',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'FL-3',
+    +     'CERAMIC TILE — 09 30 00',
+    +     'VENDOR-T',
+    +     'BLACK',
+    -     'CERAMIC TILE',
+          '',
+    -     'VENDOR-T 09 30 00 BLACK',
+    -     '',
+          'unassigned',
+          true
+        ],
+        [
+          'RB-4',
+          '',
+    +     'LVT VENDOR A',
+    +     '096813 WARM WHITE',
+          '',
+    -     'LVT VENDOR A 096813 WARM WHITE',
+    -     '',
+          'unassigned',
+          true
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: ''
+      2: ''
+      3: 'CERAMIC TILE 09 30 00 SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'CARPET TILE'
+      2: ''
+      3: 'GRAY CO 09 65 13 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'CERAMIC TILE'
+      2: ''
+      3: 'VENDOR-T 09 30 00 BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'RB-4'
+      1: ''
+      2: ''
+      3: 'LVT VENDOR A 096813 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: '09 30 00'
+      2: 'CERAMIC TILE'
+      3: 'SLATE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'FL-2'
+      1: 'CARPET TILE'
+      2: 'GRAY CO'
+      3: '09 65 13 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+    2:
+      0: 'FL-3'
+      1: 'CERAMIC TILE — 09 30 00'
+      2: 'VENDOR-T'
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    3:
+      0: 'RB-4'
+      1: ''
+      2: 'LVT VENDOR A'
+      3: '096813 WARM WHITE'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:495:14)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: vendors that don't reach under a centred MFG header keep the first read (ocr=true)
+not ok 80 - vendors that don't reach under a centred MFG header keep the first read (ocr=true)
+  ---
+  duration_ms: 0.288625
+  type: 'test'
+  location: '<worktree>/web/test/scheduleReshape.test.ts:1:38175'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+          'FL-1',
+    +     'SEALED CONCRETE',
+    +     'BLUE PEAK TILE CO',
+    -     'BLUE PEAK TILE CO SEALED CONCRETE',
+    -     '',
+          'BLACK',
+          '',
+          'unassigned',
+          true
+        ],
+        [
+          'RB-2',
+    +     'SEALED CONCRETE',
+    +     'VENDOR-A',
+    -     'VENDOR-A SEALED CONCRETE',
+    -     '',
+          'GRAY',
+          '',
+          'unassigned',
+          true
+        ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'FL-1'
+      1: 'BLUE PEAK TILE CO SEALED CONCRETE'
+      2: ''
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'VENDOR-A SEALED CONCRETE'
+      2: ''
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+  actual:
+    0:
+      0: 'FL-1'
+      1: 'SEALED CONCRETE'
+      2: 'BLUE PEAK TILE CO'
+      3: 'BLACK'
+      4: ''
+      5: 'unassigned'
+      6: true
+    1:
+      0: 'RB-2'
+      1: 'SEALED CONCRETE'
+      2: 'VENDOR-A'
+      3: 'GRAY'
+      4: ''
+      5: 'unassigned'
+      6: true
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (<worktree>/web/test/scheduleReshape.test.ts:500:12)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..80
+# tests 80
+# suites 0
+# pass 56
+# fail 24
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 269.836792
