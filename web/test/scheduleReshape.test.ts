@@ -3,8 +3,8 @@
 // (scheduleReshape.ts). Invented codes and products only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readScheduleSpans } from "../src/lib/scheduleRead.ts";
-import { reshapeBox } from "../src/lib/scheduleReshape.ts";
+import { readScheduleSpans, readScheduleDebug, sameRead, type ScheduleRead } from "../src/lib/scheduleRead.ts";
+import { reshapeBox, type AliasRename } from "../src/lib/scheduleReshape.ts";
 
 const span = (str: string, x: number, y: number) => ({ str, x, y, w: str.length * 7, h: 14 });
 const ROWS = [
@@ -47,10 +47,13 @@ test("a finish legend with no header row reads as code and description", () => {
   }
 });
 
-test("a box that already reads is never reshaped", () => {
+test("a box printed in the reader's own headers is never reshaped, and a legend gets no alias look", () => {
   const canonical = table(["CODE", "MATERIAL", "MANUFACTURER", "DESCRIPTION", "REMARKS"]);
   assert.equal(reshapeBox(canonical), null, "nothing to rename or move");
+  assert.equal(reshapeBox(canonical, { aliasesOnly: true }), null, "nothing to rename");
   assert.deepEqual(fields(canonical), FULL);
+  assert.ok(reshapeBox(legend("FINISH LEGEND")), "a legend gets a header on the no-rows look");
+  assert.equal(reshapeBox(legend("FINISH LEGEND"), { aliasesOnly: true }), null, "but not on the alias look");
 });
 
 test("negative controls stay unread", () => {
@@ -121,4 +124,322 @@ test("ambiguous boxes read nothing rather than rows in the wrong fields", () => 
   for (const ocr of [false, true]) assert.equal(readScheduleSpans(threeCol, { ocr }).rows.length, 0, `threeCol ocr=${ocr}`);
   assert.equal(readScheduleSpans(oneBox, { ocr: true }).rows.length, 0, "one header box");
   assert.equal(readScheduleSpans(glued, { ocr: true }).rows.length, 0, "glued codes");
+});
+
+// ── aliases on a box that already reads ──────────────────────────────────────
+// A box with a CODE column reads rows on the first look even when one of its
+// headers is an alias, and the alias column's cells join a known column beside
+// it (MFG | COLOR → color "VENDOR-A GRAY"). The rename-only second look fixes
+// that, and is used only when it moved text between the fields of the same rows.
+type Cell = { str: string; x: number; y: number; w: number; h: number };
+const cell = (str: string, x: number, y: number, w = str.length * 7, h = 14): Cell => ({ str, x, y, w, h });
+const R3: Record<string, string>[] = [
+  { C: "FL-1", M: "RESILIENT FLOOR", V: "VENDOR-A", K: "GRAY", N: "ZONE-A" },
+  { C: "TL-2", M: "CERAMIC TILE", V: "VENDOR-B", K: "BLUE", N: "ZONE-B" },
+  { C: "RB-3", M: "RUBBER BASE", V: "TRANSITIONS INC", K: "BLACK", N: "ZONE-C" },
+];
+const EPOX = { C: "EPOX", V: "VENDOR-E", K: "CLEAR" };
+/** A table, columns 200 px apart; `keys` pick each column's text from the row ("S": a spec section). */
+const grid = (cols: string[], keys: string[], { rows = R3, extra = [] as Cell[] } = {}): Cell[] => [
+  cell("FINISH SCHEDULE", 40, 20),
+  ...cols.map((c, i) => cell(c, 40 + i * 200, 70)),
+  ...rows.flatMap((r, j) => keys.flatMap((k, i) => {
+    const v = k === "S" ? "09 65 13" : r[k];
+    return v ? [cell(v, 40 + i * 200, 110 + j * 42)] : [];
+  })),
+  ...extra,
+];
+const CANON: Record<string, string> = { MFG: "MANUFACTURER", MFR: "MANUFACTURER", NOTES: "REMARKS", SPEC: "PRODUCT" };
+/** The same box with the reader's own header words printed. */
+const canonOf = (s: Cell[]) => s.map((t) => (CANON[t.str] ? { ...t, str: CANON[t.str] } : t));
+const ocrBox = (a: [string, number, number, number, number][]): Cell[] => a.map(([str, x, y, w, h]) => ({ str, x, y, w, h }));
+const small = (str: string, x: number, y: number) => cell(str, x, y, str.length * 8, 9);
+const smallGrid = (cols: string[], rows: string[][]) => [small("FINISH SCHEDULE", 40, 30), ...cols.map((c, i) => small(c, 40 + i * 150, 70)),
+  ...rows.flatMap((r, j) => r.flatMap((v, i) => (v ? [small(v, 40 + i * 150, 100 + j * 24)] : [])))];
+const notesBlock = (head: string, x: number, lines: [string, number][]) => [cell(head, x, 70), ...lines.map(([s, y]) => cell(s, x, y))];
+const dist = R3.map((r) => ({ ...r, X: "DIST-" + r.C }));
+const owner = R3.map((r) => ({ ...r, X: "OWNER-" + r.C }));
+
+// the OCR words of a CODE | MATERIAL | MFG | COLOR | REMARKS table: jittered boxes, real widths
+const T1_OCR = ocrBox([["FINISH SCHEDULE", 42, 40, 140, 9], ["CODE", 41, 76, 38, 8], ["MATERIAL", 128, 75, 74, 9], ["MFG", 262, 76, 33, 8], ["COLOR", 360, 77, 50, 8], ["REMARKS", 470, 75, 70, 9],
+  ["FL-1", 42, 102, 33, 9], ["RESILIENT FLOOR", 127, 103, 131, 8], ["VENDOR-A", 261, 102, 71, 9], ["GRAY", 361, 103, 37, 8], ["ZONE-A", 471, 101, 52, 10],
+  ["TL-2", 43, 125, 35, 10], ["CERAMIC TILE", 128, 126, 104, 8], ["VENDOR-B", 262, 124, 72, 10], ["BLUE", 360, 125, 36, 9], ["ZONE-B", 470, 126, 51, 8],
+  ["RB-3", 41, 148, 35, 9], ["RUBBER BASE", 129, 148, 98, 9], ["VENDOR-C", 263, 149, 72, 8], ["BLACK", 361, 149, 46, 8], ["ZONE-C", 472, 148, 52, 9]]);
+const T1_ALIASES = ["CODE", "MATERIAL", "MFG", "COLOR", "REMARKS"];
+const A = {
+  T1: grid(T1_ALIASES, ["C", "M", "V", "K", "N"]),
+  T2: grid(["CODE", "MATERIAL", "MFR", "COLOR", "NOTES"], ["C", "M", "V", "K", "N"]),
+  T3: grid(["CODE", "MATERIAL", "MANUFACTURER", "COLOR", "NOTES"], ["C", "M", "V", "K", "N"]),
+  T4: grid(["CODE", "MFG", "MATERIAL", "COLOR"], ["C", "V", "M", "K"]),
+  T5: grid(["CODE", "MATERIAL", "SPEC", "MANUFACTURER"], ["C", "M", "S", "V"]),
+  T7: grid(T1_ALIASES, ["C", "M", "V", "K", "N"], { rows: [R3[0], EPOX, R3[1], R3[2]] }),
+  T8: grid(["CODE", "MATERIAL", "MANUFACTURER", "COLOR", "NOTES"], ["C", "M", "V", "K", "N"], { rows: [R3[0], { ...R3[1], N: "NOT USED" }, R3[2]] }),
+  T9: smallGrid(["TAG", "CODE", "MATERIAL", "MFG", "COLOR"], [["T-1", "FL-1", "RESILIENT FLOOR", "VENDOR-A", "GRAY"], ["T-2", "TL-2", "CERAMIC TILE", "VENDOR-B", "BLUE"], ["T-3", "RB-3", "RUBBER BASE", "VENDOR-C", "BLACK"]]),
+  // a line above the table that names three columns and a key, one word per box
+  T10: [cell("SEE", 40, 45), cell("SPEC", 80, 45), cell("NOTES", 130, 45), cell("FOR", 190, 45), cell("TAG", 230, 45), ...grid(T1_ALIASES, ["C", "M", "V", "K", "N"])],
+  T11: grid(["CODE", "MATERIAL", "MFG", "STYLE / COLOR"], ["C", "M", "V", "K"]),
+  // OCR read one row's maker and color as one box across the MFG | COLOR boundary: the
+  // renamed read would put both in manufacturer and leave color empty, so the first read stands
+  T12: T1_OCR.filter((t) => t.str !== "VENDOR-B" && t.str !== "BLUE").concat(ocrBox([["VENDOR-B BLUE", 262, 125, 134, 9]])),
+  F1: grid(["CODE", "MATERIAL", "MANUFACTURER", "COLOR"], ["C", "M", "V", "K"], { extra: notesBlock("GENERAL NOTES", 1100, [["1. ALL FLOORING PER MFR.", 110], ["2. SEE SPECS.", 152]]) }),
+  F1k: grid(["CODE", "MATERIAL", "MANUFACTURER", "COLOR"], ["C", "M", "V", "K"], { extra: notesBlock("KEYED NOTES", 1000, [["1. PATCH SUBSTRATE", 110], ["2. MATCH EXISTING", 194]]) }),
+  F2a: grid(["CODE", "MATERIAL", "COLOR", "NOTES", "COMMENTS"], ["C", "M", "K", "N", "X"], { rows: owner }),
+  F2b: grid(["CODE", "MATERIAL", "COLOR", "COMMENTS", "NOTES"], ["C", "M", "K", "X", "N"], { rows: owner }),
+  F3: smallGrid(["CODE", "MATERIAL", "MFG", "COLOR"], [["", "", "FLOORING", ""], ["FL-1", "RESILIENT FLOOR", "VENDOR-A", "GRAY"], ["", "", "BASE", ""], ["RB-3", "RUBBER BASE", "VENDOR-C", "BLACK"]]),
+  F4a: grid(["CODE", "MATERIAL", "MFG", "MANUFACTURER", "COLOR"], ["C", "M", "X", "V", "K"], { rows: dist }),
+  F4b: grid(["CODE", "MATERIAL", "NOTES", "REMARKS", "COLOR"], ["C", "M", "X", "N", "K"], { rows: dist }),
+  F4c: grid(["CODE", "MATERIAL", "MFG", "MANUF.", "COLOR"], ["C", "M", "X", "V", "K"], { rows: dist }),
+  F4d: grid(["CODE", "MATERIAL", "NOTES", "REMARK", "COLOR"], ["C", "M", "X", "N", "K"], { rows: dist }),
+  F4e: grid(["CODE", "MATERIAL", "MFR", "MANUFACTURERS", "COLOR"], ["C", "M", "X", "V", "K"], { rows: dist }),
+  // EPOX (skipped today) carries the only text under a far GENERAL NOTES heading
+  F5: grid(["CODE", "MATERIAL", "MFG", "COLOR"], ["C", "M", "V", "K"], { rows: [R3[0], EPOX, R3[1], R3[2]], extra: notesBlock("GENERAL NOTES", 1200, [["1. SEAL ALL JOINTS", 152]]) }),
+};
+type Read = ReturnType<typeof readScheduleSpans>;
+const read = (s: Cell[], ocr: boolean) => readScheduleSpans(s, { ocr });
+const cols = (r: Read) => r.rows.map((x) => [x.finish_tag, x.description, x.manufacturer, x.spec_color, x.remarks, x.category, x.category_source, x.suggested]);
+const ROW: Record<string, (string | boolean)[]> = {
+  "FL-1": ["FL-1", "RESILIENT FLOOR", "VENDOR-A", "GRAY", "ZONE-A", "unassigned", "none", true],
+  "TL-2": ["TL-2", "CERAMIC TILE", "VENDOR-B", "BLUE", "ZONE-B", "unassigned", "none", true],
+  "RB-3": ["RB-3", "RUBBER BASE", "TRANSITIONS INC", "BLACK", "ZONE-C", "base", "text", true],
+};
+const rowsWith = (edit: (r: (string | boolean)[]) => (string | boolean)[] = (r) => r) => ["FL-1", "TL-2", "RB-3"].map((c) => edit([...ROW[c]]));
+/** The alias read reached and fell back: the renamed box reads differently, the box reads as `base`. */
+const fellBack = (s: Cell[], ocr: boolean, base: unknown, label: string) => {
+  const r = reshapeBox(s, { aliasesOnly: true });
+  assert.ok(r, `${label}: reaches the alias read`);
+  const final = read(s, ocr);
+  assert.notDeepEqual(read(r.spans, ocr), final, `${label}: the alias read was not used`);
+  assert.deepEqual(final.rows.map((x) => [x.finish_tag, x.section, x.manufacturer, x.spec_color, x.remarks]), base, label);
+};
+
+for (const ocr of [false, true]) {
+  test(`MFG | COLOR on a box that reads: maker and color in place (ocr=${ocr})`, () => {
+    assert.deepEqual(cols(read(A.T1, ocr)), rowsWith());
+    assert.deepEqual(read(T1_OCR, ocr).rows.map((x) => [x.manufacturer, x.spec_color, x.remarks]),
+      [["VENDOR-A", "GRAY", "ZONE-A"], ["VENDOR-B", "BLUE", "ZONE-B"], ["VENDOR-C", "BLACK", "ZONE-C"]], "OCR-shaped words");
+  });
+
+  test(`MFR and NOTES on a box that reads (ocr=${ocr})`, () => {
+    assert.deepEqual(cols(read(A.T2, ocr)), rowsWith());
+  });
+
+  test(`NOTES printed last on a box that reads (ocr=${ocr})`, () => {
+    assert.deepEqual(cols(read(A.T3, ocr)), rowsWith());
+  });
+
+  test(`MFG before MATERIAL: the maker leaves the description, and the base row is a base (ocr=${ocr})`, () => {
+    assert.deepEqual(cols(read(A.T4, ocr)), rowsWith((r) => { r[4] = ""; return r; }));
+  });
+
+  test(`SPEC beside MANUFACTURER: the section joins the description, not the maker (ocr=${ocr})`, () => {
+    assert.deepEqual(cols(read(A.T5, ocr)), rowsWith((r) => { r[1] += " — 09 65 13"; r[3] = ""; r[4] = ""; return r; }));
+  });
+
+  test(`an alias header reads as the reader's own header word would (ocr=${ocr})`, () => {
+    for (const [n, s] of Object.entries({ T1: A.T1, T1_OCR, T2: A.T2, T3: A.T3, T4: A.T4, T5: A.T5 })) assert.deepEqual(read(s, ocr), read(canonOf(s), ocr), n);
+  });
+
+  test(`a four-letter code skipped today reads as a row once its maker has a column (ocr=${ocr})`, () => {
+    // on the OCR read the reader folds EPOX's line into the row above (not this change); its
+    // two lines interleave in the color cell, not a run at its edge, so the first read stands
+    if (ocr) return assert.deepEqual(read(A.T7, ocr).rows.map((x) => [x.finish_tag, x.manufacturer, x.spec_color]),
+      [["FL-1", "", "VENDOR-A GRAY VENDOR-E CLEAR"], ["TL-2", "", "VENDOR-B BLUE"], ["RB-3", "", "TRANSITIONS INC BLACK"]]);
+    const r = read(A.T7, ocr);
+    assert.deepEqual(r.rows.map((x) => [x.finish_tag, x.manufacturer, x.spec_color, x.remarks]),
+      [["FL-1", "VENDOR-A", "GRAY", "ZONE-A"], ["EPOX", "VENDOR-E", "CLEAR", ""], ["TL-2", "VENDOR-B", "BLUE", "ZONE-B"], ["RB-3", "TRANSITIONS INC", "BLACK", "ZONE-C"]]);
+    assert.equal("skipped" in r ? r.skipped : undefined, undefined, "nothing left skipped");
+  });
+
+  test(`NOT USED under NOTES unticks its row, as under REMARKS (ocr=${ocr})`, () => {
+    const r = read(A.T8, ocr).rows[1];
+    assert.deepEqual([r.finish_tag, r.spec_color, r.remarks, r.suggested, r.unticked_reason], ["TL-2", "BLUE", "NOT USED", false, "not-used"]);
+  });
+
+  test(`no column moves on a box that reads: TAG before CODE stays put (ocr=${ocr})`, () => {
+    assert.deepEqual(read(A.T9, ocr).rows.map((x) => [x.finish_tag, x.manufacturer, x.spec_color]),
+      [["T-1", "VENDOR-A", "GRAY"], ["T-2", "VENDOR-B", "BLUE"], ["T-3", "VENDOR-C", "BLACK"]]);
+  });
+
+  test(`the header is the line nearest the data, not a note above it (ocr=${ocr})`, () => {
+    assert.deepEqual(cols(read(A.T10, ocr)), rowsWith());
+  });
+
+  test(`a header cell naming two columns doesn't stop the rename (ocr=${ocr})`, () => {
+    assert.deepEqual(read(A.T11, ocr).rows.map((x) => x.manufacturer), ["VENDOR-A", "VENDOR-B", "TRANSITIONS INC"]);
+  });
+
+  test(`a far notes block beside the header line adds nothing to remarks (ocr=${ocr})`, () => {
+    const base = [["FL-1", "", "VENDOR-A", "GRAY", ""], ["TL-2", "", "VENDOR-B", "BLUE", ""], ["RB-3", "", "TRANSITIONS INC", "BLACK", ""]];
+    fellBack(A.F1, ocr, base, "GENERAL NOTES");
+    fellBack(A.F1k, ocr, base, "KEYED NOTES");
+  });
+
+  test(`NOTES beside COMMENTS: no comment is lost (ocr=${ocr})`, () => {
+    for (const s of [A.F2a, A.F2b]) {
+      assert.equal(reshapeBox(s, { aliasesOnly: true }), null);
+      assert.ok(read(s, ocr).rows.every((r) => /OWNER-/.test(r.remarks) && /ZONE-/.test(r.remarks)));
+    }
+  });
+
+  test(`a section heading inside the MFG column falls back to today's read (ocr=${ocr})`, () => {
+    fellBack(A.F3, ocr, [["FL-1", "", "", "VENDOR-A GRAY", ""], ["RB-3", "", "", "VENDOR-C BLACK", ""]], "heading in MFG");
+  });
+
+  test(`an alias beside the column it names is not renamed (ocr=${ocr})`, () => {
+    const maker = [["FL-1", "", "DIST-FL-1 VENDOR-A", "GRAY", ""], ["TL-2", "", "DIST-TL-2 VENDOR-B", "BLUE", ""], ["RB-3", "", "DIST-RB-3 TRANSITIONS INC", "BLACK", ""]];
+    const notes = [["FL-1", "", "", "GRAY", "DIST-FL-1 ZONE-A"], ["TL-2", "", "", "BLUE", "DIST-TL-2 ZONE-B"], ["RB-3", "", "", "BLACK", "DIST-RB-3 ZONE-C"]];
+    for (const [n, s, base] of [["MFG|MANUFACTURER", A.F4a, maker], ["NOTES|REMARKS", A.F4b, notes], ["MFG|MANUF.", A.F4c, maker], ["NOTES|REMARK", A.F4d, notes], ["MFR|MANUFACTURERS", A.F4e, maker]] as const) {
+      assert.equal(reshapeBox(s, { aliasesOnly: true }), null, n);
+      assert.deepEqual(read(s, ocr).rows.map((x) => [x.finish_tag, x.section, x.manufacturer, x.spec_color, x.remarks]), base, n);
+    }
+  });
+
+  test(`a skipped code that would be the only home of a renamed column's text falls back (ocr=${ocr})`, () => {
+    const r = reshapeBox(A.F5, { aliasesOnly: true });
+    assert.ok(r, "reaches the alias read");
+    const final = read(A.F5, ocr);
+    assert.notDeepEqual(read(r.spans, ocr), final, "the alias read was not used");
+    if (ocr) assert.deepEqual(final.rows.map((x) => [x.finish_tag, x.spec_color]), [["FL-1", "VENDOR-A GRAY VENDOR-E CLEAR"], ["TL-2", "VENDOR-B BLUE"], ["RB-3", "TRANSITIONS INC BLACK"]]);
+    else {
+      assert.deepEqual(final.rows.map((x) => [x.finish_tag, x.manufacturer, x.spec_color, x.remarks]),
+        [["FL-1", "", "VENDOR-A GRAY", ""], ["TL-2", "", "VENDOR-B BLUE", ""], ["RB-3", "", "TRANSITIONS INC BLACK", ""]]);
+      assert.deepEqual("skipped" in final ? final.skipped : null, ["EPOX"]);
+    }
+  });
+
+  test(`the debug trace makes the same choice as the read (ocr=${ocr})`, () => {
+    // fixtures with no numeric-code recovery, where the trace (before recovery) and the read are like for like
+    for (const [n, s] of Object.entries({ T1: A.T1, T7: A.T7, F3: A.F3, F5: A.F5 })) assert.deepEqual(readScheduleDebug(s, { ocr }).read, read(s, ocr), n);
+  });
+}
+
+test("the alias reshape renames headers only: no span moves", () => {
+  const r = reshapeBox(A.T9, { aliasesOnly: true });
+  assert.ok(r);
+  assert.deepEqual(r.spans.map((t) => [t.x, t.y]), A.T9.map((t) => [t.x, t.y]));
+  assert.deepEqual(r.spans.filter((t, i) => t.str !== A.T9[i].str).map((t) => t.str), ["MANUFACTURER"]);
+});
+
+test("sameRead: the alias read is used only when it just moved text between the fields of the same rows", () => {
+  const row = (finish_tag: string, o: Record<string, unknown> = {}) => ({ finish_tag, section: "", category: "unassigned", category_source: "none", description: "", manufacturer: "", style: "", spec_color: "", size: "", remarks: "", suggested: true, ...o }) as ScheduleRead["rows"][number];
+  const first: ScheduleRead = { rows: [row("A-1", { spec_color: "VENDOR-A GRAY" }), row("B-1", { spec_color: "BLUE" })] };
+  const moved = [row("A-1", { manufacturer: "VENDOR-A", spec_color: "GRAY" }), row("B-1", { spec_color: "BLUE" })];
+  const MFG: AliasRename = { to: "MANUFACTURER", absorber: "COLOR", side: "right" };
+  const NOTES: AliasRename = { to: "REMARKS", absorber: "COLOR", side: "left" };
+  assert.ok(sameRead(first, first), "equal");
+  assert.ok(sameRead(first, { rows: moved }), "a word moved between fields");
+  assert.ok(sameRead(first, { rows: moved }, [MFG]), "the renamed column earned its words");
+  assert.ok(!sameRead(first, { rows: [moved[0]] }), "a row lost");
+  assert.ok(!sameRead(first, { rows: [moved[0], row("C-1", { spec_color: "BLUE" })] }), "a different code");
+  assert.ok(!sameRead(first, { rows: [moved[0], row("B-1", { spec_color: "BLUE", section: "BASE" })] }), "same codes, another section");
+  assert.ok(!sameRead(first, { rows: [moved[0], row("B-1", { spec_color: "BLUE", remarks: "1. SEE SPECS" })] }), "a word added");
+  assert.ok(!sameRead(first, { rows: [row("A-1", { manufacturer: "VENDOR-A" }), moved[1]] }), "a word dropped");
+  assert.ok(!sameRead(first, { rows: [row("A-1", { manufacturer: "VENDOR-A GRAY GRAY" }), moved[1]] }), "a word doubled");
+  assert.ok(!sameRead(first, { rows: [], refused: "no-table" }), "a refusal");
+  const checks = [{ first: "FL-1", second: "FL-I" }];
+  assert.ok(!sameRead({ rows: [row("A-1", { spec_color: "GRAY", code_checks: checks })] }, { rows: [row("A-1", { spec_color: "GRAY" })] }), "code_checks differ");
+  assert.ok(!sameRead({ rows: [row("A-1", { spec_color: "GRAY", ocr_code: true, read_as: "A-l" })] }, { rows: [row("A-1", { spec_color: "GRAY", ocr_code: true })] }), "read_as differs");
+  // a code the first read skipped
+  const skipped: ScheduleRead = { rows: first.rows, skipped: ["EPOX"] };
+  const withEpox = [moved[0], row("EPOX", { manufacturer: "VENDOR-E" }), moved[1]];
+  assert.ok(sameRead(skipped, { rows: withEpox }, [MFG]), "a skipped code reads as a row");
+  assert.ok(sameRead(skipped, { rows: moved, skipped: ["EPOX"] }), "still skipped");
+  assert.ok(!sameRead(first, { rows: withEpox }), "an extra row first didn't skip");
+  assert.ok(!sameRead(skipped, { rows: moved }), "a skipped code vanished");
+  assert.ok(!sameRead(skipped, { rows: moved, skipped: ["EPOX", "SEAL"] }), "a new code skipped");
+  assert.ok(!sameRead(skipped, { rows: withEpox, skipped: ["EPOX"] }), "a skipped code read and still skipped");
+  // each renamed column earns words in a row the first read has
+  assert.ok(!sameRead(first, { rows: moved }, [MFG, NOTES]), "REMARKS put words nowhere");
+  assert.ok(!sameRead(skipped, { rows: [moved[0], row("EPOX", { remarks: "1. SEAL" }), moved[1]] }, [MFG, NOTES]), "REMARKS put words only in the extra row");
+});
+
+test("sameRead: an alias column's words leave the column that took them, from the edge facing it, and nothing else moves", () => {
+  const row = (o: Record<string, unknown> = {}) => ({ finish_tag: "A-1", section: "", category: "unassigned", category_source: "none", description: "", manufacturer: "", style: "", spec_color: "", size: "", remarks: "", suggested: true, ...o }) as ScheduleRead["rows"][number];
+  const same = (f: Record<string, unknown>, r: Record<string, unknown>, renamed: AliasRename[]) => sameRead({ rows: [row(f)] }, { rows: [row(r)] }, renamed);
+  const MFG: AliasRename = { to: "MANUFACTURER", absorber: "COLOR", side: "right" };
+  // MFG | COLOR: the maker led the color cell
+  assert.ok(same({ spec_color: "ACME FLOORS GRAY" }, { manufacturer: "ACME FLOORS", spec_color: "GRAY" }, [MFG]), "a leading run split off");
+  assert.ok(!same({ spec_color: "GRAY ACME FLOORS" }, { manufacturer: "ACME FLOORS", spec_color: "GRAY" }, [MFG]), "a run from the far edge");
+  assert.ok(!same({ spec_color: "GRAY" }, { manufacturer: "GRAY" }, [MFG]), "the color cell moved whole");
+  assert.ok(!same({ spec_color: "VENDOR-A" }, { manufacturer: "VENDOR-A" }, [MFG]), "a column keeps a word of its own");
+  assert.ok(!same({ description: "CERAMIC TILE", spec_color: "VENDOR-A GRAY" }, { description: "CERAMIC", manufacturer: "VENDOR-A", spec_color: "TILE GRAY" }, [MFG]), "another field changed");
+  assert.ok(!same({ description: "CERAMIC TILE", spec_color: "VENDOR-A GRAY", remarks: "ZONE-A" }, { description: "CERAMIC", manufacturer: "VENDOR-A", spec_color: "GRAY", remarks: "TILE ZONE-A" }, [MFG]), "words moved between two other fields");
+  assert.ok(!same({ description: "CERAMIC TILE VENDOR-A", spec_color: "GRAY" }, { description: "CERAMIC TILE", manufacturer: "VENDOR-A", spec_color: "GRAY" }, [MFG]), "taken from a column that isn't the absorber");
+  // MFR | COLOR | NOTES, NOTES printed last: both alias columns took COLOR's cell on the first read
+  const both: AliasRename[] = [MFG, { to: "REMARKS", absorber: "COLOR", side: "left" }];
+  assert.ok(same({ spec_color: "VENDOR-A GRAY ZONE-A" }, { manufacturer: "VENDOR-A", spec_color: "GRAY", remarks: "ZONE-A" }, both), "a shared absorber splits at both edges");
+  assert.ok(!same({ spec_color: "VENDOR-A GRAY ZONE-A" }, { manufacturer: "VENDOR-A", spec_color: "", remarks: "GRAY ZONE-A" }, both), "a shared absorber emptied");
+  // SPEC | MANUFACTURER: the section number led the maker; PRODUCT reads into the description
+  const SPEC: AliasRename = { to: "PRODUCT", absorber: "MANUFACTURER", side: "right" };
+  assert.ok(same({ description: "RUBBER BASE", manufacturer: "09 65 13 VENDOR-A" }, { description: "RUBBER BASE — 09 65 13", manufacturer: "VENDOR-A" }, [SPEC]), "SPEC into the description");
+  assert.ok(!same({ description: "RUBBER BASE", manufacturer: "09 65 13 VENDOR-A" }, { description: "09 65 13 — RUBBER BASE", manufacturer: "VENDOR-A" }, [SPEC]), "SPEC's words not at the description's end");
+  // SPEC | MATERIAL: the absorber is the description itself
+  assert.ok(same({ description: "09 65 13 RUBBER BASE" }, { description: "RUBBER BASE — 09 65 13" }, [{ to: "PRODUCT", absorber: "MATERIAL", side: "right" }]), "SPEC before MATERIAL");
+  // an absorber with no field of its own
+  assert.ok(!same({ spec_color: "VENDOR-A GRAY" }, { manufacturer: "VENDOR-A", spec_color: "GRAY" }, [{ to: "MANUFACTURER", absorber: "CODE", side: "right" }]), "a key column as absorber");
+});
+
+// ── split, never relocate (diff review of the alias look) ────────────────────
+// Renaming MFG makes it a column anchor, and a wide column's left-aligned cells
+// beside it can move into it with every word kept. The alias read is used only
+// when the alias column's words left the column that took them on the first
+// read, from that column's edge facing the alias, and nothing else moved.
+/** Columns [header, left x, width]: headers centered, cells left-aligned 4 px in, rows 24 px apart. */
+const ruled = (cols: [string, number, number][], rows: string[][]) => [
+  cell("FINISH SCHEDULE", 40, 30),
+  ...cols.map(([s, x, w]) => cell(s, x + (w - s.length * 7) / 2, 70)),
+  ...rows.flatMap((r, j) => r.flatMap((v, i) => (v ? [cell(v, cols[i][1] + 4, 100 + j * 24)] : []))),
+];
+const at = (a: [string, number, number][]) => a.map(([s, x, y]) => cell(s, x, y));
+const RULED: [string, number, number][] = [["CODE", 40, 80], ["MATERIAL", 120, 260], ["MFG", 380, 120], ["COLOR", 500, 260], ["REMARKS", 760, 200]];
+const R = {
+  // MFG printed, every cell under it blank: the first read is right
+  blankMfg: ruled(RULED, [["FL-1", "RESILIENT FLOOR", "", "GRAY", "ZONE-A"], ["TL-2", "CERAMIC TILE", "", "BLUE", "ZONE-B"]]),
+  // one maker under MFG, read into MATERIAL on the first read; COLOR cells sit nearer the MFG header than the COLOR one
+  oneMaker: ruled(RULED, [["FL-1", "RESILIENT FLOOR", "", "GRAY", "ZONE-A"], ["TL-2", "CERAMIC TILE", "VENDOR-B", "BLUE", "ZONE-B"]]),
+  // seeded layouts from the review's fuzz run (left-aligned and mixed cells)
+  mfrBeforeWideColor: at([["FINISH SCHEDULE", 40, 30], ["CODE", 66.8, 70], ["MATERIAL", 162.2, 70], ["MFR", 340.9, 70], ["COLOR", 577.4, 70], ["REMARKS", 868.8, 70],
+    ["TL-1", 44, 100], ["RESILIENT FLOOR", 125.6, 100], ["GRAY", 448.2, 100], ["ALL FLOORS", 749.5, 100], ["TL-2", 44, 124], ["SEALED CONCRETE", 125.6, 124], ["GRAY", 448.2, 124]]),
+  mfgLast: at([["FINISH SCHEDULE", 40, 30], ["CODE", 74.5, 70], ["MATERIAL", 186, 70], ["COLOR", 351, 70], ["REMARKS", 562.2, 70], ["MFG", 767.5, 70],
+    ["TL-1", 44, 100], ["RUBBER BASE", 140.9, 100], ["GRAY", 295.1, 100], ["ALL FLOORS", 449.8, 100],
+    ["CPT-2", 44, 124], ["CERAMIC TILE", 140.9, 124], ["GRAY", 295.1, 124], ["ZONE-A", 449.8, 124], ["VENDOR-A", 731.7, 124]]),
+  mfrAfterColor: at([["FINISH SCHEDULE", 40, 30], ["CODE", 65.5, 70], ["MATERIAL", 159.8, 70], ["COLOR", 328, 70], ["MFR", 561.5, 70], ["REMARKS", 803.9, 70],
+    ["RB-1", 44, 100], ["CERAMIC TILE", 123, 100], ["BLACK", 328, 100], ["VENDOR-T", 544, 100],
+    ["CPT-2", 62, 124], ["RESILIENT FLOOR", 123, 124], ["GRAY", 260.5, 124], ["ALL FLOORS", 713.5, 124],
+    ["FL-3", 44, 148], ["CARPET TILE", 123, 148], ["BLACK", 328, 148], ["VENDOR-B", 438.5, 148]]),
+};
+const fields4 = (r: Read) => r.rows.map((x) => [x.finish_tag, x.description, x.manufacturer, x.spec_color, x.remarks]);
+
+for (const ocr of [false, true]) {
+  test(`a blank MFG column takes no color (ocr=${ocr})`, () => {
+    assert.deepEqual(fields4(read(R.blankMfg, ocr)), [["FL-1", "RESILIENT FLOOR", "", "GRAY", "ZONE-A"], ["TL-2", "CERAMIC TILE", "", "BLUE", "ZONE-B"]]);
+  });
+
+  test(`a row with no maker keeps its color when another row's maker is renamed (ocr=${ocr})`, () => {
+    // the first read stands: TL-2's maker stays in its description, as before
+    assert.deepEqual(fields4(read(R.oneMaker, ocr)), [["FL-1", "RESILIENT FLOOR", "", "GRAY", "ZONE-A"], ["TL-2", "CERAMIC TILE VENDOR-B", "", "BLUE", "ZONE-B"]]);
+  });
+
+  test(`a wide neighbour's cells don't move into the renamed column (ocr=${ocr})`, () => {
+    assert.deepEqual(fields4(read(R.mfrBeforeWideColor, ocr)), [["TL-1", "RESILIENT FLOOR", "", "GRAY", "ALL FLOORS"], ["TL-2", "SEALED CONCRETE", "", "GRAY", ""]]);
+    const last = read(R.mfgLast, ocr).rows[1];
+    assert.deepEqual([last.finish_tag, last.spec_color], ["CPT-2", "GRAY"]);
+    const after = read(R.mfrAfterColor, ocr).rows[1];
+    assert.deepEqual([after.finish_tag, after.description, after.spec_color], ["CPT-2", "RESILIENT FLOOR", "GRAY"]);
+  });
+
+  test(`an OCR box glued across MFG | COLOR keeps the first read (ocr=${ocr})`, () => {
+    assert.deepEqual(read(A.T12, ocr).rows.map((x) => [x.manufacturer, x.spec_color]), [["", "VENDOR-A GRAY"], ["", "VENDOR-B BLUE"], ["", "VENDOR-C BLACK"]]);
+  });
+}
+
+test("a box with no code line gets no alias look", () => {
+  // letters-only keys: no line shows a finish code, so no header line is chosen
+  const lettered = grid(T1_ALIASES, ["C", "M", "V", "K", "N"], { rows: R3.map((r, i) => ({ ...r, C: "ABC"[i] })) });
+  assert.equal(reshapeBox(lettered, { aliasesOnly: true }), null);
+});
+
+test("sameRead: a row's key rule must not change", () => {
+  const row = (o: Record<string, unknown> = {}) => ({ finish_tag: "A-1", section: "", category: "unassigned", category_source: "none", description: "", manufacturer: "", style: "", spec_color: "GRAY", size: "", remarks: "", suggested: true, ...o }) as ScheduleRead["rows"][number];
+  assert.ok(!sameRead({ rows: [row()] }, { rows: [row({ key_rule: "extended" })] }));
 });
