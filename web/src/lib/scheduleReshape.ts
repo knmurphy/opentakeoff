@@ -1,7 +1,6 @@
-// Import from schedule's second look at a box that read no rows (#483 rows 1
-// and 4). The finish reader keys a table on its LEFTMOST column and knows
-// its headers by a fixed vocabulary, so three common layouts read as no
-// table at all:
+// Import from schedule's second look at a box (#483 rows 1 and 4). The
+// finish reader keys a table on its LEFTMOST column and knows its headers by
+// a fixed vocabulary, so three common layouts read as no table at all:
 //   - headers it has no word for: MFG, SPECIFICATION, NOTES;
 //   - the key column printed second: MATERIAL | CODE | MANUFACTURER …;
 //   - a legend with no header row: codes down the left, text beside them.
@@ -9,9 +8,14 @@
 // knows: alias headers renamed, the key column's band moved to the front
 // (each band keeps its own spacing), or a CODE | DESCRIPTION header written
 // above a legend. It returns null when none applies. readScheduleSpans
-// calls it only after the box read no rows, so a box that reads today
-// reads exactly as before, and the rows it returns carry no coordinates,
-// so moving a band never reaches a citation.
+// calls it after the box read no rows, and the rows it returns carry no
+// coordinates, so moving a band never reaches a citation.
+// A box with a CODE column reads rows even under an alias header: the alias
+// column's cells join the known column beside it (MFG | COLOR → color
+// "VENDOR-A GRAY"). For that box, reshapeBox(spans, { aliasesOnly: true })
+// renames the alias header cells and nothing else, and readScheduleSpans
+// keeps the renamed read only when it moved text between the fields of the
+// same rows (scheduleRead.ts sameRead).
 import { finishCodeOk } from "./finishCode.ts";
 import { finishSectionOf } from "./finishSections.ts";
 import { isNonFinishSchedule, type GraphSpan } from "./sheetgraph.ts";
@@ -34,6 +38,19 @@ const headerWordOf = (s: string): string | null => {
   }
   return null;
 };
+// the columns a header cell names as the reader names them (sheetgraph.ts
+// headerLabels): a whole word, or a word starting with a column's first five
+// letters (MANUF., REMARK, COMMENT)
+const readerLabels = (s: string): string[] => {
+  const out: string[] = [];
+  for (const w of words(s)) {
+    if (HEADER_WORDS.has(w)) { if (!out.includes(w)) out.push(w); continue; }
+    const l = [...HEADER_WORDS].find((l) => w.startsWith(l.slice(0, 5)));
+    if (l && !out.includes(l)) out.push(l);
+  }
+  return out;
+};
+const isCode = (t: GraphSpan) => { const w = (t.str.trim().split(/\s+/)[0] ?? "").toUpperCase(); return /\d/.test(w) && /[A-Z]/.test(w) && finishCodeOk(w); };
 const midY = (t: GraphSpan) => t.y + (t.h || 0) / 2;
 const right = (t: GraphSpan) => t.x + (t.w || 0);
 
@@ -59,20 +76,58 @@ function headerLine(lines: GraphSpan[][]): number {
   });
 }
 
-/** The reshaped box, and how many codes it shows: the second read must
- * read at least that many rows, or it isn't used (a code glued to the
- * next cell's words by OCR can drop its row, and a read that silently
- * loses rows is worse than none). */
-export interface Reshaped { spans: GraphSpan[]; codes: number }
+/** The reshaped box, and how many codes it shows: on a box that read no
+ * rows, the second read must read at least that many rows, or it isn't used
+ * (a code glued to the next cell's words by OCR can drop its row, and a read
+ * that silently loses rows is worse than none). `renamed`: with
+ * `aliasesOnly`, the columns the alias header cells were renamed to. */
+export interface Reshaped { spans: GraphSpan[]; codes: number; renamed?: string[] }
 
-export function reshapeBox(spans: readonly GraphSpan[]): Reshaped | null {
+/** `aliasesOnly`: the look at a box that already reads — rename alias
+ * headers, move nothing, never write a legend header (renameAliases). */
+export function reshapeBox(spans: readonly GraphSpan[], opts?: { aliasesOnly?: boolean }): Reshaped | null {
   const lines = linesOf(spans);
+  if (opts?.aliasesOnly) return renameAliases(spans, lines);
   const h = headerLine(lines);
   const out = h >= 0 ? reshapeHeader(spans, lines, h) : legendHeader(spans, lines);
   if (!out) return null;
-  const isCode = (t: GraphSpan) => { const w = (t.str.trim().split(/\s+/)[0] ?? "").toUpperCase(); return /\d/.test(w) && /[A-Z]/.test(w) && finishCodeOk(w); };
   const data = lines.slice(h >= 0 ? h + 1 : 0);
   return { spans: out, codes: data.filter((l) => l.some(isCode)).length };
+}
+
+/** Rename the alias header cells of a box that already reads, and nothing
+ *  else. The header is the LAST line above the first code line naming three
+ *  distinct columns, one a key (a "SEE SPEC NOTES FOR TAG" note above the
+ *  table is not it). No band moves, so a header cell naming two columns
+ *  ("STYLE / COLOR") doesn't stop the rename, and a cell the reader already
+ *  names is never renamed. An alias is not renamed to a column the header
+ *  already prints, as the reader names it (MANUF., REMARK), with COMMENTS
+ *  counted as REMARKS (the row reads its remarks from either): the guard
+ *  in scheduleRead.ts checks that words moved, not where to, so this is
+ *  what keeps two cells from claiming one column. */
+function renameAliases(spans: readonly GraphSpan[], lines: GraphSpan[][]): Reshaped | null {
+  const firstCode = lines.findIndex((l) => l.some(isCode));
+  let h = -1;
+  for (let i = 0; i < (firstCode < 0 ? lines.length : firstCode); i++) {
+    const named = new Set(lines[i].map((t) => headerWordOf(t.str)).filter(Boolean) as string[]);
+    if (named.size >= 3 && [...named].some((w) => KEY_WORDS.has(w))) h = i;
+  }
+  if (h < 0) return null;
+  const header = lines[h];
+  const present = new Set(header.flatMap((t) => readerLabels(t.str)));
+  if (present.has("COMMENTS")) present.add("REMARKS");
+  const renamed = new Map<GraphSpan, string>();
+  for (const t of header) {
+    if (readerLabels(t.str).length) continue;
+    const to = words(t.str).map((w) => ALIASES[w]).find(Boolean);
+    if (to && !present.has(to)) { renamed.set(t, to); present.add(to); }
+  }
+  if (!renamed.size) return null;
+  return {
+    spans: spans.map((t) => (renamed.has(t) ? { ...t, str: renamed.get(t)! } : t)),
+    codes: lines.slice(h + 1).filter((l) => l.some(isCode)).length,
+    renamed: [...renamed.values()],
+  };
 }
 
 /** Rename alias headers; move the key column's band to the front. */
