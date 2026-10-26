@@ -50,6 +50,7 @@ import PageReadControl, { readControlPlacement, READ_CONTROL_LEFT } from "../com
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { serializeSplitView, normalizeSplitView } from "../lib/splitView";
+import SplitLayout from "../components/SplitLayout.jsx";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
 import { joinAbuttingSpans } from "../lib/textjoin";
@@ -9490,7 +9491,26 @@ export default function TakeoffCanvas() {
            </div>
          </div>
        )}
-       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+       {/* ALWAYS mounted — reference={null} is how "no split" renders (see
+           SplitLayout.jsx). This is what keeps the primary stage's element
+           type and tree position stable across every split toggle, so the
+           canvas subtree never unmounts/remounts on enter/exit/flip/drag. */}
+       <SplitLayout
+         orientation={splitView?.orientation ?? "v"}
+         ratio={splitView?.ratio ?? 1}
+         onRatioChange={(r) => {
+           // Hold the gesture window open for every drag tick, same idiom as
+           // wheel-zoom/panel-resize — the detail-tile resync effect depends on
+           // splitView (ratio changes its identity every tick) and would
+           // otherwise re-fire paintDetail worker requests on every pointermove;
+           // this defers the real resync to one shot on drag settle.
+           gestureUntilRef.current = performance.now() + GESTURE_MS;
+           setSplitView((s) => s && { ...s, ratio: r });
+         }}
+         onFlip={() => setSplitView((s) => s && { ...s, orientation: s.orientation === "v" ? "h" : "v" })}
+         onCollapse={() => setSplitView(null)}
+         primary={(
+       <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
         <div ref={containerRef} onPointerDownCapture={annotations.onPointerDownCapture} onPointerMoveCapture={annotations.onPointerMoveCapture} onPointerUpCapture={annotations.onPointerUpCapture} onPointerCancelCapture={annotations.onPointerCancelCapture} onDoubleClickCapture={annotations.onDoubleClickCapture} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={leaveCanvas} onContextMenu={(e) => e.preventDefault()}
           onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
@@ -10773,6 +10793,13 @@ export default function TakeoffCanvas() {
         </div>
 
        </div>
+         )}
+         reference={splitView ? (
+           // Placeholder until the ReferencePane lands (next commits in this
+           // port): the second surface always renders read-only.
+           <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "var(--ink-soft,#888)" }}>Drop a sheet here</div>
+         ) : null}
+       />
 
         {/* Agent panel — DOCKED right-rail sibling (reflows the canvas like the
             Takeoffs panel). Honest empty state until the BYO-AI seam is
