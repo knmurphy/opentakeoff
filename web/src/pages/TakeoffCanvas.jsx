@@ -52,6 +52,8 @@ import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../compone
 import { serializeSplitView, normalizeSplitView } from "../lib/splitView";
 import SplitLayout from "../components/SplitLayout.jsx";
 import ReferencePane from "../components/ReferencePane.jsx";
+import DropZoneOverlay from "../components/DropZoneOverlay.jsx";
+import { dropZoneAt, zoneToOrientation, SHEET_TAB_DND_MIME } from "../lib/dropZones";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
 import { joinAbuttingSpans } from "../lib/textjoin";
@@ -427,6 +429,8 @@ export default function TakeoffCanvas() {
   const [panelImgs, setPanelImgs] = useState({}); // { sheetKey: {w,h} } rendered bitmap dims per panel
   const [tf, setTf] = useState({ x: 0, y: 0, scale: 1 }); // render mirror of tfRef
   const [splitView, setSplitView] = useState(null); // null = single canvas; else { orientation, ratio, refKey, refSet }
+  // Live drop-zone under a dragged sheet tab — null hides the overlay.
+  const [dragZone, setDragZone] = useState(null);
   // ── reference pane resolution — independent of panelImgs/groupKeys ────────
   // panelImgs is fully REPLACED on every group render (see setPanelImgs in the
   // group effect), so a referenced sheet outside the primary group needs its
@@ -9068,11 +9072,29 @@ export default function TakeoffCanvas() {
             const lbl = tabLabel(k);
             return (
               <span key={k} data-sheet-tab={on ? "active" : "idle"}
-                draggable={!isStitchKey(k) && sheetHasInk(k)}
+                // Always draggable: a tab is both the internal drag-a-tab-to-
+                // split / add-to-group payload (SHEET_TAB_DND_MIME, any sheet,
+                // ink or not) and — when the sheet carries ink — the fork's
+                // drag-out-of-the-app marked-sheet export (DownloadURL). Both
+                // ride ONE gesture: the export writes its own types on top of
+                // the internal MIME, and onSheetTabDragStart's honest "not
+                // armed yet" refusal still wins (it preventDefault()s), because
+                // shipping a stale marked sheet is worse than a refused drag.
+                draggable
                 onMouseEnter={() => armSheetDrag(k)}
-                onDragStart={(e) => onSheetTabDragStart(k, e)}
-                title={!isStitchKey(k) && sheetHasInk(k) ? "Drag this tab out of the app to export the marked sheet" : undefined}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, border: "1px solid var(--ink-faint)", borderBottom: on ? "2px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: on ? "var(--paper-cream)" : "transparent", padding: "3px 6px 2px 9px", maxWidth: 190 }}>
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(SHEET_TAB_DND_MIME, k);
+                  if (!isStitchKey(k) && sheetHasInk(k)) onSheetTabDragStart(k, e);
+                  else e.dataTransfer.effectAllowed = "copy";
+                }}
+                // dragend fires exactly once per drag gesture regardless of how
+                // it ended (a real drop, an Escape-cancel, or releasing outside
+                // any valid target) — the one reliable place to guarantee the
+                // drop overlay never survives a cancelled drag (onDrop only
+                // clears it on an actual drop).
+                onDragEnd={() => setDragZone(null)}
+                title={!isStitchKey(k) && sheetHasInk(k) ? "Drag this tab out of the app to export the marked sheet — or onto a canvas edge to open it in the reference pane" : "Drag onto a canvas edge to open this sheet in a read-only reference pane"}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, border: "1px solid var(--ink-faint)", borderBottom: on ? "2px solid var(--cobalt)" : "1px solid var(--ink-faint)", background: on ? "var(--paper-cream)" : "transparent", padding: "3px 6px 2px 9px", maxWidth: 190, cursor: "grab" }}>
                 <button onClick={() => goToSheet(k)} title={k} style={{ border: "none", background: "none", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 11.5, color: "var(--ink)", fontFamily: "var(--f-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140, padding: 0 }}>{lbl}</button>
                 <button onClick={() => toggleInGroup(k)} title={inGroup ? "Remove from side-by-side" : "Side-by-side with the current sheet"} style={{ border: "none", background: "none", cursor: "pointer", color: inGroup ? "var(--cobalt)" : "var(--ink-faint)", padding: 0, display: "inline-flex" }}><Icon name="sideBySide" size={11} /></button>
                 <button onClick={() => closeTab(k)} title="Close tab" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0, display: "inline-flex" }}><Icon name="close" size={10} /></button>
@@ -9597,7 +9619,45 @@ export default function TakeoffCanvas() {
          onFlip={() => setSplitView((s) => s && { ...s, orientation: s.orientation === "v" ? "h" : "v" })}
          onCollapse={() => setSplitView(null)}
          primary={(
-       <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
+       <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}
+         onDragOver={(e) => {
+           // Filter on the tab MIME so this never fires for a dragged condition
+           // chip (CONDITION_DND_MIME) or an OS file drag (dataTransfer.files) —
+           // both must fall through untouched to their own handlers (the
+           // quick-access palette's onDrop, and the app-shell's file-drop
+           // onDrop — `handleFiles(e.dataTransfer?.files)` on the top-level
+           // .app-shell div — neither of which this element sits between).
+           if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
+           e.preventDefault(); e.stopPropagation();
+           const r = e.currentTarget.getBoundingClientRect();
+           setDragZone(dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView }));
+         }}
+         onDragLeave={(e) => {
+           if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
+           // dragenter/dragleave fire at every child boundary too (the stage's
+           // canvases, the panel rail buttons) — only clear when the pointer
+           // actually left this wrapper, not when it crossed onto a descendant,
+           // or the overlay would strobe on every pixel of internal movement.
+           if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
+           setDragZone(null);
+         }}
+         onDrop={(e) => {
+           if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
+           e.preventDefault(); e.stopPropagation();
+           const droppedKey = e.dataTransfer.getData(SHEET_TAB_DND_MIME);
+           setDragZone(null);
+           if (!droppedKey) return;
+           // recompute the zone from THIS event's own coordinates rather than
+           // trusting the dragZone state from the last dragover render — the
+           // drop must honor where the pointer actually released, not lag a
+           // render behind it.
+           const r = e.currentTarget.getBoundingClientRect();
+           const zone = dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView });
+           if (zone === "center") { toggleInGroup(droppedKey); return; } // join primary group (existing behavior)
+           const orientation = zoneToOrientation(zone); // "v" | "h"
+           // dropped sheet frames the reference pane; primary keeps its content
+           setSplitView({ orientation, ratio: 0.5, refKey: droppedKey, refSet: [droppedKey] });
+         }}>
         <div ref={containerRef} onPointerDownCapture={annotations.onPointerDownCapture} onPointerMoveCapture={annotations.onPointerMoveCapture} onPointerUpCapture={annotations.onPointerUpCapture} onPointerCancelCapture={annotations.onPointerCancelCapture} onDoubleClickCapture={annotations.onDoubleClickCapture} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp} onPointerLeave={leaveCanvas} onContextMenu={(e) => e.preventDefault()}
           onDoubleClick={(e) => { if (tool === "oneclick") { if (proposal?.regions.length) createProposal(); } else if (tool === "area" || tool === "deduct" || tool === "linear" || tool === "surface" || tool === "zone") finishShape(); else if (tool === "select") editMarkupAt(e); }}
@@ -10879,6 +10939,7 @@ export default function TakeoffCanvas() {
           {panelBtn(() => setShowRevisions(true), "revisions", "Revisions — save the takeoff at each bid revision, compare what moved", showRevisions)}
         </div>
 
+        <DropZoneOverlay zone={dragZone} />
        </div>
          )}
          reference={splitView ? (
