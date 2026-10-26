@@ -49,6 +49,7 @@ import OcrDownloadNotice from "../components/OcrDownloadNotice.jsx";
 import PageReadControl, { readControlPlacement, READ_CONTROL_LEFT } from "../components/PageReadControl.jsx";
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
+import { serializeSplitView, normalizeSplitView } from "../lib/splitView";
 import { Icon } from "../brand/icons.jsx";
 import { RENDER_SCALE, MAX_GROUP, STANDARD_SCALES, parseSheetKey, compareSheetKeys, extractSheetNumber, detectScale, extractRegionText, extractTextMarks, extractDimTexts } from "../lib/sheets";
 import { joinAbuttingSpans } from "../lib/textjoin";
@@ -423,6 +424,7 @@ export default function TakeoffCanvas() {
   const [tool, setTool] = useState("select");
   const [panelImgs, setPanelImgs] = useState({}); // { sheetKey: {w,h} } rendered bitmap dims per panel
   const [tf, setTf] = useState({ x: 0, y: 0, scale: 1 }); // render mirror of tfRef
+  const [splitView, setSplitView] = useState(null); // null = single canvas; else { orientation, ratio, refKey, refSet }
 
   const [scales, setScales] = useState({});
   const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
@@ -1938,6 +1940,10 @@ export default function TakeoffCanvas() {
       noTabsRef.current = true;
       if (sheetsLoadedRef.current) setView(cloudMode && !hasSheetsRef.current ? "picker" : "gallery");
     }
+    // additive `split_view` (read-only reference pane) — same else-clear rule
+    // as sheet_group/sheet_tabs: a payload without the key must not inherit
+    // the replaced project's split. normalizeSplitView(undefined) → null.
+    setSplitView(normalizeSplitView(a.split_view));
     const sc = {};
     const src = {};
     const unconf = {};
@@ -2703,6 +2709,9 @@ export default function TakeoffCanvas() {
     conditions, condition_columns: conditionColumns, shape_labels: shapeLabels, palette,
     shapes, markups, rfis, approvals, proposals, condition_edit_proposals: conditionEditProposals, rules,
     sheet_group: sheetGroup, last_group: lastGroup, sheet_tabs: openTabs, stitches,
+    // additive + omit-when-absent (lib/takeoffDocument.js drops a null): a
+    // project that never split persists byte-identical, as before the feature.
+    split_view: serializeSplitView(splitView),
     sheet_levels: sheetLevels, layer_overrides: layerOverrides, provenance_counters: provCounters,
   });
   // Runtime restore of a saved payload — the Revisions panel's Restore lands
@@ -2936,7 +2945,7 @@ export default function TakeoffCanvas() {
     // state it serializes, so listing buildPayload (a new identity each render)
     // would fire a save on every render instead of only on a real change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, scaleUnconfirmed, markups, approvals, rfis, proposals, conditionEditProposals, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units]);
+  }, [shapes, conditions, conditionColumns, shapeLabels, palette, scales, scaleSources, scaleUnconfirmed, markups, approvals, rfis, proposals, conditionEditProposals, rules, provCounters, sheetGroup, sheetLevels, layerOverrides, lastGroup, openTabs, stitches, projectName, clientInfo, units, splitView]);
   useEffect(() => { saveStateRef.current = saveState; }, [saveState]);
 
   // Flush a pending debounced save on navigate-away (unmount), and warn before a
