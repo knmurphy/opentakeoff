@@ -520,6 +520,7 @@ export default function TakeoffCanvas() {
   // handler, well after that declaration has executed.
   const dropOntoReference = (droppedKey) => {
     if (!splitView) return;
+    if (isStitchKey(droppedKey)) { setCommitMsg("A stitched surface can't frame the reference pane yet — reference a single sheet."); return; }
     if (!refSet.includes(droppedKey) && refuseIfOverCap(refSet.length + 1)) return;
     setSplitView((s) => {
       if (!s) return s;
@@ -8787,8 +8788,8 @@ export default function TakeoffCanvas() {
   // RESTORING an already-open split, not minting a new one on a device that
   // can't usefully show it).
   const referenceCandidate = splitView || !deviceCanSplit ? null : (
-    tabMruRef.current.find((k) => openTabs.includes(k) && !groupKeys.includes(k))
-    ?? openTabs.find((k) => !groupKeys.includes(k))
+    tabMruRef.current.find((k) => openTabs.includes(k) && !groupKeys.includes(k) && !isStitchKey(k))
+    ?? openTabs.find((k) => !groupKeys.includes(k) && !isStitchKey(k))
     ?? null
   );
   if (referenceCandidate) {
@@ -9975,6 +9976,10 @@ export default function TakeoffCanvas() {
            const r = e.currentTarget.getBoundingClientRect();
            const zone = dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView || !deviceCanSplit });
            if (zone === "center") { toggleInGroup(droppedKey); return; } // join primary group (existing behavior)
+           // a stitch cannot frame the reference pane (the resolve effect would
+           // reject it and silently collapse the split) — refuse it honestly
+           // here, the only place the user is watching.
+           if (isStitchKey(droppedKey)) { setCommitMsg("A stitched surface can't frame the reference pane yet — reference a single sheet."); return; }
            const orientation = zoneToOrientation(zone); // "v" | "h"
            if (refuseIfOverCap(1)) return; // refuse rather than silently drop when this would exceed the total-sheet budget
            // dropped sheet frames the reference pane; primary keeps its content
