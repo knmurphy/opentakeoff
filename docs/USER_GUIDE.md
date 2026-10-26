@@ -142,6 +142,17 @@ Stitching and aligning are yours alone—an AI agent driving OpenTakeoff [over M
 
 **If a control seems missing:** **Stitch N into one surface** is in the gallery footer and requires 2–4 selected sheets. **Align** appears only while a stitched surface is open. Reopen one from its tab or the gallery's **Stitched surfaces** strip. If Align refuses because takeoffs already exist, create a fresh stitch and align it before tracing. Deleting a stitch also refuses while takeoffs or markups exist.
 
+### Split screen — a second pane to look at
+
+Drag a sheet tab to a screen edge—left, right, top, or bottom—and the canvas splits: the dragged sheet opens in a **reference pane** beside your measuring canvas, with its own pan and zoom. (Dropping in the center still adds the tab to a side-by-side group, as before.) The divider drags to resize, **⟳** flips the split between side-by-side and stacked, **✕** closes the reference pane and the primary folds back to full width. The layout saves with the project and reopens with it.
+
+The two panes are not equals, on purpose:
+
+- **The primary pane measures.** Every tool, snap grid, and keyboard shortcut stays where it was; the split changes nothing about how you take off.
+- **The reference pane looks.** It frames one open sheet at its own pan and zoom—crisp detail tiles included—and mirrors the primary sheet's committed shapes and markups read-only, so a door schedule or an adjacent room can sit beside the room you trace, revision clouds and notes included. Mirrored ink is ink, not a control: click it and the pane pans, exactly as if the markup were printed on the sheet; select a cloud in the primary and the mirror shows the cloud, never the selection. Notes size themselves to the pane's own zoom, so they stay legible at any zoom on that side. Hiding the markup layer (the **Hide layer** control) hides it in both panes. A pane cannot frame a stitch yet: give it a single sheet.
+
+Panels together keep at most 6 sheets open, and the pane stays off on narrow viewports and low-memory devices.
+
 ### Levels (multi-floor sets)
 
 In the gallery, select sheets and click **Assign level…** (`"L1"`, `"Level 2"`, `"Garage"`—empty clears). The gallery groups by level with unassigned sheets last, cards wear their level chip, and tabs plus the page picker carry the label. Levels save with the project.
