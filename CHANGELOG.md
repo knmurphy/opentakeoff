@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-26 — split-screen reference pane
+
+### Added
+
+- **Split screen (reference pane).** Drag a sheet tab to a screen edge (left, right, top, bottom) and the canvas splits: the dragged sheet opens in a second pane that frames one sheet at its own pan and zoom, crisp detail tiles included, and mirrors the primary sheet's committed shapes read-only. The primary pane keeps every measuring tool, snap grid, and shortcut; only the display transform is duplicated, never the coordinate, measurement, keyboard, or undo machinery. The divider drags to resize, **⟳** flips the split orientation, **✕** closes the pane with fold-back, and the layout persists in the project save. The drop gesture offers five zones—edges split, center adds the tab to a side-by-side group as before. Panes together keep at most 6 sheets open; the pane is off on narrow viewports and low-memory devices. A pane cannot frame a stitch yet: give it a single sheet.
+- **Markups mirror into the reference pane too.** Clouds, callouts, text notes, dimensions, arrows, highlights, bubbles, captured images and vector stamps draw in the pane at the same plan position, through the same renderer the primary canvas draws them with (`web/src/components/markupGlyphs.jsx`), so the two surfaces cannot drift; paint order and the per-sheet mirror scope are one shared rule (`web/src/lib/markupPaint.ts`). The mirror is ink, not a control: it takes no clicks (clicking through it pans the pane), it never paints the primary's selection halo, and notes size to each pane's own zoom. Hiding the markup layer (**Hide layer**) hides the mirrored ink in both panes. Deletions and edits vanish or appear in both because both render the live records.
+
 ## 2026-09-15 — annotation toolbar
 
 Added direct arrow, highlighter, callout, cloud-note, favorites, and annotation Sweep tools. Sweep requires confirmation in a numbered checklist, supports individual exclusions, and applies one undoable batch. Added page-relative vector PDF export and rotated-page highlight checks.
