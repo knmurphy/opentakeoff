@@ -50,7 +50,8 @@ import PageReadControl, { readControlPlacement, READ_CONTROL_LEFT } from "../com
 import TakeoffsPanel, { clampPanelW, CONDITION_DND_MIME, ConditionAppearanceEditor } from "../components/TakeoffsPanel.jsx";
 import { HATCHES, PALETTE, NO_FILL, HatchPattern, HatchSwatch } from "../components/hatches.jsx";
 import { shapeFill as glyphFill, renderShapeGlyph } from "../components/shapeGlyphs.jsx";
-import { serializeSplitView, normalizeSplitView } from "../lib/splitView";
+import { serializeSplitView, normalizeSplitView, wouldExceedSheetCap, canSplit } from "../lib/splitView";
+import { LOW_MEMORY_DEVICE } from "../lib/deviceClass"; // same switch tilePool.ts sizes its worker pool on (also gates split creation/mounting)
 import SplitLayout from "../components/SplitLayout.jsx";
 import ReferencePane from "../components/ReferencePane.jsx";
 import DropZoneOverlay from "../components/DropZoneOverlay.jsx";
@@ -491,14 +492,16 @@ export default function TakeoffCanvas() {
   // the removed chip held (clamped to the new length) when the removed chip was
   // the one currently framed — same "land where you were, not always the first"
   // idiom as closeTab's own reframe, so removing chip 2-of-3 lands on the new
-  // chip 2, not always back to chip 1. (The empty-set auto-collapse lands with
-  // the lifecycle guards.)
+  // chip 2, not always back to chip 1. Removing the LAST chip empties the set —
+  // the empty-pane guard: rather than refuse, auto-collapse the whole split.
+  // ReferencePane's tab bar shows the ✕ even on a solo chip for exactly this —
+  // "remove my only reference sheet" IS "close this split," not a dead end.
   const removeRefTab = (key) => setSplitView((s) => {
     if (!s) return s;
     const set = s.refSet?.length ? s.refSet : [s.refKey];
-    if (set.length <= 1) return s;
     const i = set.indexOf(key);
     const next = set.filter((k) => k !== key);
+    if (!next.length) return null;
     const refKey = s.refKey === key ? next[Math.min(Math.max(i, 0), next.length - 1)] : s.refKey;
     return { ...s, refSet: next, refKey };
   });
@@ -507,12 +510,24 @@ export default function TakeoffCanvas() {
   // the primary pane's edge-drop-to-split gesture, except every drop here is a
   // "center" drop (see ReferencePane.jsx's comment on why it skips
   // dropZoneAt's edge/center hit-test entirely).
-  const dropOntoReference = (droppedKey) => setSplitView((s) => {
-    if (!s) return s;
-    const set = s.refSet?.length ? s.refSet : [s.refKey];
-    const next = set.includes(droppedKey) ? set : [...set, droppedKey];
-    return { ...s, refSet: next, refKey: droppedKey };
-  });
+  // Refuses (toast, no state change) rather than silently dropping the sheet
+  // when adding a NEW member would push the total over
+  // SPLIT_MAX_TOTAL_SHEETS — checked here, outside the updater, because the
+  // refusal has a side effect (the toast) and a setState updater can run more
+  // than once (StrictMode, batched retries). refuseIfOverCap/primaryCount are
+  // declared below (near groupKeys/stitchById, which the count needs);
+  // referencing them here is safe — this closure only runs later, as a drop
+  // handler, well after that declaration has executed.
+  const dropOntoReference = (droppedKey) => {
+    if (!splitView) return;
+    if (!refSet.includes(droppedKey) && refuseIfOverCap(refSet.length + 1)) return;
+    setSplitView((s) => {
+      if (!s) return s;
+      const set = s.refSet?.length ? s.refSet : [s.refKey];
+      const next = set.includes(droppedKey) ? set : [...set, droppedKey];
+      return { ...s, refSet: next, refKey: droppedKey };
+    });
+  };
 
   const [scales, setScales] = useState({});
   const [scaleSources, setScaleSources] = useState({}); // scale provenance for the report — typically "calibrated" | "standard" | "detected", but any string a newer build wrote is kept verbatim; sheets that predate the flag export "unknown"
@@ -524,6 +539,16 @@ export default function TakeoffCanvas() {
   const confirmScale = (key) => setScaleUnconfirmed((m) => { if (!(key in m)) return m; const n = { ...m }; delete n[key]; return n; });
   const [detectedScales, setDetectedScales] = useState({}); // { sheetKey: {upp,label,multi} } read off the plan text
   const isNarrow = useIsNarrow();
+  // Viewport/memory disable. `deviceCanSplit` gates split CREATION (the
+  // drag-to-split gesture and the "Reference ▸ Split…" menu items) —
+  // unconditionally, no override. `splitMounted` additionally gates whether an
+  // ALREADY-open splitView actually mounts its ReferencePane: it honors
+  // `splitOverride` (the "Restore split" menu item) so a user who explicitly
+  // asks for the pane anyway isn't second-guessed, while the persisted
+  // splitView itself is never discarded either way (see the SplitLayout render
+  // site below — `reference` goes null, `splitView` state does not).
+  const deviceCanSplit = canSplit({ narrow: isNarrow, lowMemory: LOW_MEMORY_DEVICE });
+  const splitMounted = deviceCanSplit || splitOverride;
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("opentakeoff_dark") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("opentakeoff_dark", darkMode ? "1" : "0"); } catch { /* private mode */ } }, [darkMode]);
   // App chrome theme (light/dark tokens) — independent of the canvas ☾ invert
@@ -1395,6 +1420,23 @@ export default function TakeoffCanvas() {
     const next = openTabs.filter((k) => k !== key);
     setOpenTabs(next);
     if (sheetGroup.includes(key)) { const f = sheetGroup.filter((k) => k !== key); setSheetGroup(f.length >= 2 || (f.length === 1 && isStitchKey(f[0])) ? f : []); }
+    // Stale-chip pruning: a closed tab's sheetKey must not linger in a split's
+    // reference set — the reference pane only ever REFERENCES open tabs, never
+    // owns them (SplitLayout.jsx's header comment). Drop it; if it was the
+    // framed sheet, reframe to another member that's still an open tab, or
+    // auto-collapse (setSplitView(null)) if none remain — the
+    // dangling-single-chip dead end this guards against (a stale chip stuck
+    // showing "Drop a sheet here" with no way to remove it short of
+    // collapsing the whole split).
+    if (splitView && (splitView.refKey === key || splitView.refSet?.includes(key))) {
+      setSplitView((s) => {
+        if (!s) return s;
+        const set = (s.refSet?.length ? s.refSet : [s.refKey]).filter((k) => k !== key);
+        if (!set.length) return null;
+        const refKey = s.refKey === key ? set.find((k) => next.includes(k)) : s.refKey;
+        return refKey ? { ...s, refSet: set, refKey } : null;
+      });
+    }
     if (!next.length) { setView("gallery"); return; }
     if (!sheetGroup.length && key === sheetKey) { const nb = next[Math.min(Math.max(i, 0), next.length - 1)]; if (nb) goToSheet(nb); }
   }
@@ -1426,6 +1468,22 @@ export default function TakeoffCanvas() {
   // all the original single-sheet math is unchanged.
   const groupKeys = sheetGroup.length ? sheetGroup : [sheetKey];
   const stitchById = useMemo(() => Object.fromEntries(stitches.map((s) => [s.id, s])), [stitches]);
+  // The primary group's actual live-sheet cost — a stitch panel occupies one
+  // groupKeys slot but draws (and tile-composites) every one of its members
+  // (see the draw-time expansion into `drawPanels`), so a stitch counts as its
+  // member count here, not 1. This is the "primaryCount" half of
+  // wouldExceedSheetCap(primaryCount, refCount); refSet.length is the other.
+  const primaryCount = groupKeys.reduce((n, k) => n + (isStitchKey(k) ? (stitchById[k]?.members?.length || 1) : 1), 0);
+  // Shared refusal for every split-creation / reference-add site.
+  // Side-effecting (the toast), so callers check it in an event handler BEFORE
+  // calling setSplitView, never inside a setState updater (which can run more
+  // than once). Returns true (and refuses) when adding nextRefCount reference
+  // sheets to the current primary would exceed the budget.
+  const refuseIfOverCap = (nextRefCount) => {
+    if (!wouldExceedSheetCap(primaryCount, nextRefCount)) return false;
+    setCommitMsg("Too many sheets open at once to split — close a sheet first");
+    return true;
+  };
   // docEpoch re-keys groupSig when a re-dropped file's BYTES changed under the
   // same name (store.addPdf → revised): the render effect keyed on groupSig is
   // the one path that resets every cache (compositor, pageObjs, snap grids) and
@@ -2224,6 +2282,23 @@ export default function TakeoffCanvas() {
       setOpenTabs((t) => (t.length ? t : tabs));
     }
     setOpenTabs((t) => { const f = t.filter(keyLive); return f.length === t.length ? t : f; });
+    // A split's reference set is subject to the same liveness rule — a member
+    // pointing at a since-deleted FILE (whole-file removal via Manage, not a
+    // single closed tab — closeTab's own pruning above already handles that
+    // narrower, more common case) must be dropped, and if the framed refKey
+    // itself didn't survive, reframe to another live member or auto-collapse
+    // the whole split if none remain (the same dangling-chip dead end
+    // closeTab's pruning guards against, generalized to "the file is gone
+    // entirely" rather than "this one tab was closed").
+    setSplitView((s) => {
+      if (!s) return s;
+      const rawSet = s.refSet?.length ? s.refSet : [s.refKey];
+      const set = rawSet.filter(keyLive);
+      if (set.length === rawSet.length) return s;
+      if (!set.length) return null;
+      const refKey = keyLive(s.refKey) ? s.refKey : set[0];
+      return { ...s, refSet: set, refKey };
+    });
     // stitchById joins the deps: a stitch created/deleted this session must
     // re-run the same liveness pass its members' files do.
   }, [sheets, stitchById]);
@@ -2258,13 +2333,18 @@ export default function TakeoffCanvas() {
   // Bytes come from the store; pdf.js needs them up front (docCache above).
   const docFor = useCallback((file) => docCache.doc(file), [docCache]);
 
-  // Dev-only handle for the split state (Playwright smoke / debugging): the
-  // reference pane has no visible control until the tab-drop gesture and the
-  // sheet-chip menu land, so a test needs a way to mint a split.
+  // Manual "Restore split" override — lets a user explicitly re-mount an
+  // already-open split's reference pane on a device canSplit (below) would
+  // otherwise suppress it on (narrow viewport / low-memory). Reset the moment
+  // the split itself collapses so a stale override never carries into the NEXT
+  // split. Keyed on presence/absence only (not the splitView object itself,
+  // whose identity churns every ratio-drag tick and would re-run this
+  // pointlessly on every one of those).
+  const [splitOverride, setSplitOverride] = useState(false);
   useEffect(() => {
-    if (import.meta.env.DEV) { window.__otSetSplit = setSplitView; return () => { delete window.__otSetSplit; }; }
-  }, []);
-
+    if (!splitView) setSplitOverride(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally narrowed to presence/absence (see comment above), not splitView's own churny identity
+  }, [!!splitView]);
   // ── reference pane: resolve refKey → dims, open + base-paint it ──────────
   // Independent of the group render effect below: the referenced sheet may not
   // be (and usually isn't) a member of the primary group. Runs the same
@@ -2280,7 +2360,13 @@ export default function TakeoffCanvas() {
   // openSheet call only ever lands after an await, so it always lands after
   // resetAll() regardless of hook declaration order.
   useEffect(() => {
-    const refKey = rawRefKey;
+    // Viewport/memory disable. A splitView the device can't (or isn't
+    // overridden to) mount costs nothing beyond the state itself — treat
+    // refKey as null exactly like "no split," so this never opens a compositor
+    // entry or paints tiles for a pane that isn't on screen. splitMounted
+    // flipping true (viewport widened, or the "Restore split" override)
+    // re-fires this effect (see the dep array below) and resolves for real.
+    const refKey = splitMounted ? rawRefKey : null;
     // Only clear the CURRENT dims/paint state when refKey itself changed —
     // a groupSig-only resync (the primary's resetAll() case, same refKey)
     // must reopen+repaint the compositor entry WITHOUT wiping refPanelImg,
@@ -2338,7 +2424,28 @@ export default function TakeoffCanvas() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- docFor/getCompositor are stable; groupSig is the resetAll()-invalidation signal, same idiom as the group effect below
-  }, [rawRefKey, groupSig]);
+  }, [rawRefKey, groupSig, splitMounted]);
+
+  // Dangling-single-chip dead end: the effect above marks `refInvalid` the
+  // instant a FRAMED refKey that IS a live open tab still fails to resolve —
+  // an out-of-range page (the file was replaced with fewer pages), a stitch
+  // key, or any other async-resolution failure that isn't "the tab got closed"
+  // (closeTab's own pruning already handles that) or "the whole file is gone"
+  // (the keyLive reconciliation above already handles that). If another refSet
+  // member is still a live open tab, reframe to it and drop the dangling one;
+  // if none remain, there's nothing left this pane can show — auto-collapse
+  // rather than leaving the tab bar's sole chip stuck over a permanent "Drop a
+  // sheet here" empty state.
+  useEffect(() => {
+    if (!rawRefKey || refInvalid !== rawRefKey) return;
+    setSplitView((s) => {
+      if (!s || s.refKey !== rawRefKey) return s; // stale by the time this runs
+      const set = s.refSet?.length ? s.refSet : [s.refKey];
+      const survivor = set.find((k) => k !== rawRefKey && openTabs.includes(k));
+      if (!survivor) return null;
+      return { ...s, refKey: survivor, refSet: set.filter((k) => k !== rawRefKey) };
+    });
+  }, [refInvalid, rawRefKey, openTabs]);
 
   // Deliberately depends on `darkMode` (unlike the rest of this file's
   // tile-paint calls, which read darkModeRef to stay stable across renders):
@@ -8676,7 +8783,10 @@ export default function TakeoffCanvas() {
   // sheetKey change above), falling back to the first open tab that qualifies;
   // excludes every member of `groupKeys` (not just the focused sheetKey) so a
   // side-by-side group never offers to reference a sheet it's already showing.
-  const referenceCandidate = splitView ? null : (
+  // Also withheld on a device canSplit disables (no override here — that's for
+  // RESTORING an already-open split, not minting a new one on a device that
+  // can't usefully show it).
+  const referenceCandidate = splitView || !deviceCanSplit ? null : (
     tabMruRef.current.find((k) => openTabs.includes(k) && !groupKeys.includes(k))
     ?? openTabs.find((k) => !groupKeys.includes(k))
     ?? null
@@ -8685,12 +8795,27 @@ export default function TakeoffCanvas() {
     sheetMenuItems.push({
       id: "ref-split-v", label: "Reference ▸ Split Vertical",
       title: `Open a read-only reference pane beside this one, framing ${tabLabel(referenceCandidate)}`,
-      onSelect: () => setSplitView({ orientation: "v", ratio: 0.5, refKey: referenceCandidate, refSet: [referenceCandidate] }),
+      onSelect: () => { if (refuseIfOverCap(1)) return; setSplitView({ orientation: "v", ratio: 0.5, refKey: referenceCandidate, refSet: [referenceCandidate] }); },
     });
     sheetMenuItems.push({
       id: "ref-split-h", label: "Reference ▸ Split Horizontal",
       title: `Open a read-only reference pane below this one, framing ${tabLabel(referenceCandidate)}`,
-      onSelect: () => setSplitView({ orientation: "h", ratio: 0.5, refKey: referenceCandidate, refSet: [referenceCandidate] }),
+      onSelect: () => { if (refuseIfOverCap(1)) return; setSplitView({ orientation: "h", ratio: 0.5, refKey: referenceCandidate, refSet: [referenceCandidate] }); },
+    });
+  }
+  // "Restore split": a splitView PERSISTS in state even when the device can't
+  // currently mount its reference pane (narrow viewport / low-memory — see
+  // splitMounted above); this is the escape hatch for a user who wants it
+  // anyway, e.g. a phone user who's fine with a cramped pane, or a
+  // false-positive low-memory read. Disappears the moment deviceCanSplit
+  // becomes true on its own (viewport widened) — nothing left to override.
+  if (splitView && !deviceCanSplit && !splitOverride) {
+    sheetMenuItems.push({
+      id: "restore-split", label: "Restore split",
+      title: isNarrow
+        ? "This split is hidden because the window is too narrow to show two panes usefully — restoring it may feel cramped."
+        : "This split is hidden because this device may not have enough memory for two rendered sheets at once — restoring it may be slow.",
+      onSelect: () => setSplitOverride(true),
     });
   }
   if (sheetMenuItems.length) sheetMenuItems.push("divider");
@@ -9822,7 +9947,11 @@ export default function TakeoffCanvas() {
            e.preventDefault(); e.stopPropagation();
            e.dataTransfer.dropEffect = "copy"; // negotiate the cursor — a bare preventDefault() without this leaves the browser showing "no-drop" over a valid target
            const r = e.currentTarget.getBoundingClientRect();
-           setDragZone(dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView }));
+           // Edges are ALSO disabled (center-join-only) when the device can't
+           // split — same rule the menu's referenceCandidate uses, so the drag
+           // gesture and its menu fallback never disagree about whether split
+           // creation is currently offered.
+           setDragZone(dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView || !deviceCanSplit }));
          }}
          onDragLeave={(e) => {
            if (![...e.dataTransfer.types].includes(SHEET_TAB_DND_MIME)) return;
@@ -9844,9 +9973,10 @@ export default function TakeoffCanvas() {
            // drop must honor where the pointer actually released, not lag a
            // render behind it.
            const r = e.currentTarget.getBoundingClientRect();
-           const zone = dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView });
+           const zone = dropZoneAt({ w: r.width, h: r.height }, e.clientX - r.left, e.clientY - r.top, { edgesDisabled: !!splitView || !deviceCanSplit });
            if (zone === "center") { toggleInGroup(droppedKey); return; } // join primary group (existing behavior)
            const orientation = zoneToOrientation(zone); // "v" | "h"
+           if (refuseIfOverCap(1)) return; // refuse rather than silently drop when this would exceed the total-sheet budget
            // dropped sheet frames the reference pane; primary keeps its content
            setSplitView({ orientation, ratio: 0.5, refKey: droppedKey, refSet: [droppedKey] });
          }}>
@@ -11090,7 +11220,13 @@ export default function TakeoffCanvas() {
         <DropZoneOverlay zone={dragZone} />
        </div>
          )}
-         reference={splitView ? (
+         // A persisted/live splitView that the device can't (or isn't
+         // overridden to) mount still renders the primary pane single —
+         // `reference` going null is what SplitLayout treats as "no split"
+         // (see its header comment); `splitView` itself stays in state
+         // untouched (the "Restore split" menu item flips splitOverride, not
+         // this).
+         reference={splitView && splitMounted ? (
            <ReferencePane refKey={effectiveRefKey} panelImg={refPanelImg} paintBase={paintReferenceBase} paintDetail={paintReferenceDetail} epoch={refEpoch}
              shapes={refStackedShapes} conditions={conditions} condById={condById} darkMode={darkMode} patId={patId}
              refSet={refSet} activeKey={rawRefKey} tabLabel={tabLabel} onSelectRef={selectRefTab} onRemoveRef={removeRefTab} onDropSheet={dropOntoReference} />

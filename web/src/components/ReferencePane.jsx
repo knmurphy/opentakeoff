@@ -274,10 +274,16 @@ export default function ReferencePane({
 // is expected to stay small (a handful of comparison sheets, not the whole
 // plan), and `overflowX:"auto"` on the strip covers the rare case it grows
 // past the pane's width (a vertical split at MAX_RATIO leaves the reference
-// pane just ~20% wide). Renders nothing for an empty `refSet` — the caller
-// guards against ever reaching that state today (TakeoffCanvas.jsx's
-// onRemoveRef refuses to empty the last member; Task 8 owns the eventual
-// auto-collapse), but this stays a no-op instead of crashing either way.
+// pane just ~20% wide). Renders nothing for an empty `refSet` (defensive —
+// TakeoffCanvas.jsx's empty-pane guard auto-collapses the whole split the
+// instant refSet WOULD empty, so this pane unmounts before ever needing to
+// render one, but this stays a no-op rather than crashing if that guard is
+// ever bypassed).
+//
+// The ✕ shows on EVERY chip, solo included (Task 8): "remove my only
+// reference sheet" is a legitimate way to ask for the split to close, not a
+// state to fence off. onRemove (TakeoffCanvas.jsx's removeRefTab) auto-
+// collapses the split when this empties the set — see its comment.
 function ReferenceTabBar({ refSet, activeKey, tabLabel, onSelect, onRemove }) {
   if (!refSet.length) return null;
   return (
@@ -290,12 +296,10 @@ function ReferenceTabBar({ refSet, activeKey, tabLabel, onSelect, onRemove }) {
               style={{ border: "none", background: "none", cursor: "pointer", fontWeight: on ? 700 : 500, fontSize: 10.5, color: "var(--ink)", fontFamily: "var(--f-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 105, padding: 0 }}>
               {tabLabel(k)}
             </button>
-            {refSet.length > 1 && (
-              <button type="button" onClick={() => onRemove?.(k)} title="Remove from reference"
-                style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0, display: "inline-flex" }}>
-                <Icon name="close" size={9} />
-              </button>
-            )}
+            <button type="button" onClick={() => onRemove?.(k)} title={refSet.length > 1 ? "Remove from reference" : "Remove — closes the split"}
+              style={{ border: "none", background: "none", cursor: "pointer", color: "var(--ink-muted)", padding: 0, display: "inline-flex" }}>
+              <Icon name="close" size={9} />
+            </button>
           </span>
         );
       })}
