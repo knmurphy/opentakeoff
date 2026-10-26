@@ -3,8 +3,9 @@
 // wheel/drag pan-zoom scoped to its element — panning/zooming this pane never
 // touches the primary pane's transform, and vice versa. Renders the referenced
 // sheet's BASE raster (Task 3) plus a read-only mirror of its committed shapes
-// (Task 5) plus a crisp DEEP-ZOOM detail layer (Task 6, engaged past
-// DETAIL_ENGAGE on this pane's OWN scale). It NEVER handles measurement/
+// (Task 5) plus a tile-composited detail layer (Task 6) that is the active
+// raster path at EVERY zoom level on this pane's OWN scale — no DETAIL_ENGAGE
+// gate, matching the primary pane's detail view. It NEVER handles measurement/
 // keyboard/tools — no selection, no vertex handles, no click handlers reach
 // the shape overlay below.
 //
@@ -17,7 +18,7 @@
 // the primary's `stackedShapes` — NOT scoped to the primary's sheetGroup, so
 // a shape on a sheet the primary isn't even displaying still mirrors here).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { MIN_SCALE, MAX_SCALE, SYNC_MS, DETAIL_ENGAGE, GESTURE_MS } from "../lib/canvasConstants";
+import { MIN_SCALE, MAX_SCALE, SYNC_MS, GESTURE_MS } from "../lib/canvasConstants";
 import { HatchPattern } from "./hatches.jsx";
 import { renderShapeGlyph } from "./shapeGlyphs.jsx";
 
@@ -186,8 +187,9 @@ export default function ReferencePane({ refKey, panelImg, paintBase, paintDetail
         {/* detail layer (Task 6) — a crop of the visible region + margin
             composited from cached tiles at the current zoom, exactly like the
             primary pane's per-source detail canvases (TakeoffCanvas's
-            drawPanels detail layer); hidden until this pane's own zoom × dpr
-            crosses DETAIL_ENGAGE (paintReferenceDetail in TakeoffCanvas.jsx).
+            drawPanels detail layer); active at every zoom level, no
+            DETAIL_ENGAGE gate (paintReferenceDetail in TakeoffCanvas.jsx) —
+            only hidden when the crop reports the source is off-screen.
             Position/size are set imperatively by the compositor's paintDetail
             on each reveal, same as the primary's. */}
         <canvas ref={detailCanvasRef}
